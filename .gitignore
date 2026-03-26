@@ -1,6 +1,8 @@
 node_modules
 dist
 .tools
+.vercel
+AGENTS.md
 .DS_Store
 .env
 .env.local

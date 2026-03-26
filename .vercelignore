@@ -1,0 +1,8 @@
+.git
+.gitignore
+.vercel
+.tools
+AGENTS.md
+dist
+node_modules
+.DS_Store
