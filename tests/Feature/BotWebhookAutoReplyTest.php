@@ -56,6 +56,13 @@ class BotWebhookAutoReplyTest extends TestCase
                 && $request['chat_id'] === 300
                 && $request['text'] === 'Привет бот находится в разработке. Напишите нам чуть позже.';
         });
+
+        $channel->refresh();
+
+        $this->assertNotNull($channel->last_webhook_received_at);
+        $this->assertNotNull($channel->last_reply_sent_at);
+        $this->assertNull($channel->last_error_at);
+        $this->assertSame('Работает', $channel->getHealthStatusLabel());
     }
 
     public function test_max_webhook_endpoint_accepts_valid_event_and_sends_auto_reply(): void
@@ -98,6 +105,12 @@ class BotWebhookAutoReplyTest extends TestCase
                 && $request->hasHeader('Authorization', 'max-token')
                 && $request['text'] === 'Привет бот находится в разработке. Напишите нам чуть позже.';
         });
+
+        $channel->refresh();
+
+        $this->assertNotNull($channel->last_webhook_received_at);
+        $this->assertNotNull($channel->last_reply_sent_at);
+        $this->assertNull($channel->last_error_at);
     }
 
     public function test_inactive_channel_does_not_process_event(): void
@@ -125,6 +138,49 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->assertNotFound();
 
         Http::assertNothingSent();
+    }
+
+    public function test_reply_error_updates_channel_error_status_and_timestamp(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => false,
+            ], 500),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", [
+            'update_id' => 1,
+            'message' => [
+                'message_id' => 10,
+                'text' => 'hello',
+                'from' => [
+                    'id' => 200,
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ])->assertStatus(500);
+
+        $channel->refresh();
+
+        $this->assertNotNull($channel->last_webhook_received_at);
+        $this->assertNull($channel->last_reply_sent_at);
+        $this->assertNotNull($channel->last_error_at);
+        $this->assertNotNull($channel->last_error_message);
+        $this->assertSame('Ошибка', $channel->getHealthStatusLabel());
     }
 
     public function test_invalid_telegram_webhook_secret_is_rejected(): void

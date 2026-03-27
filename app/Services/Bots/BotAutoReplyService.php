@@ -29,6 +29,8 @@ class BotAutoReplyService
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
         };
 
+        $channel->markReplySent();
+
         Log::info('bot auto reply sent', [
             'channel_id' => $channel->id,
             'platform' => $channel->platform,

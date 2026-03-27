@@ -72,12 +72,16 @@ class BotWebhookController extends Controller
             'update_type' => $payload['update_type'] ?? null,
         ]);
 
+        $channel->markWebhookReceived();
+
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
         if ($message !== null) {
             try {
                 $botAutoReplyService->handle($channel, $message);
             } catch (\Throwable $throwable) {
+                $channel->markError($throwable);
+
                 Log::error('bot auto reply failed', [
                     'channel_id' => $channel->id,
                     'platform' => $channel->platform,

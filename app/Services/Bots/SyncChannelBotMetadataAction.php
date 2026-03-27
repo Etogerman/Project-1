@@ -18,22 +18,32 @@ class SyncChannelBotMetadataAction
     {
         $this->guardChannel($channel);
 
-        $metadata = match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->fetchBotMetadata($channel),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->fetchBotMetadata($channel),
-            default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-        };
+        try {
+            $metadata = match ($channel->platform) {
+                Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->fetchBotMetadata($channel),
+                Channel::PLATFORM_MAX => $this->maxBotApiService->fetchBotMetadata($channel),
+                default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
+            };
 
-        $channel->fill($this->metadataToAttributes($metadata))->save();
+            $channel
+                ->fill($this->metadataToAttributes($metadata))
+                ->save();
 
-        Log::info('bot metadata synced', [
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'bot_external_id' => $metadata->externalId,
-            'bot_username' => $metadata->username,
-        ]);
+            $channel->clearOperationalError();
 
-        return $channel->refresh();
+            Log::info('bot metadata synced', [
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'bot_external_id' => $metadata->externalId,
+                'bot_username' => $metadata->username,
+            ]);
+
+            return $channel->refresh();
+        } catch (\Throwable $throwable) {
+            $channel->markError($throwable);
+
+            throw $throwable;
+        }
     }
 
     protected function guardChannel(Channel $channel): void

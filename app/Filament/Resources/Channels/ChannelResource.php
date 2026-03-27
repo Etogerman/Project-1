@@ -21,6 +21,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
@@ -109,6 +110,11 @@ class ChannelResource extends Resource
                             ->label('Тип')
                             ->badge()
                             ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state),
+                        TextEntry::make('health_status')
+                            ->label('Состояние')
+                            ->state(fn (Channel $record): string => $record->getHealthStatusLabel())
+                            ->badge()
+                            ->color(fn (Channel $record): string => $record->getHealthStatusColor()),
                         TextEntry::make('bot_name')
                             ->label('Имя бота')
                             ->state(fn (Channel $record): string => filled($record->bot_name) ? (string) $record->bot_name : 'Не загружено'),
@@ -126,9 +132,25 @@ class ChannelResource extends Resource
                             ->boolean(),
                         TextEntry::make('webhook_secret_status')
                             ->label('Webhook')
-                            ->state(fn (Channel $record): string => filled($record->getWebhookSecret()) ? 'Настроен' : 'Не настроен')
+                            ->state(fn (Channel $record): string => $record->getWebhookStatusLabel())
                             ->badge()
-                            ->color(fn (string $state): string => $state === 'Настроен' ? 'success' : 'gray'),
+                            ->color(fn (Channel $record): string => $record->getWebhookStatusColor()),
+                        TextEntry::make('last_webhook_received_at')
+                            ->label('Последний webhook')
+                            ->placeholder('Ещё не было')
+                            ->dateTime('d.m.Y H:i'),
+                        TextEntry::make('last_reply_sent_at')
+                            ->label('Последний ответ')
+                            ->placeholder('Ещё не было')
+                            ->dateTime('d.m.Y H:i'),
+                        TextEntry::make('last_error_at')
+                            ->label('Последняя ошибка')
+                            ->placeholder('Ошибок не было')
+                            ->dateTime('d.m.Y H:i'),
+                        TextEntry::make('last_error_message')
+                            ->label('Текст ошибки')
+                            ->state(fn (Channel $record): string => filled($record->last_error_message) ? (string) $record->last_error_message : 'Ошибок не было')
+                            ->columnSpanFull(),
                         TextEntry::make('created_at')
                             ->label('Создан')
                             ->dateTime('d.m.Y H:i'),
@@ -148,7 +170,8 @@ class ChannelResource extends Resource
                     ->label('ID')
                     ->searchable()
                     ->sortable()
-                    ->copyable(),
+                    ->copyable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('name')
                     ->label('Название')
                     ->searchable()
@@ -165,6 +188,11 @@ class ChannelResource extends Resource
                     ->openUrlInNewTab()
                     ->searchable(['bot_username'])
                     ->sortable(),
+                TextColumn::make('health_status')
+                    ->label('Состояние')
+                    ->state(fn (Channel $record): string => $record->getHealthStatusLabel())
+                    ->badge()
+                    ->color(fn (Channel $record): string => $record->getHealthStatusColor()),
                 TextColumn::make('platform')
                     ->label('Платформа')
                     ->badge()
@@ -179,20 +207,47 @@ class ChannelResource extends Resource
                     ->color('gray')
                     ->sortable(),
                 TextColumn::make('is_active')
-                    ->label('Статус')
+                    ->label('Активен')
                     ->badge()
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключен')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('webhook_secret_status')
                     ->label('Webhook')
-                    ->state(fn (Channel $record): string => filled($record->getWebhookSecret()) ? 'Настроен' : 'Не настроен')
+                    ->state(fn (Channel $record): string => $record->getWebhookStatusLabel())
                     ->badge()
-                    ->color(fn (string $state): string => $state === 'Настроен' ? 'success' : 'gray'),
+                    ->color(fn (Channel $record): string => $record->getWebhookStatusColor()),
+                TextColumn::make('bot_external_id')
+                    ->label('Внешний ID')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->searchable()
+                    ->sortable(),
+                TextColumn::make('last_webhook_received_at')
+                    ->label('Последний webhook')
+                    ->dateTime('d.m.Y H:i')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('last_reply_sent_at')
+                    ->label('Последний ответ')
+                    ->dateTime('d.m.Y H:i')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('last_error_at')
+                    ->label('Последняя ошибка')
+                    ->dateTime('d.m.Y H:i')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('last_error_message')
+                    ->label('Текст ошибки')
+                    ->limit(60)
+                    ->wrap()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('created_at')
                     ->label('Создан')
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
                 SelectFilter::make('platform')
@@ -204,6 +259,9 @@ class ChannelResource extends Resource
                     ->trueLabel('Только активные')
                     ->falseLabel('Только отключённые'),
             ])
+            ->columnManager()
+            ->deferColumnManager(false)
+            ->reorderableColumns()
             ->defaultSort('created_at', 'desc')
             ->emptyStateHeading('Каналы связи ещё не добавлены')
             ->emptyStateDescription('Создайте первое подключение для бота.')
@@ -212,6 +270,8 @@ class ChannelResource extends Resource
                     ->label('Зарегистрировать webhook')
                     ->icon(Heroicon::OutlinedBolt)
                     ->color('success')
+                    ->iconButton()
+                    ->tooltip('Зарегистрировать webhook')
                     ->requiresConfirmation()
                     ->visible(fn (Channel $record): bool => $record->is_active && $record->connection_type === Channel::CONNECTION_TYPE_BOT)
                     ->action(function (Channel $record): void {
@@ -239,6 +299,8 @@ class ChannelResource extends Resource
                     ->label('Обновить данные бота')
                     ->icon(Heroicon::OutlinedArrowPath)
                     ->color('gray')
+                    ->iconButton()
+                    ->tooltip('Обновить данные бота')
                     ->visible(fn (Channel $record): bool => $record->connection_type === Channel::CONNECTION_TYPE_BOT && filled($record->getToken()))
                     ->action(function (Channel $record): void {
                         try {
@@ -246,8 +308,8 @@ class ChannelResource extends Resource
 
                             Notification::make()
                                 ->success()
-                                ->title('Данные бота обновлены')
-                                ->body('Имя, username и внешний идентификатор бота синхронизированы с платформой.')
+                                ->title('Канал проверен')
+                                ->body('Доступ к боту подтверждён, данные бота синхронизированы с платформой.')
                                 ->send();
                         } catch (Throwable $throwable) {
                             report($throwable);
@@ -261,12 +323,18 @@ class ChannelResource extends Resource
                             throw $throwable;
                         }
                     }),
-                ViewAction::make(),
+                ViewAction::make()
+                    ->icon(Heroicon::OutlinedEye)
+                    ->iconButton()
+                    ->tooltip('Просмотр'),
                 EditAction::make()
+                    ->icon(Heroicon::OutlinedPencilSquare)
+                    ->iconButton()
+                    ->tooltip('Изменить')
                     ->using(function (array $data, Channel $record): void {
                         $record->update(static::mutateChannelData($data, $record));
                     }),
-            ])
+            ], position: RecordActionsPosition::BeforeColumns)
             ->toolbarActions([]);
     }
 

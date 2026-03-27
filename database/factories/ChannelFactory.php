@@ -28,6 +28,10 @@ class ChannelFactory extends Factory
             'bot_username' => null,
             'bot_name' => null,
             'bot_profile_url' => null,
+            'last_webhook_received_at' => null,
+            'last_reply_sent_at' => null,
+            'last_error_at' => null,
+            'last_error_message' => null,
             'is_active' => true,
         ];
     }

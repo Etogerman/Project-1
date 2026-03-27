@@ -160,6 +160,8 @@ class ChannelWebhookRegistrationTest extends TestCase
             'credentials' => [
                 'token' => 'telegram-token',
             ],
+            'last_error_at' => now(),
+            'last_error_message' => 'Old error',
         ]);
 
         Livewire::actingAs($admin)
@@ -173,6 +175,8 @@ class ChannelWebhookRegistrationTest extends TestCase
         $this->assertSame('support_stage_bot', $channel->bot_username);
         $this->assertSame('Support Bot', $channel->bot_name);
         $this->assertSame('https://t.me/support_stage_bot', $channel->getBotProfileUrl());
+        $this->assertNull($channel->last_error_at);
+        $this->assertNull($channel->last_error_message);
 
         Http::assertSentCount(1);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getMe');

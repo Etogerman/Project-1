@@ -20,28 +20,35 @@ class RegisterChannelWebhookAction
     {
         $this->guardChannel($channel);
 
-        $webhookUrl = $this->channelWebhookUrlGenerator->ensureHttps($channel);
-        $webhookSecret = $this->ensureWebhookSecret($channel);
+        try {
+            $webhookUrl = $this->channelWebhookUrlGenerator->ensureHttps($channel);
+            $webhookSecret = $this->ensureWebhookSecret($channel);
 
-        Log::info('bot webhook registration started', [
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'webhook_url' => $webhookUrl,
-        ]);
+            Log::info('bot webhook registration started', [
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'webhook_url' => $webhookUrl,
+            ]);
 
-        match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->registerWebhook($channel, $webhookUrl, $webhookSecret),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->registerWebhook($channel, $webhookUrl, $webhookSecret),
-            default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-        };
+            match ($channel->platform) {
+                Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->registerWebhook($channel, $webhookUrl, $webhookSecret),
+                Channel::PLATFORM_MAX => $this->maxBotApiService->registerWebhook($channel, $webhookUrl, $webhookSecret),
+                default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
+            };
 
-        $this->syncChannelBotMetadataAction->handle($channel);
+            $this->syncChannelBotMetadataAction->handle($channel);
+            $channel->clearOperationalError();
 
-        Log::info('bot webhook registration completed', [
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'webhook_url' => $webhookUrl,
-        ]);
+            Log::info('bot webhook registration completed', [
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'webhook_url' => $webhookUrl,
+            ]);
+        } catch (\Throwable $throwable) {
+            $channel->markError($throwable);
+
+            throw $throwable;
+        }
     }
 
     protected function guardChannel(Channel $channel): void
