@@ -1,0 +1,75 @@
+<?php
+
+namespace App\Services\Bots;
+
+use App\Models\Channel;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use InvalidArgumentException;
+
+class RegisterChannelWebhookAction
+{
+    public function __construct(
+        protected ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
+        protected TelegramBotApiService $telegramBotApiService,
+        protected MaxBotApiService $maxBotApiService,
+    ) {}
+
+    public function handle(Channel $channel): void
+    {
+        $this->guardChannel($channel);
+
+        $webhookUrl = $this->channelWebhookUrlGenerator->ensureHttps($channel);
+        $webhookSecret = $this->ensureWebhookSecret($channel);
+
+        Log::info('bot webhook registration started', [
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'webhook_url' => $webhookUrl,
+        ]);
+
+        match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->registerWebhook($channel, $webhookUrl, $webhookSecret),
+            Channel::PLATFORM_MAX => $this->maxBotApiService->registerWebhook($channel, $webhookUrl, $webhookSecret),
+            default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
+        };
+
+        Log::info('bot webhook registration completed', [
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'webhook_url' => $webhookUrl,
+        ]);
+    }
+
+    protected function guardChannel(Channel $channel): void
+    {
+        if (! $channel->is_active) {
+            throw new InvalidArgumentException('Webhook можно регистрировать только для активного канала.');
+        }
+
+        if ($channel->connection_type !== Channel::CONNECTION_TYPE_BOT) {
+            throw new InvalidArgumentException('Webhook поддерживается только для bot-каналов.');
+        }
+
+        if (! array_key_exists($channel->platform, Channel::platformOptions())) {
+            throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}].");
+        }
+    }
+
+    protected function ensureWebhookSecret(Channel $channel): string
+    {
+        $secret = $channel->getWebhookSecret();
+
+        if (filled($secret)) {
+            return $secret;
+        }
+
+        $secret = Str::random((int) config('bots.webhook_secret_length', 40));
+
+        $channel
+            ->putCredential(Channel::CREDENTIAL_WEBHOOK_SECRET, $secret)
+            ->save();
+
+        return $secret;
+    }
+}
