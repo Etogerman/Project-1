@@ -4,18 +4,23 @@
     $centered ??= false;
     $environment = app()->environment();
     $version = AppVersion::display();
+    $style = $centered
+        ? 'position: fixed; left: 50%; top: 2rem; transform: translate(-50%, -50%); z-index: 60; pointer-events: none;'
+        : null;
 
     if ($environment !== 'staging' && blank($version)) {
         return;
     }
 @endphp
 
-<div @class([
-    'inline-flex items-center gap-2',
-])>
-    @if ($centered)
-        style="position: fixed; left: 50%; top: 2rem; transform: translate(-50%, -50%); z-index: 60; pointer-events: none;"
+<div
+    @class([
+        'inline-flex items-center gap-2',
+    ])
+    @if (filled($style))
+        style="{{ $style }}"
     @endif
+>
     @if ($environment === 'staging')
         <span class="inline-flex items-center rounded-md border border-black bg-amber-300 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.22em] text-black shadow-sm">
             staging
