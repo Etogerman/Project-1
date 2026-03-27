@@ -1,0 +1,41 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Support\AppVersion;
+use Tests\TestCase;
+
+class AppVersionTest extends TestCase
+{
+    public function test_normalize_shortens_commit_hashes(): void
+    {
+        $this->assertSame('abcdef1', AppVersion::normalize('abcdef1234567890abcdef1234567890abcdef12'));
+    }
+
+    public function test_display_prefixes_commit_hashes_with_rev(): void
+    {
+        $this->assertSame('rev abcdef1', AppVersion::displayFromVersion('abcdef1234567890abcdef1234567890abcdef12'));
+    }
+
+    public function test_resolve_from_git_directory_reads_head_reference(): void
+    {
+        $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'app-version-'.uniqid();
+
+        mkdir($directory, 0777, true);
+        mkdir($directory.DIRECTORY_SEPARATOR.'refs'.DIRECTORY_SEPARATOR.'heads', 0777, true);
+
+        file_put_contents($directory.DIRECTORY_SEPARATOR.'HEAD', "ref: refs/heads/main\n");
+        file_put_contents($directory.DIRECTORY_SEPARATOR.'refs'.DIRECTORY_SEPARATOR.'heads'.DIRECTORY_SEPARATOR.'main', "f8cb57f30da90a70584776922e4d8b64913d976e\n");
+
+        $this->assertSame('f8cb57f', AppVersion::resolveFromGitDirectory($directory));
+    }
+
+    public function test_resolve_from_file_reads_plain_version_label(): void
+    {
+        $path = sys_get_temp_dir().DIRECTORY_SEPARATOR.'app-version-file-'.uniqid();
+
+        file_put_contents($path, "2026.03.27.2\n");
+
+        $this->assertSame('2026.03.27.2', AppVersion::resolveFromFile($path));
+    }
+}

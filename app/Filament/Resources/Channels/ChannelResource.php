@@ -15,8 +15,6 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\IconEntry;
-use Filament\Infolists\Components\RepeatableEntry;
-use Filament\Infolists\Components\RepeatableEntry\TableColumn;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
@@ -100,7 +98,7 @@ class ChannelResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Канал связи')
+                Section::make('Сводка канала')
                     ->schema([
                         TextEntry::make('id')
                             ->label('ID')
@@ -163,45 +161,9 @@ class ChannelResource extends Resource
                             ->label('Обновлён')
                             ->dateTime('d.m.Y H:i'),
                     ])
-                    ->columns(2),
-                Section::make('Техжурнал')
-                    ->schema([
-                        RepeatableEntry::make('recent_activity_logs')
-                            ->label('')
-                            ->state(fn (Channel $record) => $record->activityLogs()->latest('created_at')->limit(15)->get())
-                            ->placeholder('Событий ещё не было.')
-                            ->contained(false)
-                            ->table([
-                                TableColumn::make('Время')->width('160px'),
-                                TableColumn::make('Уровень')->width('110px'),
-                                TableColumn::make('Событие')->width('170px'),
-                                TableColumn::make('Сообщение'),
-                            ])
-                            ->schema([
-                                TextEntry::make('created_at')
-                                    ->dateTime('d.m.Y H:i:s'),
-                                TextEntry::make('level')
-                                    ->badge()
-                                    ->formatStateUsing(fn (string $state): string => $state === 'error' ? 'Ошибка' : 'Info')
-                                    ->color(fn (string $state): string => $state === 'error' ? 'danger' : 'gray'),
-                                TextEntry::make('event')
-                                    ->formatStateUsing(fn (string $state): string => match ($state) {
-                                        'webhook.received' => 'Webhook',
-                                        'bot.reply_sent' => 'Ответ',
-                                        'bot.reply_failed' => 'Ошибка ответа',
-                                        'bot.metadata_synced' => 'Sync metadata',
-                                        'bot.metadata_sync_failed' => 'Ошибка metadata',
-                                        'webhook.registration_started' => 'Регистрация webhook',
-                                        'webhook.registration_completed' => 'Webhook готов',
-                                        'webhook.registration_failed' => 'Ошибка webhook',
-                                        default => $state,
-                                    }),
-                                TextEntry::make('message')
-                                    ->wrap(),
-                            ]),
-                    ])
-                    ->columns(2),
-                Section::make('Последние сообщения')
+                    ->columns(4)
+                    ->columnSpanFull(),
+                Section::make('Последний webhook')
                     ->schema([
                         TextEntry::make('latest_message_saved_at')
                             ->label('Сохранено в системе')
@@ -234,18 +196,32 @@ class ChannelResource extends Resource
                             ->label('Сохранено сообщений')
                             ->state(fn (Channel $record): int => $record->messages()->count()),
                         TextEntry::make('latest_message_text')
-                            ->label('Последний текст')
+                            ->label('Текст')
                             ->placeholder('—')
                             ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->text)
                             ->wrap()
                             ->columnSpanFull(),
+                    ])
+                    ->columns(4)
+                    ->columnSpanFull(),
+                Section::make('Лента сообщений')
+                    ->schema([
                         TextEntry::make('recent_messages_feed')
-                            ->label('Лента последних сообщений')
+                            ->label('Последние сохранённые сообщения')
                             ->state(fn (Channel $record): HtmlString => static::renderRecentSavedMessages($record))
                             ->html()
                             ->columnSpanFull(),
                     ])
-                    ->columns(4),
+                    ->columnSpanFull(),
+                Section::make('Техжурнал')
+                    ->schema([
+                        TextEntry::make('recent_activity_feed')
+                            ->label('Последние события канала')
+                            ->state(fn (Channel $record): HtmlString => static::renderRecentActivityLogs($record))
+                            ->html()
+                            ->columnSpanFull(),
+                    ])
+                    ->columnSpanFull(),
             ]);
     }
 
@@ -547,5 +523,55 @@ class ChannelResource extends Resource
         })->implode('');
 
         return new HtmlString(sprintf('<div class="space-y-3">%s</div>', $items));
+    }
+
+    protected static function renderRecentActivityLogs(Channel $record): HtmlString
+    {
+        $logs = $record->activityLogs()
+            ->orderByDesc('id')
+            ->limit(15)
+            ->get();
+
+        if ($logs->isEmpty()) {
+            return new HtmlString('<div class="text-sm text-gray-500">Событий ещё не было.</div>');
+        }
+
+        $items = $logs->map(function ($log): string {
+            $badges = [
+                sprintf('Время: %s', $log->created_at?->format('d.m.Y H:i:s') ?? '—'),
+                sprintf('Уровень: %s', $log->level === 'error' ? 'Ошибка' : 'Info'),
+                sprintf('Событие: %s', static::formatActivityEvent((string) $log->event)),
+            ];
+
+            $badgeMarkup = collect($badges)
+                ->map(fn (string $badge): string => sprintf(
+                    '<span class="inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200">%s</span>',
+                    e($badge),
+                ))
+                ->implode('');
+
+            return sprintf(
+                '<div class="rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
+                $badgeMarkup,
+                e(filled($log->message) ? (string) $log->message : '—'),
+            );
+        })->implode('');
+
+        return new HtmlString(sprintf('<div class="space-y-3">%s</div>', $items));
+    }
+
+    protected static function formatActivityEvent(string $event): string
+    {
+        return match ($event) {
+            'webhook.received' => 'Webhook',
+            'bot.reply_sent' => 'Ответ',
+            'bot.reply_failed' => 'Ошибка ответа',
+            'bot.metadata_synced' => 'Sync metadata',
+            'bot.metadata_sync_failed' => 'Ошибка metadata',
+            'webhook.registration_started' => 'Регистрация webhook',
+            'webhook.registration_completed' => 'Webhook готов',
+            'webhook.registration_failed' => 'Ошибка webhook',
+            default => $event,
+        };
     }
 }

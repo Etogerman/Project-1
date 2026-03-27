@@ -287,8 +287,8 @@ class FilamentChannelsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->mountTableAction('view', $channel)
-            ->assertMountedActionModalSee('Последние сообщения')
-            ->assertMountedActionModalSee('Лента последних сообщений')
+            ->assertMountedActionModalSee('Последний webhook')
+            ->assertMountedActionModalSee('Лента сообщений')
             ->assertMountedActionModalSee('ext-100')
             ->assertMountedActionModalSee('Нужна помощь')
             ->assertMountedActionModalSee('Входящее');

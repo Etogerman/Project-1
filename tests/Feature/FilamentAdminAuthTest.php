@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Support\AppVersion;
 use App\Models\User;
 use Filament\Auth\Pages\Login;
 use Filament\Facades\Filament;
@@ -52,6 +53,23 @@ class FilamentAdminAuthTest extends TestCase
 
         $this->get('/admin')
             ->assertOk();
+    }
+
+    public function test_authenticated_user_sees_current_version_badge_in_admin_panel(): void
+    {
+        $user = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $version = AppVersion::display();
+
+        $this->assertNotNull($version);
+
+        $this->actingAs($user)
+            ->get('/admin')
+            ->assertOk()
+            ->assertSee($version);
     }
 
     public function test_inactive_user_cannot_log_in_to_the_admin_panel(): void
