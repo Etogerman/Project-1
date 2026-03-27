@@ -22,6 +22,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Enums\RecordActionsPosition;
@@ -29,6 +30,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Support\Arr;
+use Illuminate\Support\HtmlString;
 use Throwable;
 use UnitEnum;
 
@@ -201,36 +203,49 @@ class ChannelResource extends Resource
                     ->columns(2),
                 Section::make('Последние сообщения')
                     ->schema([
-                        RepeatableEntry::make('recent_messages')
-                            ->label('')
-                            ->state(fn (Channel $record) => $record->messages()
-                                ->with('contactIdentity')
-                                ->orderByDesc('received_at')
-                                ->orderByDesc('id')
-                                ->limit(15)
-                                ->get())
-                            ->placeholder('Сообщений ещё не было.')
-                            ->contained(false)
-                            ->table([
-                                TableColumn::make('Время')->width('170px'),
-                                TableColumn::make('Направление')->width('130px'),
-                                TableColumn::make('Внешний пользователь')->width('180px'),
-                                TableColumn::make('Текст'),
-                            ])
-                            ->schema([
-                                TextEntry::make('received_at')
-                                    ->dateTime('d.m.Y H:i:s'),
-                                TextEntry::make('direction')
-                                    ->badge()
-                                    ->formatStateUsing(fn (string $state): string => $state === Message::DIRECTION_INBOUND ? 'Входящее' : $state)
-                                    ->color(fn (string $state): string => $state === Message::DIRECTION_INBOUND ? 'info' : 'gray'),
-                                TextEntry::make('contactIdentity.external_user_id')
-                                    ->placeholder('—'),
-                                TextEntry::make('text')
-                                    ->placeholder('—')
-                                    ->wrap(),
-                            ]),
-                    ]),
+                        TextEntry::make('latest_message_saved_at')
+                            ->label('Сохранено в системе')
+                            ->placeholder('Сообщений ещё не было')
+                            ->state(fn (Channel $record) => static::resolveLatestSavedMessage($record)?->created_at)
+                            ->dateTime('d.m.Y H:i:s'),
+                        TextEntry::make('latest_message_received_at')
+                            ->label('Получено')
+                            ->placeholder('Не задано')
+                            ->state(fn (Channel $record) => static::resolveLatestSavedMessage($record)?->received_at)
+                            ->dateTime('d.m.Y H:i:s'),
+                        TextEntry::make('latest_message_external_user')
+                            ->label('Внешний пользователь')
+                            ->placeholder('—')
+                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->contactIdentity?->external_user_id)
+                            ->copyable(),
+                        TextEntry::make('latest_message_external_id')
+                            ->label('Внешний message ID')
+                            ->placeholder('Не задан')
+                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->external_message_id)
+                            ->copyable(),
+                        TextEntry::make('latest_message_direction')
+                            ->label('Направление')
+                            ->placeholder('—')
+                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->direction)
+                            ->badge()
+                            ->formatStateUsing(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'Входящее' : ($state ?? '—'))
+                            ->color(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'info' : 'gray'),
+                        TextEntry::make('messages_count')
+                            ->label('Сохранено сообщений')
+                            ->state(fn (Channel $record): int => $record->messages()->count()),
+                        TextEntry::make('latest_message_text')
+                            ->label('Последний текст')
+                            ->placeholder('—')
+                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->text)
+                            ->wrap()
+                            ->columnSpanFull(),
+                        TextEntry::make('recent_messages_feed')
+                            ->label('Лента последних сообщений')
+                            ->state(fn (Channel $record): HtmlString => static::renderRecentSavedMessages($record))
+                            ->html()
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(4),
             ]);
     }
 
@@ -396,6 +411,7 @@ class ChannelResource extends Resource
                         }
                     }),
                 ViewAction::make()
+                    ->modalWidth(Width::SevenExtraLarge)
                     ->icon(Heroicon::OutlinedEye)
                     ->iconButton()
                     ->tooltip('Просмотр'),
@@ -479,5 +495,57 @@ class ChannelResource extends Resource
         }
 
         return $token !== '' && $token !== $record->getToken();
+    }
+
+    protected static function resolveLatestSavedMessage(Channel $record): ?Message
+    {
+        return $record->messages()
+            ->with('contactIdentity')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    protected static function renderRecentSavedMessages(Channel $record): HtmlString
+    {
+        $messages = $record->messages()
+            ->with('contactIdentity')
+            ->orderByDesc('id')
+            ->limit(15)
+            ->get();
+
+        if ($messages->isEmpty()) {
+            return new HtmlString('<div class="text-sm text-gray-500">Сообщений ещё не было.</div>');
+        }
+
+        $items = $messages->map(function (Message $message): string {
+            $badges = [
+                sprintf('Сохранено: %s', $message->created_at?->format('d.m.Y H:i:s') ?? '—'),
+                sprintf('Получено: %s', $message->received_at?->format('d.m.Y H:i:s') ?? '—'),
+                sprintf('Пользователь: %s', $message->contactIdentity?->external_user_id ?? '—'),
+                sprintf(
+                    'Направление: %s',
+                    $message->direction === Message::DIRECTION_INBOUND ? 'Входящее' : ($message->direction ?: '—'),
+                ),
+            ];
+
+            if (filled($message->external_message_id)) {
+                $badges[] = sprintf('Message ID: %s', $message->external_message_id);
+            }
+
+            $badgeMarkup = collect($badges)
+                ->map(fn (string $badge): string => sprintf(
+                    '<span class="inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200">%s</span>',
+                    e($badge),
+                ))
+                ->implode('');
+
+            return sprintf(
+                '<div class="rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
+                $badgeMarkup,
+                e(filled($message->text) ? (string) $message->text : '—'),
+            );
+        })->implode('');
+
+        return new HtmlString(sprintf('<div class="space-y-3">%s</div>', $items));
     }
 }

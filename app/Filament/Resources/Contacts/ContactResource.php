@@ -91,9 +91,9 @@ class ContactResource extends Resource
                             ->label('Сообщений')
                             ->state(fn (Contact $record): int => $record->messages_count ?? $record->messages()->count()),
                         TextEntry::make('messages_max_received_at')
-                            ->label('Последнее сообщение')
+                            ->label('Последний webhook')
                             ->placeholder('Сообщений ещё не было')
-                            ->state(fn (Contact $record) => $record->messages_max_received_at)
+                            ->state(fn (Contact $record) => static::resolveLatestSavedMessage($record)?->created_at)
                             ->dateTime('d.m.Y H:i'),
                         TextEntry::make('created_at')
                             ->label('Создан')
@@ -106,35 +106,40 @@ class ContactResource extends Resource
                         TextEntry::make('latest_message_received_at')
                             ->label('Получено')
                             ->placeholder('Сообщений ещё не было')
-                            ->state(fn (Contact $record) => static::resolveLatestMessage($record)?->received_at)
+                            ->state(fn (Contact $record) => static::resolveLatestSavedMessage($record)?->received_at)
                             ->dateTime('d.m.Y H:i:s'),
                         TextEntry::make('latest_message_channel')
                             ->label('Канал')
                             ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->channel?->name),
+                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->channel?->name),
                         TextEntry::make('latest_message_direction')
                             ->label('Направление')
                             ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->direction)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->direction)
                             ->badge()
                             ->formatStateUsing(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'Входящее' : ($state ?? '—'))
                             ->color(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'info' : 'gray'),
                         TextEntry::make('latest_message_external_id')
                             ->label('Внешний message ID')
                             ->placeholder('Не задан')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->external_message_id)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->external_message_id)
                             ->copyable(),
                         TextEntry::make('latest_message_chat_id')
                             ->label('Chat ID')
                             ->placeholder('Не задан')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->external_chat_id)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->external_chat_id)
                             ->copyable(),
                         TextEntry::make('latest_message_text')
                             ->label('Текст')
                             ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->text)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->text)
                             ->wrap()
                             ->columnSpanFull(),
+                        TextEntry::make('latest_message_saved_at')
+                            ->label('Сохранено в системе')
+                            ->placeholder('Не задано')
+                            ->state(fn (Contact $record) => static::resolveLatestSavedMessage($record)?->created_at)
+                            ->dateTime('d.m.Y H:i:s'),
                     ])
                     ->columns(4)
                     ->columnSpanFull(),
@@ -143,18 +148,18 @@ class ContactResource extends Resource
                         TextEntry::make('diagnostic_external_message_id')
                             ->label('Последний внешний message ID')
                             ->placeholder('Не задан')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->external_message_id)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->external_message_id)
                             ->copyable(),
                         TextEntry::make('diagnostic_received_at')
                             ->label('Распарсенное received_at')
                             ->placeholder('Не задано')
-                            ->state(fn (Contact $record) => static::resolveLatestMessage($record)?->received_at)
+                            ->state(fn (Contact $record) => static::resolveLatestSavedMessage($record)?->received_at)
                             ->dateTime('d.m.Y H:i:s'),
                         TextEntry::make('diagnostic_raw_payload')
                             ->label('Последний raw payload')
                             ->placeholder('Сообщений ещё не было')
-                            ->state(fn (Contact $record): ?string => filled(static::resolveLatestMessage($record)?->raw_payload)
-                                ? static::encodeJsonPayload(static::resolveLatestMessage($record)->raw_payload)
+                            ->state(fn (Contact $record): ?string => filled(static::resolveLatestSavedMessage($record)?->raw_payload)
+                                ? static::encodeJsonPayload(static::resolveLatestSavedMessage($record)->raw_payload)
                                 : null)
                             ->formatStateUsing(fn (?string $state): HtmlString => new HtmlString(sprintf(
                                 '<pre class="whitespace-pre-wrap break-all text-xs">%s</pre>',
@@ -258,17 +263,11 @@ class ContactResource extends Resource
         }
     }
 
-    protected static function resolveLatestMessage(Contact $record): ?Message
+    protected static function resolveLatestSavedMessage(Contact $record): ?Message
     {
-        static $cache = [];
-
-        /** @var ?Message $message */
-        $message = $cache[$record->getKey()] ??= $record->messages()
+        return $record->messages()
             ->with('channel')
-            ->orderByDesc('received_at')
             ->orderByDesc('id')
             ->first();
-
-        return $message;
     }
 }

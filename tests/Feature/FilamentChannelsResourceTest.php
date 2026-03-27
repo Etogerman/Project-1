@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Livewire;
+use ReflectionMethod;
 use Tests\TestCase;
 
 class FilamentChannelsResourceTest extends TestCase
@@ -287,8 +288,93 @@ class FilamentChannelsResourceTest extends TestCase
             ->test(ManageChannels::class)
             ->mountTableAction('view', $channel)
             ->assertMountedActionModalSee('Последние сообщения')
+            ->assertMountedActionModalSee('Лента последних сообщений')
             ->assertMountedActionModalSee('ext-100')
             ->assertMountedActionModalSee('Нужна помощь')
             ->assertMountedActionModalSee('Входящее');
+    }
+
+    public function test_channel_modal_prefers_latest_saved_message_over_received_at_order(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => null,
+            'text' => 'старт',
+            'raw_payload' => ['message' => 'oldest'],
+            'received_at' => now()->addYears(2),
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => null,
+            'text' => 'тест3',
+            'raw_payload' => ['message' => 'middle'],
+            'received_at' => now()->addYear(),
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => 'mid.0000000003e3748c019d30476b8e52e7',
+            'text' => 'тест5',
+            'raw_payload' => ['message' => 'latest'],
+            'received_at' => now()->subYear(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('view', $channel)
+            ->assertMountedActionModalSee('mid.0000000003e3748c019d30476b8e52e7')
+            ->assertMountedActionModalSee('тест5');
+
+        $latestMessageResolver = new ReflectionMethod(ChannelResource::class, 'resolveLatestSavedMessage');
+        $latestMessageResolver->setAccessible(true);
+
+        /** @var Message $latestMessage */
+        $latestMessage = $latestMessageResolver->invoke(null, $channel);
+
+        $this->assertSame('тест5', $latestMessage->text);
+
+        $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
+        $recentMessagesRenderer->setAccessible(true);
+
+        $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
+
+        $latestPosition = strpos($recentMessagesHtml, 'тест5');
+        $middlePosition = strpos($recentMessagesHtml, 'тест3');
+        $oldestPosition = strpos($recentMessagesHtml, 'старт');
+
+        $this->assertIsInt($latestPosition);
+        $this->assertIsInt($middlePosition);
+        $this->assertIsInt($oldestPosition);
+        $this->assertTrue($latestPosition < $middlePosition);
+        $this->assertTrue($middlePosition < $oldestPosition);
     }
 }
