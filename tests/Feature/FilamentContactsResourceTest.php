@@ -262,6 +262,60 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('old-payload');
     }
 
+    public function test_contacts_table_uses_latest_saved_message_for_last_message_column(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Герман Абрикосов',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        $oldReceivedAt = now()->addYears(20)->startOfMinute();
+        $latestSavedReceivedAt = now()->subMinute()->startOfMinute();
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => null,
+            'text' => 'проверка',
+            'raw_payload' => ['message' => 'old-payload'],
+            'received_at' => $oldReceivedAt,
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => 'msg-latest',
+            'text' => 'тест7',
+            'raw_payload' => ['message' => 'latest-payload'],
+            'received_at' => $latestSavedReceivedAt,
+        ]);
+
+        $this->actingAs($admin)
+            ->get('/admin/contacts')
+            ->assertOk()
+            ->assertSee($latestSavedReceivedAt->format('d.m.Y H:i'))
+            ->assertDontSee($oldReceivedAt->format('d.m.Y H:i'));
+    }
+
     public function test_contacts_table_supports_column_manager_and_toggleable_columns(): void
     {
         $admin = User::factory()->create([

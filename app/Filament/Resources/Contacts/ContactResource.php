@@ -52,9 +52,10 @@ class ContactResource extends Resource
         return parent::getEloquentQuery()
             ->with([
                 'primaryIdentity.channel',
+                'latestMessage',
             ])
             ->withCount('messages')
-            ->withMax('messages', 'received_at');
+            ->withMax('messages', 'id');
     }
 
     public static function infolist(Schema $schema): Schema
@@ -219,12 +220,13 @@ class ContactResource extends Resource
                     ->toggleable()
                     ->badge()
                     ->sortable(),
-                TextColumn::make('messages_max_received_at')
+                TextColumn::make('latest_message_received_at')
                     ->label('Последнее сообщение')
                     ->toggleable()
                     ->placeholder('—')
+                    ->state(fn (Contact $record) => $record->latestMessage?->received_at)
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query->orderBy('messages_max_id', $direction)),
                 TextColumn::make('created_at')
                     ->label('Создан')
                     ->dateTime('d.m.Y H:i')
@@ -234,7 +236,7 @@ class ContactResource extends Resource
             ->columnManager()
             ->deferColumnManager(false)
             ->reorderableColumns()
-            ->defaultSort('messages_max_received_at', 'desc')
+            ->defaultSort('messages_max_id', 'desc')
             ->emptyStateHeading('Контактов ещё нет')
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')
             ->recordActions([
