@@ -12,8 +12,10 @@
 
 <div @class([
     'inline-flex items-center gap-2',
-    'pointer-events-none fixed left-1/2 top-8 z-40 -translate-x-1/2 -translate-y-1/2' => $centered,
 ])>
+    @if ($centered)
+        style="position: fixed; left: 50%; top: 2rem; transform: translate(-50%, -50%); z-index: 60; pointer-events: none;"
+    @endif
     @if ($environment === 'staging')
         <span class="inline-flex items-center rounded-md border border-black bg-amber-300 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.22em] text-black shadow-sm">
             staging

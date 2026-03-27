@@ -32,7 +32,7 @@ class AdminPanelProvider extends PanelProvider
                 fn (): string => view('filament.components.environment-indicator')->render(),
             )
             ->renderHook(
-                PanelsRenderHook::TOPBAR_END,
+                PanelsRenderHook::TOPBAR_BEFORE,
                 fn (): string => view('filament.components.environment-indicator', [
                     'centered' => true,
                 ])->render(),
