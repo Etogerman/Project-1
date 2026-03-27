@@ -118,7 +118,12 @@ class FilamentContactsResourceTest extends TestCase
             'external_chat_id' => 'chat-500',
             'external_message_id' => 'msg-700',
             'text' => 'Нужна помощь по заказу',
-            'raw_payload' => ['message' => 'payload'],
+            'raw_payload' => [
+                'debug' => 'max-debug',
+                'message' => [
+                    'mid' => 'msg-700',
+                ],
+            ],
             'received_at' => now(),
         ]);
 
@@ -127,9 +132,12 @@ class FilamentContactsResourceTest extends TestCase
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Идентификаторы')
             ->assertMountedActionModalSee('Последние сообщения')
+            ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('@max_customer')
             ->assertMountedActionModalSee('max-200')
             ->assertMountedActionModalSee('MAX Support')
+            ->assertMountedActionModalSee('msg-700')
+            ->assertMountedActionModalSee('max-debug')
             ->assertMountedActionModalSee('Нужна помощь по заказу');
     }
 

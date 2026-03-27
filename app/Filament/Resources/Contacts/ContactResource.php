@@ -19,6 +19,8 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\HtmlString;
+use JsonException;
 use UnitEnum;
 
 class ContactResource extends Resource
@@ -144,6 +146,31 @@ class ContactResource extends Resource
                                     ->wrap(),
                             ]),
                     ]),
+                Section::make('Диагностика webhook')
+                    ->schema([
+                        TextEntry::make('latestMessage.external_message_id')
+                            ->label('Последний внешний message ID')
+                            ->placeholder('Не задан')
+                            ->copyable(),
+                        TextEntry::make('latestMessage.received_at')
+                            ->label('Распарсенное received_at')
+                            ->placeholder('Не задано')
+                            ->dateTime('d.m.Y H:i:s'),
+                        TextEntry::make('latestMessage.raw_payload')
+                            ->label('Последний raw payload')
+                            ->placeholder('Сообщений ещё не было')
+                            ->state(fn (Contact $record): ?string => filled($record->latestMessage?->raw_payload)
+                                ? static::encodeJsonPayload($record->latestMessage->raw_payload)
+                                : null)
+                            ->formatStateUsing(fn (?string $state): HtmlString => new HtmlString(sprintf(
+                                '<pre class="whitespace-pre-wrap break-all text-xs">%s</pre>',
+                                e($state ?? '—'),
+                            )))
+                            ->html()
+                            ->copyable()
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(2),
             ]);
     }
 
@@ -221,5 +248,17 @@ class ContactResource extends Resource
         return [
             'index' => ManageContacts::route('/'),
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected static function encodeJsonPayload(array $payload): string
+    {
+        try {
+            return (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return 'Не удалось сериализовать payload.';
+        }
     }
 }
