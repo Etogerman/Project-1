@@ -16,6 +16,7 @@ final readonly class IncomingBotMessage
         public string $externalUserId,
         public ?string $externalMessageId,
         public ?string $externalUsername,
+        public ?string $contactName,
         public ?string $text,
         public array $rawPayload,
         public Carbon $receivedAt,

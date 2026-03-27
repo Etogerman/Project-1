@@ -70,6 +70,7 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
+            ->assertTableColumnVisible('id')
             ->assertCanSeeTableRecords([$contact])
             ->assertTableActionExists('view', null, $contact)
             ->assertTableActionDoesNotExist('edit', null, $contact)
@@ -130,6 +131,25 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('max-200')
             ->assertMountedActionModalSee('MAX Support')
             ->assertMountedActionModalSee('Нужна помощь по заказу');
+    }
+
+    public function test_contacts_table_supports_column_manager_and_toggleable_columns(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->tap(function ($component): void {
+                $table = $component->instance()->getTable();
+
+                $this->assertTrue($table->hasColumnManager());
+                $this->assertTrue($table->getColumn('id')?->isToggleable());
+                $this->assertTrue($table->getColumn('display_name')?->isToggleable());
+                $this->assertTrue($table->getColumn('primaryIdentity.external_username')?->isToggleable());
+            });
     }
 
     public function test_contact_policy_allows_only_read_access_for_active_admins(): void

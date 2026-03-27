@@ -155,9 +155,10 @@ class ContactResource extends Resource
                     ->label('ID')
                     ->sortable()
                     ->copyable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->toggleable(),
                 TextColumn::make('display_name')
                     ->label('Контакт')
+                    ->toggleable()
                     ->searchable(query: function (Builder $query, string $search): Builder {
                         return $query->where('name', 'ilike', "%{$search}%")
                             ->orWhereHas('identities', function (Builder $identityQuery) use ($search): void {
@@ -168,26 +169,32 @@ class ContactResource extends Resource
                     }),
                 TextColumn::make('primaryIdentity.channel.name')
                     ->label('Канал')
+                    ->toggleable()
                     ->placeholder('—'),
                 TextColumn::make('primaryIdentity.platform')
                     ->label('Платформа')
+                    ->toggleable()
                     ->badge()
                     ->placeholder('—')
                     ->formatStateUsing(fn (?string $state): string => filled($state) ? (Channel::platformOptions()[$state] ?? $state) : '—'),
                 TextColumn::make('primaryIdentity.external_user_id')
                     ->label('Внешний ID')
+                    ->toggleable()
                     ->placeholder('—')
                     ->copyable(),
                 TextColumn::make('primaryIdentity.external_username')
                     ->label('Username')
+                    ->toggleable()
                     ->placeholder('—')
                     ->formatStateUsing(fn (?string $state): string => filled($state) ? '@'.ltrim($state, '@') : '—'),
                 TextColumn::make('messages_count')
                     ->label('Сообщений')
+                    ->toggleable()
                     ->badge()
                     ->sortable(),
                 TextColumn::make('messages_max_received_at')
                     ->label('Последнее сообщение')
+                    ->toggleable()
                     ->placeholder('—')
                     ->dateTime('d.m.Y H:i')
                     ->sortable(),
@@ -197,6 +204,9 @@ class ContactResource extends Resource
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->columnManager()
+            ->deferColumnManager(false)
+            ->reorderableColumns()
             ->defaultSort('messages_max_received_at', 'desc')
             ->emptyStateHeading('Контактов ещё нет')
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')

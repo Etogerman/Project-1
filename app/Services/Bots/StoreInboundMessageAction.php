@@ -22,7 +22,9 @@ class StoreInboundMessageAction
                 ->first();
 
             if ($identity === null) {
-                $contact = Contact::query()->create();
+                $contact = Contact::query()->create([
+                    'name' => $message->contactName,
+                ]);
 
                 try {
                     $identity = ContactIdentity::query()->create([
@@ -45,6 +47,18 @@ class StoreInboundMessageAction
                         ->where('external_user_id', $message->externalUserId)
                         ->firstOrFail();
                 }
+            }
+
+            $contact = $identity->contact;
+
+            if (
+                $contact !== null
+                && filled($message->contactName)
+                && $contact->name !== $message->contactName
+            ) {
+                $contact->forceFill([
+                    'name' => $message->contactName,
+                ])->save();
             }
 
             if (

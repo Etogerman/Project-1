@@ -6,6 +6,7 @@ use App\Models\Channel;
 use App\Models\ContactIdentity;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -130,6 +131,71 @@ class BotWebhookAutoReplyTest extends TestCase
             'external_message_id' => 'max-10',
             'text' => 'hello',
         ]);
+    }
+
+    public function test_max_webhook_uses_real_payload_fields_for_contact_name_and_message_id(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $timestamp = Carbon::create(2026, 3, 20, 12, 34, 56, 'UTC')->getTimestampMs() + 123;
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'timestamp' => $timestamp,
+            'message' => [
+                'timestamp' => $timestamp,
+                'sender' => [
+                    'user_id' => 228532008,
+                    'first_name' => 'German',
+                    'last_name' => 'Abrikosov',
+                    'username' => null,
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-mid-42',
+                    'text' => 'Привет из MAX',
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $this->assertDatabaseHas('contacts', [
+            'name' => 'German Abrikosov',
+        ]);
+        $this->assertDatabaseHas('contact_identities', [
+            'channel_id' => $channel->id,
+            'external_user_id' => '228532008',
+            'external_username' => null,
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'external_message_id' => 'max-mid-42',
+            'text' => 'Привет из MAX',
+        ]);
+
+        $message = Message::query()->firstOrFail();
+
+        $this->assertSame(intdiv($timestamp, 1000), $message->received_at->getTimestamp());
+        $this->assertSame('2026-03-20 12:34:56', $message->received_at->utc()->format('Y-m-d H:i:s'));
     }
 
     public function test_inactive_channel_does_not_process_event(): void
