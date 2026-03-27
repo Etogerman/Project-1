@@ -130,14 +130,16 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('Идентификаторы')
-            ->assertMountedActionModalSee('Последние сообщения')
+            ->assertMountedActionModalSee('Сводка')
+            ->assertMountedActionModalSee('Последнее сообщение')
             ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('@max_customer')
             ->assertMountedActionModalSee('max-200')
             ->assertMountedActionModalSee('MAX Support')
             ->assertMountedActionModalSee('msg-700')
             ->assertMountedActionModalSee('max-debug')
+            ->assertMountedActionModalDontSee('Identities list')
+            ->assertMountedActionModalDontSee('Recent messages')
             ->assertMountedActionModalSee('Нужна помощь по заказу');
     }
 

@@ -8,12 +8,11 @@ use App\Models\Contact;
 use App\Models\Message;
 use BackedEnum;
 use Filament\Actions\ViewAction;
-use Filament\Infolists\Components\RepeatableEntry;
-use Filament\Infolists\Components\RepeatableEntry\TableColumn;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
@@ -62,16 +61,32 @@ class ContactResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Контакт')
+                Section::make('Сводка')
                     ->schema([
                         TextEntry::make('id')
                             ->label('ID')
                             ->copyable(),
                         TextEntry::make('display_name')
-                            ->label('Имя'),
+                            ->label('Контакт'),
                         TextEntry::make('name')
                             ->label('Сохранённое имя')
                             ->placeholder('Не задано'),
+                        TextEntry::make('primaryIdentity.channel.name')
+                            ->label('Канал')
+                            ->placeholder('—'),
+                        TextEntry::make('primaryIdentity.platform')
+                            ->label('Платформа')
+                            ->badge()
+                            ->placeholder('—')
+                            ->formatStateUsing(fn (?string $state): string => filled($state) ? (Channel::platformOptions()[$state] ?? $state) : '—'),
+                        TextEntry::make('primaryIdentity.external_user_id')
+                            ->label('Внешний ID')
+                            ->placeholder('—')
+                            ->copyable(),
+                        TextEntry::make('primaryIdentity.external_username')
+                            ->label('Username')
+                            ->placeholder('—')
+                            ->formatStateUsing(fn (?string $state): string => filled($state) ? '@'.ltrim($state, '@') : '—'),
                         TextEntry::make('messages_count')
                             ->label('Сообщений')
                             ->state(fn (Contact $record): int => $record->messages_count ?? $record->messages()->count()),
@@ -84,68 +99,45 @@ class ContactResource extends Resource
                             ->label('Создан')
                             ->dateTime('d.m.Y H:i'),
                     ])
-                    ->columns(2),
-                Section::make('Идентификаторы')
+                    ->columns(4)
+                    ->columnSpanFull(),
+                Section::make('Последнее сообщение')
                     ->schema([
-                        RepeatableEntry::make('identities_list')
-                            ->label('')
-                            ->state(fn (Contact $record) => $record->identities()
-                                ->with('channel')
-                                ->orderBy('created_at')
-                                ->get())
-                            ->placeholder('Идентификаторов ещё нет.')
-                            ->contained(false)
-                            ->table([
-                                TableColumn::make('Канал')->width('220px'),
-                                TableColumn::make('Платформа')->width('130px'),
-                                TableColumn::make('Внешний ID')->width('180px'),
-                                TableColumn::make('Username'),
-                            ])
-                            ->schema([
-                                TextEntry::make('channel.name')
-                                    ->placeholder('—'),
-                                TextEntry::make('platform')
-                                    ->badge()
-                                    ->formatStateUsing(fn (string $state): string => Channel::platformOptions()[$state] ?? $state),
-                                TextEntry::make('external_user_id')
-                                    ->placeholder('—'),
-                                TextEntry::make('external_username')
-                                    ->placeholder('—')
-                                    ->formatStateUsing(fn (?string $state): string => filled($state) ? '@'.ltrim($state, '@') : '—'),
-                            ]),
-                    ]),
-                Section::make('Последние сообщения')
-                    ->schema([
-                        RepeatableEntry::make('recent_messages')
-                            ->label('')
-                            ->state(fn (Contact $record) => $record->messages()
-                                ->with(['channel', 'contactIdentity'])
-                                ->orderByDesc('received_at')
-                                ->orderByDesc('id')
-                                ->limit(20)
-                                ->get())
-                            ->placeholder('Сообщений ещё не было.')
-                            ->contained(false)
-                            ->table([
-                                TableColumn::make('Время')->width('170px'),
-                                TableColumn::make('Канал')->width('220px'),
-                                TableColumn::make('Направление')->width('130px'),
-                                TableColumn::make('Текст'),
-                            ])
-                            ->schema([
-                                TextEntry::make('received_at')
-                                    ->dateTime('d.m.Y H:i:s'),
-                                TextEntry::make('channel.name')
-                                    ->placeholder('—'),
-                                TextEntry::make('direction')
-                                    ->badge()
-                                    ->formatStateUsing(fn (string $state): string => $state === Message::DIRECTION_INBOUND ? 'Входящее' : $state)
-                                    ->color(fn (string $state): string => $state === Message::DIRECTION_INBOUND ? 'info' : 'gray'),
-                                TextEntry::make('text')
-                                    ->placeholder('—')
-                                    ->wrap(),
-                            ]),
-                    ]),
+                        TextEntry::make('latest_message_received_at')
+                            ->label('Получено')
+                            ->placeholder('Сообщений ещё не было')
+                            ->state(fn (Contact $record) => static::resolveLatestMessage($record)?->received_at)
+                            ->dateTime('d.m.Y H:i:s'),
+                        TextEntry::make('latest_message_channel')
+                            ->label('Канал')
+                            ->placeholder('—')
+                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->channel?->name),
+                        TextEntry::make('latest_message_direction')
+                            ->label('Направление')
+                            ->placeholder('—')
+                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->direction)
+                            ->badge()
+                            ->formatStateUsing(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'Входящее' : ($state ?? '—'))
+                            ->color(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'info' : 'gray'),
+                        TextEntry::make('latest_message_external_id')
+                            ->label('Внешний message ID')
+                            ->placeholder('Не задан')
+                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->external_message_id)
+                            ->copyable(),
+                        TextEntry::make('latest_message_chat_id')
+                            ->label('Chat ID')
+                            ->placeholder('Не задан')
+                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->external_chat_id)
+                            ->copyable(),
+                        TextEntry::make('latest_message_text')
+                            ->label('Текст')
+                            ->placeholder('—')
+                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->text)
+                            ->wrap()
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(4)
+                    ->columnSpanFull(),
                 Section::make('Диагностика webhook')
                     ->schema([
                         TextEntry::make('diagnostic_external_message_id')
@@ -172,7 +164,8 @@ class ContactResource extends Resource
                             ->copyable()
                             ->columnSpanFull(),
                     ])
-                    ->columns(2),
+                    ->columns(2)
+                    ->columnSpanFull(),
             ]);
     }
 
@@ -240,7 +233,8 @@ class ContactResource extends Resource
             ->emptyStateHeading('Контактов ещё нет')
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')
             ->recordActions([
-                ViewAction::make(),
+                ViewAction::make()
+                    ->modalWidth(Width::SevenExtraLarge),
             ])
             ->toolbarActions([]);
     }
@@ -270,6 +264,7 @@ class ContactResource extends Resource
 
         /** @var ?Message $message */
         $message = $cache[$record->getKey()] ??= $record->messages()
+            ->with('channel')
             ->orderByDesc('received_at')
             ->orderByDesc('id')
             ->first();
