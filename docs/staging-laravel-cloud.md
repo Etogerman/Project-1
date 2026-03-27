@@ -65,6 +65,38 @@ The application needs the following tables in staging:
 3. Verify that the webhook is now registered against the staging HTTPS domain.
 4. Send a test message to Telegram and MAX bots.
 
+## Solo developer workflow
+
+For a solo workflow, keep the setup intentionally simple:
+
+1. Write code locally.
+2. Run PHPUnit locally before pushing.
+3. Push to `main`.
+4. Deploy `staging` from `main`.
+5. Verify all webhook and bot behavior only on staging.
+
+This keeps local development fast while avoiding multiple temporary bot setups.
+
+Use the staging environment as the main integration environment for:
+
+- Telegram webhook checks
+- MAX webhook checks
+- token and channel configuration
+- admin-panel sanity checks
+
+Use local development mainly for:
+
+- coding
+- PHPUnit
+- quick UI checks that do not depend on real webhooks
+
+Recommended rule of thumb:
+
+- local for implementation
+- staging for anything external
+
+If the staging environment is reused continuously, avoid creating extra bots unless the platform or product boundary really requires it.
+
 ## Notes
 
 - Do not reuse the temporary Cloudflare tunnel URL as the permanent `APP_URL`.
