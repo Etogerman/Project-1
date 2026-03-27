@@ -14,6 +14,7 @@ final readonly class IncomingBotMessage
         public int $channelId,
         public string $externalChatId,
         public string $externalUserId,
+        public ?string $providerEventKey,
         public ?string $externalMessageId,
         public ?string $externalUsername,
         public ?string $contactName,

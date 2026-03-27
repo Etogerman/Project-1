@@ -40,11 +40,13 @@ class MessageFactory extends Factory
                 return $identity->channel_id;
             },
             'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => null,
             'external_chat_id' => (string) fake()->numerify('########'),
             'external_message_id' => (string) fake()->numerify('########'),
             'text' => fake()->optional()->sentence(),
             'raw_payload' => ['message' => 'payload'],
             'received_at' => now(),
+            'auto_reply_sent_at' => null,
         ];
     }
 }

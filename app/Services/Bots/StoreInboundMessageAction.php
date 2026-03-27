@@ -70,18 +70,44 @@ class StoreInboundMessageAction
                 ])->save();
             }
 
-            return Message::query()->create([
-                'contact_id' => $identity->contact_id,
-                'contact_identity_id' => $identity->id,
-                'channel_id' => $channel->id,
-                'direction' => Message::DIRECTION_INBOUND,
-                'external_chat_id' => $message->externalChatId,
-                'external_message_id' => $message->externalMessageId,
-                'text' => $message->text,
-                'raw_payload' => $message->rawPayload,
-                'received_at' => $message->receivedAt,
-            ]);
+            if (filled($message->providerEventKey)) {
+                $existingMessage = $this->findExistingInboundMessage($channel, $message->providerEventKey);
+
+                if ($existingMessage !== null) {
+                    return $existingMessage;
+                }
+            }
+
+            try {
+                return Message::query()->create([
+                    'contact_id' => $identity->contact_id,
+                    'contact_identity_id' => $identity->id,
+                    'channel_id' => $channel->id,
+                    'direction' => Message::DIRECTION_INBOUND,
+                    'provider_event_key' => $message->providerEventKey,
+                    'external_chat_id' => $message->externalChatId,
+                    'external_message_id' => $message->externalMessageId,
+                    'text' => $message->text,
+                    'raw_payload' => $message->rawPayload,
+                    'received_at' => $message->receivedAt,
+                ]);
+            } catch (QueryException $exception) {
+                if (! filled($message->providerEventKey) || ! $this->wasUniqueConstraintViolation($exception)) {
+                    throw $exception;
+                }
+
+                return $this->findExistingInboundMessage($channel, $message->providerEventKey) ?? throw $exception;
+            }
         });
+    }
+
+    protected function findExistingInboundMessage(Channel $channel, string $providerEventKey): ?Message
+    {
+        return Message::query()
+            ->where('channel_id', $channel->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->where('provider_event_key', $providerEventKey)
+            ->first();
     }
 
     protected function wasUniqueConstraintViolation(QueryException $exception): bool

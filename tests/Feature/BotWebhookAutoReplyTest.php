@@ -82,6 +82,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->assertSame($identity->contact_id, $message->contact_id);
         $this->assertSame($identity->id, $message->contact_identity_id);
+        $this->assertNotNull($message->auto_reply_sent_at);
     }
 
     public function test_max_webhook_endpoint_accepts_valid_event_and_sends_auto_reply(): void
@@ -131,6 +132,8 @@ class BotWebhookAutoReplyTest extends TestCase
             'external_message_id' => 'max-10',
             'text' => 'hello',
         ]);
+
+        $this->assertNotNull(Message::query()->firstOrFail()->auto_reply_sent_at);
     }
 
     public function test_max_webhook_uses_real_payload_fields_for_contact_name_and_message_id(): void
@@ -198,6 +201,237 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertSame('2026-03-20 12:34:56', $message->received_at->utc()->format('Y-m-d H:i:s'));
     }
 
+    public function test_repeated_telegram_webhook_with_same_update_id_creates_one_message_and_sends_one_auto_reply(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $headers = [
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ];
+
+        $payload = $this->telegramPayload(
+            messageId: 42,
+            text: 'duplicate telegram message',
+        );
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $payload)
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $payload)
+            ->assertOk();
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseCount('messages', 1);
+
+        $message = Message::query()->firstOrFail();
+
+        $this->assertSame('42', $message->provider_event_key);
+        $this->assertNotNull($message->auto_reply_sent_at);
+    }
+
+    public function test_repeated_telegram_webhook_with_same_update_id_retries_auto_reply_after_failure(): void
+    {
+        $replyAttempts = 0;
+
+        Http::fake(function ($request) use (&$replyAttempts) {
+            if (str_starts_with($request->url(), 'https://api.telegram.org/')) {
+                $replyAttempts++;
+
+                return $replyAttempts === 1
+                    ? Http::response(['ok' => false], 500)
+                    : Http::response(['ok' => true]);
+            }
+
+            return Http::response([], 404);
+        });
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $headers = [
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ];
+
+        $payload = $this->telegramPayload(
+            messageId: 43,
+            text: 'telegram retry message',
+        );
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $payload)
+            ->assertStatus(500);
+
+        $message = Message::query()->firstOrFail();
+
+        $this->assertSame('43', $message->provider_event_key);
+        $this->assertNull($message->auto_reply_sent_at);
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $payload)
+            ->assertOk();
+
+        Http::assertSentCount(2);
+        $this->assertDatabaseCount('messages', 1);
+
+        $message->refresh();
+
+        $this->assertNotNull($message->auto_reply_sent_at);
+    }
+
+    public function test_repeated_max_webhook_with_same_external_message_id_creates_one_message_and_sends_one_auto_reply(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $headers = [
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ];
+
+        $payload = $this->maxPayload(
+            messageId: 'max-42',
+            text: 'duplicate max message',
+        );
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $payload)
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $payload)
+            ->assertOk();
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseCount('messages', 1);
+
+        $message = Message::query()->firstOrFail();
+
+        $this->assertSame('max-42', $message->provider_event_key);
+        $this->assertNotNull($message->auto_reply_sent_at);
+    }
+
+    public function test_repeated_max_webhook_with_same_external_message_id_retries_auto_reply_after_failure(): void
+    {
+        $replyAttempts = 0;
+
+        Http::fake(function ($request) use (&$replyAttempts) {
+            if (str_starts_with($request->url(), 'https://platform-api.max.ru/')) {
+                $replyAttempts++;
+
+                return $replyAttempts === 1
+                    ? Http::response(['message' => []], 500)
+                    : Http::response(['message' => []]);
+            }
+
+            return Http::response([], 404);
+        });
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $headers = [
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ];
+
+        $payload = $this->maxPayload(
+            messageId: 'max-43',
+            text: 'max retry message',
+        );
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $payload)
+            ->assertStatus(500);
+
+        $message = Message::query()->firstOrFail();
+
+        $this->assertSame('max-43', $message->provider_event_key);
+        $this->assertNull($message->auto_reply_sent_at);
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $payload)
+            ->assertOk();
+
+        Http::assertSentCount(2);
+        $this->assertDatabaseCount('messages', 1);
+
+        $message->refresh();
+
+        $this->assertNotNull($message->auto_reply_sent_at);
+    }
+
+    public function test_repeat_max_webhook_from_same_user_with_different_message_ids_creates_two_messages(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $headers = [
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ];
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $this->maxPayload(
+                messageId: 'max-100',
+                text: 'first max message',
+            ))
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $this->maxPayload(
+                messageId: 'max-101',
+                text: 'second max message',
+            ))
+            ->assertOk();
+
+        $this->assertDatabaseCount('contacts', 1);
+        $this->assertDatabaseCount('contact_identities', 1);
+        $this->assertDatabaseCount('messages', 2);
+    }
+
     public function test_inactive_channel_does_not_process_event(): void
     {
         Http::fake();
@@ -256,6 +490,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseCount('contacts', 1);
         $this->assertDatabaseCount('contact_identities', 1);
         $this->assertDatabaseCount('messages', 1);
+        $this->assertNull(Message::query()->firstOrFail()->auto_reply_sent_at);
     }
 
     public function test_invalid_telegram_webhook_secret_is_rejected(): void
@@ -378,6 +613,48 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseCount('messages', 2);
     }
 
+    public function test_telegram_webhook_without_update_id_keeps_legacy_non_deduplicated_behavior(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $headers = [
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ];
+
+        $payload = $this->telegramPayload(
+            messageId: 77,
+            text: 'legacy telegram message',
+            includeUpdateId: false,
+        );
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $payload)
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $payload)
+            ->assertOk();
+
+        Http::assertSentCount(2);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'provider_event_key' => null,
+        ]);
+    }
+
     public function test_new_telegram_webhook_from_different_user_creates_new_contact_and_identity(): void
     {
         Http::fake([
@@ -438,9 +715,9 @@ class BotWebhookAutoReplyTest extends TestCase
         ?string $text = 'hello',
         ?string $username = 'telegram_user',
         int $date = 1_711_539_200,
+        bool $includeUpdateId = true,
     ): array {
-        return [
-            'update_id' => 1,
+        $payload = [
             'message' => [
                 'message_id' => $messageId,
                 'date' => $date,
@@ -456,6 +733,12 @@ class BotWebhookAutoReplyTest extends TestCase
                 ],
             ],
         ];
+
+        if ($includeUpdateId) {
+            $payload['update_id'] = $messageId;
+        }
+
+        return $payload;
     }
 
     /**

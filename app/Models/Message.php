@@ -20,11 +20,13 @@ class Message extends Model
         'contact_identity_id',
         'channel_id',
         'direction',
+        'provider_event_key',
         'external_chat_id',
         'external_message_id',
         'text',
         'raw_payload',
         'received_at',
+        'auto_reply_sent_at',
     ];
 
     /**
@@ -33,7 +35,13 @@ class Message extends Model
     protected $casts = [
         'raw_payload' => 'array',
         'received_at' => 'datetime',
+        'auto_reply_sent_at' => 'datetime',
     ];
+
+    public function hasSuccessfulAutoReply(): bool
+    {
+        return $this->auto_reply_sent_at !== null;
+    }
 
     public function contact(): BelongsTo
     {

@@ -4,6 +4,7 @@ namespace App\Services\Bots;
 
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
+use App\Models\Message;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 
@@ -15,7 +16,7 @@ class BotAutoReplyService
         protected MaxBotApiService $maxBotApiService,
     ) {}
 
-    public function handle(Channel $channel, IncomingBotMessage $message): void
+    public function handle(Channel $channel, IncomingBotMessage $message, Message $storedMessage): void
     {
         Log::info('bot auto reply started', [
             'channel_id' => $channel->id,
@@ -29,6 +30,10 @@ class BotAutoReplyService
             Channel::PLATFORM_MAX => $this->maxBotApiService->sendAutoReply($channel, $message),
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
         };
+
+        $storedMessage->forceFill([
+            'auto_reply_sent_at' => now(),
+        ])->save();
 
         $channel->markReplySent();
 

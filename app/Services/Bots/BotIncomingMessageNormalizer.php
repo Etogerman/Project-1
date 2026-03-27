@@ -49,6 +49,7 @@ class BotIncomingMessageNormalizer
             channelId: $channel->id,
             externalChatId: $chatId,
             externalUserId: $userId,
+            providerEventKey: $this->normalizeExternalId($payload['update_id'] ?? null),
             externalMessageId: $this->normalizeExternalId(data_get($message, 'message_id')),
             externalUsername: $this->normalizeUsername(data_get($message, 'from.username')),
             contactName: $this->resolvePersonName(data_get($message, 'from')),
@@ -90,12 +91,15 @@ class BotIncomingMessageNormalizer
             return null;
         }
 
+        $externalMessageId = $this->resolveMaxMessageId($message);
+
         return new IncomingBotMessage(
             platform: $channel->platform,
             channelId: $channel->id,
             externalChatId: $chatId,
             externalUserId: $userId,
-            externalMessageId: $this->resolveMaxMessageId($message),
+            providerEventKey: $externalMessageId,
+            externalMessageId: $externalMessageId,
             externalUsername: $this->normalizeUsername(data_get($message, 'sender.username')),
             contactName: $this->resolvePersonName(data_get($message, 'sender')),
             text: $this->normalizeText(data_get($message, 'body.text')),

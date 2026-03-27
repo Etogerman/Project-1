@@ -98,10 +98,16 @@ class BotWebhookController extends Controller
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
         if ($message !== null) {
-            $storeInboundMessageAction->handle($channel, $message);
+            $storedMessage = $storeInboundMessageAction->handle($channel, $message);
+
+            if ($storedMessage->hasSuccessfulAutoReply()) {
+                return response()->json([
+                    'ok' => true,
+                ]);
+            }
 
             try {
-                $botAutoReplyService->handle($channel, $message);
+                $botAutoReplyService->handle($channel, $message, $storedMessage);
             } catch (\Throwable $throwable) {
                 $channel->markError($throwable);
                 $channelActivityLogger->error(
