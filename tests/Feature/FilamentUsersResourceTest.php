@@ -39,7 +39,11 @@ class FilamentUsersResourceTest extends TestCase
         $this->actingAs($admin)
             ->get('/admin/users')
             ->assertOk()
-            ->assertSee('Пользователи');
+            ->assertSee('Сотрудники');
+
+        $this->assertSame('Сотрудник', UserResource::getModelLabel());
+        $this->assertSame('Сотрудники', UserResource::getPluralModelLabel());
+        $this->assertSame('Сотрудники', UserResource::getNavigationLabel());
 
         Livewire::actingAs($admin)
             ->test(ManageUsers::class)

@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\Channel;
+use App\Models\ContactIdentity;
+use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -29,21 +31,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $response = $this->withHeaders([
             'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
-        ])->postJson("/webhooks/telegram/{$channel->id}", [
-            'update_id' => 1,
-            'message' => [
-                'message_id' => 10,
-                'text' => 'hello',
-                'from' => [
-                    'id' => 200,
-                    'is_bot' => false,
-                ],
-                'chat' => [
-                    'id' => 300,
-                    'type' => 'private',
-                ],
-            ],
-        ]);
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload());
 
         $response
             ->assertOk()
@@ -53,7 +41,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         Http::assertSent(function ($request): bool {
             return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-                && $request['chat_id'] === 300
+                && $request['chat_id'] === '300'
                 && $request['text'] === 'Привет бот находится в разработке. Напишите нам чуть позже.';
         });
 
@@ -71,6 +59,28 @@ class BotWebhookAutoReplyTest extends TestCase
             'channel_id' => $channel->id,
             'event' => 'bot.reply_sent',
         ]);
+        $this->assertDatabaseCount('contacts', 1);
+        $this->assertDatabaseCount('contact_identities', 1);
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseHas('contact_identities', [
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => '300',
+            'external_message_id' => '10',
+            'text' => 'hello',
+        ]);
+
+        $identity = ContactIdentity::query()->firstOrFail();
+        $message = Message::query()->firstOrFail();
+
+        $this->assertSame($identity->contact_id, $message->contact_id);
+        $this->assertSame($identity->id, $message->contact_identity_id);
     }
 
     public function test_max_webhook_endpoint_accepts_valid_event_and_sends_auto_reply(): void
@@ -91,22 +101,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->withHeaders([
             'X-Max-Bot-Api-Secret' => 'max-secret',
-        ])->postJson("/webhooks/max/{$channel->id}", [
-            'update_type' => 'message_created',
-            'user_locale' => 'ru',
-            'message' => [
-                'sender' => [
-                    'user_id' => 500,
-                    'is_bot' => false,
-                ],
-                'recipient' => [
-                    'chat_id' => 700,
-                ],
-                'body' => [
-                    'text' => 'hello',
-                ],
-            ],
-        ])->assertOk();
+        ])->postJson("/webhooks/max/{$channel->id}", $this->maxPayload())->assertOk();
 
         Http::assertSent(function ($request): bool {
             return $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
@@ -119,6 +114,22 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertNotNull($channel->last_webhook_received_at);
         $this->assertNotNull($channel->last_reply_sent_at);
         $this->assertNull($channel->last_error_at);
+        $this->assertDatabaseCount('contacts', 1);
+        $this->assertDatabaseCount('contact_identities', 1);
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseHas('contact_identities', [
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_MAX,
+            'external_user_id' => '500',
+            'external_username' => 'max_user',
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => '700',
+            'external_message_id' => 'max-10',
+            'text' => 'hello',
+        ]);
     }
 
     public function test_inactive_channel_does_not_process_event(): void
@@ -136,16 +147,12 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->withHeaders([
             'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
-        ])->postJson("/webhooks/telegram/{$channel->id}", [
-            'message' => [
-                'chat' => [
-                    'id' => 1,
-                    'type' => 'private',
-                ],
-            ],
-        ])->assertNotFound();
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload())->assertNotFound();
 
         Http::assertNothingSent();
+        $this->assertDatabaseCount('contacts', 0);
+        $this->assertDatabaseCount('contact_identities', 0);
+        $this->assertDatabaseCount('messages', 0);
     }
 
     public function test_reply_error_updates_channel_error_status_and_timestamp(): void
@@ -166,21 +173,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->withHeaders([
             'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
-        ])->postJson("/webhooks/telegram/{$channel->id}", [
-            'update_id' => 1,
-            'message' => [
-                'message_id' => 10,
-                'text' => 'hello',
-                'from' => [
-                    'id' => 200,
-                    'is_bot' => false,
-                ],
-                'chat' => [
-                    'id' => 300,
-                    'type' => 'private',
-                ],
-            ],
-        ])->assertStatus(500);
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload())->assertStatus(500);
 
         $channel->refresh();
 
@@ -194,6 +187,9 @@ class BotWebhookAutoReplyTest extends TestCase
             'event' => 'bot.reply_failed',
             'level' => 'error',
         ]);
+        $this->assertDatabaseCount('contacts', 1);
+        $this->assertDatabaseCount('contact_identities', 1);
+        $this->assertDatabaseCount('messages', 1);
     }
 
     public function test_invalid_telegram_webhook_secret_is_rejected(): void
@@ -210,16 +206,12 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->withHeaders([
             'X-Telegram-Bot-Api-Secret-Token' => 'wrong-secret',
-        ])->postJson("/webhooks/telegram/{$channel->id}", [
-            'message' => [
-                'chat' => [
-                    'id' => 1,
-                    'type' => 'private',
-                ],
-            ],
-        ])->assertForbidden();
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload())->assertForbidden();
 
         Http::assertNothingSent();
+        $this->assertDatabaseCount('contacts', 0);
+        $this->assertDatabaseCount('contact_identities', 0);
+        $this->assertDatabaseCount('messages', 0);
     }
 
     public function test_empty_max_webhook_secret_is_rejected(): void
@@ -248,6 +240,9 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->assertForbidden();
 
         Http::assertNothingSent();
+        $this->assertDatabaseCount('contacts', 0);
+        $this->assertDatabaseCount('contact_identities', 0);
+        $this->assertDatabaseCount('messages', 0);
     }
 
     public function test_auto_reply_text_is_taken_from_central_config(): void
@@ -270,23 +265,163 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->withHeaders([
             'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
-        ])->postJson("/webhooks/telegram/{$channel->id}", [
-            'message' => [
-                'text' => 'hello',
-                'from' => [
-                    'id' => 200,
-                    'is_bot' => false,
-                ],
-                'chat' => [
-                    'id' => 300,
-                    'type' => 'private',
-                ],
-            ],
-        ])->assertOk();
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload())->assertOk();
 
         Http::assertSent(function ($request): bool {
             return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
                 && $request['text'] === 'Тестовый ответ из конфига.';
         });
+    }
+
+    public function test_repeat_telegram_webhook_from_same_user_reuses_contact_identity_and_contact(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $headers = [
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ];
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+                messageId: 10,
+                text: 'first message',
+            ))
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+                messageId: 11,
+                text: 'second message',
+            ))
+            ->assertOk();
+
+        $this->assertDatabaseCount('contacts', 1);
+        $this->assertDatabaseCount('contact_identities', 1);
+        $this->assertDatabaseCount('messages', 2);
+    }
+
+    public function test_new_telegram_webhook_from_different_user_creates_new_contact_and_identity(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $headers = [
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ];
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+                userId: 200,
+                chatId: 300,
+                messageId: 10,
+                text: 'first message',
+                username: 'telegram_user',
+            ))
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+                userId: 201,
+                chatId: 301,
+                messageId: 11,
+                text: 'second message',
+                username: 'telegram_user_2',
+            ))
+            ->assertOk();
+
+        $this->assertDatabaseCount('contacts', 2);
+        $this->assertDatabaseCount('contact_identities', 2);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseHas('contact_identities', [
+            'channel_id' => $channel->id,
+            'external_user_id' => '201',
+            'external_username' => 'telegram_user_2',
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function telegramPayload(
+        int|string $userId = 200,
+        int|string $chatId = 300,
+        int|string $messageId = 10,
+        ?string $text = 'hello',
+        ?string $username = 'telegram_user',
+        int $date = 1_711_539_200,
+    ): array {
+        return [
+            'update_id' => 1,
+            'message' => [
+                'message_id' => $messageId,
+                'date' => $date,
+                'text' => $text,
+                'from' => [
+                    'id' => $userId,
+                    'username' => $username,
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => $chatId,
+                    'type' => 'private',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function maxPayload(
+        int|string $userId = 500,
+        int|string $chatId = 700,
+        int|string $messageId = 'max-10',
+        ?string $text = 'hello',
+        ?string $username = 'max_user',
+        string $timestamp = '2026-03-27T12:00:00+03:00',
+    ): array {
+        return [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'timestamp' => $timestamp,
+            'message' => [
+                'message_id' => $messageId,
+                'timestamp' => $timestamp,
+                'sender' => [
+                    'user_id' => $userId,
+                    'username' => $username,
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => $chatId,
+                ],
+                'body' => [
+                    'text' => $text,
+                ],
+            ],
+        ];
     }
 }

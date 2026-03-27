@@ -5,6 +5,9 @@ namespace Tests\Feature;
 use App\Filament\Resources\Channels\ChannelResource;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
+use App\Models\Contact;
+use App\Models\ContactIdentity;
+use App\Models\Message;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -249,5 +252,43 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertFalse(Gate::forUser($admin)->allows('delete', $channel));
         $this->assertFalse(Gate::forUser($admin)->allows('deleteAny', Channel::class));
+    }
+
+    public function test_admin_can_view_latest_messages_in_channel_view_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ext-100',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => 'msg-900',
+            'text' => 'Нужна помощь',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('view', $channel)
+            ->assertMountedActionModalSee('Последние сообщения')
+            ->assertMountedActionModalSee('ext-100')
+            ->assertMountedActionModalSee('Нужна помощь')
+            ->assertMountedActionModalSee('Входящее');
     }
 }

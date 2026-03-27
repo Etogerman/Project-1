@@ -206,7 +206,7 @@ class Channel extends Model
         return $this;
     }
 
-    public function markError(string | Throwable $error): static
+    public function markError(string|Throwable $error): static
     {
         $message = $error instanceof Throwable ? $error->getMessage() : $error;
 
@@ -231,5 +231,15 @@ class Channel extends Model
     public function activityLogs(): HasMany
     {
         return $this->hasMany(ChannelActivityLog::class);
+    }
+
+    public function contactIdentities(): HasMany
+    {
+        return $this->hasMany(ContactIdentity::class);
+    }
+
+    public function messages(): HasMany
+    {
+        return $this->hasMany(Message::class);
     }
 }

@@ -4,7 +4,9 @@ namespace App\Services\Bots;
 
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
+use Illuminate\Support\Carbon;
 use InvalidArgumentException;
+use Throwable;
 
 class BotIncomingMessageNormalizer
 {
@@ -35,8 +37,8 @@ class BotIncomingMessageNormalizer
             return null;
         }
 
-        $chatId = data_get($message, 'chat.id');
-        $userId = data_get($message, 'from.id');
+        $chatId = $this->normalizeExternalId(data_get($message, 'chat.id'));
+        $userId = $this->normalizeExternalId(data_get($message, 'from.id'));
 
         if (! filled($chatId) || ! filled($userId)) {
             return null;
@@ -47,8 +49,13 @@ class BotIncomingMessageNormalizer
             channelId: $channel->id,
             externalChatId: $chatId,
             externalUserId: $userId,
-            text: data_get($message, 'text'),
+            externalMessageId: $this->normalizeExternalId(data_get($message, 'message_id')),
+            externalUsername: $this->normalizeUsername(data_get($message, 'from.username')),
+            text: $this->normalizeText(data_get($message, 'text')),
             rawPayload: $payload,
+            receivedAt: $this->resolveReceivedAt([
+                data_get($message, 'date'),
+            ]),
         );
     }
 
@@ -75,10 +82,10 @@ class BotIncomingMessageNormalizer
             return null;
         }
 
-        $userId = data_get($message, 'sender.user_id');
-        $chatId = data_get($message, 'recipient.chat_id');
+        $userId = $this->normalizeExternalId(data_get($message, 'sender.user_id'));
+        $chatId = $this->normalizeExternalId(data_get($message, 'recipient.chat_id'));
 
-        if (! filled($userId) && ! filled($chatId)) {
+        if (! filled($userId) || ! filled($chatId)) {
             return null;
         }
 
@@ -87,8 +94,73 @@ class BotIncomingMessageNormalizer
             channelId: $channel->id,
             externalChatId: $chatId,
             externalUserId: $userId,
-            text: data_get($message, 'body.text'),
+            externalMessageId: $this->normalizeExternalId(
+                data_get($message, 'message_id', data_get($message, 'id'))
+            ),
+            externalUsername: $this->normalizeUsername(data_get($message, 'sender.username')),
+            text: $this->normalizeText(data_get($message, 'body.text')),
             rawPayload: $payload,
+            receivedAt: $this->resolveReceivedAt([
+                data_get($message, 'timestamp'),
+                data_get($message, 'created_at'),
+                data_get($payload, 'timestamp'),
+                data_get($payload, 'created_at'),
+            ]),
         );
+    }
+
+    protected function normalizeExternalId(mixed $value): ?string
+    {
+        if (! filled($value)) {
+            return null;
+        }
+
+        return trim((string) $value);
+    }
+
+    protected function normalizeUsername(mixed $value): ?string
+    {
+        if (! filled($value)) {
+            return null;
+        }
+
+        $username = ltrim(trim((string) $value), '@');
+
+        return $username !== '' ? $username : null;
+    }
+
+    protected function normalizeText(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $text = trim((string) $value);
+
+        return $text !== '' ? $text : null;
+    }
+
+    /**
+     * @param  array<int, mixed>  $candidates
+     */
+    protected function resolveReceivedAt(array $candidates): Carbon
+    {
+        foreach ($candidates as $candidate) {
+            if (! filled($candidate)) {
+                continue;
+            }
+
+            if (is_numeric($candidate)) {
+                return Carbon::createFromTimestampUTC((int) $candidate);
+            }
+
+            try {
+                return Carbon::parse((string) $candidate);
+            } catch (Throwable) {
+                continue;
+            }
+        }
+
+        return now();
     }
 }

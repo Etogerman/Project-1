@@ -12,8 +12,8 @@ use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
-use Filament\Schemas\Schema;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
@@ -28,19 +28,19 @@ class UserResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'name';
 
-    protected static ?string $modelLabel = 'пользователь';
+    protected static ?string $modelLabel = 'Сотрудник';
 
-    protected static ?string $pluralModelLabel = 'пользователи';
+    protected static ?string $pluralModelLabel = 'Сотрудники';
 
-    protected static ?string $navigationLabel = 'Пользователи';
+    protected static ?string $navigationLabel = 'Сотрудники';
 
-    protected static string | UnitEnum | null $navigationGroup = 'Команда';
+    protected static string|UnitEnum|null $navigationGroup = 'Команда';
 
     protected static ?int $navigationSort = 10;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedUsers;
 
-    public static function getRecordTitle(?Model $record): string | null
+    public static function getRecordTitle(?Model $record): ?string
     {
         if (! $record instanceof User) {
             return parent::getRecordTitle($record);
@@ -53,7 +53,7 @@ class UserResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Пользователь')
+                Section::make('Сотрудник')
                     ->schema([
                         TextInput::make('name')
                             ->label('Имя')
@@ -101,7 +101,7 @@ class UserResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Пользователь')
+                Section::make('Сотрудник')
                     ->schema([
                         TextEntry::make('id')
                             ->label('ID')
@@ -177,8 +177,8 @@ class UserResource extends Resource
                     ->falseLabel('Только сотрудники'),
             ])
             ->defaultSort('created_at', 'desc')
-            ->emptyStateHeading('Пользователи ещё не добавлены')
-            ->emptyStateDescription('Создайте первого пользователя команды.')
+            ->emptyStateHeading('Сотрудники ещё не добавлены')
+            ->emptyStateDescription('Добавьте первого сотрудника команды.')
             ->recordActions([
                 ViewAction::make(),
                 EditAction::make()

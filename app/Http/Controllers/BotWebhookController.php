@@ -4,8 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\Channel;
 use App\Services\Bots\BotAutoReplyService;
-use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\BotIncomingMessageNormalizer;
+use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\StoreInboundMessageAction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -16,6 +17,7 @@ class BotWebhookController extends Controller
         Request $request,
         Channel $channel,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
+        StoreInboundMessageAction $storeInboundMessageAction,
         BotAutoReplyService $botAutoReplyService,
         ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
@@ -24,6 +26,7 @@ class BotWebhookController extends Controller
             channel: $channel,
             expectedPlatform: Channel::PLATFORM_TELEGRAM,
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
+            storeInboundMessageAction: $storeInboundMessageAction,
             botAutoReplyService: $botAutoReplyService,
             channelActivityLogger: $channelActivityLogger,
         );
@@ -33,6 +36,7 @@ class BotWebhookController extends Controller
         Request $request,
         Channel $channel,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
+        StoreInboundMessageAction $storeInboundMessageAction,
         BotAutoReplyService $botAutoReplyService,
         ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
@@ -41,6 +45,7 @@ class BotWebhookController extends Controller
             channel: $channel,
             expectedPlatform: Channel::PLATFORM_MAX,
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
+            storeInboundMessageAction: $storeInboundMessageAction,
             botAutoReplyService: $botAutoReplyService,
             channelActivityLogger: $channelActivityLogger,
         );
@@ -51,6 +56,7 @@ class BotWebhookController extends Controller
         Channel $channel,
         string $expectedPlatform,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
+        StoreInboundMessageAction $storeInboundMessageAction,
         BotAutoReplyService $botAutoReplyService,
         ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
@@ -92,6 +98,8 @@ class BotWebhookController extends Controller
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
         if ($message !== null) {
+            $storeInboundMessageAction->handle($channel, $message);
+
             try {
                 $botAutoReplyService->handle($channel, $message);
             } catch (\Throwable $throwable) {

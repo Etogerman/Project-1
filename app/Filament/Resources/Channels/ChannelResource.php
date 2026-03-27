@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Channels;
 
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
+use App\Models\Message;
 use App\Services\Bots\RegisterChannelWebhookAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
 use BackedEnum;
@@ -13,11 +14,11 @@ use Filament\Actions\ViewAction;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
+use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\RepeatableEntry\TableColumn;
-use Filament\Notifications\Notification;
-use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -43,11 +44,11 @@ class ChannelResource extends Resource
 
     protected static ?string $navigationLabel = 'Каналы связи';
 
-    protected static string | UnitEnum | null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
 
     protected static ?int $navigationSort = 10;
 
-    protected static string | BackedEnum | null $navigationIcon = Heroicon::OutlinedChatBubbleLeftRight;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedChatBubbleLeftRight;
 
     public static function form(Schema $schema): Schema
     {
@@ -198,6 +199,37 @@ class ChannelResource extends Resource
                             ]),
                     ])
                     ->columns(2),
+                Section::make('Последние сообщения')
+                    ->schema([
+                        RepeatableEntry::make('recent_messages')
+                            ->label('')
+                            ->state(fn (Channel $record) => $record->messages()
+                                ->with('contactIdentity')
+                                ->latest('received_at')
+                                ->limit(15)
+                                ->get())
+                            ->placeholder('Сообщений ещё не было.')
+                            ->contained(false)
+                            ->table([
+                                TableColumn::make('Время')->width('170px'),
+                                TableColumn::make('Направление')->width('130px'),
+                                TableColumn::make('Внешний пользователь')->width('180px'),
+                                TableColumn::make('Текст'),
+                            ])
+                            ->schema([
+                                TextEntry::make('received_at')
+                                    ->dateTime('d.m.Y H:i:s'),
+                                TextEntry::make('direction')
+                                    ->badge()
+                                    ->formatStateUsing(fn (string $state): string => $state === Message::DIRECTION_INBOUND ? 'Входящее' : $state)
+                                    ->color(fn (string $state): string => $state === Message::DIRECTION_INBOUND ? 'info' : 'gray'),
+                                TextEntry::make('contactIdentity.external_user_id')
+                                    ->placeholder('—'),
+                                TextEntry::make('text')
+                                    ->placeholder('—')
+                                    ->wrap(),
+                            ]),
+                    ]),
             ]);
     }
 
