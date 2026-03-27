@@ -11,6 +11,7 @@ class RegisterChannelWebhookAction
 {
     public function __construct(
         protected ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
+        protected ChannelActivityLogger $channelActivityLogger,
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
         protected SyncChannelBotMetadataAction $syncChannelBotMetadataAction,
@@ -29,6 +30,15 @@ class RegisterChannelWebhookAction
                 'platform' => $channel->platform,
                 'webhook_url' => $webhookUrl,
             ]);
+            $this->channelActivityLogger->info(
+                $channel,
+                'webhook.registration_started',
+                'Начата регистрация webhook.',
+                [
+                    'platform' => $channel->platform,
+                    'webhook_url' => $webhookUrl,
+                ],
+            );
 
             match ($channel->platform) {
                 Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->registerWebhook($channel, $webhookUrl, $webhookSecret),
@@ -44,8 +54,26 @@ class RegisterChannelWebhookAction
                 'platform' => $channel->platform,
                 'webhook_url' => $webhookUrl,
             ]);
+            $this->channelActivityLogger->info(
+                $channel,
+                'webhook.registration_completed',
+                'Webhook зарегистрирован.',
+                [
+                    'platform' => $channel->platform,
+                    'webhook_url' => $webhookUrl,
+                ],
+            );
         } catch (\Throwable $throwable) {
             $channel->markError($throwable);
+            $this->channelActivityLogger->error(
+                $channel,
+                'webhook.registration_failed',
+                'Не удалось зарегистрировать webhook.',
+                [
+                    'platform' => $channel->platform,
+                    'error' => $throwable->getMessage(),
+                ],
+            );
 
             throw $throwable;
         }

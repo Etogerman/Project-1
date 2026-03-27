@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -75,6 +76,15 @@ class ChannelWebhookRegistrationTest extends TestCase
         });
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getMe');
+
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'webhook.registration_completed',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.metadata_synced',
+        ]);
     }
 
     public function test_admin_can_register_max_webhook_from_filament_resource(): void
@@ -180,5 +190,41 @@ class ChannelWebhookRegistrationTest extends TestCase
 
         Http::assertSentCount(1);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getMe');
+    }
+
+    public function test_failed_metadata_sync_is_logged_in_channel_activity_logs(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => false,
+            ], 500),
+        ]);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $this->withoutExceptionHandling();
+
+        try {
+            Livewire::actingAs($admin)
+                ->test(ManageChannels::class)
+                ->callTableAction('syncBotMetadata', $channel);
+        } catch (\Throwable) {
+            // Expected for a failed upstream API call.
+        }
+
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.metadata_sync_failed',
+            'level' => 'error',
+        ]);
     }
 }

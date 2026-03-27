@@ -13,6 +13,8 @@ use Filament\Actions\ViewAction;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
+use Filament\Infolists\Components\RepeatableEntry;
+use Filament\Infolists\Components\RepeatableEntry\TableColumn;
 use Filament\Notifications\Notification;
 use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\TextEntry;
@@ -157,6 +159,43 @@ class ChannelResource extends Resource
                         TextEntry::make('updated_at')
                             ->label('Обновлён')
                             ->dateTime('d.m.Y H:i'),
+                    ])
+                    ->columns(2),
+                Section::make('Техжурнал')
+                    ->schema([
+                        RepeatableEntry::make('recent_activity_logs')
+                            ->label('')
+                            ->state(fn (Channel $record) => $record->activityLogs()->latest('created_at')->limit(15)->get())
+                            ->placeholder('Событий ещё не было.')
+                            ->contained(false)
+                            ->table([
+                                TableColumn::make('Время')->width('160px'),
+                                TableColumn::make('Уровень')->width('110px'),
+                                TableColumn::make('Событие')->width('170px'),
+                                TableColumn::make('Сообщение'),
+                            ])
+                            ->schema([
+                                TextEntry::make('created_at')
+                                    ->dateTime('d.m.Y H:i:s'),
+                                TextEntry::make('level')
+                                    ->badge()
+                                    ->formatStateUsing(fn (string $state): string => $state === 'error' ? 'Ошибка' : 'Info')
+                                    ->color(fn (string $state): string => $state === 'error' ? 'danger' : 'gray'),
+                                TextEntry::make('event')
+                                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                                        'webhook.received' => 'Webhook',
+                                        'bot.reply_sent' => 'Ответ',
+                                        'bot.reply_failed' => 'Ошибка ответа',
+                                        'bot.metadata_synced' => 'Sync metadata',
+                                        'bot.metadata_sync_failed' => 'Ошибка metadata',
+                                        'webhook.registration_started' => 'Регистрация webhook',
+                                        'webhook.registration_completed' => 'Webhook готов',
+                                        'webhook.registration_failed' => 'Ошибка webhook',
+                                        default => $state,
+                                    }),
+                                TextEntry::make('message')
+                                    ->wrap(),
+                            ]),
                     ])
                     ->columns(2),
             ]);

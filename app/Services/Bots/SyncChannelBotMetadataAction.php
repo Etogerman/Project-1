@@ -10,6 +10,7 @@ use InvalidArgumentException;
 class SyncChannelBotMetadataAction
 {
     public function __construct(
+        protected ChannelActivityLogger $channelActivityLogger,
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
     ) {}
@@ -37,10 +38,29 @@ class SyncChannelBotMetadataAction
                 'bot_external_id' => $metadata->externalId,
                 'bot_username' => $metadata->username,
             ]);
+            $this->channelActivityLogger->info(
+                $channel,
+                'bot.metadata_synced',
+                'Данные бота синхронизированы.',
+                [
+                    'platform' => $channel->platform,
+                    'bot_external_id' => $metadata->externalId,
+                    'bot_username' => $metadata->username,
+                ],
+            );
 
             return $channel->refresh();
         } catch (\Throwable $throwable) {
             $channel->markError($throwable);
+            $this->channelActivityLogger->error(
+                $channel,
+                'bot.metadata_sync_failed',
+                'Не удалось синхронизировать данные бота.',
+                [
+                    'platform' => $channel->platform,
+                    'error' => $throwable->getMessage(),
+                ],
+            );
 
             throw $throwable;
         }

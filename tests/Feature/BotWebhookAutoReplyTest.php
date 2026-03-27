@@ -63,6 +63,14 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertNotNull($channel->last_reply_sent_at);
         $this->assertNull($channel->last_error_at);
         $this->assertSame('Работает', $channel->getHealthStatusLabel());
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'webhook.received',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_sent',
+        ]);
     }
 
     public function test_max_webhook_endpoint_accepts_valid_event_and_sends_auto_reply(): void
@@ -181,6 +189,11 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertNotNull($channel->last_error_at);
         $this->assertNotNull($channel->last_error_message);
         $this->assertSame('Ошибка', $channel->getHealthStatusLabel());
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_failed',
+            'level' => 'error',
+        ]);
     }
 
     public function test_invalid_telegram_webhook_secret_is_rejected(): void

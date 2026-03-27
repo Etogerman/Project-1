@@ -10,6 +10,7 @@ use InvalidArgumentException;
 class BotAutoReplyService
 {
     public function __construct(
+        protected ChannelActivityLogger $channelActivityLogger,
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
     ) {}
@@ -37,5 +38,15 @@ class BotAutoReplyService
             'external_chat_id' => $message->externalChatId,
             'external_user_id' => $message->externalUserId,
         ]);
+        $this->channelActivityLogger->info(
+            $channel,
+            'bot.reply_sent',
+            'Автоответ отправлен.',
+            [
+                'platform' => $channel->platform,
+                'external_chat_id' => $message->externalChatId,
+                'external_user_id' => $message->externalUserId,
+            ],
+        );
     }
 }

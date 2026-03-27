@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Channel;
 use App\Services\Bots\BotAutoReplyService;
+use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,6 +17,7 @@ class BotWebhookController extends Controller
         Channel $channel,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         BotAutoReplyService $botAutoReplyService,
+        ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
         return $this->handle(
             request: $request,
@@ -23,6 +25,7 @@ class BotWebhookController extends Controller
             expectedPlatform: Channel::PLATFORM_TELEGRAM,
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             botAutoReplyService: $botAutoReplyService,
+            channelActivityLogger: $channelActivityLogger,
         );
     }
 
@@ -31,6 +34,7 @@ class BotWebhookController extends Controller
         Channel $channel,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         BotAutoReplyService $botAutoReplyService,
+        ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
         return $this->handle(
             request: $request,
@@ -38,6 +42,7 @@ class BotWebhookController extends Controller
             expectedPlatform: Channel::PLATFORM_MAX,
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             botAutoReplyService: $botAutoReplyService,
+            channelActivityLogger: $channelActivityLogger,
         );
     }
 
@@ -47,6 +52,7 @@ class BotWebhookController extends Controller
         string $expectedPlatform,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         BotAutoReplyService $botAutoReplyService,
+        ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
         abort_unless(
             $channel->is_active
@@ -71,6 +77,15 @@ class BotWebhookController extends Controller
             'platform' => $channel->platform,
             'update_type' => $payload['update_type'] ?? null,
         ]);
+        $channelActivityLogger->info(
+            $channel,
+            'webhook.received',
+            'Получен входящий webhook.',
+            [
+                'platform' => $channel->platform,
+                'update_type' => $payload['update_type'] ?? null,
+            ],
+        );
 
         $channel->markWebhookReceived();
 
@@ -81,6 +96,15 @@ class BotWebhookController extends Controller
                 $botAutoReplyService->handle($channel, $message);
             } catch (\Throwable $throwable) {
                 $channel->markError($throwable);
+                $channelActivityLogger->error(
+                    $channel,
+                    'bot.reply_failed',
+                    'Не удалось отправить автоответ.',
+                    [
+                        'platform' => $channel->platform,
+                        'error' => $throwable->getMessage(),
+                    ],
+                );
 
                 Log::error('bot auto reply failed', [
                     'channel_id' => $channel->id,
