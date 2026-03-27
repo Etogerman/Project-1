@@ -31,7 +31,10 @@ class Contact extends Model
 
     public function latestMessage(): HasOne
     {
-        return $this->hasOne(Message::class)->latestOfMany('received_at');
+        return $this->hasOne(Message::class)->ofMany([
+            'received_at' => 'max',
+            'id' => 'max',
+        ]);
     }
 
     public function messages(): HasMany

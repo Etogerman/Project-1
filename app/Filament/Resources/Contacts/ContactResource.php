@@ -53,7 +53,6 @@ class ContactResource extends Resource
         return parent::getEloquentQuery()
             ->with([
                 'primaryIdentity.channel',
-                'latestMessage',
             ])
             ->withCount('messages')
             ->withMax('messages', 'received_at');
@@ -121,7 +120,8 @@ class ContactResource extends Resource
                             ->label('')
                             ->state(fn (Contact $record) => $record->messages()
                                 ->with(['channel', 'contactIdentity'])
-                                ->latest('received_at')
+                                ->orderByDesc('received_at')
+                                ->orderByDesc('id')
                                 ->limit(20)
                                 ->get())
                             ->placeholder('Сообщений ещё не было.')
@@ -148,19 +148,21 @@ class ContactResource extends Resource
                     ]),
                 Section::make('Диагностика webhook')
                     ->schema([
-                        TextEntry::make('latestMessage.external_message_id')
+                        TextEntry::make('diagnostic_external_message_id')
                             ->label('Последний внешний message ID')
                             ->placeholder('Не задан')
+                            ->state(fn (Contact $record): ?string => static::resolveLatestMessage($record)?->external_message_id)
                             ->copyable(),
-                        TextEntry::make('latestMessage.received_at')
+                        TextEntry::make('diagnostic_received_at')
                             ->label('Распарсенное received_at')
                             ->placeholder('Не задано')
+                            ->state(fn (Contact $record) => static::resolveLatestMessage($record)?->received_at)
                             ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('latestMessage.raw_payload')
+                        TextEntry::make('diagnostic_raw_payload')
                             ->label('Последний raw payload')
                             ->placeholder('Сообщений ещё не было')
-                            ->state(fn (Contact $record): ?string => filled($record->latestMessage?->raw_payload)
-                                ? static::encodeJsonPayload($record->latestMessage->raw_payload)
+                            ->state(fn (Contact $record): ?string => filled(static::resolveLatestMessage($record)?->raw_payload)
+                                ? static::encodeJsonPayload(static::resolveLatestMessage($record)->raw_payload)
                                 : null)
                             ->formatStateUsing(fn (?string $state): HtmlString => new HtmlString(sprintf(
                                 '<pre class="whitespace-pre-wrap break-all text-xs">%s</pre>',
@@ -260,5 +262,18 @@ class ContactResource extends Resource
         } catch (JsonException) {
             return 'Не удалось сериализовать payload.';
         }
+    }
+
+    protected static function resolveLatestMessage(Contact $record): ?Message
+    {
+        static $cache = [];
+
+        /** @var ?Message $message */
+        $message = $cache[$record->getKey()] ??= $record->messages()
+            ->orderByDesc('received_at')
+            ->orderByDesc('id')
+            ->first();
+
+        return $message;
     }
 }

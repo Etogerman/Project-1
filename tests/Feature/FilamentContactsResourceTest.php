@@ -141,6 +141,67 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Нужна помощь по заказу');
     }
 
+    public function test_contact_diagnostics_show_latest_message_even_with_same_received_at_second(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Герман Абрикосов',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+            'external_username' => null,
+        ]);
+        $receivedAt = now()->startOfSecond();
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => 'msg-old',
+            'text' => 'проверка',
+            'raw_payload' => [
+                'debug' => 'old-payload',
+                'message' => ['body' => ['text' => 'проверка']],
+            ],
+            'received_at' => $receivedAt,
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => 'msg-new',
+            'text' => 'тест3',
+            'raw_payload' => [
+                'debug' => 'new-payload',
+                'message' => ['body' => ['text' => 'тест3']],
+            ],
+            'received_at' => $receivedAt,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('msg-new')
+            ->assertMountedActionModalSee('new-payload')
+            ->assertMountedActionModalSee('тест3')
+            ->assertMountedActionModalDontSee('old-payload');
+    }
+
     public function test_contacts_table_supports_column_manager_and_toggleable_columns(): void
     {
         $admin = User::factory()->create([
