@@ -28,7 +28,11 @@ class AdminPanelProvider extends PanelProvider
             ->login()
             ->brandName('Abrikosoff Connector')
             ->renderHook(
-                PanelsRenderHook::TOPBAR_END,
+                PanelsRenderHook::SIDEBAR_LOGO_AFTER,
+                fn (): string => view('filament.components.environment-indicator')->render(),
+            )
+            ->renderHook(
+                PanelsRenderHook::TOPBAR_LOGO_AFTER,
                 fn (): string => view('filament.components.environment-indicator')->render(),
             )
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
