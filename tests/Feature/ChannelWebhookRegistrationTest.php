@@ -92,6 +92,7 @@ class ChannelWebhookRegistrationTest extends TestCase
             'https://platform-api.max.ru/subscriptions?url=https%3A%2F%2Fold.example%2Fwebhook' => Http::response([], 200),
             'https://platform-api.max.ru/me' => Http::response([
                 'user_id' => 987654321,
+                'name' => 'Стейджинг-1',
                 'first_name' => 'MAX',
                 'last_name' => 'Bot',
                 'username' => 'max_stage_bot',
@@ -119,7 +120,7 @@ class ChannelWebhookRegistrationTest extends TestCase
         $this->assertNotNull($channel->getWebhookSecret());
         $this->assertSame('987654321', $channel->bot_external_id);
         $this->assertSame('max_stage_bot', $channel->bot_username);
-        $this->assertSame('MAX Bot', $channel->bot_name);
+        $this->assertSame('Стейджинг-1', $channel->bot_name);
         $this->assertSame('https://max.ru/max_stage_bot', $channel->getBotProfileUrl());
 
         Http::assertSent(function ($request) use ($channel): bool {

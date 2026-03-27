@@ -62,7 +62,7 @@ class ChannelResource extends Resource
                             ->required()
                             ->native(false),
                         Select::make('connection_type')
-                            ->label('Тип подключения')
+                            ->label('Тип')
                             ->options(Channel::connectionTypeOptions())
                             ->default(Channel::CONNECTION_TYPE_BOT)
                             ->required()
@@ -106,7 +106,7 @@ class ChannelResource extends Resource
                             ->badge()
                             ->formatStateUsing(fn (string $state): string => Channel::platformOptions()[$state] ?? $state),
                         TextEntry::make('connection_type')
-                            ->label('Тип подключения')
+                            ->label('Тип')
                             ->badge()
                             ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state),
                         TextEntry::make('bot_name')
@@ -173,7 +173,7 @@ class ChannelResource extends Resource
                     ->searchable()
                     ->sortable(),
                 TextColumn::make('connection_type')
-                    ->label('Тип подключения')
+                    ->label('Тип')
                     ->badge()
                     ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state)
                     ->color('gray')

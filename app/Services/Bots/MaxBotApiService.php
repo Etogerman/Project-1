@@ -82,11 +82,12 @@ class MaxBotApiService
         }
 
         $username = filled(data_get($bot, 'username')) ? ltrim((string) data_get($bot, 'username'), '@') : null;
-        $name = trim(implode(' ', array_filter([
-            data_get($bot, 'first_name'),
-            data_get($bot, 'last_name'),
-            data_get($bot, 'name'),
-        ], fn (mixed $value): bool => filled($value))));
+        $name = filled(data_get($bot, 'name'))
+            ? trim((string) data_get($bot, 'name'))
+            : trim(implode(' ', array_filter([
+                data_get($bot, 'first_name'),
+                data_get($bot, 'last_name'),
+            ], fn (mixed $value): bool => filled($value))));
 
         return new BotMetadata(
             externalId: filled(data_get($bot, 'user_id')) ? (string) data_get($bot, 'user_id') : null,
