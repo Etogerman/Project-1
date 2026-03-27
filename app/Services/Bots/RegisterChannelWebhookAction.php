@@ -13,6 +13,7 @@ class RegisterChannelWebhookAction
         protected ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
+        protected SyncChannelBotMetadataAction $syncChannelBotMetadataAction,
     ) {}
 
     public function handle(Channel $channel): void
@@ -33,6 +34,8 @@ class RegisterChannelWebhookAction
             Channel::PLATFORM_MAX => $this->maxBotApiService->registerWebhook($channel, $webhookUrl, $webhookSecret),
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
         };
+
+        $this->syncChannelBotMetadataAction->handle($channel);
 
         Log::info('bot webhook registration completed', [
             'channel_id' => $channel->id,

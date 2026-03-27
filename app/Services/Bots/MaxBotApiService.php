@@ -2,10 +2,12 @@
 
 namespace App\Services\Bots;
 
+use App\Data\Bots\BotMetadata;
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 class MaxBotApiService
@@ -66,6 +68,32 @@ class MaxBotApiService
                 'update_types' => (array) config('bots.max.update_types', ['message_created']),
             ])
             ->throw();
+    }
+
+    public function fetchBotMetadata(Channel $channel): BotMetadata
+    {
+        $bot = $this->client($channel)
+            ->get('https://platform-api.max.ru/me')
+            ->throw()
+            ->json();
+
+        if (! is_array($bot)) {
+            throw new InvalidArgumentException("MAX API did not return bot metadata for channel [{$channel->id}].");
+        }
+
+        $username = filled(data_get($bot, 'username')) ? ltrim((string) data_get($bot, 'username'), '@') : null;
+        $name = trim(implode(' ', array_filter([
+            data_get($bot, 'first_name'),
+            data_get($bot, 'last_name'),
+            data_get($bot, 'name'),
+        ], fn (mixed $value): bool => filled($value))));
+
+        return new BotMetadata(
+            externalId: filled(data_get($bot, 'user_id')) ? (string) data_get($bot, 'user_id') : null,
+            username: $username,
+            name: filled($name) ? Str::limit($name, 255, '') : null,
+            profileUrl: filled($username) ? 'https://max.ru/'.$username : null,
+        );
     }
 
     protected function client(Channel $channel): PendingRequest

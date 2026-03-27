@@ -24,6 +24,10 @@ class ChannelFactory extends Factory
             'credentials' => [
                 'token' => fake()->sha256(),
             ],
+            'bot_external_id' => null,
+            'bot_username' => null,
+            'bot_name' => null,
+            'bot_profile_url' => null,
             'is_active' => true,
         ];
     }

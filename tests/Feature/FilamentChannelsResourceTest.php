@@ -148,7 +148,12 @@ class FilamentChannelsResourceTest extends TestCase
             'platform' => Channel::PLATFORM_TELEGRAM,
             'credentials' => [
                 'token' => 'current-token',
+                'webhook_secret' => 'saved-secret',
             ],
+            'bot_external_id' => '101',
+            'bot_username' => 'old_bot',
+            'bot_name' => 'Old Bot',
+            'bot_profile_url' => 'https://t.me/old_bot',
             'is_active' => true,
         ]);
 
@@ -170,9 +175,11 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame('Updated Telegram Bot', $channel->name);
         $this->assertFalse($channel->is_active);
         $this->assertSame('current-token', $channel->credentials['token']);
+        $this->assertSame('saved-secret', $channel->credentials['webhook_secret']);
+        $this->assertSame('old_bot', $channel->bot_username);
     }
 
-    public function test_admin_can_update_channel_token_on_edit(): void
+    public function test_admin_can_update_channel_token_on_edit_without_losing_webhook_secret(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -181,7 +188,12 @@ class FilamentChannelsResourceTest extends TestCase
         $channel = Channel::factory()->create([
             'credentials' => [
                 'token' => 'old-token',
+                'webhook_secret' => 'saved-secret',
             ],
+            'bot_external_id' => '202',
+            'bot_username' => 'old_username',
+            'bot_name' => 'Old Username',
+            'bot_profile_url' => 'https://t.me/old_username',
         ]);
 
         Livewire::actingAs($admin)
@@ -200,6 +212,11 @@ class FilamentChannelsResourceTest extends TestCase
         $channel->refresh();
 
         $this->assertSame('new-token', $channel->credentials['token']);
+        $this->assertSame('saved-secret', $channel->credentials['webhook_secret']);
+        $this->assertNull($channel->bot_external_id);
+        $this->assertNull($channel->bot_username);
+        $this->assertNull($channel->bot_name);
+        $this->assertNull($channel->bot_profile_url);
 
         $storedCredentials = DB::table('channels')
             ->where('id', $channel->id)

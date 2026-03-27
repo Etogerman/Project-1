@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Channels;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
 use App\Services\Bots\RegisterChannelWebhookAction;
+use App\Services\Bots\SyncChannelBotMetadataAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -108,6 +109,18 @@ class ChannelResource extends Resource
                             ->label('Тип подключения')
                             ->badge()
                             ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state),
+                        TextEntry::make('bot_name')
+                            ->label('Имя бота')
+                            ->state(fn (Channel $record): string => filled($record->bot_name) ? (string) $record->bot_name : 'Не загружено'),
+                        TextEntry::make('bot_username')
+                            ->label('Username')
+                            ->state(fn (Channel $record): string => $record->getBotUsernameLabel() ?? 'Не загружен')
+                            ->url(fn (Channel $record): ?string => $record->getBotProfileUrl())
+                            ->openUrlInNewTab(),
+                        TextEntry::make('bot_external_id')
+                            ->label('Внешний ID')
+                            ->state(fn (Channel $record): string => filled($record->bot_external_id) ? (string) $record->bot_external_id : 'Не загружен')
+                            ->copyable(),
                         IconEntry::make('is_active')
                             ->label('Активен')
                             ->boolean(),
@@ -139,6 +152,18 @@ class ChannelResource extends Resource
                 TextColumn::make('name')
                     ->label('Название')
                     ->searchable()
+                    ->sortable(),
+                TextColumn::make('bot_name')
+                    ->label('Имя бота')
+                    ->state(fn (Channel $record): string => filled($record->bot_name) ? (string) $record->bot_name : '—')
+                    ->searchable()
+                    ->sortable(),
+                TextColumn::make('bot_username')
+                    ->label('Username')
+                    ->state(fn (Channel $record): string => $record->getBotUsernameLabel() ?? '—')
+                    ->url(fn (Channel $record): ?string => $record->getBotProfileUrl())
+                    ->openUrlInNewTab()
+                    ->searchable(['bot_username'])
                     ->sortable(),
                 TextColumn::make('platform')
                     ->label('Платформа')
@@ -196,7 +221,7 @@ class ChannelResource extends Resource
                             Notification::make()
                                 ->success()
                                 ->title('Webhook зарегистрирован')
-                                ->body('Секрет сохранён автоматически, webhook обновлён у внешней платформы.')
+                                ->body('Секрет сохранён автоматически, webhook обновлён, данные бота синхронизированы.')
                                 ->send();
                         } catch (Throwable $throwable) {
                             report($throwable);
@@ -204,6 +229,32 @@ class ChannelResource extends Resource
                             Notification::make()
                                 ->danger()
                                 ->title('Не удалось зарегистрировать webhook')
+                                ->body($throwable->getMessage())
+                                ->send();
+
+                            throw $throwable;
+                        }
+                    }),
+                Action::make('syncBotMetadata')
+                    ->label('Обновить данные бота')
+                    ->icon(Heroicon::OutlinedArrowPath)
+                    ->color('gray')
+                    ->visible(fn (Channel $record): bool => $record->connection_type === Channel::CONNECTION_TYPE_BOT && filled($record->getToken()))
+                    ->action(function (Channel $record): void {
+                        try {
+                            app(SyncChannelBotMetadataAction::class)->handle($record);
+
+                            Notification::make()
+                                ->success()
+                                ->title('Данные бота обновлены')
+                                ->body('Имя, username и внешний идентификатор бота синхронизированы с платформой.')
+                                ->send();
+                        } catch (Throwable $throwable) {
+                            report($throwable);
+
+                            Notification::make()
+                                ->danger()
+                                ->title('Не удалось обновить данные бота')
                                 ->body($throwable->getMessage())
                                 ->send();
 
@@ -233,9 +284,15 @@ class ChannelResource extends Resource
     public static function mutateChannelData(array $data, ?Channel $record = null): array
     {
         $token = trim((string) data_get($data, 'credentials.token', ''));
+        $credentials = $record?->credentials ?? [];
+
+        if (static::shouldClearBotMetadata($data, $record, $token)) {
+            $data = static::clearBotMetadata($data);
+        }
 
         if ($token !== '') {
-            Arr::set($data, 'credentials', ['token' => $token]);
+            Arr::set($credentials, Channel::CREDENTIAL_TOKEN, $token);
+            Arr::set($data, 'credentials', $credentials);
 
             return $data;
         }
@@ -249,5 +306,38 @@ class ChannelResource extends Resource
         Arr::forget($data, 'credentials');
 
         return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function clearBotMetadata(array $data): array
+    {
+        $data['bot_external_id'] = null;
+        $data['bot_username'] = null;
+        $data['bot_name'] = null;
+        $data['bot_profile_url'] = null;
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected static function shouldClearBotMetadata(array $data, ?Channel $record, string $token): bool
+    {
+        if ($record === null) {
+            return false;
+        }
+
+        $nextPlatform = (string) data_get($data, 'platform', $record->platform);
+        $nextConnectionType = (string) data_get($data, 'connection_type', $record->connection_type);
+
+        if ($nextPlatform !== $record->platform || $nextConnectionType !== $record->connection_type) {
+            return true;
+        }
+
+        return $token !== '' && $token !== $record->getToken();
     }
 }

@@ -2,9 +2,11 @@
 
 namespace App\Services\Bots;
 
+use App\Data\Bots\BotMetadata;
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 class TelegramBotApiService
@@ -38,6 +40,33 @@ class TelegramBotApiService
                 ],
             )
             ->throw();
+    }
+
+    public function fetchBotMetadata(Channel $channel): BotMetadata
+    {
+        $response = Http::asJson()
+            ->get(sprintf('https://api.telegram.org/bot%s/getMe', $this->token($channel)))
+            ->throw()
+            ->json();
+
+        $bot = data_get($response, 'result');
+
+        if (! is_array($bot)) {
+            throw new InvalidArgumentException("Telegram API did not return bot metadata for channel [{$channel->id}].");
+        }
+
+        $username = filled(data_get($bot, 'username')) ? ltrim((string) data_get($bot, 'username'), '@') : null;
+        $name = trim(implode(' ', array_filter([
+            data_get($bot, 'first_name'),
+            data_get($bot, 'last_name'),
+        ], fn (mixed $value): bool => filled($value))));
+
+        return new BotMetadata(
+            externalId: filled(data_get($bot, 'id')) ? (string) data_get($bot, 'id') : null,
+            username: $username,
+            name: filled($name) ? Str::limit($name, 255, '') : null,
+            profileUrl: filled($username) ? 'https://t.me/'.$username : null,
+        );
     }
 
     protected function token(Channel $channel): string

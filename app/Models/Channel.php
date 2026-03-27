@@ -29,6 +29,10 @@ class Channel extends Model
         'platform',
         'connection_type',
         'credentials',
+        'bot_external_id',
+        'bot_username',
+        'bot_name',
+        'bot_profile_url',
         'is_active',
     ];
 
@@ -96,5 +100,31 @@ class Channel extends Model
         $this->credentials = $credentials;
 
         return $this;
+    }
+
+    public function getBotUsernameLabel(): ?string
+    {
+        if (! filled($this->bot_username)) {
+            return null;
+        }
+
+        return '@'.ltrim((string) $this->bot_username, '@');
+    }
+
+    public function getBotProfileUrl(): ?string
+    {
+        if (filled($this->bot_profile_url)) {
+            return (string) $this->bot_profile_url;
+        }
+
+        if (! filled($this->bot_username)) {
+            return null;
+        }
+
+        return match ($this->platform) {
+            self::PLATFORM_TELEGRAM => 'https://t.me/'.ltrim((string) $this->bot_username, '@'),
+            self::PLATFORM_MAX => 'https://max.ru/'.ltrim((string) $this->bot_username, '@'),
+            default => null,
+        };
     }
 }
