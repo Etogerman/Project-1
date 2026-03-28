@@ -264,11 +264,6 @@ class ContactResource extends Resource
                     ->state(fn (Contact $record): string => static::formatInboxStatus($record))
                     ->badge()
                     ->color(fn (Contact $record): string => static::getInboxStatusColor($record)),
-                TextColumn::make('ownership_status')
-                    ->label('Назначение')
-                    ->state(fn (Contact $record): string => static::formatOwnershipStatus($record))
-                    ->badge()
-                    ->color(fn (Contact $record): string => static::getOwnershipStatusColor($record)),
                 TextColumn::make('assignedUser.name')
                     ->label('Ответственный')
                     ->toggleable()
