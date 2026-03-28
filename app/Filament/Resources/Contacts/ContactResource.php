@@ -619,6 +619,10 @@ class ContactResource extends Resource
         return [
             'canReply' => static::canCurrentUserReplyToContact($record),
             'blockedReason' => static::getInlineReplyBlockedReason($record),
+            'canClaim' => static::canCurrentUserClaimContact($record),
+            'canRelease' => static::canCurrentUserReleaseContact($record),
+            'assignedUserLabel' => static::formatAssignedUserLabel($record),
+            'ownershipStatusLabel' => static::formatOwnershipStatus($record),
         ];
     }
 

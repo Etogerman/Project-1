@@ -1086,6 +1086,7 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Контакт сейчас свободен.')
             ->set('inlineReplyText', 'Ответ с авто-claim')
             ->call('sendInlineReply')
             ->assertNotified()
