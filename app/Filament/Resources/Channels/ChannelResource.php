@@ -606,6 +606,7 @@ class ChannelResource extends Resource
     {
         return match ($event) {
             'webhook.received' => 'Webhook',
+            'bot.reply_queued' => 'Ответ в очереди',
             'bot.reply_sent' => 'Ответ',
             'bot.reply_failed' => 'Ошибка ответа',
             'contact.reply_sent' => 'Ручной ответ',

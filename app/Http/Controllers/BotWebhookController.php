@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ProcessAutoReplyJob;
 use App\Models\Channel;
-use App\Services\Bots\BotAutoReplyService;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\StoreInboundMessageAction;
@@ -18,7 +18,6 @@ class BotWebhookController extends Controller
         Channel $channel,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
-        BotAutoReplyService $botAutoReplyService,
         ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
         return $this->handle(
@@ -27,7 +26,6 @@ class BotWebhookController extends Controller
             expectedPlatform: Channel::PLATFORM_TELEGRAM,
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
-            botAutoReplyService: $botAutoReplyService,
             channelActivityLogger: $channelActivityLogger,
         );
     }
@@ -37,7 +35,6 @@ class BotWebhookController extends Controller
         Channel $channel,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
-        BotAutoReplyService $botAutoReplyService,
         ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
         return $this->handle(
@@ -46,7 +43,6 @@ class BotWebhookController extends Controller
             expectedPlatform: Channel::PLATFORM_MAX,
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
-            botAutoReplyService: $botAutoReplyService,
             channelActivityLogger: $channelActivityLogger,
         );
     }
@@ -57,7 +53,6 @@ class BotWebhookController extends Controller
         string $expectedPlatform,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
-        BotAutoReplyService $botAutoReplyService,
         ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
         abort_unless(
@@ -125,33 +120,24 @@ class BotWebhookController extends Controller
                 $channelActivityLogger->info(
                     $channel,
                     'webhook.duplicate_retry_reply',
-                    'Повторный webhook использован для повторной отправки автоответа.',
+                    'Повторный webhook поставил автоответ в очередь повторно.',
                     $duplicateContext,
                 );
             }
 
-            try {
-                $botAutoReplyService->handle($channel, $message, $storedMessage);
-            } catch (\Throwable $throwable) {
-                $channel->markError($throwable);
-                $channelActivityLogger->error(
-                    $channel,
-                    'bot.reply_failed',
-                    'Не удалось отправить автоответ.',
-                    [
-                        'platform' => $channel->platform,
-                        'error' => $throwable->getMessage(),
-                    ],
-                );
+            ProcessAutoReplyJob::dispatch($storedMessage->id)->afterCommit();
 
-                Log::error('bot auto reply failed', [
-                    'channel_id' => $channel->id,
+            $channelActivityLogger->info(
+                $channel,
+                'bot.reply_queued',
+                'Автоответ поставлен в очередь.',
+                [
                     'platform' => $channel->platform,
-                    'error' => $throwable->getMessage(),
-                ]);
-
-                throw $throwable;
-            }
+                    'message_id' => $storedMessage->id,
+                    'provider_event_key' => $storedMessage->provider_event_key,
+                    'external_message_id' => $storedMessage->external_message_id,
+                ],
+            );
         }
 
         return response()->json([

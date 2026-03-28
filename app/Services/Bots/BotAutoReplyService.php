@@ -2,8 +2,6 @@
 
 namespace App\Services\Bots;
 
-use App\Data\Bots\IncomingBotMessage;
-use App\Models\Channel;
 use App\Models\Message;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -17,20 +15,45 @@ class BotAutoReplyService
         protected MaxBotApiService $maxBotApiService,
     ) {}
 
-    public function handle(Channel $channel, IncomingBotMessage $message, Message $storedMessage): void
+    public function handle(Message $storedMessage): void
     {
+        if ($storedMessage->hasSuccessfulAutoReply()) {
+            return;
+        }
+
+        $storedMessage->loadMissing(['channel', 'contactIdentity']);
+
+        $channel = $storedMessage->channel;
+
+        if ($channel === null) {
+            throw new InvalidArgumentException("Inbound message [{$storedMessage->id}] does not have a channel.");
+        }
+
         $replyText = (string) config('bots.default_auto_reply_text');
+        $externalChatId = $storedMessage->external_chat_id;
+        $externalUserId = $storedMessage->contactIdentity?->external_user_id;
 
         Log::info('bot auto reply started', [
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
-            'external_chat_id' => $message->externalChatId,
-            'external_user_id' => $message->externalUserId,
+            'message_id' => $storedMessage->id,
+            'external_chat_id' => $externalChatId,
+            'external_user_id' => $externalUserId,
         ]);
 
         $deliveryResult = match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendAutoReply($channel, $message, $replyText),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->sendAutoReply($channel, $message, $replyText),
+            \App\Models\Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
+                $channel,
+                $externalChatId,
+                $externalUserId,
+                $replyText,
+            ),
+            \App\Models\Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
+                $channel,
+                $externalChatId,
+                $externalUserId,
+                $replyText,
+            ),
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
         };
 
@@ -41,8 +64,9 @@ class BotAutoReplyService
         Log::info('bot auto reply sent', [
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
-            'external_chat_id' => $message->externalChatId,
-            'external_user_id' => $message->externalUserId,
+            'message_id' => $storedMessage->id,
+            'external_chat_id' => $externalChatId,
+            'external_user_id' => $externalUserId,
             'outbound_external_message_id' => $deliveryResult->externalMessageId,
         ]);
         $this->channelActivityLogger->info(
@@ -51,8 +75,9 @@ class BotAutoReplyService
             'Автоответ отправлен.',
             [
                 'platform' => $channel->platform,
-                'external_chat_id' => $message->externalChatId,
-                'external_user_id' => $message->externalUserId,
+                'message_id' => $storedMessage->id,
+                'external_chat_id' => $externalChatId,
+                'external_user_id' => $externalUserId,
                 'outbound_external_message_id' => $deliveryResult->externalMessageId,
             ],
         );
