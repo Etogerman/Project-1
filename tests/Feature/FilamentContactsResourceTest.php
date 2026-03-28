@@ -78,6 +78,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableColumnVisible('inbox_status')
             ->assertCanSeeTableRecords([$contact])
             ->assertTableFilterExists('requires_manual_reply')
+            ->assertTableFilterExists('assigned_to_me')
+            ->assertTableFilterExists('unassigned_contacts')
             ->assertTableActionExists('view', null, $contact)
             ->assertTableActionDoesNotExist('edit', null, $contact)
             ->assertTableHeaderActionsExistInOrder([]);
@@ -137,9 +139,12 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Сводка')
+            ->assertMountedActionModalSee('Работа с контактом')
             ->assertMountedActionModalSee('Последнее сообщение')
             ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('История сообщений')
+            ->assertMountedActionModalSee('Свободен')
+            ->assertMountedActionModalSee('Взять в работу')
             ->assertMountedActionModalSee('@max_customer')
             ->assertMountedActionModalSee('max-200')
             ->assertMountedActionModalSee('MAX Support')
@@ -184,6 +189,7 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->assertTableActionExists('view', null, $contact)
             ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Сначала возьмите контакт в работу.')
             ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('Ответ')
@@ -198,6 +204,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
         $contact = Contact::factory()->create([
             'name' => 'Герман Абрикосов',
+            'assigned_user_id' => $admin->id,
         ]);
         $channel = Channel::factory()->create([
             'name' => 'MAX Support',
@@ -647,6 +654,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
         $contact = Contact::factory()->create([
             'name' => 'Герман Абрикосов',
+            'assigned_user_id' => $admin->id,
         ]);
         $channel = Channel::factory()->create([
             'name' => 'Telegram Support',
@@ -733,6 +741,7 @@ class FilamentContactsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $contact = Contact::factory()->create();
+        $contact->update(['assigned_user_id' => $admin->id]);
         $channel = Channel::factory()->create([
             'name' => 'MAX Support',
             'platform' => Channel::PLATFORM_MAX,
@@ -798,7 +807,9 @@ class FilamentContactsResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
         ]);
-        $contact = Contact::factory()->create();
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $admin->id,
+        ]);
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
         ]);
@@ -849,7 +860,9 @@ class FilamentContactsResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
         ]);
-        $contact = Contact::factory()->create();
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $admin->id,
+        ]);
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
             'is_active' => false,
@@ -886,6 +899,242 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertDatabaseMissing(ChannelActivityLog::class, [
             'event' => 'contact.reply_sent',
         ]);
+    }
+
+    public function test_free_contact_can_be_claimed_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Администратор 1',
+        ]);
+        $contact = Contact::factory()->create();
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('claimMountedContact')
+            ->assertNotified()
+            ->assertMountedActionModalSee('Мой')
+            ->assertMountedActionModalSee('Снять с себя')
+            ->assertMountedActionModalSee('Администратор 1');
+
+        $contact->refresh();
+
+        $this->assertSame($admin->id, $contact->assigned_user_id);
+    }
+
+    public function test_contact_claim_does_not_overwrite_existing_owner(): void
+    {
+        $firstAdmin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Первый администратор',
+        ]);
+        $secondAdmin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Второй администратор',
+        ]);
+        $contact = Contact::factory()->create();
+
+        Livewire::actingAs($firstAdmin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('claimMountedContact')
+            ->assertNotified();
+
+        Livewire::actingAs($secondAdmin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('claimMountedContact')
+            ->assertNotified()
+            ->assertMountedActionModalSee('Назначен другому')
+            ->assertMountedActionModalSee('Первый администратор');
+
+        $contact->refresh();
+
+        $this->assertSame($firstAdmin->id, $contact->assigned_user_id);
+    }
+
+    public function test_owner_can_release_contact_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $admin->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('releaseMountedContact')
+            ->assertNotified()
+            ->assertMountedActionModalSee('Свободен')
+            ->assertMountedActionModalSee('Взять в работу');
+
+        $contact->refresh();
+
+        $this->assertNull($contact->assigned_user_id);
+    }
+
+    public function test_non_owner_cannot_release_contact_from_contact_modal(): void
+    {
+        $owner = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Владелец контакта',
+        ]);
+        $otherAdmin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $owner->id,
+        ]);
+
+        Livewire::actingAs($otherAdmin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('releaseMountedContact')
+            ->assertNotified()
+            ->assertMountedActionModalSee('Назначен другому')
+            ->assertMountedActionModalSee('Владелец контакта');
+
+        $contact->refresh();
+
+        $this->assertSame($owner->id, $contact->assigned_user_id);
+    }
+
+    public function test_contacts_table_filters_support_my_and_unassigned_contacts(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $otherAdmin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $myContact = Contact::factory()->create([
+            'name' => 'Мой контакт',
+            'assigned_user_id' => $admin->id,
+        ]);
+        $otherContact = Contact::factory()->create([
+            'name' => 'Чужой контакт',
+            'assigned_user_id' => $otherAdmin->id,
+        ]);
+        $freeContact = Contact::factory()->create([
+            'name' => 'Свободный контакт',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->filterTable('assigned_to_me')
+            ->assertCanSeeTableRecords([$myContact])
+            ->assertCanNotSeeTableRecords([$otherContact, $freeContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->filterTable('unassigned_contacts')
+            ->assertCanSeeTableRecords([$freeContact])
+            ->assertCanNotSeeTableRecords([$myContact, $otherContact]);
+    }
+
+    public function test_inline_reply_composer_blocks_manual_reply_until_contact_is_claimed(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-unassigned',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-update-unassigned',
+            'external_chat_id' => 'chat-unassigned',
+            'external_message_id' => 'msg-unassigned',
+            'text' => 'Входящее сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Сначала возьмите контакт в работу.')
+            ->set('inlineReplyText', 'Ответ без claim')
+            ->call('sendInlineReply')
+            ->assertNotified()
+            ->assertSet('inlineReplyText', 'Ответ без claim');
+
+        $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_inline_reply_composer_blocks_manual_reply_for_contact_owned_by_another_user(): void
+    {
+        $owner = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Другой сотрудник',
+        ]);
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $owner->id,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-owned-by-other',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-update-owned-by-other',
+            'external_chat_id' => 'chat-owned-by-other',
+            'external_message_id' => 'msg-owned-by-other',
+            'text' => 'Входящее сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Контакт уже назначен сотруднику Другой сотрудник.')
+            ->set('inlineReplyText', 'Ответ чужому контакту')
+            ->call('sendInlineReply')
+            ->assertNotified()
+            ->assertSet('inlineReplyText', 'Ответ чужому контакту');
+
+        $this->assertDatabaseCount('messages', 1);
     }
 
     public function test_contact_modal_keeps_webhook_diagnostics_bound_to_latest_inbound_message(): void
@@ -1075,6 +1324,7 @@ class FilamentContactsResourceTest extends TestCase
                 $this->assertTrue($table->hasColumnManager());
                 $this->assertTrue($table->getColumn('id')?->isToggleable());
                 $this->assertTrue($table->getColumn('display_name')?->isToggleable());
+                $this->assertTrue($table->getColumn('assignedUser.name')?->isToggleable());
                 $this->assertTrue($table->getColumn('primaryIdentity.external_username')?->isToggleable());
             });
     }

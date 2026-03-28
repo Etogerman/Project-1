@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -17,7 +18,13 @@ class Contact extends Model
      */
     protected $fillable = [
         'name',
+        'assigned_user_id',
     ];
+
+    public function assignedUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_user_id');
+    }
 
     public function identities(): HasMany
     {
@@ -37,6 +44,16 @@ class Contact extends Model
     public function messages(): HasMany
     {
         return $this->hasMany(Message::class);
+    }
+
+    public function isAssigned(): bool
+    {
+        return filled($this->assigned_user_id);
+    }
+
+    public function isAssignedTo(User $user): bool
+    {
+        return (int) $this->assigned_user_id === $user->id;
     }
 
     protected function displayName(): Attribute

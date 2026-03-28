@@ -6,6 +6,7 @@ use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Models\User;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
@@ -56,6 +57,7 @@ class ContactResource extends Resource
     {
         return parent::getEloquentQuery()
             ->with([
+                'assignedUser',
                 'primaryIdentity.channel',
                 'latestMessage.channel',
             ])
@@ -110,6 +112,24 @@ class ContactResource extends Resource
                             ->dateTime('d.m.Y H:i'),
                     ])
                     ->columns(4)
+                    ->columnSpanFull(),
+                Section::make('Работа с контактом')
+                    ->schema([
+                        TextEntry::make('assigned_user_label')
+                            ->label('Ответственный')
+                            ->state(fn (Contact $record): string => static::formatAssignedUserLabel($record)),
+                        TextEntry::make('ownership_status')
+                            ->label('Назначение')
+                            ->state(fn (Contact $record): string => static::formatOwnershipStatus($record))
+                            ->badge()
+                            ->color(fn (Contact $record): string => static::getOwnershipStatusColor($record)),
+                        ViewEntry::make('ownership_controls')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.ownership-controls')
+                            ->viewData(fn (Contact $record): array => static::buildOwnershipControlsViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(2)
                     ->columnSpanFull(),
                 Section::make('Последнее сообщение')
                     ->schema([
@@ -212,6 +232,7 @@ class ContactResource extends Resource
                         ViewEntry::make('conversation_reply_composer')
                             ->hiddenLabel()
                             ->view('filament.contacts.partials.inline-reply-composer')
+                            ->viewData(fn (Contact $record): array => static::buildInlineReplyComposerViewData($record))
                             ->columnSpanFull(),
                     ])
                     ->columnSpanFull(),
@@ -243,6 +264,15 @@ class ContactResource extends Resource
                     ->state(fn (Contact $record): string => static::formatInboxStatus($record))
                     ->badge()
                     ->color(fn (Contact $record): string => static::getInboxStatusColor($record)),
+                TextColumn::make('ownership_status')
+                    ->label('Назначение')
+                    ->state(fn (Contact $record): string => static::formatOwnershipStatus($record))
+                    ->badge()
+                    ->color(fn (Contact $record): string => static::getOwnershipStatusColor($record)),
+                TextColumn::make('assignedUser.name')
+                    ->label('Ответственный')
+                    ->toggleable()
+                    ->placeholder('Свободен'),
                 TextColumn::make('latest_message_text')
                     ->label('Последнее сообщение')
                     ->toggleable()
@@ -298,6 +328,12 @@ class ContactResource extends Resource
                 Filter::make('requires_manual_reply')
                     ->label('Требует ответа')
                     ->query(fn (Builder $query): Builder => static::applyRequiresManualReplyFilter($query)),
+                Filter::make('assigned_to_me')
+                    ->label('Мои')
+                    ->query(fn (Builder $query): Builder => static::applyAssignedToMeFilter($query)),
+                Filter::make('unassigned_contacts')
+                    ->label('Свободные')
+                    ->query(fn (Builder $query): Builder => $query->whereNull('assigned_user_id')),
             ])
             ->columnManager()
             ->deferColumnManager(false)
@@ -408,6 +444,17 @@ class ContactResource extends Resource
                         [Message::KIND_INBOUND_USER, Message::KIND_OUTBOUND_MANUAL_REPLY],
                     );
             });
+    }
+
+    protected static function applyAssignedToMeFilter(Builder $query): Builder
+    {
+        $currentUserId = static::resolveCurrentUserId();
+
+        if ($currentUserId === null) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->where('assigned_user_id', $currentUserId);
     }
 
     protected static function renderConversationHistory(Contact $record): HtmlString
@@ -551,6 +598,117 @@ class ContactResource extends Resource
         }
 
         return $channel->name ?: $platformLabel;
+    }
+
+    protected static function buildOwnershipControlsViewData(Contact $record): array
+    {
+        $record->loadMissing('assignedUser');
+
+        return [
+            'assignedUserLabel' => static::formatAssignedUserLabel($record),
+            'ownershipStatusLabel' => static::formatOwnershipStatus($record),
+            'ownershipStatusColor' => static::getOwnershipStatusColor($record),
+            'canClaim' => static::canCurrentUserClaimContact($record),
+            'canRelease' => static::canCurrentUserReleaseContact($record),
+            'ownershipHint' => static::getOwnershipHint($record),
+        ];
+    }
+
+    protected static function buildInlineReplyComposerViewData(Contact $record): array
+    {
+        return [
+            'canReply' => static::canCurrentUserReplyToContact($record),
+            'blockedReason' => static::getInlineReplyBlockedReason($record),
+        ];
+    }
+
+    protected static function resolveCurrentUserId(): ?int
+    {
+        /** @var User|null $user */
+        $user = auth()->user();
+
+        return $user?->id;
+    }
+
+    protected static function formatAssignedUserLabel(Contact $record): string
+    {
+        $record->loadMissing('assignedUser');
+
+        return filled($record->assignedUser?->name)
+            ? (string) $record->assignedUser->name
+            : 'Свободен';
+    }
+
+    protected static function formatOwnershipStatus(Contact $record): string
+    {
+        return match (static::getContactOwnershipState($record)) {
+            'mine' => 'Мой',
+            'other' => 'Назначен другому',
+            default => 'Свободен',
+        };
+    }
+
+    protected static function getOwnershipStatusColor(Contact $record): string
+    {
+        return match (static::getContactOwnershipState($record)) {
+            'mine' => 'success',
+            'other' => 'gray',
+            default => 'warning',
+        };
+    }
+
+    protected static function getOwnershipHint(Contact $record): ?string
+    {
+        return match (static::getContactOwnershipState($record)) {
+            'mine' => 'Контакт закреплён за вами. Ручной ответ доступен.',
+            'other' => filled($record->assignedUser?->name)
+                ? 'Контакт в работе у '.$record->assignedUser->name.'.'
+                : 'Контакт уже назначен другому сотруднику.',
+            default => 'Контакт свободен. Сначала возьмите его в работу.',
+        };
+    }
+
+    protected static function canCurrentUserClaimContact(Contact $record): bool
+    {
+        return static::getContactOwnershipState($record) === 'unassigned';
+    }
+
+    protected static function canCurrentUserReleaseContact(Contact $record): bool
+    {
+        return static::getContactOwnershipState($record) === 'mine';
+    }
+
+    protected static function canCurrentUserReplyToContact(Contact $record): bool
+    {
+        return static::getContactOwnershipState($record) === 'mine';
+    }
+
+    protected static function getInlineReplyBlockedReason(Contact $record): ?string
+    {
+        return match (static::getContactOwnershipState($record)) {
+            'unassigned' => 'Сначала возьмите контакт в работу.',
+            'other' => filled($record->assignedUser?->name)
+                ? 'Контакт уже назначен сотруднику '.$record->assignedUser->name.'.'
+                : 'Контакт уже назначен другому сотруднику.',
+            default => null,
+        };
+    }
+
+    protected static function getContactOwnershipState(Contact $record): string
+    {
+        $record->loadMissing('assignedUser');
+
+        if (! $record->isAssigned()) {
+            return 'unassigned';
+        }
+
+        $currentUserId = static::resolveCurrentUserId();
+
+        if (($currentUserId !== null) && ((int) $record->assigned_user_id === $currentUserId)) {
+            return 'mine';
+        }
+
+        return 'other';
     }
 
     protected static function formatConversationReplyLink(?Message $message): ?string

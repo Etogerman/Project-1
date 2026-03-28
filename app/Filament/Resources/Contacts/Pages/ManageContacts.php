@@ -6,6 +6,8 @@ use App\Filament\Resources\Contacts\ContactResource;
 use App\Models\Contact;
 use App\Models\User;
 use App\Services\Bots\SendManualContactReplyAction;
+use App\Services\Contacts\ClaimContactAction;
+use App\Services\Contacts\ReleaseContactAssignmentAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRecords;
@@ -24,6 +26,76 @@ class ManageContacts extends ManageRecords
     protected function getHeaderActions(): array
     {
         return [];
+    }
+
+    public function claimMountedContact(): void
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось взять контакт в работу')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        try {
+            $employee = $this->resolveCurrentEmployee();
+
+            app(ClaimContactAction::class)->handle($record, $employee);
+
+            $this->replaceMountedTableAction('view', (string) $record->id);
+
+            Notification::make()
+                ->success()
+                ->title('Контакт взят в работу')
+                ->body('Теперь ручной ответ доступен только вам.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось взять контакт в работу')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function releaseMountedContact(): void
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось снять контакт с работы')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        try {
+            $employee = $this->resolveCurrentEmployee();
+
+            app(ReleaseContactAssignmentAction::class)->handle($record, $employee);
+
+            $this->replaceMountedTableAction('view', (string) $record->id);
+
+            Notification::make()
+                ->success()
+                ->title('Контакт освобождён')
+                ->body('Контакт снова доступен для взятия в работу.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось снять контакт с работы')
+                ->body($throwable->getMessage())
+                ->send();
+        }
     }
 
     public function sendInlineReply(): void
@@ -53,12 +125,7 @@ class ManageContacts extends ManageRecords
         }
 
         try {
-            /** @var User|null $employee */
-            $employee = auth()->user();
-
-            if (! $employee instanceof User) {
-                throw new \RuntimeException('Не удалось определить текущего сотрудника.');
-            }
+            $employee = $this->resolveCurrentEmployee();
 
             app(SendManualContactReplyAction::class)->handle(
                 $record,
@@ -80,5 +147,63 @@ class ManageContacts extends ManageRecords
                 ->body($throwable->getMessage())
                 ->send();
         }
+    }
+
+    public function canClaimContact(?Contact $contact = null): bool
+    {
+        return $this->getContactOwnershipState($contact) === 'unassigned';
+    }
+
+    public function canReleaseContact(?Contact $contact = null): bool
+    {
+        return $this->getContactOwnershipState($contact) === 'mine';
+    }
+
+    public function canSendInlineReply(?Contact $contact = null): bool
+    {
+        return $this->getContactOwnershipState($contact) === 'mine';
+    }
+
+    public function getInlineReplyBlockedReason(?Contact $contact = null): ?string
+    {
+        return match ($this->getContactOwnershipState($contact)) {
+            'unassigned' => 'Сначала возьмите контакт в работу.',
+            'other' => 'Контакт уже назначен другому сотруднику. Ручной ответ недоступен.',
+            default => null,
+        };
+    }
+
+    public function getContactOwnershipState(?Contact $contact = null): string
+    {
+        if (! $contact instanceof Contact) {
+            return 'unknown';
+        }
+
+        $contact->loadMissing('assignedUser');
+
+        if (! $contact->isAssigned()) {
+            return 'unassigned';
+        }
+
+        /** @var User|null $employee */
+        $employee = auth()->user();
+
+        if ($employee instanceof User && $contact->isAssignedTo($employee)) {
+            return 'mine';
+        }
+
+        return 'other';
+    }
+
+    protected function resolveCurrentEmployee(): User
+    {
+        /** @var User|null $employee */
+        $employee = auth()->user();
+
+        if (! $employee instanceof User) {
+            throw new \RuntimeException('Не удалось определить текущего сотрудника.');
+        }
+
+        return $employee;
     }
 }

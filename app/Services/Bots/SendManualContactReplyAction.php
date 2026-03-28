@@ -28,10 +28,20 @@ class SendManualContactReplyAction
             throw new AuthorizationException();
         }
 
+        $contact = Contact::query()->findOrFail($contact->id);
+
         $text = trim($text);
 
         if ($text === '') {
             throw new InvalidArgumentException('Введите текст ответа.');
+        }
+
+        if (! $contact->isAssigned()) {
+            throw new InvalidArgumentException('Сначала возьмите контакт в работу.');
+        }
+
+        if (! $contact->isAssignedTo($employee)) {
+            throw new InvalidArgumentException('Контакт уже взят в работу другим сотрудником.');
         }
 
         $routeSource = $this->resolveRouteSource($contact);
