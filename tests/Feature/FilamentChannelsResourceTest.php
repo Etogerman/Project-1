@@ -281,6 +281,7 @@ class FilamentChannelsResourceTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'provider_event_key' => 'telegram-update-900',
             'external_chat_id' => 'chat-500',
             'external_message_id' => 'msg-900',
@@ -312,7 +313,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertMountedActionModalSee('Ответ отправлен')
             ->assertMountedActionModalSee('Дубликат проигнорирован')
             ->assertMountedActionModalSee('Нужна помощь')
-            ->assertMountedActionModalSee('Входящее');
+            ->assertMountedActionModalSee('Входящее')
+            ->assertMountedActionModalSee('Пользователь');
     }
 
     public function test_channel_modal_prefers_latest_saved_message_over_received_at_order(): void
@@ -417,6 +419,7 @@ class FilamentChannelsResourceTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'provider_event_key' => 'telegram-update-901',
             'external_chat_id' => 'chat-901',
             'external_message_id' => 'msg-901',
@@ -431,6 +434,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
 
+        $this->assertStringContainsString('Тип: Пользователь', $recentMessagesHtml);
         $this->assertStringContainsString('Event key: telegram-update-901', $recentMessagesHtml);
         $this->assertStringContainsString('Автоответ: —', $recentMessagesHtml);
         $this->assertStringContainsString('Статус: Ответ еще не отправлен', $recentMessagesHtml);
@@ -481,6 +485,7 @@ class FilamentChannelsResourceTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'provider_event_key' => 'telegram-update-903',
             'external_chat_id' => 'chat-903',
             'external_message_id' => 'msg-903',
@@ -495,6 +500,7 @@ class FilamentChannelsResourceTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'reply_to_message_id' => $inboundMessage->id,
             'external_chat_id' => 'chat-903',
             'external_message_id' => 'out-903',
@@ -508,8 +514,44 @@ class FilamentChannelsResourceTest extends TestCase
 
         $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
 
+        $this->assertStringContainsString('Тип: Автоответ', $recentMessagesHtml);
         $this->assertStringContainsString('Исходящее', $recentMessagesHtml);
         $this->assertStringContainsString('Исходящий автоответ', $recentMessagesHtml);
         $this->assertStringContainsString('Связь: Ответ на event key: telegram-update-903', $recentMessagesHtml);
+    }
+
+    public function test_recent_messages_renderer_shows_unknown_kind_for_historical_messages_without_classification(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ext-legacy',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => null,
+            'external_chat_id' => 'chat-legacy',
+            'external_message_id' => 'legacy-out',
+            'text' => 'Исторический outbound',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => Carbon::create(2026, 3, 28, 13, 5, 0),
+        ]);
+
+        $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
+        $recentMessagesRenderer->setAccessible(true);
+
+        $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Исторический outbound', $recentMessagesHtml);
+        $this->assertStringContainsString('Тип: Не определен', $recentMessagesHtml);
     }
 }

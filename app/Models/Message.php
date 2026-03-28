@@ -15,6 +15,12 @@ class Message extends Model
 
     public const DIRECTION_OUTBOUND = 'outbound';
 
+    public const KIND_INBOUND_USER = 'inbound_user';
+
+    public const KIND_OUTBOUND_AUTO_REPLY = 'outbound_auto_reply';
+
+    public const KIND_OUTBOUND_MANUAL_REPLY = 'outbound_manual_reply';
+
     /**
      * @var list<string>
      */
@@ -23,6 +29,7 @@ class Message extends Model
         'contact_identity_id',
         'channel_id',
         'direction',
+        'message_kind',
         'reply_to_message_id',
         'provider_event_key',
         'external_chat_id',

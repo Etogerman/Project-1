@@ -14,6 +14,7 @@ class StoreManualOutboundMessageAction
             'contact_identity_id' => $routeSourceMessage->contact_identity_id,
             'channel_id' => $routeSourceMessage->channel_id,
             'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'reply_to_message_id' => $replyToMessage?->id,
             'provider_event_key' => null,
             'external_chat_id' => $routeSourceMessage->external_chat_id,

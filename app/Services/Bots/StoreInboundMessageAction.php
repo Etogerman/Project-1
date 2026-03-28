@@ -84,6 +84,7 @@ class StoreInboundMessageAction
                     'contact_identity_id' => $identity->id,
                     'channel_id' => $channel->id,
                     'direction' => Message::DIRECTION_INBOUND,
+                    'message_kind' => Message::KIND_INBOUND_USER,
                     'provider_event_key' => $message->providerEventKey,
                     'external_chat_id' => $message->externalChatId,
                     'external_message_id' => $message->externalMessageId,

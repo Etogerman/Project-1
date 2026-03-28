@@ -268,6 +268,7 @@ class FilamentContactsResourceTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'provider_event_key' => 'telegram-update-950',
             'external_chat_id' => 'chat-950',
             'external_message_id' => 'msg-950',
@@ -282,6 +283,7 @@ class FilamentContactsResourceTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'reply_to_message_id' => $inboundMessage->id,
             'external_chat_id' => 'chat-950',
             'external_message_id' => 'out-950',
@@ -300,9 +302,47 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('Входящее сообщение от пользователя', $historyHtml);
         $this->assertStringContainsString('Исходящий автоответ', $historyHtml);
         $this->assertStringContainsString('Канал: Telegram Support', $historyHtml);
+        $this->assertStringContainsString('Тип: Пользователь', $historyHtml);
+        $this->assertStringContainsString('Тип: Автоответ', $historyHtml);
         $this->assertStringContainsString('Event key: telegram-update-950', $historyHtml);
         $this->assertStringContainsString('Статус: Ответ отправлен', $historyHtml);
         $this->assertStringContainsString('Связь: Ответ на event key: telegram-update-950', $historyHtml);
+    }
+
+    public function test_contact_history_renderer_shows_unknown_kind_for_historical_messages_without_classification(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-legacy',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => null,
+            'external_chat_id' => 'chat-legacy',
+            'external_message_id' => 'legacy-out',
+            'text' => 'Историческое исходящее',
+            'raw_payload' => ['provider' => 'legacy'],
+            'received_at' => now(),
+        ]);
+
+        $historyRenderer = new ReflectionMethod(ContactResource::class, 'renderConversationHistory');
+        $historyRenderer->setAccessible(true);
+
+        $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
+
+        $this->assertStringContainsString('Историческое исходящее', $historyHtml);
+        $this->assertStringContainsString('Тип: Не определен', $historyHtml);
     }
 
     public function test_manual_reply_action_sends_telegram_message_and_creates_outbound_message(): void
@@ -339,6 +379,7 @@ class FilamentContactsResourceTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'provider_event_key' => 'telegram-update-902',
             'external_chat_id' => 'chat-902',
             'external_message_id' => 'msg-902',
@@ -371,6 +412,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame('chat-902', $outboundMessage->external_chat_id);
         $this->assertSame('99001', $outboundMessage->external_message_id);
         $this->assertSame('Ручной ответ сотрудника', $outboundMessage->text);
+        $this->assertSame(Message::KIND_OUTBOUND_MANUAL_REPLY, $outboundMessage->message_kind);
         $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
 
         $channel->refresh();
@@ -386,7 +428,8 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Ручной ответ сотрудника')
-            ->assertMountedActionModalSee('Исходящее');
+            ->assertMountedActionModalSee('Исходящее')
+            ->assertMountedActionModalSee('Ручной ответ');
     }
 
     public function test_manual_reply_action_sends_max_message_and_creates_outbound_message(): void
@@ -420,6 +463,7 @@ class FilamentContactsResourceTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'provider_event_key' => 'mid.0000000003f780cc019d33311ef013fa',
             'external_chat_id' => '',
             'external_message_id' => 'mid.0000000003f780cc019d33311ef013fa',
@@ -452,6 +496,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame('', $outboundMessage->external_chat_id);
         $this->assertSame('max-manual-001', $outboundMessage->external_message_id);
         $this->assertSame('Ручной ответ MAX', $outboundMessage->text);
+        $this->assertSame(Message::KIND_OUTBOUND_MANUAL_REPLY, $outboundMessage->message_kind);
         $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
     }
 

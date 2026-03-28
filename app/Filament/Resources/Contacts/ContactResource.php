@@ -393,6 +393,10 @@ class ContactResource extends Resource
                     sprintf('Направление: %s', static::formatMessageDirection($message->direction)),
                     static::getMessageDirectionBadgeClasses($message->direction),
                 ),
+                static::renderFeedBadge(
+                    sprintf('Тип: %s', static::formatMessageKind($message->message_kind)),
+                    static::getMessageKindBadgeClasses($message->message_kind),
+                ),
                 static::renderFeedBadge(sprintf('Message ID: %s', $message->external_message_id ?? '—')),
             ];
 
@@ -458,6 +462,26 @@ class ContactResource extends Resource
         }
 
         return $message->hasSuccessfulAutoReply() ? 'success' : 'gray';
+    }
+
+    protected static function formatMessageKind(?string $messageKind): string
+    {
+        return match ($messageKind) {
+            Message::KIND_INBOUND_USER => 'Пользователь',
+            Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
+            Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
+            default => 'Не определен',
+        };
+    }
+
+    protected static function getMessageKindBadgeClasses(?string $messageKind): string
+    {
+        return match ($messageKind) {
+            Message::KIND_INBOUND_USER => 'inline-flex items-center rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-xs text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200',
+            Message::KIND_OUTBOUND_AUTO_REPLY => 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200',
+            Message::KIND_OUTBOUND_MANUAL_REPLY => 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200',
+            default => 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200',
+        };
     }
 
     protected static function renderFeedBadge(string $badge, ?string $classes = null): string

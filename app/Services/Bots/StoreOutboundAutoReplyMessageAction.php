@@ -21,6 +21,7 @@ class StoreOutboundAutoReplyMessageAction
                 'contact_identity_id' => $inboundMessage->contact_identity_id,
                 'channel_id' => $channel->id,
                 'direction' => Message::DIRECTION_OUTBOUND,
+                'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
                 'reply_to_message_id' => $inboundMessage->id,
                 'provider_event_key' => null,
                 'external_chat_id' => $inboundMessage->external_chat_id,

@@ -76,6 +76,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'external_chat_id' => '300',
             'external_message_id' => '10',
             'text' => 'hello',
@@ -83,6 +84,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'external_chat_id' => '300',
             'external_message_id' => '9001',
             'text' => 'Привет бот находится в разработке. Напишите нам чуть позже.',
@@ -94,12 +96,14 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->assertSame($identity->contact_id, $inboundMessage->contact_id);
         $this->assertSame($identity->id, $inboundMessage->contact_identity_id);
+        $this->assertSame(Message::KIND_INBOUND_USER, $inboundMessage->message_kind);
         $this->assertNotNull($inboundMessage->auto_reply_sent_at);
         $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
         $this->assertSame($inboundMessage->contact_id, $outboundMessage->contact_id);
         $this->assertSame($inboundMessage->contact_identity_id, $outboundMessage->contact_identity_id);
         $this->assertSame($inboundMessage->channel_id, $outboundMessage->channel_id);
         $this->assertSame($inboundMessage->external_chat_id, $outboundMessage->external_chat_id);
+        $this->assertSame(Message::KIND_OUTBOUND_AUTO_REPLY, $outboundMessage->message_kind);
     }
 
     public function test_max_webhook_endpoint_accepts_valid_event_and_sends_auto_reply(): void
@@ -148,6 +152,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'external_chat_id' => '700',
             'external_message_id' => 'max-10',
             'text' => 'hello',
@@ -155,6 +160,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'external_chat_id' => '700',
             'external_message_id' => 'max-out-9001',
             'text' => 'Привет бот находится в разработке. Напишите нам чуть позже.',
@@ -163,11 +169,13 @@ class BotWebhookAutoReplyTest extends TestCase
         $inboundMessage = $this->inboundMessages()->firstOrFail();
         $outboundMessage = $this->outboundMessages()->firstOrFail();
 
+        $this->assertSame(Message::KIND_INBOUND_USER, $inboundMessage->message_kind);
         $this->assertNotNull($inboundMessage->auto_reply_sent_at);
         $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
         $this->assertSame($inboundMessage->contact_id, $outboundMessage->contact_id);
         $this->assertSame($inboundMessage->contact_identity_id, $outboundMessage->contact_identity_id);
         $this->assertSame($inboundMessage->channel_id, $outboundMessage->channel_id);
+        $this->assertSame(Message::KIND_OUTBOUND_AUTO_REPLY, $outboundMessage->message_kind);
     }
 
     public function test_max_webhook_uses_real_payload_fields_for_contact_name_and_message_id(): void
@@ -228,12 +236,14 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'external_message_id' => 'max-mid-42',
             'text' => 'Привет из MAX',
         ]);
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'external_message_id' => 'max-out-42',
             'text' => 'Привет бот находится в разработке. Напишите нам чуть позже.',
         ]);
@@ -289,8 +299,10 @@ class BotWebhookAutoReplyTest extends TestCase
         $outboundMessage = $this->outboundMessages()->firstOrFail();
 
         $this->assertSame('42', $message->provider_event_key);
+        $this->assertSame(Message::KIND_INBOUND_USER, $message->message_kind);
         $this->assertNotNull($message->auto_reply_sent_at);
         $this->assertSame($message->id, $outboundMessage->reply_to_message_id);
+        $this->assertSame(Message::KIND_OUTBOUND_AUTO_REPLY, $outboundMessage->message_kind);
     }
 
     public function test_repeated_telegram_webhook_with_same_update_id_retries_auto_reply_after_failure(): void
@@ -338,6 +350,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $message = $this->inboundMessages()->firstOrFail();
 
         $this->assertSame('43', $message->provider_event_key);
+        $this->assertSame(Message::KIND_INBOUND_USER, $message->message_kind);
         $this->assertNull($message->auto_reply_sent_at);
         $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 0);
 
@@ -353,7 +366,9 @@ class BotWebhookAutoReplyTest extends TestCase
         $message->refresh();
 
         $this->assertNotNull($message->auto_reply_sent_at);
-        $this->assertSame($message->id, $this->outboundMessages()->firstOrFail()->reply_to_message_id);
+        $outboundMessage = $this->outboundMessages()->firstOrFail();
+        $this->assertSame($message->id, $outboundMessage->reply_to_message_id);
+        $this->assertSame(Message::KIND_OUTBOUND_AUTO_REPLY, $outboundMessage->message_kind);
     }
 
     public function test_repeated_max_webhook_with_same_external_message_id_creates_one_message_and_sends_one_auto_reply(): void
@@ -400,8 +415,10 @@ class BotWebhookAutoReplyTest extends TestCase
         $outboundMessage = $this->outboundMessages()->firstOrFail();
 
         $this->assertSame('max-42', $message->provider_event_key);
+        $this->assertSame(Message::KIND_INBOUND_USER, $message->message_kind);
         $this->assertNotNull($message->auto_reply_sent_at);
         $this->assertSame($message->id, $outboundMessage->reply_to_message_id);
+        $this->assertSame(Message::KIND_OUTBOUND_AUTO_REPLY, $outboundMessage->message_kind);
     }
 
     public function test_repeated_max_webhook_with_same_external_message_id_retries_auto_reply_after_failure(): void
@@ -448,6 +465,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $message = $this->inboundMessages()->firstOrFail();
 
         $this->assertSame('max-43', $message->provider_event_key);
+        $this->assertSame(Message::KIND_INBOUND_USER, $message->message_kind);
         $this->assertNull($message->auto_reply_sent_at);
         $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 0);
 
@@ -463,7 +481,9 @@ class BotWebhookAutoReplyTest extends TestCase
         $message->refresh();
 
         $this->assertNotNull($message->auto_reply_sent_at);
-        $this->assertSame($message->id, $this->outboundMessages()->firstOrFail()->reply_to_message_id);
+        $outboundMessage = $this->outboundMessages()->firstOrFail();
+        $this->assertSame($message->id, $outboundMessage->reply_to_message_id);
+        $this->assertSame(Message::KIND_OUTBOUND_AUTO_REPLY, $outboundMessage->message_kind);
     }
 
     public function test_repeat_max_webhook_from_same_user_with_different_message_ids_creates_two_messages(): void
@@ -655,6 +675,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->assertDatabaseHas('messages', [
             'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'text' => 'Тестовый ответ из конфига.',
             'external_message_id' => '9004',
         ]);
@@ -742,6 +763,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
             'provider_event_key' => null,
         ]);
     }
