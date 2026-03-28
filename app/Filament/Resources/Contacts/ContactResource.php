@@ -118,18 +118,13 @@ class ContactResource extends Resource
                         TextEntry::make('assigned_user_label')
                             ->label('Ответственный')
                             ->state(fn (Contact $record): string => static::formatAssignedUserLabel($record)),
-                        TextEntry::make('ownership_status')
-                            ->label('Назначение')
-                            ->state(fn (Contact $record): string => static::formatOwnershipStatus($record))
-                            ->badge()
-                            ->color(fn (Contact $record): string => static::getOwnershipStatusColor($record)),
                         ViewEntry::make('ownership_controls')
                             ->hiddenLabel()
                             ->view('filament.contacts.partials.ownership-controls')
                             ->viewData(fn (Contact $record): array => static::buildOwnershipControlsViewData($record))
                             ->columnSpanFull(),
                     ])
-                    ->columns(2)
+                    ->columns(1)
                     ->columnSpanFull(),
                 Section::make('Последнее сообщение')
                     ->schema([
@@ -342,6 +337,8 @@ class ContactResource extends Resource
                     ->mountUsing(function (Action $action, ?Schema $schema, ManageContacts $livewire): void {
                         $schema?->fill();
                         $livewire->inlineReplyText = '';
+                        $livewire->showAssignContactDialog = false;
+                        $livewire->selectedAssigneeId = '';
                     }),
             ])
             ->toolbarActions([]);
@@ -601,10 +598,7 @@ class ContactResource extends Resource
 
         return [
             'assignedUserLabel' => static::formatAssignedUserLabel($record),
-            'ownershipStatusLabel' => static::formatOwnershipStatus($record),
-            'ownershipStatusColor' => static::getOwnershipStatusColor($record),
-            'canClaim' => static::canCurrentUserClaimContact($record),
-            'canRelease' => static::canCurrentUserReleaseContact($record),
+            'availableAssignees' => static::getAssignableUserOptions(),
             'ownershipHint' => static::getOwnershipHint($record),
         ];
     }
@@ -615,10 +609,22 @@ class ContactResource extends Resource
             'canReply' => static::canCurrentUserReplyToContact($record),
             'blockedReason' => static::getInlineReplyBlockedReason($record),
             'canClaim' => static::canCurrentUserClaimContact($record),
-            'canRelease' => static::canCurrentUserReleaseContact($record),
             'assignedUserLabel' => static::formatAssignedUserLabel($record),
-            'ownershipStatusLabel' => static::formatOwnershipStatus($record),
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected static function getAssignableUserOptions(): array
+    {
+        return User::query()
+            ->where('is_active', true)
+            ->where('is_admin', true)
+            ->orderBy('name')
+            ->pluck('name', 'id')
+            ->map(fn (string $name, int|string $id): string => filled($name) ? $name : 'Сотрудник #'.$id)
+            ->all();
     }
 
     protected static function resolveCurrentUserId(): ?int

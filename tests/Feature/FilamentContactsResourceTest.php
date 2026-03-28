@@ -144,7 +144,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Свободен')
-            ->assertMountedActionModalSee('Взять в работу')
+            ->assertMountedActionModalSee('Выбрать ответственного')
             ->assertMountedActionModalSee('@max_customer')
             ->assertMountedActionModalSee('max-200')
             ->assertMountedActionModalSee('MAX Support')
@@ -900,7 +900,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
-    public function test_free_contact_can_be_claimed_from_contact_modal(): void
+    public function test_contact_modal_can_assign_current_employee_via_responsible_dialog(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -912,10 +912,12 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->call('claimMountedContact')
+            ->assertMountedActionModalSee('Выбрать ответственного')
+            ->call('openAssignContactDialog')
+            ->assertMountedActionModalSee('Выберите сотрудника, который будет вести этот контакт.')
+            ->set('selectedAssigneeId', (string) $admin->id)
+            ->call('saveMountedContactAssignee')
             ->assertNotified()
-            ->assertMountedActionModalSee('Мой')
-            ->assertMountedActionModalSee('Снять с себя')
             ->assertMountedActionModalSee('Администратор 1');
 
         $contact->refresh();
@@ -923,7 +925,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame($admin->id, $contact->assigned_user_id);
     }
 
-    public function test_contact_claim_does_not_overwrite_existing_owner(): void
+    public function test_contact_modal_can_assign_other_employee_via_responsible_dialog(): void
     {
         $firstAdmin = User::factory()->create([
             'is_active' => true,
@@ -940,23 +942,18 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($firstAdmin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->call('claimMountedContact')
-            ->assertNotified();
-
-        Livewire::actingAs($secondAdmin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $contact)
-            ->call('claimMountedContact')
+            ->call('openAssignContactDialog')
+            ->set('selectedAssigneeId', (string) $secondAdmin->id)
+            ->call('saveMountedContactAssignee')
             ->assertNotified()
-            ->assertMountedActionModalSee('Назначен другому')
-            ->assertMountedActionModalSee('Первый администратор');
+            ->assertMountedActionModalSee('Второй администратор');
 
         $contact->refresh();
 
-        $this->assertSame($firstAdmin->id, $contact->assigned_user_id);
+        $this->assertSame($secondAdmin->id, $contact->assigned_user_id);
     }
 
-    public function test_owner_can_release_contact_from_contact_modal(): void
+    public function test_contact_modal_can_clear_responsible_via_dialog(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -969,42 +966,41 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->call('releaseMountedContact')
+            ->call('openAssignContactDialog')
+            ->set('selectedAssigneeId', '')
+            ->call('saveMountedContactAssignee')
             ->assertNotified()
-            ->assertMountedActionModalSee('Свободен')
-            ->assertMountedActionModalSee('Взять в работу');
+            ->assertMountedActionModalSee('Свободен');
 
         $contact->refresh();
 
         $this->assertNull($contact->assigned_user_id);
     }
 
-    public function test_non_owner_cannot_release_contact_from_contact_modal(): void
+    public function test_contact_modal_does_not_accept_inactive_non_admin_as_responsible(): void
     {
-        $owner = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-            'name' => 'Владелец контакта',
-        ]);
-        $otherAdmin = User::factory()->create([
+        $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
-        $contact = Contact::factory()->create([
-            'assigned_user_id' => $owner->id,
+        $invalidAssignee = User::factory()->create([
+            'is_active' => false,
+            'is_admin' => false,
         ]);
+        $contact = Contact::factory()->create();
 
-        Livewire::actingAs($otherAdmin)
+        Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->call('releaseMountedContact')
+            ->call('openAssignContactDialog')
+            ->set('selectedAssigneeId', (string) $invalidAssignee->id)
+            ->call('saveMountedContactAssignee')
             ->assertNotified()
-            ->assertMountedActionModalSee('Назначен другому')
-            ->assertMountedActionModalSee('Владелец контакта');
+            ->assertMountedActionModalSee('Свободен');
 
         $contact->refresh();
 
-        $this->assertSame($owner->id, $contact->assigned_user_id);
+        $this->assertNull($contact->assigned_user_id);
     }
 
     public function test_contacts_table_filters_support_my_and_unassigned_contacts(): void
@@ -1086,7 +1082,7 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('Контакт сейчас свободен.')
+            ->assertMountedActionModalSee('Ответственный пока не выбран.')
             ->set('inlineReplyText', 'Ответ с авто-claim')
             ->call('sendInlineReply')
             ->assertNotified()

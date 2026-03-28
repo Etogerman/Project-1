@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\Bots\SendManualContactReplyAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
+use App\Services\Contacts\SetContactAssigneeAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRecords;
@@ -19,6 +20,8 @@ class ManageContacts extends ManageRecords
     protected static string $resource = ContactResource::class;
 
     public string $inlineReplyText = '';
+    public bool $showAssignContactDialog = false;
+    public string $selectedAssigneeId = '';
 
     /**
      * @return array<Action>
@@ -144,6 +147,72 @@ class ManageContacts extends ManageRecords
             Notification::make()
                 ->danger()
                 ->title('Не удалось отправить ответ')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function openAssignContactDialog(): void
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть выбор ответственного')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        $this->selectedAssigneeId = filled($record->assigned_user_id)
+            ? (string) $record->assigned_user_id
+            : '';
+        $this->showAssignContactDialog = true;
+    }
+
+    public function closeAssignContactDialog(): void
+    {
+        $this->showAssignContactDialog = false;
+        $this->selectedAssigneeId = '';
+    }
+
+    public function saveMountedContactAssignee(): void
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить ответственного')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        try {
+            $employee = $this->resolveCurrentEmployee();
+            $assigneeId = $this->selectedAssigneeId !== ''
+                ? (int) $this->selectedAssigneeId
+                : null;
+
+            app(SetContactAssigneeAction::class)->handle($record, $employee, $assigneeId);
+
+            $this->showAssignContactDialog = false;
+            $this->selectedAssigneeId = '';
+            $this->replaceMountedTableAction('view', (string) $record->id);
+
+            Notification::make()
+                ->success()
+                ->title('Ответственный обновлён')
+                ->body('Изменения сохранены.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить ответственного')
                 ->body($throwable->getMessage())
                 ->send();
         }
