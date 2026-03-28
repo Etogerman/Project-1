@@ -7,6 +7,7 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Contacts\ClaimContactAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -17,6 +18,7 @@ class SendManualContactReplyAction
 {
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
+        protected ClaimContactAction $claimContactAction,
         protected StoreManualOutboundMessageAction $storeManualOutboundMessageAction,
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
@@ -37,7 +39,7 @@ class SendManualContactReplyAction
         }
 
         if (! $contact->isAssigned()) {
-            throw new InvalidArgumentException('Сначала возьмите контакт в работу.');
+            $contact = $this->claimContactAction->handle($contact, $employee);
         }
 
         if (! $contact->isAssignedTo($employee)) {

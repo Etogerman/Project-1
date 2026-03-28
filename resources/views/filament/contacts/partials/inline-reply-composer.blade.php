@@ -1,9 +1,12 @@
-<section data-role="conversation-reply-form" class="rounded-2xl border border-gray-200/80 bg-white/90 p-4 shadow-sm dark:border-white/10 dark:bg-slate-900/80">
+<section data-role="conversation-reply-form" class="rounded-3xl border-2 border-primary-200/80 bg-gradient-to-br from-primary-50/70 via-white to-emerald-50/40 p-5 shadow-md ring-1 ring-primary-100/80 dark:border-primary-500/20 dark:from-primary-500/10 dark:via-slate-900/90 dark:to-emerald-500/10 dark:ring-primary-500/10">
     <div class="mb-3 flex items-center justify-between gap-3">
         <div>
-            <h3 class="text-sm font-semibold text-gray-950 dark:text-white">Ответ</h3>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
+            <h3 class="text-base font-semibold text-gray-950 dark:text-white">Ответ</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-300">
                 Сообщение будет отправлено через последний активный канал контакта.
+                @if ($canReply && ! filled($blockedReason))
+                    Если контакт ещё свободен, он автоматически перейдёт к вам после отправки.
+                @endif
             </p>
         </div>
     </div>
@@ -19,11 +22,12 @@
             <textarea
                 data-role="conversation-reply-textarea"
                 wire:model.defer="inlineReplyText"
-                rows="5"
+                rows="7"
                 maxlength="2000"
                 placeholder="Введите текст ответа"
                 @disabled(! $canReply)
-                class="block w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-950 shadow-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:border-white/10 dark:bg-slate-950 dark:text-white"
+                style="width: 100%; min-width: 100%;"
+                class="block min-h-[12rem] w-full min-w-full rounded-2xl border-2 border-primary-300 bg-white px-4 py-3 text-base leading-6 text-gray-950 shadow-inner outline-none transition focus:border-primary-500 focus:ring-4 focus:ring-primary-500/20 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100/80 dark:border-primary-500/30 dark:bg-slate-950 dark:text-white dark:disabled:border-white/10 dark:disabled:bg-slate-900/70"
             ></textarea>
 
             @error('inlineReplyText')
@@ -39,7 +43,7 @@
                 @disabled(! $canReply)
                 wire:loading.attr="disabled"
                 wire:target="sendInlineReply"
-                class="inline-flex items-center rounded-lg bg-success-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-success-500 disabled:cursor-not-allowed disabled:opacity-60"
+                class="inline-flex items-center rounded-xl bg-success-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-success-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
                 <span wire:loading.remove wire:target="sendInlineReply">Отправить</span>
                 <span wire:loading wire:target="sendInlineReply">Отправка...</span>

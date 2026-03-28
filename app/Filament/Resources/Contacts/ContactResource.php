@@ -680,13 +680,12 @@ class ContactResource extends Resource
 
     protected static function canCurrentUserReplyToContact(Contact $record): bool
     {
-        return static::getContactOwnershipState($record) === 'mine';
+        return in_array(static::getContactOwnershipState($record), ['mine', 'unassigned'], true);
     }
 
     protected static function getInlineReplyBlockedReason(Contact $record): ?string
     {
         return match (static::getContactOwnershipState($record)) {
-            'unassigned' => 'Сначала возьмите контакт в работу.',
             'other' => filled($record->assignedUser?->name)
                 ? 'Контакт уже назначен сотруднику '.$record->assignedUser->name.'.'
                 : 'Контакт уже назначен другому сотруднику.',

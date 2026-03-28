@@ -161,13 +161,12 @@ class ManageContacts extends ManageRecords
 
     public function canSendInlineReply(?Contact $contact = null): bool
     {
-        return $this->getContactOwnershipState($contact) === 'mine';
+        return in_array($this->getContactOwnershipState($contact), ['mine', 'unassigned'], true);
     }
 
     public function getInlineReplyBlockedReason(?Contact $contact = null): ?string
     {
         return match ($this->getContactOwnershipState($contact)) {
-            'unassigned' => 'Сначала возьмите контакт в работу.',
             'other' => 'Контакт уже назначен другому сотруднику. Ручной ответ недоступен.',
             default => null,
         };

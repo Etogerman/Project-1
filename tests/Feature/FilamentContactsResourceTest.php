@@ -189,7 +189,6 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->assertTableActionExists('view', null, $contact)
             ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('Сначала возьмите контакт в работу.')
             ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('Ответ')
@@ -1044,8 +1043,17 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$myContact, $otherContact]);
     }
 
-    public function test_inline_reply_composer_blocks_manual_reply_until_contact_is_claimed(): void
+    public function test_inline_reply_composer_auto_claims_free_contact_before_sending_reply(): void
     {
+        Http::fake([
+            'https://api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 99011,
+                ],
+            ]),
+        ]);
+
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
@@ -1078,13 +1086,20 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('Сначала возьмите контакт в работу.')
-            ->set('inlineReplyText', 'Ответ без claim')
+            ->set('inlineReplyText', 'Ответ с авто-claim')
             ->call('sendInlineReply')
             ->assertNotified()
-            ->assertSet('inlineReplyText', 'Ответ без claim');
+            ->assertSet('inlineReplyText', '');
 
-        $this->assertDatabaseCount('messages', 1);
+        $contact->refresh();
+
+        $this->assertSame($admin->id, $contact->assigned_user_id);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'text' => 'Ответ с авто-claim',
+        ]);
     }
 
     public function test_inline_reply_composer_blocks_manual_reply_for_contact_owned_by_another_user(): void
