@@ -494,6 +494,7 @@ class ChannelResource extends Resource
     {
         return $record->messages()
             ->with('contactIdentity')
+            ->where('direction', Message::DIRECTION_INBOUND)
             ->orderByDesc('id')
             ->first();
     }
@@ -501,7 +502,7 @@ class ChannelResource extends Resource
     protected static function renderRecentSavedMessages(Channel $record): HtmlString
     {
         $messages = $record->messages()
-            ->with('contactIdentity')
+            ->with(['contactIdentity', 'replyTo'])
             ->orderByDesc('id')
             ->limit(15)
             ->get();
@@ -519,14 +520,24 @@ class ChannelResource extends Resource
                     sprintf('Направление: %s', static::formatMessageDirection($message->direction)),
                     static::getMessageDirectionBadgeClasses($message->direction),
                 ),
-                static::renderFeedBadge(
+                static::renderFeedBadge(sprintf('Message ID: %s', $message->external_message_id ?? '—')),
+            ];
+
+            if ($message->direction === Message::DIRECTION_INBOUND) {
+                $badges[] = static::renderFeedBadge(sprintf('Event key: %s', $message->provider_event_key ?? '—'));
+                $badges[] = static::renderFeedBadge(sprintf('Автоответ: %s', $message->auto_reply_sent_at?->format('d.m.Y H:i:s') ?? '—'));
+                $badges[] = static::renderFeedBadge(
                     sprintf('Статус: %s', static::formatMessageReplyStatus($message)),
                     static::getMessageReplyStatusBadgeClasses($message),
-                ),
-                static::renderFeedBadge(sprintf('Message ID: %s', $message->external_message_id ?? '—')),
-                static::renderFeedBadge(sprintf('Event key: %s', $message->provider_event_key ?? '—')),
-                static::renderFeedBadge(sprintf('Автоответ: %s', $message->auto_reply_sent_at?->format('d.m.Y H:i:s') ?? '—')),
-            ];
+                );
+            }
+
+            if ($message->direction === Message::DIRECTION_OUTBOUND) {
+                $badges[] = static::renderFeedBadge(
+                    sprintf('Связь: %s', static::formatOutboundReplyLink($message)),
+                    static::getOutboundReplyLinkBadgeClasses(),
+                );
+            }
 
             $badgeMarkup = implode('', $badges);
 
@@ -628,12 +639,20 @@ class ChannelResource extends Resource
 
     protected static function formatMessageDirection(?string $direction): string
     {
-        return $direction === Message::DIRECTION_INBOUND ? 'Входящее' : ($direction ?? '—');
+        return match ($direction) {
+            Message::DIRECTION_INBOUND => 'Входящее',
+            Message::DIRECTION_OUTBOUND => 'Исходящее',
+            default => $direction ?? '—',
+        };
     }
 
     protected static function getMessageDirectionColor(?string $direction): string
     {
-        return $direction === Message::DIRECTION_INBOUND ? 'info' : 'gray';
+        return match ($direction) {
+            Message::DIRECTION_INBOUND => 'info',
+            Message::DIRECTION_OUTBOUND => 'success',
+            default => 'gray',
+        };
     }
 
     protected static function formatMessageReplyStatus(Message $message): string
@@ -661,6 +680,10 @@ class ChannelResource extends Resource
     {
         if ($direction === Message::DIRECTION_INBOUND) {
             return 'inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200';
+        }
+
+        if ($direction === Message::DIRECTION_OUTBOUND) {
+            return 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200';
         }
 
         return 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200';
@@ -695,6 +718,26 @@ class ChannelResource extends Resource
     protected static function getDedupeActivityBadgeClasses(): string
     {
         return 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200';
+    }
+
+    protected static function formatOutboundReplyLink(Message $message): string
+    {
+        $replyTo = $message->replyTo;
+
+        if ($replyTo === null) {
+            return 'Ответ без связи';
+        }
+
+        if (filled($replyTo->provider_event_key)) {
+            return 'Ответ на event key: '.$replyTo->provider_event_key;
+        }
+
+        return 'Ответ на inbound #'.$replyTo->id;
+    }
+
+    protected static function getOutboundReplyLinkBadgeClasses(): string
+    {
+        return 'inline-flex items-center rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-700 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-200';
     }
 
     protected static function getActivityCardClasses(bool $isDedupeEvent): string

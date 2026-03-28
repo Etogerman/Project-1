@@ -40,6 +40,7 @@ class MessageFactory extends Factory
                 return $identity->channel_id;
             },
             'direction' => Message::DIRECTION_INBOUND,
+            'reply_to_message_id' => null,
             'provider_event_key' => null,
             'external_chat_id' => (string) fake()->numerify('########'),
             'external_message_id' => (string) fake()->numerify('########'),

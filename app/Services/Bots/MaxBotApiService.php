@@ -2,6 +2,7 @@
 
 namespace App\Services\Bots;
 
+use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotMetadata;
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
@@ -12,7 +13,7 @@ use InvalidArgumentException;
 
 class MaxBotApiService
 {
-    public function sendAutoReply(Channel $channel, IncomingBotMessage $message): void
+    public function sendAutoReply(Channel $channel, IncomingBotMessage $message, string $text): AutoReplyDeliveryResult
     {
         $query = [];
 
@@ -24,14 +25,25 @@ class MaxBotApiService
             throw new InvalidArgumentException("MAX message for channel [{$channel->id}] does not have chat or user id.");
         }
 
-        $this->client($channel)
+        $response = $this->client($channel)
             ->post(
                 'https://platform-api.max.ru/messages?'.http_build_query($query),
                 [
-                    'text' => (string) config('bots.default_auto_reply_text'),
+                    'text' => $text,
                 ],
             )
-            ->throw();
+            ->throw()
+            ->json();
+
+        $rawPayload = is_array($response)
+            ? $response
+            : ['response' => $response];
+
+        return new AutoReplyDeliveryResult(
+            text: $text,
+            externalMessageId: $this->resolveSentMessageId($rawPayload),
+            rawPayload: $rawPayload,
+        );
     }
 
     public function registerWebhook(Channel $channel, string $url, string $secret): void
@@ -113,5 +125,24 @@ class MaxBotApiService
         }
 
         return $token;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveSentMessageId(array $payload): ?string
+    {
+        $messageId = data_get($payload, 'message.body.mid')
+            ?? data_get($payload, 'message.message_id')
+            ?? data_get($payload, 'message.id')
+            ?? data_get($payload, 'body.mid')
+            ?? data_get($payload, 'message_id')
+            ?? data_get($payload, 'id');
+
+        if (! filled($messageId)) {
+            return null;
+        }
+
+        return trim((string) $messageId);
     }
 }

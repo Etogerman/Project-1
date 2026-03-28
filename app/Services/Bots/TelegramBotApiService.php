@@ -2,6 +2,7 @@
 
 namespace App\Services\Bots;
 
+use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotMetadata;
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
@@ -11,21 +12,34 @@ use InvalidArgumentException;
 
 class TelegramBotApiService
 {
-    public function sendAutoReply(Channel $channel, IncomingBotMessage $message): void
+    public function sendAutoReply(Channel $channel, IncomingBotMessage $message, string $text): AutoReplyDeliveryResult
     {
         if (! filled($message->externalChatId)) {
             throw new InvalidArgumentException("Telegram message for channel [{$channel->id}] does not have chat id.");
         }
 
-        Http::asJson()
+        $response = Http::asJson()
             ->post(
                 sprintf('https://api.telegram.org/bot%s/sendMessage', $this->token($channel)),
                 [
                     'chat_id' => $message->externalChatId,
-                    'text' => (string) config('bots.default_auto_reply_text'),
+                    'text' => $text,
                 ],
             )
-            ->throw();
+            ->throw()
+            ->json();
+
+        $rawPayload = is_array($response)
+            ? $response
+            : ['response' => $response];
+
+        return new AutoReplyDeliveryResult(
+            text: $text,
+            externalMessageId: filled(data_get($rawPayload, 'result.message_id'))
+                ? (string) data_get($rawPayload, 'result.message_id')
+                : null,
+            rawPayload: $rawPayload,
+        );
     }
 
     public function registerWebhook(Channel $channel, string $url, string $secret): void

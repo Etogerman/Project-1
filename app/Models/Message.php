@@ -5,12 +5,15 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Message extends Model
 {
     use HasFactory;
 
     public const DIRECTION_INBOUND = 'inbound';
+
+    public const DIRECTION_OUTBOUND = 'outbound';
 
     /**
      * @var list<string>
@@ -20,6 +23,7 @@ class Message extends Model
         'contact_identity_id',
         'channel_id',
         'direction',
+        'reply_to_message_id',
         'provider_event_key',
         'external_chat_id',
         'external_message_id',
@@ -56,5 +60,15 @@ class Message extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    public function replyTo(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'reply_to_message_id');
+    }
+
+    public function replies(): HasMany
+    {
+        return $this->hasMany(self::class, 'reply_to_message_id');
     }
 }

@@ -19,6 +19,9 @@ class BotWebhookAutoReplyTest extends TestCase
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
+                'result' => [
+                    'message_id' => 9001,
+                ],
             ]),
         ]);
 
@@ -62,7 +65,8 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
         $this->assertDatabaseCount('contacts', 1);
         $this->assertDatabaseCount('contact_identities', 1);
-        $this->assertDatabaseCount('messages', 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 1);
         $this->assertDatabaseHas('contact_identities', [
             'channel_id' => $channel->id,
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -76,20 +80,35 @@ class BotWebhookAutoReplyTest extends TestCase
             'external_message_id' => '10',
             'text' => 'hello',
         ]);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'external_chat_id' => '300',
+            'external_message_id' => '9001',
+            'text' => 'Привет бот находится в разработке. Напишите нам чуть позже.',
+        ]);
 
         $identity = ContactIdentity::query()->firstOrFail();
-        $message = Message::query()->firstOrFail();
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $outboundMessage = $this->outboundMessages()->firstOrFail();
 
-        $this->assertSame($identity->contact_id, $message->contact_id);
-        $this->assertSame($identity->id, $message->contact_identity_id);
-        $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertSame($identity->contact_id, $inboundMessage->contact_id);
+        $this->assertSame($identity->id, $inboundMessage->contact_identity_id);
+        $this->assertNotNull($inboundMessage->auto_reply_sent_at);
+        $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
+        $this->assertSame($inboundMessage->contact_id, $outboundMessage->contact_id);
+        $this->assertSame($inboundMessage->contact_identity_id, $outboundMessage->contact_identity_id);
+        $this->assertSame($inboundMessage->channel_id, $outboundMessage->channel_id);
+        $this->assertSame($inboundMessage->external_chat_id, $outboundMessage->external_chat_id);
     }
 
     public function test_max_webhook_endpoint_accepts_valid_event_and_sends_auto_reply(): void
     {
         Http::fake([
             'https://platform-api.max.ru/*' => Http::response([
-                'message' => [],
+                'message' => [
+                    'message_id' => 'max-out-9001',
+                ],
             ]),
         ]);
 
@@ -118,7 +137,8 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertNull($channel->last_error_at);
         $this->assertDatabaseCount('contacts', 1);
         $this->assertDatabaseCount('contact_identities', 1);
-        $this->assertDatabaseCount('messages', 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 1);
         $this->assertDatabaseHas('contact_identities', [
             'channel_id' => $channel->id,
             'platform' => Channel::PLATFORM_MAX,
@@ -132,15 +152,31 @@ class BotWebhookAutoReplyTest extends TestCase
             'external_message_id' => 'max-10',
             'text' => 'hello',
         ]);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'external_chat_id' => '700',
+            'external_message_id' => 'max-out-9001',
+            'text' => 'Привет бот находится в разработке. Напишите нам чуть позже.',
+        ]);
 
-        $this->assertNotNull(Message::query()->firstOrFail()->auto_reply_sent_at);
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $outboundMessage = $this->outboundMessages()->firstOrFail();
+
+        $this->assertNotNull($inboundMessage->auto_reply_sent_at);
+        $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
+        $this->assertSame($inboundMessage->contact_id, $outboundMessage->contact_id);
+        $this->assertSame($inboundMessage->contact_identity_id, $outboundMessage->contact_identity_id);
+        $this->assertSame($inboundMessage->channel_id, $outboundMessage->channel_id);
     }
 
     public function test_max_webhook_uses_real_payload_fields_for_contact_name_and_message_id(): void
     {
         Http::fake([
             'https://platform-api.max.ru/*' => Http::response([
-                'message' => [],
+                'message' => [
+                    'message_id' => 'max-out-42',
+                ],
             ]),
         ]);
 
@@ -191,11 +227,18 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
             'external_message_id' => 'max-mid-42',
             'text' => 'Привет из MAX',
         ]);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'external_message_id' => 'max-out-42',
+            'text' => 'Привет бот находится в разработке. Напишите нам чуть позже.',
+        ]);
 
-        $message = Message::query()->firstOrFail();
+        $message = $this->inboundMessages()->firstOrFail();
 
         $this->assertSame(intdiv($timestamp, 1000), $message->received_at->getTimestamp());
         $this->assertSame('2026-03-20 12:34:56', $message->received_at->utc()->format('Y-m-d H:i:s'));
@@ -206,6 +249,9 @@ class BotWebhookAutoReplyTest extends TestCase
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
+                'result' => [
+                    'message_id' => 9002,
+                ],
             ]),
         ]);
 
@@ -235,12 +281,16 @@ class BotWebhookAutoReplyTest extends TestCase
             ->assertOk();
 
         Http::assertSentCount(1);
-        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 1);
 
-        $message = Message::query()->firstOrFail();
+        $message = $this->inboundMessages()->firstOrFail();
+        $outboundMessage = $this->outboundMessages()->firstOrFail();
 
         $this->assertSame('42', $message->provider_event_key);
         $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertSame($message->id, $outboundMessage->reply_to_message_id);
     }
 
     public function test_repeated_telegram_webhook_with_same_update_id_retries_auto_reply_after_failure(): void
@@ -253,7 +303,12 @@ class BotWebhookAutoReplyTest extends TestCase
 
                 return $replyAttempts === 1
                     ? Http::response(['ok' => false], 500)
-                    : Http::response(['ok' => true]);
+                    : Http::response([
+                        'ok' => true,
+                        'result' => [
+                            'message_id' => 9003,
+                        ],
+                    ]);
             }
 
             return Http::response([], 404);
@@ -280,28 +335,34 @@ class BotWebhookAutoReplyTest extends TestCase
             ->postJson("/webhooks/telegram/{$channel->id}", $payload)
             ->assertStatus(500);
 
-        $message = Message::query()->firstOrFail();
+        $message = $this->inboundMessages()->firstOrFail();
 
         $this->assertSame('43', $message->provider_event_key);
         $this->assertNull($message->auto_reply_sent_at);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 0);
 
         $this->withHeaders($headers)
             ->postJson("/webhooks/telegram/{$channel->id}", $payload)
             ->assertOk();
 
         Http::assertSentCount(2);
-        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 1);
 
         $message->refresh();
 
         $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertSame($message->id, $this->outboundMessages()->firstOrFail()->reply_to_message_id);
     }
 
     public function test_repeated_max_webhook_with_same_external_message_id_creates_one_message_and_sends_one_auto_reply(): void
     {
         Http::fake([
             'https://platform-api.max.ru/*' => Http::response([
-                'message' => [],
+                'message' => [
+                    'message_id' => 'max-out-9002',
+                ],
             ]),
         ]);
 
@@ -331,12 +392,16 @@ class BotWebhookAutoReplyTest extends TestCase
             ->assertOk();
 
         Http::assertSentCount(1);
-        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 1);
 
-        $message = Message::query()->firstOrFail();
+        $message = $this->inboundMessages()->firstOrFail();
+        $outboundMessage = $this->outboundMessages()->firstOrFail();
 
         $this->assertSame('max-42', $message->provider_event_key);
         $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertSame($message->id, $outboundMessage->reply_to_message_id);
     }
 
     public function test_repeated_max_webhook_with_same_external_message_id_retries_auto_reply_after_failure(): void
@@ -349,7 +414,11 @@ class BotWebhookAutoReplyTest extends TestCase
 
                 return $replyAttempts === 1
                     ? Http::response(['message' => []], 500)
-                    : Http::response(['message' => []]);
+                    : Http::response([
+                        'message' => [
+                            'message_id' => 'max-out-9003',
+                        ],
+                    ]);
             }
 
             return Http::response([], 404);
@@ -376,21 +445,25 @@ class BotWebhookAutoReplyTest extends TestCase
             ->postJson("/webhooks/max/{$channel->id}", $payload)
             ->assertStatus(500);
 
-        $message = Message::query()->firstOrFail();
+        $message = $this->inboundMessages()->firstOrFail();
 
         $this->assertSame('max-43', $message->provider_event_key);
         $this->assertNull($message->auto_reply_sent_at);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 0);
 
         $this->withHeaders($headers)
             ->postJson("/webhooks/max/{$channel->id}", $payload)
             ->assertOk();
 
         Http::assertSentCount(2);
-        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 1);
 
         $message->refresh();
 
         $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertSame($message->id, $this->outboundMessages()->firstOrFail()->reply_to_message_id);
     }
 
     public function test_repeat_max_webhook_from_same_user_with_different_message_ids_creates_two_messages(): void
@@ -429,7 +502,9 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->assertDatabaseCount('contacts', 1);
         $this->assertDatabaseCount('contact_identities', 1);
-        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseCount('messages', 4);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 2);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 2);
     }
 
     public function test_inactive_channel_does_not_process_event(): void
@@ -490,7 +565,9 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseCount('contacts', 1);
         $this->assertDatabaseCount('contact_identities', 1);
         $this->assertDatabaseCount('messages', 1);
-        $this->assertNull(Message::query()->firstOrFail()->auto_reply_sent_at);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 1);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 0);
+        $this->assertNull($this->inboundMessages()->firstOrFail()->auto_reply_sent_at);
     }
 
     public function test_invalid_telegram_webhook_secret_is_rejected(): void
@@ -553,6 +630,9 @@ class BotWebhookAutoReplyTest extends TestCase
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
+                'result' => [
+                    'message_id' => 9004,
+                ],
             ]),
         ]);
 
@@ -572,6 +652,12 @@ class BotWebhookAutoReplyTest extends TestCase
             return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
                 && $request['text'] === 'Тестовый ответ из конфига.';
         });
+
+        $this->assertDatabaseHas('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'text' => 'Тестовый ответ из конфига.',
+            'external_message_id' => '9004',
+        ]);
     }
 
     public function test_repeat_telegram_webhook_from_same_user_reuses_contact_identity_and_contact(): void
@@ -610,7 +696,9 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->assertDatabaseCount('contacts', 1);
         $this->assertDatabaseCount('contact_identities', 1);
-        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseCount('messages', 4);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 2);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 2);
     }
 
     public function test_telegram_webhook_without_update_id_keeps_legacy_non_deduplicated_behavior(): void
@@ -648,9 +736,12 @@ class BotWebhookAutoReplyTest extends TestCase
             ->assertOk();
 
         Http::assertSentCount(2);
-        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseCount('messages', 4);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 2);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 2);
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
             'provider_event_key' => null,
         ]);
     }
@@ -697,7 +788,9 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->assertDatabaseCount('contacts', 2);
         $this->assertDatabaseCount('contact_identities', 2);
-        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseCount('messages', 4);
+        $this->assertMessageDirectionCount(Message::DIRECTION_INBOUND, 2);
+        $this->assertMessageDirectionCount(Message::DIRECTION_OUTBOUND, 2);
         $this->assertDatabaseHas('contact_identities', [
             'channel_id' => $channel->id,
             'external_user_id' => '201',
@@ -772,5 +865,23 @@ class BotWebhookAutoReplyTest extends TestCase
                 ],
             ],
         ];
+    }
+
+    protected function assertMessageDirectionCount(string $direction, int $expectedCount): void
+    {
+        $this->assertSame(
+            $expectedCount,
+            Message::query()->where('direction', $direction)->count(),
+        );
+    }
+
+    protected function inboundMessages()
+    {
+        return Message::query()->where('direction', Message::DIRECTION_INBOUND);
+    }
+
+    protected function outboundMessages()
+    {
+        return Message::query()->where('direction', Message::DIRECTION_OUTBOUND);
     }
 }

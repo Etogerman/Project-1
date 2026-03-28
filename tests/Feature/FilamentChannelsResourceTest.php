@@ -462,4 +462,54 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('Event key: telegram-update-902', $recentActivityHtml);
         $this->assertStringContainsString('data-dedupe-event="true"', $recentActivityHtml);
     }
+
+    public function test_recent_messages_renderer_shows_outbound_reply_link(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ext-300',
+        ]);
+
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'telegram-update-903',
+            'external_chat_id' => 'chat-903',
+            'external_message_id' => 'msg-903',
+            'text' => 'Входящее сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => Carbon::create(2026, 3, 28, 13, 0, 0),
+            'auto_reply_sent_at' => Carbon::create(2026, 3, 28, 13, 0, 5),
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'reply_to_message_id' => $inboundMessage->id,
+            'external_chat_id' => 'chat-903',
+            'external_message_id' => 'out-903',
+            'text' => 'Исходящий автоответ',
+            'raw_payload' => ['message' => ['message_id' => 'out-903']],
+            'received_at' => Carbon::create(2026, 3, 28, 13, 0, 5),
+        ]);
+
+        $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
+        $recentMessagesRenderer->setAccessible(true);
+
+        $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Исходящее', $recentMessagesHtml);
+        $this->assertStringContainsString('Исходящий автоответ', $recentMessagesHtml);
+        $this->assertStringContainsString('Связь: Ответ на event key: telegram-update-903', $recentMessagesHtml);
+    }
 }
