@@ -5,12 +5,15 @@ namespace Tests\Feature;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Message;
 use App\Models\User;
 use Filament\Facades\Filament;
+use Illuminate\Http\Client\Request;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Livewire;
 use ReflectionMethod;
@@ -145,6 +148,44 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Нужна помощь по заказу');
     }
 
+    public function test_admin_can_open_manual_reply_action_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-901',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'telegram-update-901',
+            'external_chat_id' => 'chat-901',
+            'external_message_id' => 'msg-901',
+            'text' => 'Входящее сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableActionExists(['view', 'sendReply'], null, $contact)
+            ->mountTableAction(['view', 'sendReply'], $contact)
+            ->assertMountedActionModalSee('Отправить ответ')
+            ->assertMountedActionModalSee('Текст ответа');
+    }
+
     public function test_contact_diagnostics_show_latest_message_even_with_same_received_at_second(): void
     {
         $admin = User::factory()->create([
@@ -262,6 +303,256 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('Event key: telegram-update-950', $historyHtml);
         $this->assertStringContainsString('Статус: Ответ отправлен', $historyHtml);
         $this->assertStringContainsString('Связь: Ответ на event key: telegram-update-950', $historyHtml);
+    }
+
+    public function test_manual_reply_action_sends_telegram_message_and_creates_outbound_message(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 99001,
+                ],
+            ]),
+        ]);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Герман Абрикосов',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-902',
+        ]);
+
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'telegram-update-902',
+            'external_chat_id' => 'chat-902',
+            'external_message_id' => 'msg-902',
+            'text' => 'Входящее сообщение от пользователя',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->callTableAction(['view', 'sendReply'], $contact, [
+                'text' => '  Ручной ответ сотрудника  ',
+            ])
+            ->assertHasNoTableActionErrors()
+            ->assertNotified();
+
+        Http::assertSent(function (Request $request) use ($channel): bool {
+            return $request->url() === 'https://api.telegram.org/bot'.$channel->getToken().'/sendMessage'
+                && $request['chat_id'] === 'chat-902'
+                && $request['text'] === 'Ручной ответ сотрудника';
+        });
+
+        $outboundMessage = Message::query()
+            ->where('contact_id', $contact->id)
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->firstOrFail();
+
+        $this->assertSame($identity->id, $outboundMessage->contact_identity_id);
+        $this->assertSame($channel->id, $outboundMessage->channel_id);
+        $this->assertSame('chat-902', $outboundMessage->external_chat_id);
+        $this->assertSame('99001', $outboundMessage->external_message_id);
+        $this->assertSame('Ручной ответ сотрудника', $outboundMessage->text);
+        $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
+
+        $channel->refresh();
+
+        $this->assertNotNull($channel->last_reply_sent_at);
+        $this->assertDatabaseHas(ChannelActivityLog::class, [
+            'channel_id' => $channel->id,
+            'event' => 'contact.reply_sent',
+            'level' => 'info',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Ручной ответ сотрудника')
+            ->assertMountedActionModalSee('Исходящее');
+    }
+
+    public function test_manual_reply_action_sends_max_message_and_creates_outbound_message(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response([
+                'message' => [
+                    'message_id' => 'max-manual-001',
+                ],
+            ]),
+        ]);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'mid.0000000003f780cc019d33311ef013fa',
+            'external_chat_id' => '',
+            'external_message_id' => 'mid.0000000003f780cc019d33311ef013fa',
+            'text' => 'MAX входящее сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->callTableAction(['view', 'sendReply'], $contact, [
+                'text' => 'Ручной ответ MAX',
+            ])
+            ->assertHasNoTableActionErrors()
+            ->assertNotified();
+
+        Http::assertSent(function (Request $request): bool {
+            return str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+                && str_contains($request->url(), 'user_id=228532008')
+                && $request['text'] === 'Ручной ответ MAX';
+        });
+
+        $outboundMessage = Message::query()
+            ->where('contact_id', $contact->id)
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->firstOrFail();
+
+        $this->assertSame($identity->id, $outboundMessage->contact_identity_id);
+        $this->assertSame($channel->id, $outboundMessage->channel_id);
+        $this->assertSame('', $outboundMessage->external_chat_id);
+        $this->assertSame('max-manual-001', $outboundMessage->external_message_id);
+        $this->assertSame('Ручной ответ MAX', $outboundMessage->text);
+        $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
+    }
+
+    public function test_manual_reply_action_does_not_create_outbound_message_when_provider_fails(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => false,
+            ], 500),
+        ]);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-903',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'telegram-update-903',
+            'external_chat_id' => 'chat-903',
+            'external_message_id' => 'msg-903',
+            'text' => 'Входящее сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->callTableAction(['view', 'sendReply'], $contact, [
+                'text' => 'Ответ с ошибкой провайдера',
+            ])
+            ->assertNotified();
+
+        $this->assertDatabaseCount('messages', 1);
+
+        $channel->refresh();
+
+        $this->assertNull($channel->last_reply_sent_at);
+        $this->assertNotNull($channel->last_error_at);
+        $this->assertDatabaseHas(ChannelActivityLog::class, [
+            'channel_id' => $channel->id,
+            'event' => 'contact.reply_failed',
+            'level' => 'error',
+        ]);
+    }
+
+    public function test_manual_reply_action_shows_error_when_contact_has_no_active_route_source(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => false,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-904',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'telegram-update-904',
+            'external_chat_id' => 'chat-904',
+            'external_message_id' => 'msg-904',
+            'text' => 'Входящее сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->callTableAction(['view', 'sendReply'], $contact, [
+                'text' => 'Ручной ответ без маршрута',
+            ])
+            ->assertNotified();
+
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseMissing(ChannelActivityLog::class, [
+            'event' => 'contact.reply_sent',
+        ]);
     }
 
     public function test_contact_modal_keeps_webhook_diagnostics_bound_to_latest_inbound_message(): void

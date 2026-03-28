@@ -604,6 +604,8 @@ class ChannelResource extends Resource
             'webhook.received' => 'Webhook',
             'bot.reply_sent' => 'Ответ',
             'bot.reply_failed' => 'Ошибка ответа',
+            'contact.reply_sent' => 'Ручной ответ',
+            'contact.reply_failed' => 'Ошибка ручного ответа',
             'webhook.duplicate_ignored' => 'Дубликат проигнорирован',
             'webhook.duplicate_retry_reply' => 'Дубликат → retry ответа',
             'bot.metadata_synced' => 'Sync metadata',

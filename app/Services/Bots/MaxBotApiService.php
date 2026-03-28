@@ -15,12 +15,17 @@ class MaxBotApiService
 {
     public function sendAutoReply(Channel $channel, IncomingBotMessage $message, string $text): AutoReplyDeliveryResult
     {
+        return $this->sendTextMessage($channel, $message->externalChatId, $message->externalUserId, $text);
+    }
+
+    public function sendTextMessage(Channel $channel, ?string $externalChatId, ?string $externalUserId, string $text): AutoReplyDeliveryResult
+    {
         $query = [];
 
-        if (filled($message->externalChatId)) {
-            $query['chat_id'] = $message->externalChatId;
-        } elseif (filled($message->externalUserId)) {
-            $query['user_id'] = $message->externalUserId;
+        if (filled($externalChatId)) {
+            $query['chat_id'] = $externalChatId;
+        } elseif (filled($externalUserId)) {
+            $query['user_id'] = $externalUserId;
         } else {
             throw new InvalidArgumentException("MAX message for channel [{$channel->id}] does not have chat or user id.");
         }

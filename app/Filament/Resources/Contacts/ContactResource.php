@@ -6,9 +6,14 @@ use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Models\User;
+use App\Services\Bots\SendManualContactReplyAction;
 use BackedEnum;
+use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
+use Filament\Forms\Components\Textarea;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -20,6 +25,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\HtmlString;
 use JsonException;
+use Throwable;
 use UnitEnum;
 
 class ContactResource extends Resource
@@ -271,7 +277,62 @@ class ContactResource extends Resource
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')
             ->recordActions([
                 ViewAction::make()
-                    ->modalWidth(Width::SevenExtraLarge),
+                    ->modalWidth(Width::SevenExtraLarge)
+                    ->extraModalFooterActions([
+                        Action::make('sendReply')
+                            ->label('Отправить ответ')
+                            ->icon(Heroicon::OutlinedPaperAirplane)
+                            ->color('success')
+                            ->modalHeading('Отправить ответ')
+                            ->modalDescription('Сообщение будет отправлено через последний активный канал этого контакта.')
+                            ->modalWidth(Width::ThreeExtraLarge)
+                            ->modalSubmitActionLabel('Отправить')
+                            ->schema([
+                                Textarea::make('text')
+                                    ->label('Текст ответа')
+                                    ->required()
+                                    ->maxLength(2000)
+                                    ->rows(5)
+                                    ->placeholder('Введите текст ответа')
+                                    ->mutateStateForValidationUsing(fn (?string $state): string => trim((string) $state))
+                                    ->dehydrateStateUsing(fn (?string $state): string => trim((string) $state))
+                                    ->rules([
+                                        'required',
+                                        'string',
+                                        'max:2000',
+                                    ]),
+                            ])
+                            ->action(function (Action $action, array $data, Contact $record): void {
+                                try {
+                                    /** @var User|null $employee */
+                                    $employee = auth()->user();
+
+                                    if (! $employee instanceof User) {
+                                        throw new \RuntimeException('Не удалось определить текущего сотрудника.');
+                                    }
+
+                                    app(SendManualContactReplyAction::class)->handle(
+                                        $record,
+                                        $employee,
+                                        (string) ($data['text'] ?? ''),
+                                    );
+
+                                    Notification::make()
+                                        ->success()
+                                        ->title('Ответ отправлен')
+                                        ->body('Сообщение отправлено и сохранено в истории контакта.')
+                                        ->send();
+                                } catch (Throwable $throwable) {
+                                    Notification::make()
+                                        ->danger()
+                                        ->title('Не удалось отправить ответ')
+                                        ->body($throwable->getMessage())
+                                        ->send();
+
+                                    $action->halt();
+                                }
+                            }),
+                    ]),
             ])
             ->toolbarActions([]);
     }

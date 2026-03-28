@@ -14,7 +14,12 @@ class TelegramBotApiService
 {
     public function sendAutoReply(Channel $channel, IncomingBotMessage $message, string $text): AutoReplyDeliveryResult
     {
-        if (! filled($message->externalChatId)) {
+        return $this->sendTextMessage($channel, $message->externalChatId, $message->externalUserId, $text);
+    }
+
+    public function sendTextMessage(Channel $channel, ?string $externalChatId, ?string $externalUserId, string $text): AutoReplyDeliveryResult
+    {
+        if (! filled($externalChatId)) {
             throw new InvalidArgumentException("Telegram message for channel [{$channel->id}] does not have chat id.");
         }
 
@@ -22,7 +27,7 @@ class TelegramBotApiService
             ->post(
                 sprintf('https://api.telegram.org/bot%s/sendMessage', $this->token($channel)),
                 [
-                    'chat_id' => $message->externalChatId,
+                    'chat_id' => $externalChatId,
                     'text' => $text,
                 ],
             )
