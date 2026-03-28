@@ -20,9 +20,11 @@ use Filament\Schemas\Schema;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\Filter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\HtmlString;
 use JsonException;
 use Throwable;
@@ -58,10 +60,14 @@ class ContactResource extends Resource
         return parent::getEloquentQuery()
             ->with([
                 'primaryIdentity.channel',
-                'latestMessage',
+                'latestMessage.channel',
             ])
             ->withCount('messages')
-            ->withMax('messages', 'id');
+            ->withMax(['messages as latest_message_id' => fn (Builder $query): Builder => $query], 'id')
+            ->withMax(['messages as latest_inbound_user_message_id' => fn (Builder $query): Builder => $query
+                ->where('message_kind', Message::KIND_INBOUND_USER)], 'id')
+            ->withMax(['messages as latest_outbound_manual_reply_message_id' => fn (Builder $query): Builder => $query
+                ->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)], 'id');
     }
 
     public static function infolist(Schema $schema): Schema
@@ -231,16 +237,31 @@ class ContactResource extends Resource
                                     ->orWhere('external_username', 'ilike', "%{$search}%");
                             });
                     }),
-                TextColumn::make('primaryIdentity.channel.name')
+                TextColumn::make('inbox_status')
+                    ->label('Статус')
+                    ->state(fn (Contact $record): string => static::formatInboxStatus($record))
+                    ->badge()
+                    ->color(fn (Contact $record): string => static::getInboxStatusColor($record)),
+                TextColumn::make('latest_message_text')
+                    ->label('Последнее сообщение')
+                    ->toggleable()
+                    ->placeholder('—')
+                    ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->text)
+                    ->limit(60)
+                    ->tooltip(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->text),
+                TextColumn::make('latest_message_kind')
+                    ->label('Тип')
+                    ->toggleable()
+                    ->placeholder('—')
+                    ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->message_kind)
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => static::formatMessageKind($state))
+                    ->color(fn (?string $state): string => static::getMessageKindColor($state)),
+                TextColumn::make('latest_message_channel')
                     ->label('Канал')
                     ->toggleable()
-                    ->placeholder('—'),
-                TextColumn::make('primaryIdentity.platform')
-                    ->label('Платформа')
-                    ->toggleable()
-                    ->badge()
                     ->placeholder('—')
-                    ->formatStateUsing(fn (?string $state): string => filled($state) ? (Channel::platformOptions()[$state] ?? $state) : '—'),
+                    ->state(fn (Contact $record): ?string => static::formatLatestMessageChannel(static::resolveLatestConversationMessage($record))),
                 TextColumn::make('primaryIdentity.external_user_id')
                     ->label('Внешний ID')
                     ->toggleable()
@@ -255,24 +276,32 @@ class ContactResource extends Resource
                     ->label('Сообщений')
                     ->toggleable()
                     ->badge()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('latest_message_received_at')
-                    ->label('Последнее сообщение')
+                    ->label('Активность')
                     ->toggleable()
                     ->placeholder('—')
-                    ->state(fn (Contact $record) => $record->latestMessage?->received_at)
+                    ->state(fn (Contact $record) => static::resolveLatestConversationMessage($record)?->received_at)
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query->orderBy('messages_max_id', $direction)),
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
+                        ->orderBy('latest_message_id', $direction)
+                        ->orderBy('contacts.id', $direction)),
                 TextColumn::make('created_at')
                     ->label('Создан')
                     ->dateTime('d.m.Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->filters([
+                Filter::make('requires_manual_reply')
+                    ->label('Требует ответа')
+                    ->query(fn (Builder $query): Builder => static::applyRequiresManualReplyFilter($query)),
+            ])
             ->columnManager()
             ->deferColumnManager(false)
             ->reorderableColumns()
-            ->defaultSort('messages_max_id', 'desc')
+            ->defaultSort('latest_message_id', 'desc')
             ->emptyStateHeading('Контактов ещё нет')
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')
             ->recordActions([
@@ -367,10 +396,68 @@ class ContactResource extends Resource
 
     protected static function resolveLatestConversationMessage(Contact $record): ?Message
     {
+        if ($record->relationLoaded('latestMessage')) {
+            return $record->latestMessage;
+        }
+
         return $record->messages()
             ->with(['channel', 'replyTo'])
             ->orderByDesc('id')
             ->first();
+    }
+
+    protected static function contactRequiresManualReply(Contact $record): bool
+    {
+        $latestInboundUserMessageId = $record->getAttribute('latest_inbound_user_message_id');
+        $latestOutboundManualReplyMessageId = $record->getAttribute('latest_outbound_manual_reply_message_id');
+
+        if (! filled($latestInboundUserMessageId)) {
+            return false;
+        }
+
+        if (! filled($latestOutboundManualReplyMessageId)) {
+            return true;
+        }
+
+        return (int) $latestInboundUserMessageId > (int) $latestOutboundManualReplyMessageId;
+    }
+
+    protected static function formatInboxStatus(Contact $record): string
+    {
+        return static::contactRequiresManualReply($record)
+            ? 'Требует ответа'
+            : 'Нет новых';
+    }
+
+    protected static function getInboxStatusColor(Contact $record): string
+    {
+        return static::contactRequiresManualReply($record) ? 'warning' : 'success';
+    }
+
+    protected static function applyRequiresManualReplyFilter(Builder $query): Builder
+    {
+        return $query
+            ->whereExists(function (QueryBuilder $subquery): void {
+                $subquery
+                    ->selectRaw('1')
+                    ->from('messages')
+                    ->whereColumn('messages.contact_id', 'contacts.id')
+                    ->where('messages.message_kind', Message::KIND_INBOUND_USER);
+            })
+            ->where(function (Builder $query): Builder {
+                return $query
+                    ->whereNotExists(function (QueryBuilder $subquery): void {
+                        $subquery
+                            ->selectRaw('1')
+                            ->from('messages')
+                            ->whereColumn('messages.contact_id', 'contacts.id')
+                            ->where('messages.message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY);
+                    })
+                    ->orWhereRaw(
+                        '(select max(id) from messages where messages.contact_id = contacts.id and messages.message_kind = ?) > (select max(id) from messages where messages.contact_id = contacts.id and messages.message_kind = ?)',
+                        [Message::KIND_INBOUND_USER, Message::KIND_OUTBOUND_MANUAL_REPLY],
+                    );
+            });
     }
 
     protected static function renderConversationHistory(Contact $record): HtmlString
@@ -472,6 +559,35 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
             default => 'Не определен',
         };
+    }
+
+    protected static function getMessageKindColor(?string $messageKind): string
+    {
+        return match ($messageKind) {
+            Message::KIND_INBOUND_USER => 'info',
+            Message::KIND_OUTBOUND_AUTO_REPLY => 'warning',
+            Message::KIND_OUTBOUND_MANUAL_REPLY => 'success',
+            default => 'gray',
+        };
+    }
+
+    protected static function formatLatestMessageChannel(?Message $message): ?string
+    {
+        $channel = $message?->channel;
+
+        if ($channel === null) {
+            return null;
+        }
+
+        $platformLabel = filled($channel->platform)
+            ? (Channel::platformOptions()[$channel->platform] ?? $channel->platform)
+            : null;
+
+        if (filled($channel->name) && filled($platformLabel)) {
+            return sprintf('%s (%s)', $channel->name, $platformLabel);
+        }
+
+        return $channel->name ?: $platformLabel;
     }
 
     protected static function getMessageKindBadgeClasses(?string $messageKind): string

@@ -75,7 +75,9 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->assertTableColumnVisible('id')
+            ->assertTableColumnVisible('inbox_status')
             ->assertCanSeeTableRecords([$contact])
+            ->assertTableFilterExists('requires_manual_reply')
             ->assertTableActionExists('view', null, $contact)
             ->assertTableActionDoesNotExist('edit', null, $contact)
             ->assertTableHeaderActionsExistInOrder([]);
@@ -343,6 +345,262 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertStringContainsString('Историческое исходящее', $historyHtml);
         $this->assertStringContainsString('Тип: Не определен', $historyHtml);
+    }
+
+    public function test_contacts_table_marks_contact_as_requires_reply_when_auto_reply_is_latest_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт с автоответом',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-inbox-1',
+        ]);
+
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-update-inbox-1',
+            'external_chat_id' => 'chat-inbox-1',
+            'external_message_id' => 'msg-inbox-1',
+            'text' => 'Пользователь написал первым',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now()->subMinute(),
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'reply_to_message_id' => $inboundMessage->id,
+            'external_chat_id' => 'chat-inbox-1',
+            'external_message_id' => 'out-inbox-1',
+            'text' => 'Автоответ системы',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertCanSeeTableRecords([$contact])
+            ->assertSee('Требует ответа')
+            ->assertSee('Автоответ системы')
+            ->assertSee('Автоответ')
+            ->assertSee('Telegram Support (Telegram)');
+    }
+
+    public function test_contacts_table_marks_contact_as_no_new_after_manual_reply(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт с ручным ответом',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'max-inbox-1',
+        ]);
+
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-max-inbox',
+            'external_message_id' => 'msg-max-inbox',
+            'text' => 'Нужно уточнение по заказу',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now()->subMinute(),
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'reply_to_message_id' => $inboundMessage->id,
+            'external_chat_id' => 'chat-max-inbox',
+            'external_message_id' => 'out-max-inbox',
+            'text' => 'Ручной ответ оператора',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertCanSeeTableRecords([$contact])
+            ->assertSee('Нет новых')
+            ->assertSee('Ручной ответ оператора')
+            ->assertSee('Ручной ответ')
+            ->assertSee('MAX Support (MAX)');
+    }
+
+    public function test_requires_manual_reply_filter_shows_only_contacts_that_need_reply(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $needsReply = Contact::factory()->create([
+            'name' => 'Нужен ответ',
+        ]);
+        $needsReplyIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $needsReply->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-open',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $needsReply->id,
+            'contact_identity_id' => $needsReplyIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-open',
+            'external_message_id' => 'msg-open',
+            'text' => 'Нужно ответить',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now()->subMinute(),
+        ]);
+
+        $closedContact = Contact::factory()->create([
+            'name' => 'Ответ уже дан',
+        ]);
+        $closedIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $closedContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-closed',
+        ]);
+
+        $closedInbound = Message::query()->create([
+            'contact_id' => $closedContact->id,
+            'contact_identity_id' => $closedIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-closed',
+            'external_message_id' => 'msg-closed',
+            'text' => 'Вопрос закрыт',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now()->subMinutes(2),
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $closedContact->id,
+            'contact_identity_id' => $closedIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'reply_to_message_id' => $closedInbound->id,
+            'external_chat_id' => 'chat-closed',
+            'external_message_id' => 'out-closed',
+            'text' => 'Ответ уже отправлен',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableFilterExists('requires_manual_reply')
+            ->filterTable('requires_manual_reply')
+            ->assertCanSeeTableRecords([$needsReply])
+            ->assertCanNotSeeTableRecords([$closedContact]);
+    }
+
+    public function test_contacts_table_sorts_by_latest_saved_message_desc(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $olderContact = Contact::factory()->create([
+            'name' => 'Старый контакт',
+        ]);
+        $olderIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $olderContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-older',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $olderContact->id,
+            'contact_identity_id' => $olderIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-older',
+            'external_message_id' => 'msg-older',
+            'text' => 'Старое сохранённое сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now()->addDay(),
+        ]);
+
+        $newerContact = Contact::factory()->create([
+            'name' => 'Новый контакт',
+        ]);
+        $newerIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $newerContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-newer',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $newerContact->id,
+            'contact_identity_id' => $newerIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-newer',
+            'external_message_id' => 'msg-newer',
+            'text' => 'Более новое сохранённое сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now()->subDay(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertCanSeeTableRecords([$newerContact, $olderContact], inOrder: true);
     }
 
     public function test_manual_reply_action_sends_telegram_message_and_creates_outbound_message(): void
