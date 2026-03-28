@@ -299,16 +299,26 @@ class FilamentContactsResourceTest extends TestCase
 
         $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
 
+        $this->assertStringContainsString('data-role="conversation-thread"', $historyHtml);
+        $this->assertStringContainsString('data-role="conversation-message"', $historyHtml);
+        $this->assertStringContainsString('data-direction="inbound"', $historyHtml);
+        $this->assertStringContainsString('data-direction="outbound"', $historyHtml);
+        $this->assertStringContainsString('data-kind="inbound_user"', $historyHtml);
+        $this->assertStringContainsString('data-kind="outbound_auto_reply"', $historyHtml);
         $this->assertStringContainsString('Входящее', $historyHtml);
         $this->assertStringContainsString('Исходящее', $historyHtml);
         $this->assertStringContainsString('Входящее сообщение от пользователя', $historyHtml);
         $this->assertStringContainsString('Исходящий автоответ', $historyHtml);
-        $this->assertStringContainsString('Канал: Telegram Support', $historyHtml);
-        $this->assertStringContainsString('Тип: Пользователь', $historyHtml);
-        $this->assertStringContainsString('Тип: Автоответ', $historyHtml);
+        $this->assertStringContainsString('Telegram Support (Telegram)', $historyHtml);
+        $this->assertStringContainsString('Пользователь', $historyHtml);
+        $this->assertStringContainsString('Автоответ', $historyHtml);
         $this->assertStringContainsString('Event key: telegram-update-950', $historyHtml);
         $this->assertStringContainsString('Статус: Ответ отправлен', $historyHtml);
-        $this->assertStringContainsString('Связь: Ответ на event key: telegram-update-950', $historyHtml);
+        $this->assertStringContainsString('Ответ на event key: telegram-update-950', $historyHtml);
+        $this->assertLessThan(
+            strpos($historyHtml, 'Исходящий автоответ'),
+            strpos($historyHtml, 'Входящее сообщение от пользователя'),
+        );
     }
 
     public function test_contact_history_renderer_shows_unknown_kind_for_historical_messages_without_classification(): void
@@ -344,7 +354,22 @@ class FilamentContactsResourceTest extends TestCase
         $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
 
         $this->assertStringContainsString('Историческое исходящее', $historyHtml);
-        $this->assertStringContainsString('Тип: Не определен', $historyHtml);
+        $this->assertStringContainsString('Не определен', $historyHtml);
+        $this->assertStringContainsString('data-kind="unknown"', $historyHtml);
+    }
+
+    public function test_contact_history_renderer_shows_empty_state_when_contact_has_no_messages(): void
+    {
+        $contact = Contact::factory()->create();
+
+        $historyRenderer = new ReflectionMethod(ContactResource::class, 'renderConversationHistory');
+        $historyRenderer->setAccessible(true);
+
+        $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
+
+        $this->assertStringContainsString('data-role="conversation-thread"', $historyHtml);
+        $this->assertStringContainsString('data-role="conversation-empty"', $historyHtml);
+        $this->assertStringContainsString('Сообщений ещё не было.', $historyHtml);
     }
 
     public function test_contacts_table_marks_contact_as_requires_reply_when_auto_reply_is_latest_message(): void

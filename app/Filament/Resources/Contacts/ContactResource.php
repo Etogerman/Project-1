@@ -25,6 +25,7 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
 use JsonException;
 use Throwable;
@@ -464,53 +465,66 @@ class ContactResource extends Resource
     {
         $messages = $record->messages()
             ->with(['channel', 'replyTo'])
+            ->orderByRaw('coalesce(received_at, created_at) desc')
             ->orderByDesc('id')
-            ->limit(20)
+            ->limit(30)
             ->get();
 
         if ($messages->isEmpty()) {
-            return new HtmlString('<div class="text-sm text-gray-500">Сообщений ещё не было.</div>');
+            return new HtmlString(view('filament.contacts.partials.conversation-chat', [
+                'messages' => [],
+            ])->render());
         }
 
-        $items = $messages->map(function (Message $message): string {
-            $badges = [
-                static::renderFeedBadge(sprintf('Время: %s', $message->received_at?->format('d.m.Y H:i:s') ?? '—')),
-                static::renderFeedBadge(sprintf('Канал: %s', $message->channel?->name ?? '—')),
-                static::renderFeedBadge(
-                    sprintf('Направление: %s', static::formatMessageDirection($message->direction)),
-                    static::getMessageDirectionBadgeClasses($message->direction),
-                ),
-                static::renderFeedBadge(
-                    sprintf('Тип: %s', static::formatMessageKind($message->message_kind)),
-                    static::getMessageKindBadgeClasses($message->message_kind),
-                ),
-                static::renderFeedBadge(sprintf('Message ID: %s', $message->external_message_id ?? '—')),
-            ];
+        $sortedMessages = $messages
+            ->sort(function (Message $left, Message $right): int {
+                $leftAt = $left->received_at ?? $left->created_at;
+                $rightAt = $right->received_at ?? $right->created_at;
 
-            if ($message->direction === Message::DIRECTION_INBOUND) {
-                $badges[] = static::renderFeedBadge(sprintf('Event key: %s', $message->provider_event_key ?? '—'));
-                $badges[] = static::renderFeedBadge(sprintf('Автоответ: %s', $message->auto_reply_sent_at?->format('d.m.Y H:i:s') ?? '—'));
-                $badges[] = static::renderFeedBadge(
-                    sprintf('Статус: %s', static::formatMessageReplyStatus($message)),
-                    static::getMessageReplyStatusBadgeClasses($message),
-                );
-            }
+                $comparison = ($leftAt?->getTimestamp() ?? 0) <=> ($rightAt?->getTimestamp() ?? 0);
 
-            if ($message->direction === Message::DIRECTION_OUTBOUND) {
-                $badges[] = static::renderFeedBadge(
-                    sprintf('Связь: %s', static::formatConversationReplyLink($message)),
-                    static::getOutboundReplyLinkBadgeClasses(),
-                );
-            }
+                if ($comparison !== 0) {
+                    return $comparison;
+                }
 
-            return sprintf(
-                '<div class="rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
-                implode('', $badges),
-                e(filled($message->text) ? (string) $message->text : '—'),
-            );
-        })->implode('');
+                return $left->id <=> $right->id;
+            })
+            ->values();
 
-        return new HtmlString(sprintf('<div class="space-y-3">%s</div>', $items));
+        return new HtmlString(view('filament.contacts.partials.conversation-chat', [
+            'messages' => static::buildConversationHistoryViewData($sortedMessages),
+        ])->render());
+    }
+
+    /**
+     * @param  Collection<int, Message>  $messages
+     * @return list<array<string, mixed>>
+     */
+    protected static function buildConversationHistoryViewData(Collection $messages): array
+    {
+        return $messages
+            ->map(fn (Message $message): array => [
+                'id' => $message->id,
+                'direction' => $message->direction,
+                'kind' => $message->message_kind ?? 'unknown',
+                'direction_label' => static::formatMessageDirection($message->direction),
+                'kind_label' => static::formatMessageKind($message->message_kind),
+                'text' => filled($message->text) ? (string) $message->text : '—',
+                'time_label' => ($message->received_at ?? $message->created_at)?->format('d.m.Y H:i:s') ?? '—',
+                'channel_label' => static::formatLatestMessageChannel($message) ?? '—',
+                'message_id_label' => $message->external_message_id,
+                'provider_event_key_label' => $message->provider_event_key,
+                'auto_reply_sent_at_label' => $message->auto_reply_sent_at?->format('d.m.Y H:i:s'),
+                'reply_status_label' => $message->direction === Message::DIRECTION_INBOUND
+                    ? static::formatMessageReplyStatus($message)
+                    : null,
+                'reply_link_label' => $message->direction === Message::DIRECTION_OUTBOUND
+                    ? static::formatConversationReplyLink($message)
+                    : null,
+                'is_inbound' => $message->direction === Message::DIRECTION_INBOUND,
+                'is_outbound' => $message->direction === Message::DIRECTION_OUTBOUND,
+            ])
+            ->all();
     }
 
     protected static function formatMessageDirection(?string $direction): string
@@ -590,47 +604,6 @@ class ContactResource extends Resource
         return $channel->name ?: $platformLabel;
     }
 
-    protected static function getMessageKindBadgeClasses(?string $messageKind): string
-    {
-        return match ($messageKind) {
-            Message::KIND_INBOUND_USER => 'inline-flex items-center rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-xs text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200',
-            Message::KIND_OUTBOUND_AUTO_REPLY => 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200',
-            Message::KIND_OUTBOUND_MANUAL_REPLY => 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200',
-            default => 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200',
-        };
-    }
-
-    protected static function renderFeedBadge(string $badge, ?string $classes = null): string
-    {
-        return sprintf(
-            '<span class="%s">%s</span>',
-            e($classes ?? 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200'),
-            e($badge),
-        );
-    }
-
-    protected static function getMessageDirectionBadgeClasses(?string $direction): string
-    {
-        if ($direction === Message::DIRECTION_INBOUND) {
-            return 'inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200';
-        }
-
-        if ($direction === Message::DIRECTION_OUTBOUND) {
-            return 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200';
-        }
-
-        return 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200';
-    }
-
-    protected static function getMessageReplyStatusBadgeClasses(Message $message): string
-    {
-        if ($message->hasSuccessfulAutoReply()) {
-            return 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200';
-        }
-
-        return 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200';
-    }
-
     protected static function formatConversationReplyLink(?Message $message): ?string
     {
         if ($message === null || $message->direction !== Message::DIRECTION_OUTBOUND) {
@@ -648,10 +621,5 @@ class ContactResource extends Resource
         }
 
         return 'Ответ на входящее #'.$replyTo->id;
-    }
-
-    protected static function getOutboundReplyLinkBadgeClasses(): string
-    {
-        return 'inline-flex items-center rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-700 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-200';
     }
 }
