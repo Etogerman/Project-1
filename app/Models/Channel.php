@@ -24,6 +24,10 @@ class Channel extends Model
 
     public const CREDENTIAL_WEBHOOK_SECRET = 'webhook_secret';
 
+    public const AUTO_REPLY_MODE_LEGACY_DEFAULT = 'legacy_default';
+
+    public const AUTO_REPLY_MODE_RULES_ONLY = 'rules_only';
+
     /**
      * @var list<string>
      */
@@ -36,6 +40,7 @@ class Channel extends Model
         'bot_username',
         'bot_name',
         'bot_profile_url',
+        'auto_reply_mode',
         'last_webhook_received_at',
         'last_reply_sent_at',
         'last_error_at',
@@ -75,6 +80,17 @@ class Channel extends Model
         ];
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function autoReplyModeOptions(): array
+    {
+        return [
+            self::AUTO_REPLY_MODE_LEGACY_DEFAULT => 'Legacy fallback',
+            self::AUTO_REPLY_MODE_RULES_ONLY => 'Только правила',
+        ];
+    }
+
     protected function displayTitle(): Attribute
     {
         return Attribute::make(
@@ -99,6 +115,22 @@ class Channel extends Model
         $secret = data_get($this->credentials, self::CREDENTIAL_WEBHOOK_SECRET);
 
         return filled($secret) ? (string) $secret : null;
+    }
+
+    public function usesLegacyAutoReplyFallback(): bool
+    {
+        return ($this->auto_reply_mode ?? self::AUTO_REPLY_MODE_LEGACY_DEFAULT) === self::AUTO_REPLY_MODE_LEGACY_DEFAULT;
+    }
+
+    public function usesRulesOnlyAutoReply(): bool
+    {
+        return ($this->auto_reply_mode ?? self::AUTO_REPLY_MODE_LEGACY_DEFAULT) === self::AUTO_REPLY_MODE_RULES_ONLY;
+    }
+
+    public function getAutoReplyModeLabel(): string
+    {
+        return self::autoReplyModeOptions()[$this->auto_reply_mode ?? self::AUTO_REPLY_MODE_LEGACY_DEFAULT]
+            ?? (string) ($this->auto_reply_mode ?? self::AUTO_REPLY_MODE_LEGACY_DEFAULT);
     }
 
     public function putCredential(string $key, mixed $value): static

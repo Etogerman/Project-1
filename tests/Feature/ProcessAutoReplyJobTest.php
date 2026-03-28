@@ -31,6 +31,7 @@ class ProcessAutoReplyJobTest extends TestCase
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
             'credentials' => [
                 'token' => 'telegram-token',
             ],
@@ -59,6 +60,7 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertNotNull($message->auto_reply_sent_at);
         $this->assertNotNull($channel->last_reply_sent_at);
         $this->assertNull($channel->last_error_at);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->auto_reply_mode);
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
@@ -66,6 +68,11 @@ class ProcessAutoReplyJobTest extends TestCase
             'reply_to_message_id' => $message->id,
             'external_message_id' => '9001',
             'text' => 'Тестовый queued ответ.',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_legacy_default_used',
+            'level' => 'info',
         ]);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
@@ -126,6 +133,7 @@ class ProcessAutoReplyJobTest extends TestCase
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
             'credentials' => [
                 'token' => 'telegram-token',
             ],
@@ -155,6 +163,7 @@ class ProcessAutoReplyJobTest extends TestCase
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
             'credentials' => [
                 'token' => 'telegram-token',
             ],
@@ -196,15 +205,20 @@ class ProcessAutoReplyJobTest extends TestCase
             'level' => 'info',
         ]);
 
+        $matchedLog = $channel->activityLogs()->where('event', 'bot.reply_rule_matched')->latest('id')->firstOrFail();
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $matchedLog->context['auto_reply_mode']);
+        $this->assertSame('rule', $matchedLog->context['auto_reply_source']);
+
         $this->assertTrue($rule->exists);
     }
 
-    public function test_job_skips_reply_when_channel_has_active_rules_but_no_match(): void
+    public function test_job_skips_reply_when_channel_is_rules_only_and_no_rule_matches(): void
     {
         Http::fake();
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
             'credentials' => [
                 'token' => 'telegram-token',
             ],
@@ -235,6 +249,62 @@ class ProcessAutoReplyJobTest extends TestCase
             'event' => 'bot.reply_skipped_no_rule',
             'level' => 'info',
         ]);
+
+        $skipLog = $channel->activityLogs()->where('event', 'bot.reply_skipped_no_rule')->latest('id')->firstOrFail();
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $skipLog->context['auto_reply_mode']);
+        $this->assertSame('skipped_no_rule', $skipLog->context['auto_reply_source']);
+    }
+
+    public function test_job_uses_legacy_fallback_when_channel_mode_is_legacy_default_and_no_rule_matches(): void
+    {
+        config()->set('bots.default_auto_reply_text', 'Legacy fallback text');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9102,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => 'Тест1',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Тест1'),
+            'reply_text' => 'Шаблон 1',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-legacy-no-match',
+            'text' => 'Совсем другой текст',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(function ($request): bool {
+            return $request['text'] === 'Legacy fallback text';
+        });
+
+        $this->assertDatabaseHas('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Legacy fallback text',
+        ]);
+
+        $legacyLog = $channel->activityLogs()->where('event', 'bot.reply_legacy_default_used')->latest('id')->firstOrFail();
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $legacyLog->context['auto_reply_mode']);
+        $this->assertSame('legacy_default', $legacyLog->context['auto_reply_source']);
     }
 
     public function test_job_skips_reply_when_contact_auto_reply_is_disabled(): void
@@ -267,6 +337,50 @@ class ProcessAutoReplyJobTest extends TestCase
             'event' => 'bot.reply_skipped_contact_disabled',
             'level' => 'info',
         ]);
+
+        $skipLog = $channel->activityLogs()->where('event', 'bot.reply_skipped_contact_disabled')->latest('id')->firstOrFail();
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $skipLog->context['auto_reply_mode']);
+        $this->assertSame('skipped_contact_disabled', $skipLog->context['auto_reply_source']);
+    }
+
+    public function test_job_skips_reply_when_contact_auto_reply_is_disabled_in_rules_only_mode(): void
+    {
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => 'Тест1',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Тест1'),
+            'reply_text' => 'Шаблон 1',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage(
+            $channel,
+            [
+                'provider_event_key' => 'telegram-disabled-rules-only',
+                'text' => 'Тест1',
+            ],
+            [],
+            ['is_auto_reply_enabled' => false],
+        );
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+        $this->assertNull($message->fresh()->auto_reply_sent_at);
+
+        $skipLog = $channel->activityLogs()->where('event', 'bot.reply_skipped_contact_disabled')->latest('id')->firstOrFail();
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $skipLog->context['auto_reply_mode']);
+        $this->assertSame('skipped_contact_disabled', $skipLog->context['auto_reply_source']);
     }
 
     public function test_repeated_job_execution_for_same_inbound_message_creates_one_outbound_message(): void
@@ -341,6 +455,10 @@ class ProcessAutoReplyJobTest extends TestCase
             'event' => 'bot.reply_failed',
             'level' => 'error',
         ]);
+
+        $failedLog = $channel->activityLogs()->where('event', 'bot.reply_failed')->latest('id')->firstOrFail();
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $failedLog->context['auto_reply_mode']);
+        $this->assertSame('legacy_default', $failedLog->context['auto_reply_source']);
     }
 
     public function test_job_can_succeed_after_previous_failure(): void
@@ -427,5 +545,46 @@ class ProcessAutoReplyJobTest extends TestCase
             'received_at' => now(),
             'auto_reply_sent_at' => null,
         ], $messageOverrides));
+    }
+
+    public function test_channel_without_explicit_mode_uses_legacy_default_fallback(): void
+    {
+        config()->set('bots.default_auto_reply_text', 'Fallback by default');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9201,
+                ],
+            ]),
+        ]);
+
+        $channelId = Channel::query()->create([
+            'name' => 'Compat Channel',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+            'is_active' => true,
+        ])->id;
+
+        $channel = Channel::query()->findOrFail($channelId);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->auto_reply_mode);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-compat-mode',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(function ($request): bool {
+            return $request['text'] === 'Fallback by default';
+        });
+
+        $legacyLog = $channel->fresh()->activityLogs()->where('event', 'bot.reply_legacy_default_used')->latest('id')->firstOrFail();
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $legacyLog->context['auto_reply_mode']);
+        $this->assertSame('legacy_default', $legacyLog->context['auto_reply_source']);
     }
 }

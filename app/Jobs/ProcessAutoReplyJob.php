@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Message;
 use App\Services\Bots\BotAutoReplyService;
 use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\ResolveAutoReplyRuleAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -43,10 +44,14 @@ class ProcessAutoReplyJob implements ShouldQueue
         ];
     }
 
-    public function handle(BotAutoReplyService $botAutoReplyService, ChannelActivityLogger $channelActivityLogger): void
+    public function handle(
+        BotAutoReplyService $botAutoReplyService,
+        ChannelActivityLogger $channelActivityLogger,
+        ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
+    ): void
     {
         $message = Message::query()
-            ->with(['channel', 'contactIdentity'])
+            ->with(['channel', 'contactIdentity', 'contact'])
             ->find($this->inboundMessageId);
 
         if (! $message instanceof Message) {
@@ -82,6 +87,8 @@ class ProcessAutoReplyJob implements ShouldQueue
                         'message_id' => $message->id,
                         'provider_event_key' => $message->provider_event_key,
                         'external_message_id' => $message->external_message_id,
+                        'auto_reply_mode' => $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+                        'auto_reply_source' => $this->resolveAutoReplySource($message, $resolveAutoReplyRuleAction),
                         'error' => $throwable->getMessage(),
                     ],
                 );
@@ -96,5 +103,24 @@ class ProcessAutoReplyJob implements ShouldQueue
 
             throw $throwable;
         }
+    }
+
+    protected function resolveAutoReplySource(Message $message, ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction): string
+    {
+        if ($message->contact !== null && ! $message->contact->isAutoReplyEnabled()) {
+            return 'skipped_contact_disabled';
+        }
+
+        $channel = $message->channel;
+
+        if ($channel === null) {
+            return 'legacy_default';
+        }
+
+        if ($resolveAutoReplyRuleAction->handle($channel, $message->text) !== null) {
+            return 'rule';
+        }
+
+        return $channel->usesLegacyAutoReplyFallback() ? 'legacy_default' : 'skipped_no_rule';
     }
 }

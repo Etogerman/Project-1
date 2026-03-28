@@ -77,6 +77,7 @@ class FilamentChannelsResourceTest extends TestCase
                 'name' => 'Telegram Bot',
                 'platform' => Channel::PLATFORM_TELEGRAM,
                 'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
                 'credentials' => [
                     'token' => 'telegram-secret-token',
                 ],
@@ -90,6 +91,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame(Channel::PLATFORM_TELEGRAM, $channel->platform);
         $this->assertSame(Channel::CONNECTION_TYPE_BOT, $channel->connection_type);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->auto_reply_mode);
         $this->assertTrue($channel->is_active);
         $this->assertSame('telegram-secret-token', $channel->credentials['token']);
     }
@@ -107,6 +109,7 @@ class FilamentChannelsResourceTest extends TestCase
                 'name' => 'MAX Bot',
                 'platform' => Channel::PLATFORM_MAX,
                 'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
                 'credentials' => [
                     'token' => 'max-secret-token',
                 ],
@@ -120,6 +123,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame(Channel::PLATFORM_MAX, $channel->platform);
         $this->assertSame(Channel::CONNECTION_TYPE_BOT, $channel->connection_type);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->auto_reply_mode);
         $this->assertSame('max-secret-token', $channel->credentials['token']);
     }
 
@@ -169,6 +173,7 @@ class FilamentChannelsResourceTest extends TestCase
                 'name' => 'Updated Telegram Bot',
                 'platform' => Channel::PLATFORM_TELEGRAM,
                 'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
                 'credentials' => [
                     'token' => '',
                 ],
@@ -180,6 +185,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame('Updated Telegram Bot', $channel->name);
         $this->assertFalse($channel->is_active);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
         $this->assertSame('current-token', $channel->credentials['token']);
         $this->assertSame('saved-secret', $channel->credentials['webhook_secret']);
         $this->assertSame('old_bot', $channel->bot_username);
@@ -208,6 +214,7 @@ class FilamentChannelsResourceTest extends TestCase
                 'name' => $channel->name,
                 'platform' => $channel->platform,
                 'connection_type' => $channel->connection_type,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
                 'credentials' => [
                     'token' => 'new-token',
                 ],
@@ -219,6 +226,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame('new-token', $channel->credentials['token']);
         $this->assertSame('saved-secret', $channel->credentials['webhook_secret']);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->auto_reply_mode);
         $this->assertNull($channel->bot_external_id);
         $this->assertNull($channel->bot_username);
         $this->assertNull($channel->bot_name);
@@ -255,6 +263,51 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertFalse(Gate::forUser($admin)->allows('delete', $channel));
         $this->assertFalse(Gate::forUser($admin)->allows('deleteAny', Channel::class));
+    }
+
+    public function test_channel_defaults_to_legacy_auto_reply_mode_when_not_explicitly_set(): void
+    {
+        $channel = Channel::query()->create([
+            'name' => 'Default Mode Channel',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+            'is_active' => true,
+        ]);
+
+        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->fresh()->auto_reply_mode);
+    }
+
+    public function test_admin_can_see_and_update_auto_reply_mode_in_channels_ui(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->create([
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertSee('Автоответ')
+            ->assertSee('Legacy fallback')
+            ->callTableAction('edit', $channel, [
+                'name' => $channel->name,
+                'platform' => $channel->platform,
+                'connection_type' => $channel->connection_type,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                'credentials' => [
+                    'token' => '',
+                ],
+                'is_active' => $channel->is_active,
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->fresh()->auto_reply_mode);
     }
 
     public function test_admin_can_view_latest_messages_in_channel_view_modal(): void

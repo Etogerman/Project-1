@@ -72,6 +72,12 @@ class ChannelResource extends Resource
                             ->default(Channel::CONNECTION_TYPE_BOT)
                             ->required()
                             ->native(false),
+                        Select::make('auto_reply_mode')
+                            ->label('Режим автоответа')
+                            ->options(Channel::autoReplyModeOptions())
+                            ->default(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT)
+                            ->required()
+                            ->native(false),
                         TextInput::make('credentials.token')
                             ->label('Токен')
                             ->password()
@@ -114,6 +120,11 @@ class ChannelResource extends Resource
                             ->label('Тип')
                             ->badge()
                             ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state),
+                        TextEntry::make('auto_reply_mode')
+                            ->label('Автоответ')
+                            ->state(fn (Channel $record): string => $record->getAutoReplyModeLabel())
+                            ->badge()
+                            ->color(fn (Channel $record): string => static::getAutoReplyModeColor($record->auto_reply_mode)),
                         TextEntry::make('health_status')
                             ->label('Состояние')
                             ->state(fn (Channel $record): string => $record->getHealthStatusLabel())
@@ -285,6 +296,12 @@ class ChannelResource extends Resource
                     ->badge()
                     ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state)
                     ->color('gray')
+                    ->sortable(),
+                TextColumn::make('auto_reply_mode')
+                    ->label('Автоответ')
+                    ->state(fn (Channel $record): string => $record->getAutoReplyModeLabel())
+                    ->badge()
+                    ->color(fn (Channel $record): string => static::getAutoReplyModeColor($record->auto_reply_mode))
                     ->sortable(),
                 TextColumn::make('is_active')
                     ->label('Активен')
@@ -623,6 +640,15 @@ class ChannelResource extends Resource
             'webhook.registration_completed' => 'Webhook готов',
             'webhook.registration_failed' => 'Ошибка webhook',
             default => $event,
+        };
+    }
+
+    protected static function getAutoReplyModeColor(?string $autoReplyMode): string
+    {
+        return match ($autoReplyMode) {
+            Channel::AUTO_REPLY_MODE_RULES_ONLY => 'info',
+            Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT => 'warning',
+            default => 'gray',
         };
     }
 
