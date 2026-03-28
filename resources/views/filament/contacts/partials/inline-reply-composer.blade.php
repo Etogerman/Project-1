@@ -10,6 +10,11 @@
         <p style="margin: 0; font-size: 0.8125rem; color: #4b5563;">
             <strong>Ответственный:</strong> {{ $assignedUserLabel }}.
         </p>
+        @if (! $autoReplyEnabled)
+            <p style="margin: 0.375rem 0 0; font-size: 0.8125rem; color: #92400e;">
+                Автоответы для этого контакта отключены. Это не влияет на ручной ответ.
+            </p>
+        @endif
         @if ($canClaim)
             <p style="margin: 0.375rem 0 0; font-size: 0.8125rem; color: #92400e;">
                 Ответственный пока не выбран. Его можно выбрать выше, либо просто отправить сообщение — контакт закрепится за вами автоматически.

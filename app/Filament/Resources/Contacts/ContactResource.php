@@ -597,6 +597,8 @@ class ContactResource extends Resource
             'assignedUserLabel' => static::formatAssignedUserLabel($record),
             'availableAssignees' => static::getAssignableUserOptions(),
             'ownershipHint' => static::getOwnershipHint($record),
+            'autoReplyEnabled' => $record->isAutoReplyEnabled(),
+            'autoReplyStatusLabel' => $record->isAutoReplyEnabled() ? 'Включены' : 'Отключены',
         ];
     }
 
@@ -607,6 +609,7 @@ class ContactResource extends Resource
             'blockedReason' => static::getInlineReplyBlockedReason($record),
             'canClaim' => static::canCurrentUserClaimContact($record),
             'assignedUserLabel' => static::formatAssignedUserLabel($record),
+            'autoReplyEnabled' => $record->isAutoReplyEnabled(),
         ];
     }
 

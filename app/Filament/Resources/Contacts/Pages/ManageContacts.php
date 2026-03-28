@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\Bots\SendManualContactReplyAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
+use App\Services\Contacts\SetContactAutoReplyEnabledAction;
 use App\Services\Contacts\SetContactAssigneeAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
@@ -218,6 +219,16 @@ class ManageContacts extends ManageRecords
         }
     }
 
+    public function enableMountedContactAutoReply(): void
+    {
+        $this->setMountedContactAutoReplyEnabled(true);
+    }
+
+    public function disableMountedContactAutoReply(): void
+    {
+        $this->setMountedContactAutoReplyEnabled(false);
+    }
+
     public function canClaimContact(?Contact $contact = null): bool
     {
         return $this->getContactOwnershipState($contact) === 'unassigned';
@@ -273,5 +284,40 @@ class ManageContacts extends ManageRecords
         }
 
         return $employee;
+    }
+
+    protected function setMountedContactAutoReplyEnabled(bool $isEnabled): void
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось обновить автоответы')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        try {
+            app(SetContactAutoReplyEnabledAction::class)->handle($record, $isEnabled);
+
+            $this->replaceMountedTableAction('view', (string) $record->id);
+
+            Notification::make()
+                ->success()
+                ->title($isEnabled ? 'Автоответы включены' : 'Автоответы отключены')
+                ->body($isEnabled
+                    ? 'Автоответы снова будут отправляться автоматически.'
+                    : 'Для этого контакта автоответы больше не отправляются автоматически.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось обновить автоответы')
+                ->body($throwable->getMessage())
+                ->send();
+        }
     }
 }

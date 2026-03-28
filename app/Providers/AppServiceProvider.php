@@ -2,9 +2,11 @@
 
 namespace App\Providers;
 
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\User;
+use App\Policies\AutoReplyRulePolicy;
 use App\Policies\ChannelPolicy;
 use App\Policies\ContactPolicy;
 use App\Policies\UserPolicy;
@@ -29,5 +31,6 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Channel::class, ChannelPolicy::class);
         Gate::policy(Contact::class, ContactPolicy::class);
         Gate::policy(User::class, UserPolicy::class);
+        Gate::policy(AutoReplyRule::class, AutoReplyRulePolicy::class);
     }
 }

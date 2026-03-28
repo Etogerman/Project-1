@@ -10,19 +10,51 @@
             <p style="margin: 0; font-size: 1rem; font-weight: 700; color: #111827;">
                 {{ $assignedUserLabel }}
             </p>
+            <p style="margin: 0.75rem 0 0.35rem; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+                Автоответы
+            </p>
+            <p style="margin: 0; font-size: 0.95rem; font-weight: 700; color: {{ $autoReplyEnabled ? '#166534' : '#991b1b' }};">
+                {{ $autoReplyStatusLabel }}
+            </p>
         </div>
 
-        <button
-            data-role="contact-open-assignee-dialog"
-            type="button"
-            wire:click="openAssignContactDialog"
-            wire:loading.attr="disabled"
-            wire:target="openAssignContactDialog,saveMountedContactAssignee"
-            style="display: inline-flex; align-items: center; justify-content: center; min-width: 13.5rem; border: 1px solid #1d4ed8; border-radius: 10px; background: #2563eb; color: #ffffff; font-size: 0.875rem; font-weight: 700; padding: 0.72rem 1rem; box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22); cursor: pointer;"
-        >
-            <span wire:loading.remove wire:target="openAssignContactDialog,saveMountedContactAssignee">Изменить</span>
-            <span wire:loading wire:target="openAssignContactDialog,saveMountedContactAssignee">Открываем...</span>
-        </button>
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <button
+                data-role="contact-open-assignee-dialog"
+                type="button"
+                wire:click="openAssignContactDialog"
+                wire:loading.attr="disabled"
+                wire:target="openAssignContactDialog,saveMountedContactAssignee"
+                style="display: inline-flex; align-items: center; justify-content: center; min-width: 13.5rem; border: 1px solid #1d4ed8; border-radius: 10px; background: #2563eb; color: #ffffff; font-size: 0.875rem; font-weight: 700; padding: 0.72rem 1rem; box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22); cursor: pointer;"
+            >
+                <span wire:loading.remove wire:target="openAssignContactDialog,saveMountedContactAssignee">Изменить</span>
+                <span wire:loading wire:target="openAssignContactDialog,saveMountedContactAssignee">Открываем...</span>
+            </button>
+
+            @if ($autoReplyEnabled)
+                <button
+                    data-role="contact-disable-auto-reply"
+                    type="button"
+                    wire:click="disableMountedContactAutoReply"
+                    wire:loading.attr="disabled"
+                    wire:target="disableMountedContactAutoReply,enableMountedContactAutoReply"
+                    style="display: inline-flex; align-items: center; justify-content: center; min-width: 12rem; border: 1px solid #dc2626; border-radius: 10px; background: #ffffff; color: #b91c1c; font-size: 0.875rem; font-weight: 700; padding: 0.72rem 1rem; cursor: pointer;"
+                >
+                    Отключить автоответы
+                </button>
+            @else
+                <button
+                    data-role="contact-enable-auto-reply"
+                    type="button"
+                    wire:click="enableMountedContactAutoReply"
+                    wire:loading.attr="disabled"
+                    wire:target="disableMountedContactAutoReply,enableMountedContactAutoReply"
+                    style="display: inline-flex; align-items: center; justify-content: center; min-width: 12rem; border: 1px solid #15803d; border-radius: 10px; background: #16a34a; color: #ffffff; font-size: 0.875rem; font-weight: 700; padding: 0.72rem 1rem; cursor: pointer;"
+                >
+                    Включить автоответы
+                </button>
+            @endif
+        </div>
     </div>
 
     @if ($this->showAssignContactDialog)

@@ -19,6 +19,7 @@ class ContactFactory extends Factory
     {
         return [
             'name' => fake()->optional()->name(),
+            'is_auto_reply_enabled' => true,
         ];
     }
 }

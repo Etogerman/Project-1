@@ -18,7 +18,15 @@ class Contact extends Model
      */
     protected $fillable = [
         'name',
+        'is_auto_reply_enabled',
         'assigned_user_id',
+    ];
+
+    /**
+     * @var array<string, string>
+     */
+    protected $casts = [
+        'is_auto_reply_enabled' => 'boolean',
     ];
 
     public function assignedUser(): BelongsTo
@@ -49,6 +57,11 @@ class Contact extends Model
     public function isAssigned(): bool
     {
         return filled($this->assigned_user_id);
+    }
+
+    public function isAutoReplyEnabled(): bool
+    {
+        return (bool) $this->is_auto_reply_enabled;
     }
 
     public function isAssignedTo(User $user): bool

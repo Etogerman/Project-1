@@ -196,6 +196,31 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Отправить');
     }
 
+    public function test_admin_can_toggle_contact_auto_reply_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'is_auto_reply_enabled' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Автоответы')
+            ->assertMountedActionModalSee('Включены')
+            ->call('disableMountedContactAutoReply')
+            ->assertMountedActionModalSee('Отключены')
+            ->call('enableMountedContactAutoReply')
+            ->assertMountedActionModalSee('Включены');
+
+        $contact->refresh();
+
+        $this->assertTrue($contact->is_auto_reply_enabled);
+    }
+
     public function test_contact_diagnostics_show_latest_message_even_with_same_received_at_second(): void
     {
         $admin = User::factory()->create([
