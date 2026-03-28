@@ -115,9 +115,6 @@ class ContactResource extends Resource
                     ->columnSpanFull(),
                 Section::make('Работа с контактом')
                     ->schema([
-                        TextEntry::make('assigned_user_label')
-                            ->label('Ответственный')
-                            ->state(fn (Contact $record): string => static::formatAssignedUserLabel($record)),
                         ViewEntry::make('ownership_controls')
                             ->hiddenLabel()
                             ->view('filament.contacts.partials.ownership-controls')
@@ -665,11 +662,11 @@ class ContactResource extends Resource
     protected static function getOwnershipHint(Contact $record): ?string
     {
         return match (static::getContactOwnershipState($record)) {
-            'mine' => 'Контакт закреплён за вами. Ручной ответ доступен.',
+            'mine' => 'Контакт закреплён за вами.',
             'other' => filled($record->assignedUser?->name)
-                ? 'Контакт в работе у '.$record->assignedUser->name.'.'
+                ? 'Контакт закреплён за '.$record->assignedUser->name.'.'
                 : 'Контакт уже назначен другому сотруднику.',
-            default => 'Контакт свободен. Сначала возьмите его в работу.',
+            default => 'Контакт пока свободен. Можно выбрать ответственного или оставить контакт свободным.',
         };
     }
 
