@@ -94,7 +94,7 @@ class ContactResource extends Resource
                         TextEntry::make('messages_max_received_at')
                             ->label('Последний webhook')
                             ->placeholder('Сообщений ещё не было')
-                            ->state(fn (Contact $record) => static::resolveLatestSavedMessage($record)?->created_at)
+                            ->state(fn (Contact $record) => static::resolveLatestInboundMessage($record)?->created_at)
                             ->dateTime('d.m.Y H:i'),
                         TextEntry::make('created_at')
                             ->label('Создан')
@@ -107,39 +107,44 @@ class ContactResource extends Resource
                         TextEntry::make('latest_message_received_at')
                             ->label('Получено')
                             ->placeholder('Сообщений ещё не было')
-                            ->state(fn (Contact $record) => static::resolveLatestSavedMessage($record)?->received_at)
+                            ->state(fn (Contact $record) => static::resolveLatestConversationMessage($record)?->received_at)
                             ->dateTime('d.m.Y H:i:s'),
                         TextEntry::make('latest_message_channel')
                             ->label('Канал')
                             ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->channel?->name),
+                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->channel?->name),
                         TextEntry::make('latest_message_direction')
                             ->label('Направление')
                             ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->direction)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->direction)
                             ->badge()
-                            ->formatStateUsing(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'Входящее' : ($state ?? '—'))
-                            ->color(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'info' : 'gray'),
+                            ->formatStateUsing(fn (?string $state): string => static::formatMessageDirection($state))
+                            ->color(fn (?string $state): string => static::getMessageDirectionColor($state)),
                         TextEntry::make('latest_message_external_id')
                             ->label('Внешний message ID')
                             ->placeholder('Не задан')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->external_message_id)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->external_message_id)
                             ->copyable(),
                         TextEntry::make('latest_message_chat_id')
                             ->label('Chat ID')
                             ->placeholder('Не задан')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->external_chat_id)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->external_chat_id)
                             ->copyable(),
+                        TextEntry::make('latest_message_reply_link')
+                            ->label('Связь')
+                            ->placeholder('—')
+                            ->state(fn (Contact $record): ?string => static::formatConversationReplyLink(static::resolveLatestConversationMessage($record)))
+                            ->visible(fn (Contact $record): bool => static::resolveLatestConversationMessage($record)?->direction === Message::DIRECTION_OUTBOUND),
                         TextEntry::make('latest_message_text')
                             ->label('Текст')
                             ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->text)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->text)
                             ->wrap()
                             ->columnSpanFull(),
                         TextEntry::make('latest_message_saved_at')
                             ->label('Сохранено в системе')
                             ->placeholder('Не задано')
-                            ->state(fn (Contact $record) => static::resolveLatestSavedMessage($record)?->created_at)
+                            ->state(fn (Contact $record) => static::resolveLatestConversationMessage($record)?->created_at)
                             ->dateTime('d.m.Y H:i:s'),
                     ])
                     ->columns(4)
@@ -149,18 +154,34 @@ class ContactResource extends Resource
                         TextEntry::make('diagnostic_external_message_id')
                             ->label('Последний внешний message ID')
                             ->placeholder('Не задан')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestSavedMessage($record)?->external_message_id)
+                            ->state(fn (Contact $record): ?string => static::resolveLatestInboundMessage($record)?->external_message_id)
+                            ->copyable(),
+                        TextEntry::make('diagnostic_provider_event_key')
+                            ->label('Provider event key')
+                            ->placeholder('Не задан')
+                            ->state(fn (Contact $record): ?string => static::resolveLatestInboundMessage($record)?->provider_event_key)
                             ->copyable(),
                         TextEntry::make('diagnostic_received_at')
                             ->label('Распарсенное received_at')
                             ->placeholder('Не задано')
-                            ->state(fn (Contact $record) => static::resolveLatestSavedMessage($record)?->received_at)
+                            ->state(fn (Contact $record) => static::resolveLatestInboundMessage($record)?->received_at)
                             ->dateTime('d.m.Y H:i:s'),
+                        TextEntry::make('diagnostic_auto_reply_sent_at')
+                            ->label('Автоответ отправлен')
+                            ->placeholder('Ответ ещё не отправлен')
+                            ->state(fn (Contact $record) => static::resolveLatestInboundMessage($record)?->auto_reply_sent_at)
+                            ->dateTime('d.m.Y H:i:s'),
+                        TextEntry::make('diagnostic_reply_status')
+                            ->label('Статус автоответа')
+                            ->placeholder('Сообщений ещё не было')
+                            ->state(fn (Contact $record): ?string => static::formatMessageReplyStatus(static::resolveLatestInboundMessage($record)))
+                            ->badge()
+                            ->color(fn (Contact $record): string => static::getMessageReplyStatusColor(static::resolveLatestInboundMessage($record))),
                         TextEntry::make('diagnostic_raw_payload')
                             ->label('Последний raw payload')
                             ->placeholder('Сообщений ещё не было')
-                            ->state(fn (Contact $record): ?string => filled(static::resolveLatestSavedMessage($record)?->raw_payload)
-                                ? static::encodeJsonPayload(static::resolveLatestSavedMessage($record)->raw_payload)
+                            ->state(fn (Contact $record): ?string => filled(static::resolveLatestInboundMessage($record)?->raw_payload)
+                                ? static::encodeJsonPayload(static::resolveLatestInboundMessage($record)->raw_payload)
                                 : null)
                             ->formatStateUsing(fn (?string $state): HtmlString => new HtmlString(sprintf(
                                 '<pre class="whitespace-pre-wrap break-all text-xs">%s</pre>',
@@ -170,7 +191,16 @@ class ContactResource extends Resource
                             ->copyable()
                             ->columnSpanFull(),
                     ])
-                    ->columns(2)
+                    ->columns(4)
+                    ->columnSpanFull(),
+                Section::make('История сообщений')
+                    ->schema([
+                        TextEntry::make('conversation_history')
+                            ->label('Последние сообщения контакта')
+                            ->state(fn (Contact $record): HtmlString => static::renderConversationHistory($record))
+                            ->html()
+                            ->columnSpanFull(),
+                    ])
                     ->columnSpanFull(),
             ]);
     }
@@ -265,11 +295,162 @@ class ContactResource extends Resource
         }
     }
 
-    protected static function resolveLatestSavedMessage(Contact $record): ?Message
+    protected static function resolveLatestInboundMessage(Contact $record): ?Message
     {
         return $record->messages()
             ->with('channel')
+            ->where('direction', Message::DIRECTION_INBOUND)
             ->orderByDesc('id')
             ->first();
+    }
+
+    protected static function resolveLatestConversationMessage(Contact $record): ?Message
+    {
+        return $record->messages()
+            ->with(['channel', 'replyTo'])
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    protected static function renderConversationHistory(Contact $record): HtmlString
+    {
+        $messages = $record->messages()
+            ->with(['channel', 'replyTo'])
+            ->orderByDesc('id')
+            ->limit(20)
+            ->get();
+
+        if ($messages->isEmpty()) {
+            return new HtmlString('<div class="text-sm text-gray-500">Сообщений ещё не было.</div>');
+        }
+
+        $items = $messages->map(function (Message $message): string {
+            $badges = [
+                static::renderFeedBadge(sprintf('Время: %s', $message->received_at?->format('d.m.Y H:i:s') ?? '—')),
+                static::renderFeedBadge(sprintf('Канал: %s', $message->channel?->name ?? '—')),
+                static::renderFeedBadge(
+                    sprintf('Направление: %s', static::formatMessageDirection($message->direction)),
+                    static::getMessageDirectionBadgeClasses($message->direction),
+                ),
+                static::renderFeedBadge(sprintf('Message ID: %s', $message->external_message_id ?? '—')),
+            ];
+
+            if ($message->direction === Message::DIRECTION_INBOUND) {
+                $badges[] = static::renderFeedBadge(sprintf('Event key: %s', $message->provider_event_key ?? '—'));
+                $badges[] = static::renderFeedBadge(sprintf('Автоответ: %s', $message->auto_reply_sent_at?->format('d.m.Y H:i:s') ?? '—'));
+                $badges[] = static::renderFeedBadge(
+                    sprintf('Статус: %s', static::formatMessageReplyStatus($message)),
+                    static::getMessageReplyStatusBadgeClasses($message),
+                );
+            }
+
+            if ($message->direction === Message::DIRECTION_OUTBOUND) {
+                $badges[] = static::renderFeedBadge(
+                    sprintf('Связь: %s', static::formatConversationReplyLink($message)),
+                    static::getOutboundReplyLinkBadgeClasses(),
+                );
+            }
+
+            return sprintf(
+                '<div class="rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
+                implode('', $badges),
+                e(filled($message->text) ? (string) $message->text : '—'),
+            );
+        })->implode('');
+
+        return new HtmlString(sprintf('<div class="space-y-3">%s</div>', $items));
+    }
+
+    protected static function formatMessageDirection(?string $direction): string
+    {
+        return match ($direction) {
+            Message::DIRECTION_INBOUND => 'Входящее',
+            Message::DIRECTION_OUTBOUND => 'Исходящее',
+            default => $direction ?? '—',
+        };
+    }
+
+    protected static function getMessageDirectionColor(?string $direction): string
+    {
+        return match ($direction) {
+            Message::DIRECTION_INBOUND => 'info',
+            Message::DIRECTION_OUTBOUND => 'success',
+            default => 'gray',
+        };
+    }
+
+    protected static function formatMessageReplyStatus(?Message $message): ?string
+    {
+        if ($message === null) {
+            return null;
+        }
+
+        return $message->hasSuccessfulAutoReply()
+            ? 'Ответ отправлен'
+            : 'Ответ еще не отправлен';
+    }
+
+    protected static function getMessageReplyStatusColor(?Message $message): string
+    {
+        if ($message === null) {
+            return 'gray';
+        }
+
+        return $message->hasSuccessfulAutoReply() ? 'success' : 'gray';
+    }
+
+    protected static function renderFeedBadge(string $badge, ?string $classes = null): string
+    {
+        return sprintf(
+            '<span class="%s">%s</span>',
+            e($classes ?? 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200'),
+            e($badge),
+        );
+    }
+
+    protected static function getMessageDirectionBadgeClasses(?string $direction): string
+    {
+        if ($direction === Message::DIRECTION_INBOUND) {
+            return 'inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200';
+        }
+
+        if ($direction === Message::DIRECTION_OUTBOUND) {
+            return 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200';
+        }
+
+        return 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200';
+    }
+
+    protected static function getMessageReplyStatusBadgeClasses(Message $message): string
+    {
+        if ($message->hasSuccessfulAutoReply()) {
+            return 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200';
+        }
+
+        return 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200';
+    }
+
+    protected static function formatConversationReplyLink(?Message $message): ?string
+    {
+        if ($message === null || $message->direction !== Message::DIRECTION_OUTBOUND) {
+            return null;
+        }
+
+        $replyTo = $message->replyTo;
+
+        if ($replyTo === null) {
+            return 'Ответ без связи';
+        }
+
+        if (filled($replyTo->provider_event_key)) {
+            return 'Ответ на event key: '.$replyTo->provider_event_key;
+        }
+
+        return 'Ответ на входящее #'.$replyTo->id;
+    }
+
+    protected static function getOutboundReplyLinkBadgeClasses(): string
+    {
+        return 'inline-flex items-center rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-700 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-200';
     }
 }

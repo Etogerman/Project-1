@@ -13,6 +13,7 @@ use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Livewire;
+use ReflectionMethod;
 use Tests\TestCase;
 
 class FilamentContactsResourceTest extends TestCase
@@ -133,6 +134,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Сводка')
             ->assertMountedActionModalSee('Последнее сообщение')
             ->assertMountedActionModalSee('Диагностика webhook')
+            ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('@max_customer')
             ->assertMountedActionModalSee('max-200')
             ->assertMountedActionModalSee('MAX Support')
@@ -202,6 +204,124 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('new-payload')
             ->assertMountedActionModalSee('тест3')
             ->assertMountedActionModalDontSee('old-payload');
+    }
+
+    public function test_contact_history_renderer_shows_inbound_and_outbound_messages_with_reply_link(): void
+    {
+        $contact = Contact::factory()->create([
+            'name' => 'Герман Абрикосов',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-900',
+        ]);
+
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'telegram-update-950',
+            'external_chat_id' => 'chat-950',
+            'external_message_id' => 'msg-950',
+            'text' => 'Входящее сообщение от пользователя',
+            'raw_payload' => ['debug' => 'inbound-payload'],
+            'received_at' => now()->subSecond(),
+            'auto_reply_sent_at' => now(),
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'reply_to_message_id' => $inboundMessage->id,
+            'external_chat_id' => 'chat-950',
+            'external_message_id' => 'out-950',
+            'text' => 'Исходящий автоответ',
+            'raw_payload' => ['provider' => 'telegram-send'],
+            'received_at' => now(),
+        ]);
+
+        $historyRenderer = new ReflectionMethod(ContactResource::class, 'renderConversationHistory');
+        $historyRenderer->setAccessible(true);
+
+        $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
+
+        $this->assertStringContainsString('Входящее', $historyHtml);
+        $this->assertStringContainsString('Исходящее', $historyHtml);
+        $this->assertStringContainsString('Входящее сообщение от пользователя', $historyHtml);
+        $this->assertStringContainsString('Исходящий автоответ', $historyHtml);
+        $this->assertStringContainsString('Канал: Telegram Support', $historyHtml);
+        $this->assertStringContainsString('Event key: telegram-update-950', $historyHtml);
+        $this->assertStringContainsString('Статус: Ответ отправлен', $historyHtml);
+        $this->assertStringContainsString('Связь: Ответ на event key: telegram-update-950', $historyHtml);
+    }
+
+    public function test_contact_modal_keeps_webhook_diagnostics_bound_to_latest_inbound_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Герман Абрикосов',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'mid.0000000003f780cc019d33311ef013fa',
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => 'msg-inbound',
+            'text' => 'тест3',
+            'raw_payload' => [
+                'debug' => 'latest-inbound-payload',
+            ],
+            'received_at' => now()->subSecond(),
+            'auto_reply_sent_at' => now(),
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'reply_to_message_id' => $inboundMessage->id,
+            'external_chat_id' => 'chat-500',
+            'external_message_id' => 'msg-outbound',
+            'text' => 'Привет бот находится в разработке.',
+            'raw_payload' => [
+                'debug' => 'outbound-provider-response',
+            ],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('mid.0000000003f780cc019d33311ef013fa')
+            ->assertMountedActionModalSee('latest-inbound-payload')
+            ->assertMountedActionModalSee('Ответ отправлен')
+            ->assertMountedActionModalDontSee('outbound-provider-response');
     }
 
     public function test_contact_modal_prefers_latest_saved_message_over_received_at_order(): void
