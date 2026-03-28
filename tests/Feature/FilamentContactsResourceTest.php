@@ -150,7 +150,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Нужна помощь по заказу');
     }
 
-    public function test_admin_can_open_manual_reply_action_from_contact_modal(): void
+    public function test_admin_can_see_inline_reply_composer_in_contact_modal(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -182,10 +182,12 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->assertTableActionExists(['view', 'sendReply'], null, $contact)
-            ->mountTableAction(['view', 'sendReply'], $contact)
-            ->assertMountedActionModalSee('Отправить ответ')
-            ->assertMountedActionModalSee('Текст ответа');
+            ->assertTableActionExists('view', null, $contact)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('История сообщений')
+            ->assertMountedActionModalSee('Диагностика webhook')
+            ->assertMountedActionModalSee('Ответ')
+            ->assertMountedActionModalSee('Отправить');
     }
 
     public function test_contact_diagnostics_show_latest_message_even_with_same_received_at_second(): void
@@ -628,7 +630,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$newerContact, $olderContact], inOrder: true);
     }
 
-    public function test_manual_reply_action_sends_telegram_message_and_creates_outbound_message(): void
+    public function test_inline_reply_composer_sends_telegram_message_and_creates_outbound_message(): void
     {
         Http::fake([
             'https://api.telegram.org/*/sendMessage' => Http::response([
@@ -673,11 +675,11 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->callTableAction(['view', 'sendReply'], $contact, [
-                'text' => '  Ручной ответ сотрудника  ',
-            ])
-            ->assertHasNoTableActionErrors()
-            ->assertNotified();
+            ->mountTableAction('view', $contact)
+            ->set('inlineReplyText', '  Ручной ответ сотрудника  ')
+            ->call('sendInlineReply')
+            ->assertNotified()
+            ->assertSet('inlineReplyText', '');
 
         Http::assertSent(function (Request $request) use ($channel): bool {
             return $request->url() === 'https://api.telegram.org/bot'.$channel->getToken().'/sendMessage'
@@ -712,10 +714,11 @@ class FilamentContactsResourceTest extends TestCase
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Ручной ответ сотрудника')
             ->assertMountedActionModalSee('Исходящее')
-            ->assertMountedActionModalSee('Ручной ответ');
+            ->assertMountedActionModalSee('Ручной ответ')
+            ->assertMountedActionModalSee('Ответ');
     }
 
-    public function test_manual_reply_action_sends_max_message_and_creates_outbound_message(): void
+    public function test_inline_reply_composer_sends_max_message_and_creates_outbound_message(): void
     {
         Http::fake([
             'https://platform-api.max.ru/messages*' => Http::response([
@@ -757,11 +760,11 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->callTableAction(['view', 'sendReply'], $contact, [
-                'text' => 'Ручной ответ MAX',
-            ])
-            ->assertHasNoTableActionErrors()
-            ->assertNotified();
+            ->mountTableAction('view', $contact)
+            ->set('inlineReplyText', 'Ручной ответ MAX')
+            ->call('sendInlineReply')
+            ->assertNotified()
+            ->assertSet('inlineReplyText', '');
 
         Http::assertSent(function (Request $request): bool {
             return str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
@@ -783,7 +786,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
     }
 
-    public function test_manual_reply_action_does_not_create_outbound_message_when_provider_fails(): void
+    public function test_inline_reply_composer_does_not_create_outbound_message_when_provider_fails(): void
     {
         Http::fake([
             'https://api.telegram.org/*/sendMessage' => Http::response([
@@ -821,10 +824,11 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->callTableAction(['view', 'sendReply'], $contact, [
-                'text' => 'Ответ с ошибкой провайдера',
-            ])
-            ->assertNotified();
+            ->mountTableAction('view', $contact)
+            ->set('inlineReplyText', 'Ответ с ошибкой провайдера')
+            ->call('sendInlineReply')
+            ->assertNotified()
+            ->assertSet('inlineReplyText', 'Ответ с ошибкой провайдера');
 
         $this->assertDatabaseCount('messages', 1);
 
@@ -839,7 +843,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
-    public function test_manual_reply_action_shows_error_when_contact_has_no_active_route_source(): void
+    public function test_inline_reply_composer_shows_error_when_contact_has_no_active_route_source(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -872,10 +876,11 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->callTableAction(['view', 'sendReply'], $contact, [
-                'text' => 'Ручной ответ без маршрута',
-            ])
-            ->assertNotified();
+            ->mountTableAction('view', $contact)
+            ->set('inlineReplyText', 'Ручной ответ без маршрута')
+            ->call('sendInlineReply')
+            ->assertNotified()
+            ->assertSet('inlineReplyText', 'Ручной ответ без маршрута');
 
         $this->assertDatabaseCount('messages', 1);
         $this->assertDatabaseMissing(ChannelActivityLog::class, [
