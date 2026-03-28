@@ -6,6 +6,10 @@ use Illuminate\Support\Carbon;
 
 final readonly class IncomingBotMessage
 {
+    public const KIND_INBOUND_USER = 'inbound_user';
+
+    public const KIND_INBOUND_CONTACT_SHARE = 'inbound_contact_share';
+
     /**
      * @param  array<string, mixed>  $rawPayload
      */
@@ -19,6 +23,9 @@ final readonly class IncomingBotMessage
         public ?string $externalUsername,
         public ?string $contactName,
         public ?string $text,
+        public string $inboundKind,
+        public ?string $sharedPhoneNumber,
+        public ?string $sharedContactUserId,
         public array $rawPayload,
         public Carbon $receivedAt,
     ) {}

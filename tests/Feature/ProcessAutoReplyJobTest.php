@@ -212,6 +212,49 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertTrue($rule->exists);
     }
 
+    public function test_job_sends_request_phone_button_for_telegram_rule(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9105,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => 'Телефон',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Телефон'),
+            'reply_text' => 'Нажмите кнопку ниже',
+            'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-request-phone',
+            'text' => 'телефон',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+                && $request['text'] === 'Нажмите кнопку ниже'
+                && data_get($request->data(), 'reply_markup.keyboard.0.0.request_contact') === true
+                && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Запросить номер телефона';
+        });
+    }
+
     public function test_job_skips_reply_when_channel_is_rules_only_and_no_rule_matches(): void
     {
         Http::fake();
@@ -459,6 +502,7 @@ class ProcessAutoReplyJobTest extends TestCase
         $failedLog = $channel->activityLogs()->where('event', 'bot.reply_failed')->latest('id')->firstOrFail();
         $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $failedLog->context['auto_reply_mode']);
         $this->assertSame('legacy_default', $failedLog->context['auto_reply_source']);
+        $this->assertNull($failedLog->context['button_type']);
     }
 
     public function test_job_can_succeed_after_previous_failure(): void

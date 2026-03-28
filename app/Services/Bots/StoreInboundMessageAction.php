@@ -6,12 +6,19 @@ use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\ContactPhoneNumber;
 use App\Models\Message;
+use App\Services\Contacts\AddContactPhoneAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 class StoreInboundMessageAction
 {
+    public function __construct(
+        protected AddContactPhoneAction $addContactPhoneAction,
+        protected ChannelActivityLogger $channelActivityLogger,
+    ) {}
+
     public function handle(Channel $channel, IncomingBotMessage $message): Message
     {
         return DB::transaction(function () use ($channel, $message): Message {
@@ -79,12 +86,12 @@ class StoreInboundMessageAction
             }
 
             try {
-                return Message::query()->create([
+                $storedMessage = Message::query()->create([
                     'contact_id' => $identity->contact_id,
                     'contact_identity_id' => $identity->id,
                     'channel_id' => $channel->id,
                     'direction' => Message::DIRECTION_INBOUND,
-                    'message_kind' => Message::KIND_INBOUND_USER,
+                    'message_kind' => $this->resolveInboundMessageKind($message),
                     'provider_event_key' => $message->providerEventKey,
                     'external_chat_id' => $message->externalChatId,
                     'external_message_id' => $message->externalMessageId,
@@ -92,6 +99,10 @@ class StoreInboundMessageAction
                     'raw_payload' => $message->rawPayload,
                     'received_at' => $message->receivedAt,
                 ]);
+
+                $this->captureSharedPhoneIfNeeded($channel, $contact, $storedMessage, $message);
+
+                return $storedMessage;
             } catch (QueryException $exception) {
                 if (! filled($message->providerEventKey) || ! $this->wasUniqueConstraintViolation($exception)) {
                     throw $exception;
@@ -114,5 +125,71 @@ class StoreInboundMessageAction
     protected function wasUniqueConstraintViolation(QueryException $exception): bool
     {
         return ($exception->errorInfo[0] ?? null) === '23505';
+    }
+
+    protected function resolveInboundMessageKind(IncomingBotMessage $message): string
+    {
+        return $message->inboundKind === IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
+            ? Message::KIND_INBOUND_CONTACT_SHARE
+            : Message::KIND_INBOUND_USER;
+    }
+
+    protected function captureSharedPhoneIfNeeded(
+        Channel $channel,
+        ?Contact $contact,
+        Message $storedMessage,
+        IncomingBotMessage $message,
+    ): void {
+        if (
+            $contact === null
+            || $message->inboundKind !== IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
+            || ! filled($message->sharedPhoneNumber)
+        ) {
+            return;
+        }
+
+        if (
+            filled($message->sharedContactUserId)
+            && $message->sharedContactUserId !== $message->externalUserId
+        ) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'contact.phone_capture_skipped_sender_mismatch',
+                'Номер телефона не сохранён: contact.user_id не совпадает с отправителем.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $storedMessage->id,
+                    'sender_user_id' => $message->externalUserId,
+                    'shared_contact_user_id' => $message->sharedContactUserId,
+                ],
+            );
+
+            return;
+        }
+
+        $phoneNumber = $this->addContactPhoneAction->handle(
+            $contact,
+            $message->sharedPhoneNumber,
+            ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+        );
+
+        if (! $phoneNumber->wasRecentlyCreated) {
+            return;
+        }
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'contact.phone_captured',
+            'Номер телефона сохранён у контакта.',
+            [
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'message_id' => $storedMessage->id,
+                'source' => $phoneNumber->source,
+                'phone_last4' => mb_substr($phoneNumber->phone_normalized, -4),
+                'phone_masked' => AddContactPhoneAction::maskPhone($phoneNumber->phone_normalized),
+            ],
+        );
     }
 }

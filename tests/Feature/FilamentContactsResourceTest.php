@@ -8,6 +8,7 @@ use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\User;
 use Filament\Facades\Filament;
@@ -219,6 +220,29 @@ class FilamentContactsResourceTest extends TestCase
         $contact->refresh();
 
         $this->assertTrue($contact->is_auto_reply_enabled);
+    }
+
+    public function test_contact_modal_displays_saved_phone_numbers(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Телефоны')
+            ->assertMountedActionModalSee('+7 999 123 45 67')
+            ->assertMountedActionModalSee('Основной');
     }
 
     public function test_contact_diagnostics_show_latest_message_even_with_same_received_at_second(): void

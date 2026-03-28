@@ -17,6 +17,8 @@ class Message extends Model
 
     public const KIND_INBOUND_USER = 'inbound_user';
 
+    public const KIND_INBOUND_CONTACT_SHARE = 'inbound_contact_share';
+
     public const KIND_OUTBOUND_AUTO_REPLY = 'outbound_auto_reply';
 
     public const KIND_OUTBOUND_MANUAL_REPLY = 'outbound_manual_reply';

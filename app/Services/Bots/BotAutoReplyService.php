@@ -2,6 +2,7 @@
 
 namespace App\Services\Bots;
 
+use App\Models\AutoReplyRule;
 use App\Models\Message;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -32,12 +33,14 @@ class BotAutoReplyService
         }
 
         $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT;
+        $buttonType = null;
         $baseContext = [
             'platform' => $channel->platform,
             'message_id' => $storedMessage->id,
             'provider_event_key' => $storedMessage->provider_event_key,
             'external_message_id' => $storedMessage->external_message_id,
             'auto_reply_mode' => $autoReplyMode,
+            'button_type' => $buttonType,
         ];
 
         if ($contact !== null && ! $contact->isAutoReplyEnabled()) {
@@ -58,6 +61,7 @@ class BotAutoReplyService
         if ($matchedRule !== null) {
             $replyText = (string) $matchedRule->reply_text;
             $autoReplySource = 'rule';
+            $buttonType = $matchedRule->telegram_button_type;
 
             $this->channelActivityLogger->info(
                 $channel,
@@ -65,6 +69,7 @@ class BotAutoReplyService
                 'Выбрано правило автоответа.',
                 $baseContext + [
                     'auto_reply_source' => $autoReplySource,
+                    'button_type' => $buttonType,
                     'rule_id' => $matchedRule->id,
                     'keyword' => $matchedRule->keyword,
                 ],
@@ -101,14 +106,15 @@ class BotAutoReplyService
         $externalUserId = $storedMessage->contactIdentity?->external_user_id;
 
         Log::info('bot auto reply started', [
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'message_id' => $storedMessage->id,
-            'external_chat_id' => $externalChatId,
-            'external_user_id' => $externalUserId,
-            'auto_reply_mode' => $autoReplyMode,
-            'auto_reply_source' => $autoReplySource,
-            'rule_id' => $matchedRule?->id,
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'message_id' => $storedMessage->id,
+                'external_chat_id' => $externalChatId,
+                'external_user_id' => $externalUserId,
+                'auto_reply_mode' => $autoReplyMode,
+                'auto_reply_source' => $autoReplySource,
+                'button_type' => $buttonType,
+                'rule_id' => $matchedRule?->id,
         ]);
 
         $deliveryResult = match ($channel->platform) {
@@ -117,6 +123,7 @@ class BotAutoReplyService
                 $externalChatId,
                 $externalUserId,
                 $replyText,
+                $this->buildTelegramReplyMarkup($matchedRule),
             ),
             \App\Models\Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
                 $channel,
@@ -139,6 +146,7 @@ class BotAutoReplyService
             'external_user_id' => $externalUserId,
             'auto_reply_mode' => $autoReplyMode,
             'auto_reply_source' => $autoReplySource,
+            'button_type' => $buttonType,
             'outbound_external_message_id' => $deliveryResult->externalMessageId,
         ]);
         $this->channelActivityLogger->info(
@@ -147,11 +155,38 @@ class BotAutoReplyService
             'Автоответ отправлен.',
             $baseContext + [
                 'auto_reply_source' => $autoReplySource,
+                'button_type' => $buttonType,
                 'external_chat_id' => $externalChatId,
                 'external_user_id' => $externalUserId,
                 'outbound_external_message_id' => $deliveryResult->externalMessageId,
                 'rule_id' => $matchedRule?->id,
             ],
         );
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function buildTelegramReplyMarkup(?AutoReplyRule $matchedRule): ?array
+    {
+        if (
+            ! $matchedRule instanceof AutoReplyRule
+            || $matchedRule->telegram_button_type !== AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE
+        ) {
+            return null;
+        }
+
+        return [
+            'keyboard' => [
+                [
+                    [
+                        'text' => 'Запросить номер телефона',
+                        'request_contact' => true,
+                    ],
+                ],
+            ],
+            'resize_keyboard' => true,
+            'one_time_keyboard' => true,
+        ];
     }
 }

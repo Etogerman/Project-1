@@ -25,6 +25,7 @@ class AutoReplyRuleFactory extends Factory
             'keyword' => $keyword,
             'normalized_keyword' => AutoReplyRule::normalizeKeyword($keyword),
             'reply_text' => fake()->sentence(),
+            'telegram_button_type' => null,
             'is_active' => true,
         ];
     }

@@ -89,6 +89,7 @@ class ProcessAutoReplyJob implements ShouldQueue
                         'external_message_id' => $message->external_message_id,
                         'auto_reply_mode' => $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
                         'auto_reply_source' => $this->resolveAutoReplySource($message, $resolveAutoReplyRuleAction),
+                        'button_type' => $this->resolveAutoReplyButtonType($message, $resolveAutoReplyRuleAction),
                         'error' => $throwable->getMessage(),
                     ],
                 );
@@ -98,6 +99,7 @@ class ProcessAutoReplyJob implements ShouldQueue
                 'channel_id' => $channel?->id,
                 'platform' => $channel?->platform,
                 'message_id' => $message->id,
+                'button_type' => $this->resolveAutoReplyButtonType($message, $resolveAutoReplyRuleAction),
                 'error' => $throwable->getMessage(),
             ]);
 
@@ -122,5 +124,16 @@ class ProcessAutoReplyJob implements ShouldQueue
         }
 
         return $channel->usesLegacyAutoReplyFallback() ? 'legacy_default' : 'skipped_no_rule';
+    }
+
+    protected function resolveAutoReplyButtonType(Message $message, ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction): ?string
+    {
+        $channel = $message->channel;
+
+        if ($channel === null) {
+            return null;
+        }
+
+        return $resolveAutoReplyRuleAction->handle($channel, $message->text)?->telegram_button_type;
     }
 }

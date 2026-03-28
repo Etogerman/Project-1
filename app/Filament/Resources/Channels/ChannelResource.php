@@ -630,6 +630,8 @@ class ChannelResource extends Resource
             'bot.reply_legacy_default_used' => 'Legacy автоответ',
             'bot.reply_sent' => 'Ответ',
             'bot.reply_failed' => 'Ошибка ответа',
+            'contact.phone_captured' => 'Номер телефона сохранён',
+            'contact.phone_capture_skipped_sender_mismatch' => 'Номер телефона пропущен',
             'contact.reply_sent' => 'Ручной ответ',
             'contact.reply_failed' => 'Ошибка ручного ответа',
             'webhook.duplicate_ignored' => 'Дубликат проигнорирован',
@@ -708,6 +710,7 @@ class ChannelResource extends Resource
     {
         return match ($messageKind) {
             Message::KIND_INBOUND_USER => 'Пользователь',
+            Message::KIND_INBOUND_CONTACT_SHARE => 'Поделился телефоном',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
             default => 'Не определен',
@@ -718,6 +721,7 @@ class ChannelResource extends Resource
     {
         return match ($messageKind) {
             Message::KIND_INBOUND_USER => 'inline-flex items-center rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-xs text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200',
+            Message::KIND_INBOUND_CONTACT_SHARE => 'inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-700 dark:border-slate-500/30 dark:bg-slate-500/10 dark:text-slate-200',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200',
             default => 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200',

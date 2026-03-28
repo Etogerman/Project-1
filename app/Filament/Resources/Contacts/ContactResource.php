@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Contacts;
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\User;
 use BackedEnum;
@@ -119,6 +120,16 @@ class ContactResource extends Resource
                             ->hiddenLabel()
                             ->view('filament.contacts.partials.ownership-controls')
                             ->viewData(fn (Contact $record): array => static::buildOwnershipControlsViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
+                Section::make('Телефоны')
+                    ->schema([
+                        ViewEntry::make('phone_numbers')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.phone-numbers')
+                            ->viewData(fn (Contact $record): array => static::buildPhoneNumbersViewData($record))
                             ->columnSpanFull(),
                     ])
                     ->columns(1)
@@ -554,6 +565,7 @@ class ContactResource extends Resource
     {
         return match ($messageKind) {
             Message::KIND_INBOUND_USER => 'Пользователь',
+            Message::KIND_INBOUND_CONTACT_SHARE => 'Поделился телефоном',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
             default => 'Не определен',
@@ -564,6 +576,7 @@ class ContactResource extends Resource
     {
         return match ($messageKind) {
             Message::KIND_INBOUND_USER => 'info',
+            Message::KIND_INBOUND_CONTACT_SHARE => 'gray',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'warning',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'success',
             default => 'gray',
@@ -600,6 +613,34 @@ class ContactResource extends Resource
             'autoReplyEnabled' => $record->isAutoReplyEnabled(),
             'autoReplyStatusLabel' => $record->isAutoReplyEnabled() ? 'Включены' : 'Отключены',
         ];
+    }
+
+    /**
+     * @return array{phoneNumbers: array<int, array{phone:string, source:string, is_primary:bool}>}
+     */
+    protected static function buildPhoneNumbersViewData(Contact $record): array
+    {
+        $phoneNumbers = $record->relationLoaded('phoneNumbers')
+            ? $record->phoneNumbers
+            : $record->phoneNumbers()->get();
+
+        return [
+            'phoneNumbers' => $phoneNumbers
+                ->map(fn (ContactPhoneNumber $phoneNumber): array => [
+                    'phone' => $phoneNumber->phone_raw,
+                    'source' => static::formatPhoneSource($phoneNumber->source),
+                    'is_primary' => $phoneNumber->is_primary,
+                ])
+                ->all(),
+        ];
+    }
+
+    protected static function formatPhoneSource(?string $source): string
+    {
+        return match ($source) {
+            ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE => 'Telegram contact share',
+            default => $source ?? '—',
+        };
     }
 
     protected static function buildInlineReplyComposerViewData(Contact $record): array

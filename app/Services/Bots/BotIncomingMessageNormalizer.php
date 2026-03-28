@@ -54,6 +54,11 @@ class BotIncomingMessageNormalizer
             externalUsername: $this->normalizeUsername(data_get($message, 'from.username')),
             contactName: $this->resolvePersonName(data_get($message, 'from')),
             text: $this->normalizeText(data_get($message, 'text')),
+            inboundKind: filled(data_get($message, 'contact.phone_number'))
+                ? IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
+                : IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: $this->normalizeText(data_get($message, 'contact.phone_number')),
+            sharedContactUserId: $this->normalizeExternalId(data_get($message, 'contact.user_id')),
             rawPayload: $payload,
             receivedAt: $this->resolveReceivedAt([
                 data_get($message, 'date'),
@@ -103,6 +108,9 @@ class BotIncomingMessageNormalizer
             externalUsername: $this->normalizeUsername(data_get($message, 'sender.username')),
             contactName: $this->resolvePersonName(data_get($message, 'sender')),
             text: $this->normalizeText(data_get($message, 'body.text')),
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
             rawPayload: $payload,
             receivedAt: $this->resolveReceivedAt([
                 data_get($message, 'timestamp'),

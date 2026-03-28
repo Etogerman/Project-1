@@ -7,10 +7,13 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Validation\ValidationException;
 
 class AutoReplyRule extends Model
 {
     use HasFactory;
+
+    public const TELEGRAM_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
 
     /**
      * @var list<string>
@@ -20,6 +23,7 @@ class AutoReplyRule extends Model
         'keyword',
         'normalized_keyword',
         'reply_text',
+        'telegram_button_type',
         'is_active',
     ];
 
@@ -29,6 +33,13 @@ class AutoReplyRule extends Model
     protected $casts = [
         'is_active' => 'boolean',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(function (AutoReplyRule $rule): void {
+            $rule->guardTelegramButtonType();
+        });
+    }
 
     public static function normalizeKeyword(?string $value): ?string
     {
@@ -49,6 +60,16 @@ class AutoReplyRule extends Model
         return $query->where('is_active', true);
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function telegramButtonTypeOptions(): array
+    {
+        return [
+            self::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE => 'Запросить номер телефона',
+        ];
+    }
+
     protected function keyword(): Attribute
     {
         return Attribute::make(
@@ -57,5 +78,28 @@ class AutoReplyRule extends Model
                 'normalized_keyword' => static::normalizeKeyword($value),
             ],
         );
+    }
+
+    protected function guardTelegramButtonType(): void
+    {
+        if (! filled($this->telegram_button_type)) {
+            return;
+        }
+
+        if ($this->telegram_button_type !== self::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE) {
+            throw ValidationException::withMessages([
+                'telegram_button_type' => 'Неизвестный тип Telegram-кнопки.',
+            ]);
+        }
+
+        $channel = $this->relationLoaded('channel')
+            ? $this->channel
+            : Channel::query()->find($this->channel_id);
+
+        if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_TELEGRAM) {
+            throw ValidationException::withMessages([
+                'telegram_button_type' => 'Кнопка "Запросить номер телефона" доступна только для Telegram-каналов.',
+            ]);
+        }
     }
 }

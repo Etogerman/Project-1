@@ -54,6 +54,13 @@ class Contact extends Model
         return $this->hasMany(Message::class);
     }
 
+    public function phoneNumbers(): HasMany
+    {
+        return $this->hasMany(ContactPhoneNumber::class)
+            ->orderByDesc('is_primary')
+            ->orderBy('id');
+    }
+
     public function isAssigned(): bool
     {
         return filled($this->assigned_user_id);

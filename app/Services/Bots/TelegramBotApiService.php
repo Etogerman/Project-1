@@ -17,19 +17,34 @@ class TelegramBotApiService
         return $this->sendTextMessage($channel, $message->externalChatId, $message->externalUserId, $text);
     }
 
-    public function sendTextMessage(Channel $channel, ?string $externalChatId, ?string $externalUserId, string $text): AutoReplyDeliveryResult
+    /**
+     * @param  array<string, mixed>|null  $replyMarkup
+     */
+    public function sendTextMessage(
+        Channel $channel,
+        ?string $externalChatId,
+        ?string $externalUserId,
+        string $text,
+        ?array $replyMarkup = null,
+    ): AutoReplyDeliveryResult
     {
         if (! filled($externalChatId)) {
             throw new InvalidArgumentException("Telegram message for channel [{$channel->id}] does not have chat id.");
         }
 
+        $payload = [
+            'chat_id' => $externalChatId,
+            'text' => $text,
+        ];
+
+        if ($replyMarkup !== null) {
+            $payload['reply_markup'] = $replyMarkup;
+        }
+
         $response = Http::asJson()
             ->post(
                 sprintf('https://api.telegram.org/bot%s/sendMessage', $this->token($channel)),
-                [
-                    'chat_id' => $externalChatId,
-                    'text' => $text,
-                ],
+                $payload,
             )
             ->throw()
             ->json();

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Jobs\ProcessAutoReplyJob;
 use App\Models\Channel;
+use App\Models\Message;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\StoreInboundMessageAction;
@@ -111,6 +112,12 @@ class BotWebhookController extends Controller
                     );
                 }
 
+                return response()->json([
+                    'ok' => true,
+                ]);
+            }
+
+            if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
                 return response()->json([
                     'ok' => true,
                 ]);

@@ -9,6 +9,7 @@ use App\Models\Channel;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -55,6 +56,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 'channel_id' => $channel->id,
                 'keyword' => 'Тест1',
                 'reply_text' => 'Шаблон 1',
+                'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
                 'is_active' => true,
             ])
             ->assertHasNoFormErrors();
@@ -63,6 +65,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
 
         $this->assertSame('Тест1', $rule->keyword);
         $this->assertSame('тест1', $rule->normalized_keyword);
+        $this->assertSame(AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE, $rule->telegram_button_type);
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
@@ -70,6 +73,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 'channel_id' => $channel->id,
                 'keyword' => 'Тест2',
                 'reply_text' => 'Шаблон 2',
+                'telegram_button_type' => null,
                 'is_active' => false,
             ])
             ->assertHasNoTableActionErrors();
@@ -80,6 +84,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame('тест2', $rule->normalized_keyword);
         $this->assertSame('Шаблон 2', $rule->reply_text);
         $this->assertFalse($rule->is_active);
+        $this->assertNull($rule->telegram_button_type);
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
@@ -115,5 +120,24 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ]);
 
         $this->assertSame(1, AutoReplyRule::query()->count());
+    }
+
+    public function test_request_phone_button_cannot_be_saved_for_non_telegram_channel(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        $this->expectException(ValidationException::class);
+
+        AutoReplyRule::query()->create([
+            'channel_id' => $channel->id,
+            'keyword' => 'Тест1',
+            'normalized_keyword' => 'тест1',
+            'reply_text' => 'Шаблон 1',
+            'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
+            'is_active' => true,
+        ]);
     }
 }

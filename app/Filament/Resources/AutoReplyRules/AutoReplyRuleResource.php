@@ -14,6 +14,7 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
@@ -53,6 +54,7 @@ class AutoReplyRuleResource extends Resource
                             ->required()
                             ->searchable()
                             ->preload()
+                            ->live()
                             ->native(false),
                         TextInput::make('keyword')
                             ->label('Ключевое слово')
@@ -64,6 +66,13 @@ class AutoReplyRuleResource extends Resource
                             ->rows(6)
                             ->maxLength(2000)
                             ->columnSpanFull(),
+                        Select::make('telegram_button_type')
+                            ->label('Кнопка')
+                            ->options(AutoReplyRule::telegramButtonTypeOptions())
+                            ->placeholder('Без кнопки')
+                            ->native(false)
+                            ->helperText('Доступно только для Telegram-каналов.')
+                            ->hidden(fn (Get $get): bool => ! static::channelSupportsTelegram((int) $get('channel_id'))),
                         Toggle::make('is_active')
                             ->label('Активно')
                             ->default(true)
@@ -89,6 +98,12 @@ class AutoReplyRuleResource extends Resource
                     ->limit(60)
                     ->wrap()
                     ->tooltip(fn (AutoReplyRule $record): string => (string) $record->reply_text),
+                TextColumn::make('telegram_button_type')
+                    ->label('Кнопка')
+                    ->placeholder('—')
+                    ->formatStateUsing(fn (?string $state): string => filled($state)
+                        ? (AutoReplyRule::telegramButtonTypeOptions()[$state] ?? $state)
+                        : '—'),
                 TextColumn::make('is_active')
                     ->label('Активно')
                     ->badge()
@@ -141,6 +156,9 @@ class AutoReplyRuleResource extends Resource
         $data['keyword'] = filled($data['keyword'] ?? null)
             ? trim((string) $data['keyword'])
             : $data['keyword'];
+        $data['telegram_button_type'] = filled($data['telegram_button_type'] ?? null)
+            ? trim((string) $data['telegram_button_type'])
+            : null;
         $data['normalized_keyword'] = AutoReplyRule::normalizeKeyword($data['keyword'] ?? null);
 
         return $data;
@@ -195,5 +213,17 @@ class AutoReplyRuleResource extends Resource
         $platform = Channel::platformOptions()[$channel->platform] ?? $channel->platform;
 
         return sprintf('%s (%s)', $channel->name, $platform);
+    }
+
+    protected static function channelSupportsTelegram(int $channelId): bool
+    {
+        if ($channelId <= 0) {
+            return false;
+        }
+
+        return Channel::query()
+            ->whereKey($channelId)
+            ->where('platform', Channel::PLATFORM_TELEGRAM)
+            ->exists();
     }
 }
