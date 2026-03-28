@@ -8,7 +8,7 @@
         </div>
     </div>
 
-    <form wire:submit.prevent="sendInlineReply" class="space-y-3">
+    <div class="space-y-3">
         <div>
             <textarea
                 data-role="conversation-reply-textarea"
@@ -27,7 +27,8 @@
         <div class="flex justify-end">
             <button
                 data-role="conversation-reply-submit"
-                type="submit"
+                type="button"
+                wire:click="sendInlineReply"
                 wire:loading.attr="disabled"
                 wire:target="sendInlineReply"
                 class="inline-flex items-center rounded-lg bg-success-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-success-500 disabled:cursor-not-allowed disabled:opacity-60"
@@ -36,5 +37,5 @@
                 <span wire:loading wire:target="sendInlineReply">Отправка...</span>
             </button>
         </div>
-    </form>
+    </div>
 </section>
