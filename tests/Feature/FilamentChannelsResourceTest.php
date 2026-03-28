@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Filament\Resources\Channels\ChannelResource;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Message;
@@ -13,6 +14,7 @@ use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Carbon;
 use Livewire\Livewire;
 use ReflectionMethod;
 use Tests\TestCase;
@@ -272,16 +274,31 @@ class FilamentChannelsResourceTest extends TestCase
             'external_user_id' => 'ext-100',
         ]);
 
+        $autoReplySentAt = Carbon::create(2026, 3, 28, 10, 11, 12);
+
         Message::query()->create([
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'telegram-update-900',
             'external_chat_id' => 'chat-500',
             'external_message_id' => 'msg-900',
             'text' => 'Нужна помощь',
             'raw_payload' => ['message' => 'payload'],
             'received_at' => now(),
+            'auto_reply_sent_at' => $autoReplySentAt,
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'info',
+            'event' => 'webhook.duplicate_ignored',
+            'message' => 'Повторный webhook обработан без повторной отправки ответа.',
+            'context' => [
+                'provider_event_key' => 'telegram-update-900',
+            ],
+            'created_at' => now(),
         ]);
 
         Livewire::actingAs($admin)
@@ -290,6 +307,10 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertMountedActionModalSee('Последний webhook')
             ->assertMountedActionModalSee('Лента сообщений')
             ->assertMountedActionModalSee('ext-100')
+            ->assertMountedActionModalSee('telegram-update-900')
+            ->assertMountedActionModalSee('28.03.2026 10:11:12')
+            ->assertMountedActionModalSee('Ответ отправлен')
+            ->assertMountedActionModalSee('Дубликат проигнорирован')
             ->assertMountedActionModalSee('Нужна помощь')
             ->assertMountedActionModalSee('Входящее');
     }
@@ -376,5 +397,69 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertIsInt($oldestPosition);
         $this->assertTrue($latestPosition < $middlePosition);
         $this->assertTrue($middlePosition < $oldestPosition);
+    }
+
+    public function test_recent_messages_renderer_shows_provider_event_key_auto_reply_timestamp_and_pending_status(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ext-200',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'telegram-update-901',
+            'external_chat_id' => 'chat-901',
+            'external_message_id' => 'msg-901',
+            'text' => 'Повторное сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => Carbon::create(2026, 3, 28, 12, 30, 0),
+            'auto_reply_sent_at' => null,
+        ]);
+
+        $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
+        $recentMessagesRenderer->setAccessible(true);
+
+        $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Event key: telegram-update-901', $recentMessagesHtml);
+        $this->assertStringContainsString('Автоответ: —', $recentMessagesHtml);
+        $this->assertStringContainsString('Статус: Ответ еще не отправлен', $recentMessagesHtml);
+    }
+
+    public function test_recent_activity_renderer_shows_and_highlights_dedupe_events(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'info',
+            'event' => 'webhook.duplicate_retry_reply',
+            'message' => 'Повторный webhook использован для повторной отправки автоответа.',
+            'context' => [
+                'provider_event_key' => 'telegram-update-902',
+            ],
+            'created_at' => Carbon::create(2026, 3, 28, 12, 45, 0),
+        ]);
+
+        $recentActivityRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentActivityLogs');
+        $recentActivityRenderer->setAccessible(true);
+
+        $recentActivityHtml = $recentActivityRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Дубликат → retry ответа', $recentActivityHtml);
+        $this->assertStringContainsString('Event key: telegram-update-902', $recentActivityHtml);
+        $this->assertStringContainsString('data-dedupe-event="true"', $recentActivityHtml);
     }
 }

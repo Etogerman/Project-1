@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Channels;
 
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\Message;
 use App\Services\Bots\RegisterChannelWebhookAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
@@ -185,13 +186,29 @@ class ChannelResource extends Resource
                             ->placeholder('Не задан')
                             ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->external_message_id)
                             ->copyable(),
+                        TextEntry::make('latest_message_provider_event_key')
+                            ->label('Provider event key')
+                            ->placeholder('Не задан')
+                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->provider_event_key)
+                            ->copyable(),
                         TextEntry::make('latest_message_direction')
                             ->label('Направление')
                             ->placeholder('—')
                             ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->direction)
                             ->badge()
-                            ->formatStateUsing(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'Входящее' : ($state ?? '—'))
-                            ->color(fn (?string $state): string => $state === Message::DIRECTION_INBOUND ? 'info' : 'gray'),
+                            ->formatStateUsing(fn (?string $state): string => static::formatMessageDirection($state))
+                            ->color(fn (?string $state): string => static::getMessageDirectionColor($state)),
+                        TextEntry::make('latest_message_auto_reply_sent_at')
+                            ->label('Автоответ отправлен')
+                            ->placeholder('Ответ ещё не отправлен')
+                            ->state(fn (Channel $record) => static::resolveLatestSavedMessage($record)?->auto_reply_sent_at)
+                            ->dateTime('d.m.Y H:i:s'),
+                        TextEntry::make('latest_message_reply_status')
+                            ->label('Статус автоответа')
+                            ->placeholder('Сообщений ещё не было')
+                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessageReplyStatus($record))
+                            ->badge()
+                            ->color(fn (Channel $record): string => static::getLatestSavedMessageReplyStatusColor($record)),
                         TextEntry::make('messages_count')
                             ->label('Сохранено сообщений')
                             ->state(fn (Channel $record): int => $record->messages()->count()),
@@ -495,25 +512,23 @@ class ChannelResource extends Resource
 
         $items = $messages->map(function (Message $message): string {
             $badges = [
-                sprintf('Сохранено: %s', $message->created_at?->format('d.m.Y H:i:s') ?? '—'),
-                sprintf('Получено: %s', $message->received_at?->format('d.m.Y H:i:s') ?? '—'),
-                sprintf('Пользователь: %s', $message->contactIdentity?->external_user_id ?? '—'),
-                sprintf(
-                    'Направление: %s',
-                    $message->direction === Message::DIRECTION_INBOUND ? 'Входящее' : ($message->direction ?: '—'),
+                static::renderFeedBadge(sprintf('Сохранено: %s', $message->created_at?->format('d.m.Y H:i:s') ?? '—')),
+                static::renderFeedBadge(sprintf('Получено: %s', $message->received_at?->format('d.m.Y H:i:s') ?? '—')),
+                static::renderFeedBadge(sprintf('Пользователь: %s', $message->contactIdentity?->external_user_id ?? '—')),
+                static::renderFeedBadge(
+                    sprintf('Направление: %s', static::formatMessageDirection($message->direction)),
+                    static::getMessageDirectionBadgeClasses($message->direction),
                 ),
+                static::renderFeedBadge(
+                    sprintf('Статус: %s', static::formatMessageReplyStatus($message)),
+                    static::getMessageReplyStatusBadgeClasses($message),
+                ),
+                static::renderFeedBadge(sprintf('Message ID: %s', $message->external_message_id ?? '—')),
+                static::renderFeedBadge(sprintf('Event key: %s', $message->provider_event_key ?? '—')),
+                static::renderFeedBadge(sprintf('Автоответ: %s', $message->auto_reply_sent_at?->format('d.m.Y H:i:s') ?? '—')),
             ];
 
-            if (filled($message->external_message_id)) {
-                $badges[] = sprintf('Message ID: %s', $message->external_message_id);
-            }
-
-            $badgeMarkup = collect($badges)
-                ->map(fn (string $badge): string => sprintf(
-                    '<span class="inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200">%s</span>',
-                    e($badge),
-                ))
-                ->implode('');
+            $badgeMarkup = implode('', $badges);
 
             return sprintf(
                 '<div class="rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
@@ -536,22 +551,34 @@ class ChannelResource extends Resource
             return new HtmlString('<div class="text-sm text-gray-500">Событий ещё не было.</div>');
         }
 
-        $items = $logs->map(function ($log): string {
+        $items = $logs->map(function (ChannelActivityLog $log): string {
+            $isDedupeEvent = static::isDedupeActivityEvent((string) $log->event);
             $badges = [
-                sprintf('Время: %s', $log->created_at?->format('d.m.Y H:i:s') ?? '—'),
-                sprintf('Уровень: %s', $log->level === 'error' ? 'Ошибка' : 'Info'),
-                sprintf('Событие: %s', static::formatActivityEvent((string) $log->event)),
+                static::renderFeedBadge(sprintf('Время: %s', $log->created_at?->format('d.m.Y H:i:s') ?? '—')),
+                static::renderFeedBadge(
+                    sprintf('Уровень: %s', $log->level === 'error' ? 'Ошибка' : 'Info'),
+                    static::getActivityLevelBadgeClasses((string) $log->level),
+                ),
+                static::renderFeedBadge(
+                    sprintf('Событие: %s', static::formatActivityEvent((string) $log->event)),
+                    $isDedupeEvent ? static::getDedupeActivityBadgeClasses() : null,
+                ),
             ];
 
-            $badgeMarkup = collect($badges)
-                ->map(fn (string $badge): string => sprintf(
-                    '<span class="inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200">%s</span>',
-                    e($badge),
-                ))
-                ->implode('');
+            $providerEventKey = data_get($log->context, 'provider_event_key');
+            if (filled($providerEventKey)) {
+                $badges[] = static::renderFeedBadge(
+                    sprintf('Event key: %s', $providerEventKey),
+                    $isDedupeEvent ? static::getDedupeActivityBadgeClasses() : null,
+                );
+            }
+
+            $badgeMarkup = implode('', $badges);
 
             return sprintf(
-                '<div class="rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
+                '<div class="%s" data-dedupe-event="%s"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
+                static::getActivityCardClasses($isDedupeEvent),
+                $isDedupeEvent ? 'true' : 'false',
                 $badgeMarkup,
                 e(filled($log->message) ? (string) $log->message : '—'),
             );
@@ -566,6 +593,8 @@ class ChannelResource extends Resource
             'webhook.received' => 'Webhook',
             'bot.reply_sent' => 'Ответ',
             'bot.reply_failed' => 'Ошибка ответа',
+            'webhook.duplicate_ignored' => 'Дубликат проигнорирован',
+            'webhook.duplicate_retry_reply' => 'Дубликат → retry ответа',
             'bot.metadata_synced' => 'Sync metadata',
             'bot.metadata_sync_failed' => 'Ошибка metadata',
             'webhook.registration_started' => 'Регистрация webhook',
@@ -573,5 +602,107 @@ class ChannelResource extends Resource
             'webhook.registration_failed' => 'Ошибка webhook',
             default => $event,
         };
+    }
+
+    protected static function resolveLatestSavedMessageReplyStatus(Channel $record): ?string
+    {
+        $message = static::resolveLatestSavedMessage($record);
+
+        if ($message === null) {
+            return null;
+        }
+
+        return static::formatMessageReplyStatus($message);
+    }
+
+    protected static function getLatestSavedMessageReplyStatusColor(Channel $record): string
+    {
+        $message = static::resolveLatestSavedMessage($record);
+
+        if ($message === null) {
+            return 'gray';
+        }
+
+        return static::getMessageReplyStatusColor($message);
+    }
+
+    protected static function formatMessageDirection(?string $direction): string
+    {
+        return $direction === Message::DIRECTION_INBOUND ? 'Входящее' : ($direction ?? '—');
+    }
+
+    protected static function getMessageDirectionColor(?string $direction): string
+    {
+        return $direction === Message::DIRECTION_INBOUND ? 'info' : 'gray';
+    }
+
+    protected static function formatMessageReplyStatus(Message $message): string
+    {
+        return $message->hasSuccessfulAutoReply()
+            ? 'Ответ отправлен'
+            : 'Ответ еще не отправлен';
+    }
+
+    protected static function getMessageReplyStatusColor(Message $message): string
+    {
+        return $message->hasSuccessfulAutoReply() ? 'success' : 'gray';
+    }
+
+    protected static function renderFeedBadge(string $badge, ?string $classes = null): string
+    {
+        return sprintf(
+            '<span class="%s">%s</span>',
+            e($classes ?? 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200'),
+            e($badge),
+        );
+    }
+
+    protected static function getMessageDirectionBadgeClasses(?string $direction): string
+    {
+        if ($direction === Message::DIRECTION_INBOUND) {
+            return 'inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200';
+        }
+
+        return 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200';
+    }
+
+    protected static function getMessageReplyStatusBadgeClasses(Message $message): string
+    {
+        if ($message->hasSuccessfulAutoReply()) {
+            return 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200';
+        }
+
+        return 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200';
+    }
+
+    protected static function getActivityLevelBadgeClasses(string $level): string
+    {
+        if ($level === 'error') {
+            return 'inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200';
+        }
+
+        return 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200';
+    }
+
+    protected static function isDedupeActivityEvent(string $event): bool
+    {
+        return in_array($event, [
+            'webhook.duplicate_ignored',
+            'webhook.duplicate_retry_reply',
+        ], true);
+    }
+
+    protected static function getDedupeActivityBadgeClasses(): string
+    {
+        return 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200';
+    }
+
+    protected static function getActivityCardClasses(bool $isDedupeEvent): string
+    {
+        if ($isDedupeEvent) {
+            return 'rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3 dark:border-amber-500/30 dark:bg-amber-500/10';
+        }
+
+        return 'rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10';
     }
 }

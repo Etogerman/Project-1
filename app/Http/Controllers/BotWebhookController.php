@@ -99,11 +99,35 @@ class BotWebhookController extends Controller
 
         if ($message !== null) {
             $storedMessage = $storeInboundMessageAction->handle($channel, $message);
+            $duplicateContext = [
+                'platform' => $channel->platform,
+                'provider_event_key' => $storedMessage->provider_event_key,
+                'message_id' => $storedMessage->id,
+                'external_message_id' => $storedMessage->external_message_id,
+            ];
 
             if ($storedMessage->hasSuccessfulAutoReply()) {
+                if (! $storedMessage->wasRecentlyCreated) {
+                    $channelActivityLogger->info(
+                        $channel,
+                        'webhook.duplicate_ignored',
+                        'Повторный webhook обработан без повторной отправки ответа.',
+                        $duplicateContext,
+                    );
+                }
+
                 return response()->json([
                     'ok' => true,
                 ]);
+            }
+
+            if (! $storedMessage->wasRecentlyCreated) {
+                $channelActivityLogger->info(
+                    $channel,
+                    'webhook.duplicate_retry_reply',
+                    'Повторный webhook использован для повторной отправки автоответа.',
+                    $duplicateContext,
+                );
             }
 
             try {
