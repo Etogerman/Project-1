@@ -570,7 +570,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('old-payload');
     }
 
-    public function test_contact_history_renderer_shows_inbound_and_outbound_messages_with_reply_link(): void
+    public function test_contact_history_renderer_renders_messages_as_chat_bubbles_without_technical_noise(): void
     {
         $contact = Contact::factory()->create([
             'name' => 'Герман Абрикосов',
@@ -621,21 +621,20 @@ class FilamentContactsResourceTest extends TestCase
         $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
 
         $this->assertStringContainsString('data-role="conversation-thread"', $historyHtml);
+        $this->assertStringContainsString('data-role="conversation-date-separator"', $historyHtml);
         $this->assertStringContainsString('data-role="conversation-message"', $historyHtml);
         $this->assertStringContainsString('data-direction="inbound"', $historyHtml);
         $this->assertStringContainsString('data-direction="outbound"', $historyHtml);
         $this->assertStringContainsString('data-kind="inbound_user"', $historyHtml);
         $this->assertStringContainsString('data-kind="outbound_auto_reply"', $historyHtml);
-        $this->assertStringContainsString('Входящее', $historyHtml);
-        $this->assertStringContainsString('Исходящее', $historyHtml);
         $this->assertStringContainsString('Входящее сообщение от пользователя', $historyHtml);
         $this->assertStringContainsString('Исходящий автоответ', $historyHtml);
-        $this->assertStringContainsString('Telegram Support (Telegram)', $historyHtml);
-        $this->assertStringContainsString('Пользователь', $historyHtml);
-        $this->assertStringContainsString('Автоответ', $historyHtml);
-        $this->assertStringContainsString('Event key: telegram-update-950', $historyHtml);
-        $this->assertStringContainsString('Статус: Ответ отправлен', $historyHtml);
-        $this->assertStringContainsString('Ответ на event key: telegram-update-950', $historyHtml);
+        $this->assertStringContainsString(now()->format('H:i'), $historyHtml);
+        $this->assertStringContainsString('Сегодня', $historyHtml);
+        $this->assertStringNotContainsString('Event key: telegram-update-950', $historyHtml);
+        $this->assertStringNotContainsString('Статус: Ответ отправлен', $historyHtml);
+        $this->assertStringNotContainsString('Ответ на event key: telegram-update-950', $historyHtml);
+        $this->assertStringNotContainsString('Telegram Support (Telegram)', $historyHtml);
         $this->assertLessThan(
             strpos($historyHtml, 'Исходящий автоответ'),
             strpos($historyHtml, 'Входящее сообщение от пользователя'),
@@ -675,8 +674,43 @@ class FilamentContactsResourceTest extends TestCase
         $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
 
         $this->assertStringContainsString('Историческое исходящее', $historyHtml);
-        $this->assertStringContainsString('Не определен', $historyHtml);
         $this->assertStringContainsString('data-kind="unknown"', $historyHtml);
+    }
+
+    public function test_contact_history_renderer_uses_display_text_for_contact_share_messages_without_text(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-contact-share',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => 'chat-contact-share',
+            'external_message_id' => 'contact-share-1',
+            'text' => null,
+            'raw_payload' => ['provider' => 'telegram-contact-share'],
+            'received_at' => now(),
+        ]);
+
+        $historyRenderer = new ReflectionMethod(ContactResource::class, 'renderConversationHistory');
+        $historyRenderer->setAccessible(true);
+
+        $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
+
+        $this->assertStringContainsString('Поделился номером телефона', $historyHtml);
+        $this->assertStringContainsString('data-kind="inbound_contact_share"', $historyHtml);
     }
 
     public function test_contact_history_renderer_shows_empty_state_when_contact_has_no_messages(): void

@@ -25,6 +25,7 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
 use JsonException;
@@ -559,28 +560,57 @@ class ContactResource extends Resource
     protected static function buildConversationHistoryViewData(Collection $messages): array
     {
         return $messages
-            ->map(fn (Message $message): array => [
-                'id' => $message->id,
-                'direction' => $message->direction,
-                'kind' => $message->message_kind ?? 'unknown',
-                'direction_label' => static::formatMessageDirection($message->direction),
-                'kind_label' => static::formatMessageKind($message->message_kind),
-                'text' => filled($message->text) ? (string) $message->text : '—',
-                'time_label' => ($message->received_at ?? $message->created_at)?->format('d.m.Y H:i:s') ?? '—',
-                'channel_label' => static::formatLatestMessageChannel($message) ?? '—',
-                'message_id_label' => $message->external_message_id,
-                'provider_event_key_label' => $message->provider_event_key,
-                'auto_reply_sent_at_label' => $message->auto_reply_sent_at?->format('d.m.Y H:i:s'),
-                'reply_status_label' => $message->direction === Message::DIRECTION_INBOUND
-                    ? static::formatMessageReplyStatus($message)
-                    : null,
-                'reply_link_label' => $message->direction === Message::DIRECTION_OUTBOUND
-                    ? static::formatConversationReplyLink($message)
-                    : null,
-                'is_inbound' => $message->direction === Message::DIRECTION_INBOUND,
-                'is_outbound' => $message->direction === Message::DIRECTION_OUTBOUND,
-            ])
+            ->map(function (Message $message): array {
+                $messageAt = $message->received_at ?? $message->created_at;
+
+                return [
+                    'id' => $message->id,
+                    'direction' => $message->direction,
+                    'kind' => $message->message_kind ?? 'unknown',
+                    'display_text' => static::resolveConversationDisplayText($message),
+                    'time_label' => $messageAt?->format('H:i') ?? '—',
+                    'date_key' => $messageAt?->format('Y-m-d') ?? 'unknown-date',
+                    'date_label' => static::formatConversationDateLabel($messageAt),
+                    'is_inbound' => $message->direction === Message::DIRECTION_INBOUND,
+                    'is_outbound' => $message->direction === Message::DIRECTION_OUTBOUND,
+                ];
+            })
             ->all();
+    }
+
+    protected static function resolveConversationDisplayText(Message $message): string
+    {
+        if (filled($message->text)) {
+            return (string) $message->text;
+        }
+
+        return match ($message->message_kind) {
+            Message::KIND_INBOUND_CONTACT_SHARE => 'Поделился номером телефона',
+            Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Спасибо, номер получили.',
+            Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
+            Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ответ оператора',
+            default => 'Системное сообщение',
+        };
+    }
+
+    protected static function formatConversationDateLabel(?Carbon $messageAt): string
+    {
+        if (! $messageAt instanceof Carbon) {
+            return '—';
+        }
+
+        $today = now()->startOfDay();
+        $messageDate = $messageAt->copy()->startOfDay();
+
+        if ($messageDate->equalTo($today)) {
+            return 'Сегодня';
+        }
+
+        if ($messageDate->equalTo($today->copy()->subDay())) {
+            return 'Вчера';
+        }
+
+        return $messageAt->format('d.m.Y');
     }
 
     protected static function formatMessageDirection(?string $direction): string
