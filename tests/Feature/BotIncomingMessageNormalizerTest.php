@@ -89,6 +89,52 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('max-contact-77', $message->providerEventKey);
     }
 
+    public function test_max_contact_share_vcf_attachment_payload_is_normalized(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 228532008,
+                    'first_name' => 'German',
+                    'last_name' => 'Abrikosov',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 66552012,
+                ],
+                'body' => [
+                    'mid' => 'max-contact-vcf-1',
+                    'text' => null,
+                    'attachments' => [[
+                        'type' => 'contact',
+                        'payload' => [
+                            'max_info' => [
+                                'user_id' => 228532008,
+                            ],
+                            'vcf_info' => "BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=cell:79263527111\r\nFN:German Abrikosov\r\nEND:VCARD",
+                        ],
+                    ]],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE, $message->inboundKind);
+        $this->assertSame('79263527111', $message->sharedPhoneNumber);
+        $this->assertSame('228532008', $message->sharedContactUserId);
+        $this->assertNull($message->text);
+        $this->assertSame('max-contact-vcf-1', $message->externalMessageId);
+        $this->assertSame('max-contact-vcf-1', $message->providerEventKey);
+    }
+
     public function test_max_contact_share_with_unknown_format_is_still_marked_as_contact_share(): void
     {
         $channel = Channel::factory()->create([

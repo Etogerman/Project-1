@@ -256,23 +256,9 @@ class BotIncomingMessageNormalizer
                 continue;
             }
 
-            $phoneNumber = $phoneNumber
-                ?? $this->normalizeText(
-                    data_get($container, 'phone_number')
-                    ?? data_get($container, 'phone')
-                    ?? data_get($container, 'number')
-                    ?? data_get($container, 'contact.phone_number')
-                    ?? data_get($container, 'contact.phone')
-                    ?? data_get($container, 'payload.contact.phone_number')
-                    ?? data_get($container, 'payload.contact.phone')
-                );
+            $phoneNumber = $phoneNumber ?? $this->extractPhoneNumberFromMaxContainer($container);
 
-            $sharedContactUserId = $sharedContactUserId
-                ?? $this->normalizeExternalId(
-                    data_get($container, 'user_id')
-                    ?? data_get($container, 'contact.user_id')
-                    ?? data_get($container, 'payload.contact.user_id')
-                );
+            $sharedContactUserId = $sharedContactUserId ?? $this->extractSharedContactUserIdFromMaxContainer($container);
         }
 
         return [
@@ -280,6 +266,55 @@ class BotIncomingMessageNormalizer
             'phone_number' => $phoneNumber,
             'shared_contact_user_id' => $sharedContactUserId,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $container
+     */
+    protected function extractPhoneNumberFromMaxContainer(array $container): ?string
+    {
+        $phoneNumber = $this->normalizeText(
+            data_get($container, 'phone_number')
+            ?? data_get($container, 'phone')
+            ?? data_get($container, 'number')
+            ?? data_get($container, 'contact.phone_number')
+            ?? data_get($container, 'contact.phone')
+            ?? data_get($container, 'payload.contact.phone_number')
+            ?? data_get($container, 'payload.contact.phone')
+        );
+
+        if (filled($phoneNumber)) {
+            return $phoneNumber;
+        }
+
+        $vcfInfo = $this->normalizeText(
+            data_get($container, 'vcf_info')
+            ?? data_get($container, 'payload.vcf_info')
+        );
+
+        if (! filled($vcfInfo)) {
+            return null;
+        }
+
+        if (! preg_match('/^TEL(?:;[^:\r\n]+)*:([^\r\n]+)/mi', $vcfInfo, $matches)) {
+            return null;
+        }
+
+        return $this->normalizeText($matches[1] ?? null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $container
+     */
+    protected function extractSharedContactUserIdFromMaxContainer(array $container): ?string
+    {
+        return $this->normalizeExternalId(
+            data_get($container, 'user_id')
+            ?? data_get($container, 'contact.user_id')
+            ?? data_get($container, 'payload.contact.user_id')
+            ?? data_get($container, 'max_info.user_id')
+            ?? data_get($container, 'payload.max_info.user_id')
+        );
     }
 
     /**

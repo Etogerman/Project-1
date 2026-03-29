@@ -307,6 +307,68 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_max_contact_share_webhook_with_vcf_attachment_saves_phone_and_queues_confirmation_follow_up(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = $this->maxPayload(messageId: 'max-contact-vcf-90', text: null);
+        $payload['message']['sender']['user_id'] = 228532008;
+        $payload['message']['body'] = [
+            'mid' => 'max-contact-vcf-90',
+            'text' => null,
+            'attachments' => [[
+                'type' => 'contact',
+                'payload' => [
+                    'max_info' => [
+                        'user_id' => 228532008,
+                    ],
+                    'vcf_info' => "BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=cell:79263527111\r\nFN:Герман Абрикосов\r\nEND:VCARD",
+                ],
+            ]],
+        ];
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Http::assertNothingSent();
+
+        $this->assertSame(Message::KIND_INBOUND_CONTACT_SHARE, $storedMessage->message_kind);
+        $this->assertDatabaseHas('contact_phone_numbers', [
+            'contact_id' => $storedMessage->contact_id,
+            'phone_raw' => '79263527111',
+            'phone_normalized' => '79263527111',
+            'source' => ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_captured',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_confirmation_queued',
+        ]);
+    }
+
     public function test_max_contact_share_with_unknown_format_logs_skip_event_and_does_not_queue_follow_up(): void
     {
         Queue::fake();
