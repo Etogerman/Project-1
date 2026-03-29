@@ -87,7 +87,7 @@ class ProcessAutoReplyJob implements ShouldQueue
                         'message_id' => $message->id,
                         'provider_event_key' => $message->provider_event_key,
                         'external_message_id' => $message->external_message_id,
-                        'auto_reply_mode' => $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+                        'auto_reply_mode' => $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY,
                         'auto_reply_source' => $this->resolveAutoReplySource($message, $resolveAutoReplyRuleAction),
                         'button_type' => $this->resolveAutoReplyButtonType($message, $resolveAutoReplyRuleAction),
                         'error' => $throwable->getMessage(),
@@ -116,14 +116,14 @@ class ProcessAutoReplyJob implements ShouldQueue
         $channel = $message->channel;
 
         if ($channel === null) {
-            return 'legacy_default';
+            return 'skipped_no_rule';
         }
 
         if ($message->contact !== null && $resolveAutoReplyRuleAction->handle($channel, $message->contact, $message->text) !== null) {
             return 'rule';
         }
 
-        return $channel->usesLegacyAutoReplyFallback() ? 'legacy_default' : 'skipped_no_rule';
+        return 'skipped_no_rule';
     }
 
     protected function resolveAutoReplyButtonType(Message $message, ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction): ?string

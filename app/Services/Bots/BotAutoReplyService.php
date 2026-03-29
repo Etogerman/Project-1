@@ -33,7 +33,7 @@ class BotAutoReplyService
             throw new InvalidArgumentException("Inbound message [{$storedMessage->id}] does not have a channel.");
         }
 
-        $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT;
+        $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY;
         $buttonType = null;
         $contactHasPhone = $contact instanceof Contact
             ? $contact->phoneNumbers()->exists()
@@ -83,7 +83,7 @@ class BotAutoReplyService
                     'keyword' => $matchedRule->keyword,
                 ],
             );
-        } elseif ($channel->usesRulesOnlyAutoReply()) {
+        } else {
             $autoReplySource = 'skipped_no_rule';
 
             $this->channelActivityLogger->info(
@@ -99,20 +99,6 @@ class BotAutoReplyService
             );
 
             return;
-        } else {
-            $replyText = (string) config('bots.default_auto_reply_text');
-            $autoReplySource = 'legacy_default';
-
-            $this->channelActivityLogger->info(
-                $channel,
-                'bot.reply_legacy_default_used',
-                'Автоответ отправлен через legacy fallback.',
-                $baseContext + [
-                    'auto_reply_source' => $autoReplySource,
-                    'match_scope' => null,
-                    'contact_phone_condition' => null,
-                ],
-            );
         }
 
         $externalChatId = $storedMessage->external_chat_id;

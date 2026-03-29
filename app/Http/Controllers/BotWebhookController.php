@@ -172,7 +172,7 @@ class BotWebhookController extends Controller
                     'message_id' => $storedMessage->id,
                     'provider_event_key' => $storedMessage->provider_event_key,
                     'external_message_id' => $storedMessage->external_message_id,
-                    'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+                    'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
                 ],
             );
         }

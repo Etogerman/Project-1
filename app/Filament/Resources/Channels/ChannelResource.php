@@ -75,7 +75,7 @@ class ChannelResource extends Resource
                         Select::make('auto_reply_mode')
                             ->label('Режим автоответа')
                             ->options(Channel::autoReplyModeOptions())
-                            ->default(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT)
+                            ->default(Channel::AUTO_REPLY_MODE_RULES_ONLY)
                             ->required()
                             ->native(false),
                         TextInput::make('credentials.token')
@@ -654,8 +654,7 @@ class ChannelResource extends Resource
     protected static function getAutoReplyModeColor(?string $autoReplyMode): string
     {
         return match ($autoReplyMode) {
-            Channel::AUTO_REPLY_MODE_RULES_ONLY => 'info',
-            Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT => 'warning',
+            Channel::AUTO_REPLY_MODE_RULES_ONLY, Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT => 'info',
             default => 'gray',
         };
     }

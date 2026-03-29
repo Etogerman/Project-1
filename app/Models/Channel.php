@@ -86,7 +86,6 @@ class Channel extends Model
     public static function autoReplyModeOptions(): array
     {
         return [
-            self::AUTO_REPLY_MODE_LEGACY_DEFAULT => 'Legacy fallback',
             self::AUTO_REPLY_MODE_RULES_ONLY => 'Только правила',
         ];
     }
@@ -119,18 +118,28 @@ class Channel extends Model
 
     public function usesLegacyAutoReplyFallback(): bool
     {
-        return ($this->auto_reply_mode ?? self::AUTO_REPLY_MODE_LEGACY_DEFAULT) === self::AUTO_REPLY_MODE_LEGACY_DEFAULT;
+        return false;
     }
 
     public function usesRulesOnlyAutoReply(): bool
     {
-        return ($this->auto_reply_mode ?? self::AUTO_REPLY_MODE_LEGACY_DEFAULT) === self::AUTO_REPLY_MODE_RULES_ONLY;
+        return in_array(
+            $this->auto_reply_mode ?? self::AUTO_REPLY_MODE_RULES_ONLY,
+            [self::AUTO_REPLY_MODE_RULES_ONLY, self::AUTO_REPLY_MODE_LEGACY_DEFAULT],
+            true,
+        );
     }
 
     public function getAutoReplyModeLabel(): string
     {
-        return self::autoReplyModeOptions()[$this->auto_reply_mode ?? self::AUTO_REPLY_MODE_LEGACY_DEFAULT]
-            ?? (string) ($this->auto_reply_mode ?? self::AUTO_REPLY_MODE_LEGACY_DEFAULT);
+        $autoReplyMode = $this->auto_reply_mode ?? self::AUTO_REPLY_MODE_RULES_ONLY;
+
+        if ($autoReplyMode === self::AUTO_REPLY_MODE_LEGACY_DEFAULT) {
+            $autoReplyMode = self::AUTO_REPLY_MODE_RULES_ONLY;
+        }
+
+        return self::autoReplyModeOptions()[$autoReplyMode]
+            ?? (string) $autoReplyMode;
     }
 
     public function putCredential(string $key, mixed $value): static

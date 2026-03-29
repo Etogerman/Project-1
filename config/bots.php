@@ -1,11 +1,6 @@
 <?php
 
 return [
-    'default_auto_reply_text' => env(
-        'BOT_AUTO_REPLY_TEXT',
-        'Привет бот находится в разработке. Напишите нам чуть позже.'
-    ),
-
     'phone_capture_confirmation_text' => env(
         'BOT_PHONE_CAPTURE_CONFIRMATION_TEXT',
         'Спасибо, номер получили.'

@@ -77,7 +77,7 @@ class FilamentChannelsResourceTest extends TestCase
                 'name' => 'Telegram Bot',
                 'platform' => Channel::PLATFORM_TELEGRAM,
                 'connection_type' => Channel::CONNECTION_TYPE_BOT,
-                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
                 'credentials' => [
                     'token' => 'telegram-secret-token',
                 ],
@@ -91,7 +91,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame(Channel::PLATFORM_TELEGRAM, $channel->platform);
         $this->assertSame(Channel::CONNECTION_TYPE_BOT, $channel->connection_type);
-        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->auto_reply_mode);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
         $this->assertTrue($channel->is_active);
         $this->assertSame('telegram-secret-token', $channel->credentials['token']);
     }
@@ -109,7 +109,7 @@ class FilamentChannelsResourceTest extends TestCase
                 'name' => 'MAX Bot',
                 'platform' => Channel::PLATFORM_MAX,
                 'connection_type' => Channel::CONNECTION_TYPE_BOT,
-                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
                 'credentials' => [
                     'token' => 'max-secret-token',
                 ],
@@ -123,7 +123,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame(Channel::PLATFORM_MAX, $channel->platform);
         $this->assertSame(Channel::CONNECTION_TYPE_BOT, $channel->connection_type);
-        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->auto_reply_mode);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
         $this->assertSame('max-secret-token', $channel->credentials['token']);
     }
 
@@ -214,7 +214,7 @@ class FilamentChannelsResourceTest extends TestCase
                 'name' => $channel->name,
                 'platform' => $channel->platform,
                 'connection_type' => $channel->connection_type,
-                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
                 'credentials' => [
                     'token' => 'new-token',
                 ],
@@ -226,7 +226,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame('new-token', $channel->credentials['token']);
         $this->assertSame('saved-secret', $channel->credentials['webhook_secret']);
-        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->auto_reply_mode);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
         $this->assertNull($channel->bot_external_id);
         $this->assertNull($channel->bot_username);
         $this->assertNull($channel->bot_name);
@@ -265,7 +265,7 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertFalse(Gate::forUser($admin)->allows('deleteAny', Channel::class));
     }
 
-    public function test_channel_defaults_to_legacy_auto_reply_mode_when_not_explicitly_set(): void
+    public function test_channel_defaults_to_rules_only_when_not_explicitly_set(): void
     {
         $channel = Channel::query()->create([
             'name' => 'Default Mode Channel',
@@ -277,7 +277,7 @@ class FilamentChannelsResourceTest extends TestCase
             'is_active' => true,
         ]);
 
-        $this->assertSame(Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT, $channel->fresh()->auto_reply_mode);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->fresh()->auto_reply_mode);
     }
 
     public function test_admin_can_see_and_update_auto_reply_mode_in_channels_ui(): void
@@ -288,13 +288,13 @@ class FilamentChannelsResourceTest extends TestCase
         ]);
 
         $channel = Channel::factory()->create([
-            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
         ]);
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->assertSee('Автоответ')
-            ->assertSee('Legacy fallback')
+            ->assertSee('Только правила')
             ->callTableAction('edit', $channel, [
                 'name' => $channel->name,
                 'platform' => $channel->platform,
