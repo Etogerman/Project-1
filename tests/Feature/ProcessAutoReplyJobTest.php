@@ -7,6 +7,7 @@ use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -210,6 +211,100 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertSame('rule', $matchedLog->context['auto_reply_source']);
 
         $this->assertTrue($rule->exists);
+    }
+
+    public function test_job_applies_has_phone_condition_for_exact_rule(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9102,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => 'Тест1',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Тест1'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'reply_text' => 'Привет!',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-rule-has-phone',
+            'text' => 'Тест1',
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $message->contact_id,
+            'is_primary' => true,
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => $request['text'] === 'Привет!');
+        $this->assertDatabaseHas('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Привет!',
+        ]);
+    }
+
+    public function test_job_uses_any_inbound_rule_when_contact_has_no_phone(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'message_id' => 'max-out-any-1',
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+            'reply_text' => 'Пожалуйста, поделитесь номером телефона.',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'max-any-inbound-missing-phone',
+            'text' => 'Любое входящее сообщение',
+        ], [
+            'external_user_id' => '777',
+            'external_username' => 'max_any_user',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => $request['text'] === 'Пожалуйста, поделитесь номером телефона.');
+        $this->assertDatabaseHas('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Пожалуйста, поделитесь номером телефона.',
+        ]);
     }
 
     public function test_job_sends_request_phone_button_for_telegram_rule(): void

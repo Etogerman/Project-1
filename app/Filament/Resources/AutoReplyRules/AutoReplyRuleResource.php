@@ -56,10 +56,24 @@ class AutoReplyRuleResource extends Resource
                             ->preload()
                             ->live()
                             ->native(false),
+                        Select::make('match_scope')
+                            ->label('Область срабатывания')
+                            ->options(AutoReplyRule::matchScopeOptions())
+                            ->default(AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD)
+                            ->required()
+                            ->live()
+                            ->native(false),
                         TextInput::make('keyword')
                             ->label('Ключевое слово')
-                            ->required()
+                            ->required(fn (Get $get): bool => static::usesExactKeywordScope((string) $get('match_scope')))
+                            ->hidden(fn (Get $get): bool => ! static::usesExactKeywordScope((string) $get('match_scope')))
                             ->maxLength(255),
+                        Select::make('contact_phone_condition')
+                            ->label('Условие по телефону')
+                            ->options(AutoReplyRule::phoneConditionOptions())
+                            ->placeholder('Неважно')
+                            ->helperText('Правило сработает только для контактов, соответствующих условию.')
+                            ->native(false),
                         Textarea::make('reply_text')
                             ->label('Текст ответа')
                             ->required()
@@ -98,8 +112,24 @@ class AutoReplyRuleResource extends Resource
                     ->state(fn (AutoReplyRule $record): string => static::formatChannelLabel($record->channel)),
                 TextColumn::make('keyword')
                     ->label('Ключевое слово')
+                    ->state(fn (AutoReplyRule $record): string => $record->usesAnyInboundScope()
+                        ? 'Любое входящее'
+                        : (string) $record->keyword)
                     ->searchable()
                     ->sortable(),
+                TextColumn::make('match_scope')
+                    ->label('Область')
+                    ->badge()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->formatStateUsing(fn (?string $state): string => AutoReplyRule::matchScopeOptions()[$state ?? AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD] ?? '—'),
+                TextColumn::make('contact_phone_condition')
+                    ->label('Условие по телефону')
+                    ->badge()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->placeholder('Неважно')
+                    ->formatStateUsing(fn (?string $state): string => filled($state)
+                        ? (AutoReplyRule::phoneConditionOptions()[$state] ?? $state)
+                        : 'Неважно'),
                 TextColumn::make('reply_text')
                     ->label('Текст ответа')
                     ->limit(60)
@@ -161,20 +191,43 @@ class AutoReplyRuleResource extends Resource
      */
     public static function mutateAutoReplyRuleData(array $data, ?AutoReplyRule $record = null): array
     {
-        static::guardAgainstDuplicateNormalizedKeyword($data, $record);
+        $data['match_scope'] = filled($data['match_scope'] ?? null)
+            ? trim((string) $data['match_scope'])
+            : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
+        $data['contact_phone_condition'] = filled($data['contact_phone_condition'] ?? null)
+            ? trim((string) $data['contact_phone_condition'])
+            : null;
 
-        $data['keyword'] = filled($data['keyword'] ?? null)
+        $data['keyword'] = static::usesExactKeywordScope((string) $data['match_scope']) && filled($data['keyword'] ?? null)
             ? trim((string) $data['keyword'])
-            : $data['keyword'];
+            : null;
         $data['telegram_button_type'] = filled($data['telegram_button_type'] ?? null)
             ? trim((string) $data['telegram_button_type'])
             : null;
         $data['max_button_type'] = filled($data['max_button_type'] ?? null)
             ? trim((string) $data['max_button_type'])
             : null;
-        $data['normalized_keyword'] = AutoReplyRule::normalizeKeyword($data['keyword'] ?? null);
+        $data['normalized_keyword'] = static::usesExactKeywordScope((string) $data['match_scope'])
+            ? AutoReplyRule::normalizeKeyword($data['keyword'] ?? null)
+            : null;
+
+        static::guardAgainstConflictingRule($data, $record);
 
         return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected static function guardAgainstConflictingRule(array $data, ?AutoReplyRule $record = null): void
+    {
+        if (($data['match_scope'] ?? AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD) === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+            static::guardAgainstDuplicateAnyInboundRule($data, $record);
+
+            return;
+        }
+
+        static::guardAgainstDuplicateNormalizedKeyword($data, $record);
     }
 
     /**
@@ -201,6 +254,38 @@ class AutoReplyRuleResource extends Resource
 
         throw ValidationException::withMessages([
             'keyword' => 'Для этого канала правило с таким ключевым словом уже существует.',
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected static function guardAgainstDuplicateAnyInboundRule(array $data, ?AutoReplyRule $record = null): void
+    {
+        $channelId = (int) ($data['channel_id'] ?? 0);
+        $contactPhoneCondition = filled($data['contact_phone_condition'] ?? null)
+            ? trim((string) $data['contact_phone_condition'])
+            : null;
+
+        if ($channelId <= 0) {
+            return;
+        }
+
+        $exists = AutoReplyRule::query()
+            ->where('channel_id', $channelId)
+            ->where('match_scope', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND)
+            ->where(fn ($query) => filled($contactPhoneCondition)
+                ? $query->where('contact_phone_condition', $contactPhoneCondition)
+                : $query->whereNull('contact_phone_condition'))
+            ->when($record instanceof AutoReplyRule, fn ($query) => $query->whereKeyNot($record->id))
+            ->exists();
+
+        if (! $exists) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'match_scope' => 'Для этого канала правило на любое входящее с таким условием уже существует.',
         ]);
     }
 
@@ -250,5 +335,12 @@ class AutoReplyRuleResource extends Resource
             ->whereKey($channelId)
             ->where('platform', Channel::PLATFORM_MAX)
             ->exists();
+    }
+
+    protected static function usesExactKeywordScope(?string $matchScope): bool
+    {
+        return (($matchScope !== null && $matchScope !== '')
+            ? $matchScope
+            : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD) === AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
     }
 }

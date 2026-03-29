@@ -119,7 +119,7 @@ class ProcessAutoReplyJob implements ShouldQueue
             return 'legacy_default';
         }
 
-        if ($resolveAutoReplyRuleAction->handle($channel, $message->text) !== null) {
+        if ($message->contact !== null && $resolveAutoReplyRuleAction->handle($channel, $message->contact, $message->text) !== null) {
             return 'rule';
         }
 
@@ -134,7 +134,11 @@ class ProcessAutoReplyJob implements ShouldQueue
             return null;
         }
 
-        $rule = $resolveAutoReplyRuleAction->handle($channel, $message->text);
+        if ($message->contact === null) {
+            return null;
+        }
+
+        $rule = $resolveAutoReplyRuleAction->handle($channel, $message->contact, $message->text);
 
         if ($rule === null) {
             return null;

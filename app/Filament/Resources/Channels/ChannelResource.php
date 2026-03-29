@@ -625,6 +625,7 @@ class ChannelResource extends Resource
             'webhook.received' => 'Webhook',
             'bot.reply_queued' => 'Ответ в очереди',
             'bot.reply_rule_matched' => 'Правило автоответа',
+            'bot.reply_rule_skipped_contact_condition' => 'Правило не прошло условие',
             'bot.reply_skipped_no_rule' => 'Автоответ пропущен',
             'bot.reply_skipped_contact_disabled' => 'Автоответ отключён',
             'bot.reply_legacy_default_used' => 'Legacy автоответ',

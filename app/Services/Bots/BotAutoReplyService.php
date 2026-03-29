@@ -3,6 +3,7 @@
 namespace App\Services\Bots;
 
 use App\Models\AutoReplyRule;
+use App\Models\Contact;
 use App\Models\Message;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -34,12 +35,16 @@ class BotAutoReplyService
 
         $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT;
         $buttonType = null;
+        $contactHasPhone = $contact instanceof Contact
+            ? $contact->phoneNumbers()->exists()
+            : false;
         $baseContext = [
             'platform' => $channel->platform,
             'message_id' => $storedMessage->id,
             'provider_event_key' => $storedMessage->provider_event_key,
             'external_message_id' => $storedMessage->external_message_id,
             'auto_reply_mode' => $autoReplyMode,
+            'contact_has_phone' => $contactHasPhone,
             'button_type' => $buttonType,
         ];
 
@@ -56,7 +61,9 @@ class BotAutoReplyService
             return;
         }
 
-        $matchedRule = $this->resolveAutoReplyRuleAction->handle($channel, $storedMessage->text);
+        $matchedRule = $contact instanceof Contact
+            ? $this->resolveAutoReplyRuleAction->handle($channel, $contact, $storedMessage->text)
+            : null;
 
         if ($matchedRule !== null) {
             $replyText = (string) $matchedRule->reply_text;
@@ -71,6 +78,8 @@ class BotAutoReplyService
                     'auto_reply_source' => $autoReplySource,
                     'button_type' => $buttonType,
                     'rule_id' => $matchedRule->id,
+                    'match_scope' => $matchedRule->match_scope,
+                    'contact_phone_condition' => $matchedRule->contact_phone_condition,
                     'keyword' => $matchedRule->keyword,
                 ],
             );
@@ -83,6 +92,8 @@ class BotAutoReplyService
                 'Автоответ не отправлен: правило не найдено.',
                 $baseContext + [
                     'auto_reply_source' => $autoReplySource,
+                    'match_scope' => null,
+                    'contact_phone_condition' => null,
                     'message_text' => $storedMessage->text,
                 ],
             );
@@ -98,6 +109,8 @@ class BotAutoReplyService
                 'Автоответ отправлен через legacy fallback.',
                 $baseContext + [
                     'auto_reply_source' => $autoReplySource,
+                    'match_scope' => null,
+                    'contact_phone_condition' => null,
                 ],
             );
         }
@@ -115,6 +128,9 @@ class BotAutoReplyService
                 'auto_reply_source' => $autoReplySource,
                 'button_type' => $buttonType,
                 'rule_id' => $matchedRule?->id,
+                'match_scope' => $matchedRule?->match_scope,
+                'contact_phone_condition' => $matchedRule?->contact_phone_condition,
+                'contact_has_phone' => $contactHasPhone,
         ]);
 
         $deliveryResult = match ($channel->platform) {
@@ -148,6 +164,9 @@ class BotAutoReplyService
             'auto_reply_mode' => $autoReplyMode,
             'auto_reply_source' => $autoReplySource,
             'button_type' => $buttonType,
+            'match_scope' => $matchedRule?->match_scope,
+            'contact_phone_condition' => $matchedRule?->contact_phone_condition,
+            'contact_has_phone' => $contactHasPhone,
             'outbound_external_message_id' => $deliveryResult->externalMessageId,
         ]);
         $this->channelActivityLogger->info(
@@ -157,6 +176,8 @@ class BotAutoReplyService
             $baseContext + [
                 'auto_reply_source' => $autoReplySource,
                 'button_type' => $buttonType,
+                'match_scope' => $matchedRule?->match_scope,
+                'contact_phone_condition' => $matchedRule?->contact_phone_condition,
                 'external_chat_id' => $externalChatId,
                 'external_user_id' => $externalUserId,
                 'outbound_external_message_id' => $deliveryResult->externalMessageId,

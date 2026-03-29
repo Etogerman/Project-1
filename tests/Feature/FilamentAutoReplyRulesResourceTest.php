@@ -54,6 +54,8 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->test(ManageAutoReplyRules::class)
             ->callAction('create', [
                 'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'contact_phone_condition' => null,
                 'keyword' => 'Тест1',
                 'reply_text' => 'Шаблон 1',
                 'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
@@ -65,12 +67,16 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
 
         $this->assertSame('Тест1', $rule->keyword);
         $this->assertSame('тест1', $rule->normalized_keyword);
+        $this->assertSame(AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD, $rule->match_scope);
+        $this->assertNull($rule->contact_phone_condition);
         $this->assertSame(AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE, $rule->telegram_button_type);
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
             ->callTableAction('edit', $rule, [
                 'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'contact_phone_condition' => null,
                 'keyword' => 'Тест2',
                 'reply_text' => 'Шаблон 2',
                 'telegram_button_type' => null,
@@ -114,12 +120,67 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->test(ManageAutoReplyRules::class)
             ->callAction('create', [
                 'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
                 'keyword' => '  тест1  ',
                 'reply_text' => 'Дубликат',
                 'is_active' => true,
             ]);
 
         $this->assertSame(1, AutoReplyRule::query()->count());
+    }
+
+    public function test_admin_can_create_any_inbound_rule_without_keyword(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+                'reply_text' => 'Поделитесь номером',
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        $this->assertSame(AutoReplyRule::MATCH_SCOPE_ANY_INBOUND, $rule->match_scope);
+        $this->assertSame(AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE, $rule->contact_phone_condition);
+        $this->assertNull($rule->keyword);
+        $this->assertNull($rule->normalized_keyword);
+    }
+
+    public function test_any_inbound_rule_must_be_unique_per_channel_and_phone_condition(): void
+    {
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+
+        AutoReplyRule::query()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+            'reply_text' => 'Первое правило',
+            'is_active' => true,
+        ]);
+
+        $this->expectException(ValidationException::class);
+
+        AutoReplyRule::query()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+            'reply_text' => 'Дубликат',
+            'is_active' => true,
+        ]);
     }
 
     public function test_request_phone_button_cannot_be_saved_for_non_telegram_channel(): void
@@ -157,6 +218,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->test(ManageAutoReplyRules::class)
             ->callAction('create', [
                 'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
                 'keyword' => 'Телефон',
                 'reply_text' => 'Поделитесь номером',
                 'max_button_type' => AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE,

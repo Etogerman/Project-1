@@ -13,6 +13,14 @@ class AutoReplyRule extends Model
 {
     use HasFactory;
 
+    public const MATCH_SCOPE_EXACT_KEYWORD = 'exact_keyword';
+
+    public const MATCH_SCOPE_ANY_INBOUND = 'any_inbound';
+
+    public const CONTACT_PHONE_CONDITION_HAS_PHONE = 'has_phone';
+
+    public const CONTACT_PHONE_CONDITION_MISSING_PHONE = 'missing_phone';
+
     public const TELEGRAM_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
 
     public const MAX_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
@@ -24,6 +32,8 @@ class AutoReplyRule extends Model
         'channel_id',
         'keyword',
         'normalized_keyword',
+        'match_scope',
+        'contact_phone_condition',
         'reply_text',
         'telegram_button_type',
         'max_button_type',
@@ -40,6 +50,10 @@ class AutoReplyRule extends Model
     protected static function booted(): void
     {
         static::saving(function (AutoReplyRule $rule): void {
+            $rule->guardMatchScope();
+            $rule->guardContactPhoneCondition();
+            $rule->guardKeywordFieldsForMatchScope();
+            $rule->guardAnyInboundUniqueness();
             $rule->guardTelegramButtonType();
             $rule->guardMaxButtonType();
         });
@@ -54,6 +68,28 @@ class AutoReplyRule extends Model
         return mb_strtolower(trim((string) $value));
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function matchScopeOptions(): array
+    {
+        return [
+            self::MATCH_SCOPE_EXACT_KEYWORD => 'По ключевому слову',
+            self::MATCH_SCOPE_ANY_INBOUND => 'На любое входящее',
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function phoneConditionOptions(): array
+    {
+        return [
+            self::CONTACT_PHONE_CONDITION_HAS_PHONE => 'Телефон заполнен',
+            self::CONTACT_PHONE_CONDITION_MISSING_PHONE => 'Телефон не заполнен',
+        ];
+    }
+
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
@@ -62,6 +98,16 @@ class AutoReplyRule extends Model
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('is_active', true);
+    }
+
+    public function usesExactKeywordScope(): bool
+    {
+        return ($this->match_scope ?? self::MATCH_SCOPE_EXACT_KEYWORD) === self::MATCH_SCOPE_EXACT_KEYWORD;
+    }
+
+    public function usesAnyInboundScope(): bool
+    {
+        return $this->match_scope === self::MATCH_SCOPE_ANY_INBOUND;
     }
 
     /**
@@ -92,6 +138,79 @@ class AutoReplyRule extends Model
                 'normalized_keyword' => static::normalizeKeyword($value),
             ],
         );
+    }
+
+    protected function guardMatchScope(): void
+    {
+        $matchScope = $this->match_scope ?? self::MATCH_SCOPE_EXACT_KEYWORD;
+
+        if (! in_array($matchScope, array_keys(self::matchScopeOptions()), true)) {
+            throw ValidationException::withMessages([
+                'match_scope' => 'Неизвестная область срабатывания правила.',
+            ]);
+        }
+
+        $this->match_scope = $matchScope;
+    }
+
+    protected function guardContactPhoneCondition(): void
+    {
+        if (! filled($this->contact_phone_condition)) {
+            $this->contact_phone_condition = null;
+
+            return;
+        }
+
+        if (! in_array($this->contact_phone_condition, array_keys(self::phoneConditionOptions()), true)) {
+            throw ValidationException::withMessages([
+                'contact_phone_condition' => 'Неизвестное условие по телефону.',
+            ]);
+        }
+    }
+
+    protected function guardKeywordFieldsForMatchScope(): void
+    {
+        if ($this->usesAnyInboundScope()) {
+            $this->keyword = null;
+            $this->normalized_keyword = null;
+
+            return;
+        }
+
+        $normalizedKeyword = static::normalizeKeyword($this->keyword ?? $this->normalized_keyword);
+
+        if (! filled($normalizedKeyword)) {
+            throw ValidationException::withMessages([
+                'keyword' => 'Для правила по ключевому слову нужно указать ключевое слово.',
+            ]);
+        }
+
+        $this->keyword = filled($this->keyword) ? trim((string) $this->keyword) : $normalizedKeyword;
+        $this->normalized_keyword = $normalizedKeyword;
+    }
+
+    protected function guardAnyInboundUniqueness(): void
+    {
+        if (! $this->usesAnyInboundScope() || ! filled($this->channel_id)) {
+            return;
+        }
+
+        $existing = static::query()
+            ->where('channel_id', $this->channel_id)
+            ->where('match_scope', self::MATCH_SCOPE_ANY_INBOUND)
+            ->where(fn (Builder $query) => filled($this->contact_phone_condition)
+                ? $query->where('contact_phone_condition', $this->contact_phone_condition)
+                : $query->whereNull('contact_phone_condition'))
+            ->when($this->exists, fn (Builder $query) => $query->whereKeyNot($this->getKey()))
+            ->exists();
+
+        if (! $existing) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'match_scope' => 'Для этого канала правило на любое входящее с таким условием уже существует.',
+        ]);
     }
 
     protected function guardTelegramButtonType(): void
