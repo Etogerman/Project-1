@@ -12,6 +12,8 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\User;
 use Filament\Facades\Filament;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
 use Illuminate\Http\Client\Request;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -139,11 +141,13 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('Сводка')
+            ->assertMountedActionModalSee('Контакт')
             ->assertMountedActionModalSee('Работа с контактом')
+            ->assertMountedActionModalSee('Телефоны')
+            ->assertMountedActionModalSee('История сообщений')
+            ->assertMountedActionModalSee('Подробности')
             ->assertMountedActionModalSee('Последнее сообщение')
             ->assertMountedActionModalSee('Диагностика webhook')
-            ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Свободен')
             ->assertMountedActionModalSee('Изменить')
             ->assertMountedActionModalSee('@max_customer')
@@ -155,6 +159,44 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('Identities list')
             ->assertMountedActionModalDontSee('Recent messages')
             ->assertMountedActionModalSee('Нужна помощь по заказу');
+    }
+
+    public function test_contact_infolist_uses_compact_section_order_and_collapsed_technical_sections(): void
+    {
+        $schema = ContactResource::infolist(new Schema(null));
+
+        /** @var array<int, Section> $sections */
+        $sections = $schema->getComponents();
+
+        $this->assertSame([
+            'Контакт',
+            'Работа с контактом',
+            'Телефоны',
+            'История сообщений',
+            'Подробности',
+            'Последнее сообщение',
+            'Диагностика webhook',
+        ], array_map(
+            fn (Section $section): string => (string) $section->getHeading(),
+            $sections,
+        ));
+
+        $sectionsByHeading = collect($sections)
+            ->mapWithKeys(fn (Section $section): array => [(string) $section->getHeading() => $section]);
+
+        $this->assertFalse($sectionsByHeading['Контакт']->isCollapsible());
+        $this->assertFalse($sectionsByHeading['Работа с контактом']->isCollapsible());
+        $this->assertFalse($sectionsByHeading['Телефоны']->isCollapsible());
+        $this->assertFalse($sectionsByHeading['История сообщений']->isCollapsible());
+
+        $this->assertTrue($sectionsByHeading['Подробности']->isCollapsible());
+        $this->assertTrue($sectionsByHeading['Подробности']->isCollapsed());
+
+        $this->assertTrue($sectionsByHeading['Последнее сообщение']->isCollapsible());
+        $this->assertTrue($sectionsByHeading['Последнее сообщение']->isCollapsed());
+
+        $this->assertTrue($sectionsByHeading['Диагностика webhook']->isCollapsible());
+        $this->assertTrue($sectionsByHeading['Диагностика webhook']->isCollapsed());
     }
 
     public function test_admin_can_see_inline_reply_composer_in_contact_modal(): void

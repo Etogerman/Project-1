@@ -81,24 +81,72 @@ class ContactResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Сводка')
+                Section::make('Контакт')
                     ->schema([
-                        TextEntry::make('id')
-                            ->label('ID')
-                            ->copyable(),
                         TextEntry::make('display_name')
                             ->label('Контакт'),
-                        TextEntry::make('name')
-                            ->label('Сохранённое имя')
-                            ->placeholder('Не задано'),
-                        TextEntry::make('primaryIdentity.channel.name')
-                            ->label('Канал')
-                            ->placeholder('—'),
+                        TextEntry::make('primary_phone_raw')
+                            ->label('Телефон')
+                            ->placeholder('—')
+                            ->state(fn (Contact $record): ?string => static::resolvePrimaryPhoneRaw($record))
+                            ->copyable(fn (Contact $record): bool => filled(static::resolvePrimaryPhoneRaw($record)))
+                            ->copyableState(fn (Contact $record): ?string => static::resolvePrimaryPhoneRaw($record)),
                         TextEntry::make('primaryIdentity.platform')
                             ->label('Платформа')
                             ->badge()
                             ->placeholder('—')
                             ->formatStateUsing(fn (?string $state): string => filled($state) ? (Channel::platformOptions()[$state] ?? $state) : '—'),
+                        TextEntry::make('assignedUser.name')
+                            ->label('Ответственный')
+                            ->placeholder('Свободен'),
+                        TextEntry::make('primaryIdentity.channel.name')
+                            ->label('Канал')
+                            ->placeholder('—'),
+                    ])
+                    ->columns(5)
+                    ->columnSpanFull(),
+                Section::make('Работа с контактом')
+                    ->schema([
+                        ViewEntry::make('ownership_controls')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.ownership-controls')
+                            ->viewData(fn (Contact $record): array => static::buildOwnershipControlsViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
+                Section::make('Телефоны')
+                    ->schema([
+                        ViewEntry::make('phone_numbers')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.phone-numbers')
+                            ->viewData(fn (Contact $record): array => static::buildPhoneNumbersViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
+                Section::make('История сообщений')
+                    ->schema([
+                        TextEntry::make('conversation_history')
+                            ->label('Последние сообщения контакта')
+                            ->state(fn (Contact $record): HtmlString => static::renderConversationHistory($record))
+                            ->html()
+                            ->columnSpanFull(),
+                        ViewEntry::make('conversation_reply_composer')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.inline-reply-composer')
+                            ->viewData(fn (Contact $record): array => static::buildInlineReplyComposerViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columnSpanFull(),
+                Section::make('Подробности')
+                    ->schema([
+                        TextEntry::make('id')
+                            ->label('ID')
+                            ->copyable(),
+                        TextEntry::make('name')
+                            ->label('Сохранённое имя')
+                            ->placeholder('Не задано'),
                         TextEntry::make('primaryIdentity.external_user_id')
                             ->label('Внешний ID')
                             ->placeholder('—')
@@ -120,26 +168,8 @@ class ContactResource extends Resource
                             ->dateTime('d.m.Y H:i'),
                     ])
                     ->columns(4)
-                    ->columnSpanFull(),
-                Section::make('Работа с контактом')
-                    ->schema([
-                        ViewEntry::make('ownership_controls')
-                            ->hiddenLabel()
-                            ->view('filament.contacts.partials.ownership-controls')
-                            ->viewData(fn (Contact $record): array => static::buildOwnershipControlsViewData($record))
-                            ->columnSpanFull(),
-                    ])
-                    ->columns(1)
-                    ->columnSpanFull(),
-                Section::make('Телефоны')
-                    ->schema([
-                        ViewEntry::make('phone_numbers')
-                            ->hiddenLabel()
-                            ->view('filament.contacts.partials.phone-numbers')
-                            ->viewData(fn (Contact $record): array => static::buildPhoneNumbersViewData($record))
-                            ->columnSpanFull(),
-                    ])
-                    ->columns(1)
+                    ->collapsible()
+                    ->collapsed()
                     ->columnSpanFull(),
                 Section::make('Последнее сообщение')
                     ->schema([
@@ -187,6 +217,8 @@ class ContactResource extends Resource
                             ->dateTime('d.m.Y H:i:s'),
                     ])
                     ->columns(4)
+                    ->collapsible()
+                    ->collapsed()
                     ->columnSpanFull(),
                 Section::make('Диагностика webhook')
                     ->schema([
@@ -231,20 +263,8 @@ class ContactResource extends Resource
                             ->columnSpanFull(),
                     ])
                     ->columns(4)
-                    ->columnSpanFull(),
-                Section::make('История сообщений')
-                    ->schema([
-                        TextEntry::make('conversation_history')
-                            ->label('Последние сообщения контакта')
-                            ->state(fn (Contact $record): HtmlString => static::renderConversationHistory($record))
-                            ->html()
-                            ->columnSpanFull(),
-                        ViewEntry::make('conversation_reply_composer')
-                            ->hiddenLabel()
-                            ->view('filament.contacts.partials.inline-reply-composer')
-                            ->viewData(fn (Contact $record): array => static::buildInlineReplyComposerViewData($record))
-                            ->columnSpanFull(),
-                    ])
+                    ->collapsible()
+                    ->collapsed()
                     ->columnSpanFull(),
             ]);
     }
@@ -516,6 +536,20 @@ class ContactResource extends Resource
         return ContactPhoneNumber::query()
             ->selectRaw('count(*)')
             ->whereColumn('contact_id', 'contacts.id');
+    }
+
+    protected static function resolvePrimaryPhoneRaw(Contact $record): ?string
+    {
+        $primaryPhoneRaw = $record->getAttribute('primary_phone_raw');
+
+        if (filled($primaryPhoneRaw)) {
+            return $primaryPhoneRaw;
+        }
+
+        return $record->phoneNumbers()
+            ->orderByDesc('is_primary')
+            ->orderBy('id')
+            ->value('phone_raw');
     }
 
     protected static function renderConversationHistory(Contact $record): HtmlString
