@@ -6,6 +6,11 @@ return [
         'Привет бот находится в разработке. Напишите нам чуть позже.'
     ),
 
+    'phone_capture_confirmation_text' => env(
+        'BOT_PHONE_CAPTURE_CONFIRMATION_TEXT',
+        'Спасибо, номер получили.'
+    ),
+
     'webhook_secret_length' => 40,
 
     'telegram' => [

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessAutoReplyJob;
+use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Services\Bots\BotIncomingMessageNormalizer;
@@ -94,7 +95,8 @@ class BotWebhookController extends Controller
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
         if ($message !== null) {
-            $storedMessage = $storeInboundMessageAction->handle($channel, $message);
+            $storedResult = $storeInboundMessageAction->handle($channel, $message);
+            $storedMessage = $storedResult->message;
             $duplicateContext = [
                 'platform' => $channel->platform,
                 'provider_event_key' => $storedMessage->provider_event_key,
@@ -111,6 +113,33 @@ class BotWebhookController extends Controller
                         $duplicateContext,
                     );
                 }
+
+                return response()->json([
+                    'ok' => true,
+                ]);
+            }
+
+            if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
+                if (! $storedResult->shouldQueuePhoneCaptureFollowUp()) {
+                    return response()->json([
+                        'ok' => true,
+                    ]);
+                }
+
+                ProcessPhoneCaptureFollowUpJob::dispatch($storedMessage->id)->afterCommit();
+
+                $channelActivityLogger->info(
+                    $channel,
+                    'contact.phone_capture_confirmation_queued',
+                    'Подтверждение после получения номера поставлено в очередь.',
+                    [
+                        'platform' => $channel->platform,
+                        'contact_id' => $storedMessage->contact_id,
+                        'message_id' => $storedMessage->id,
+                        'button_type' => 'request_phone',
+                        'phone_capture_status' => $storedResult->phoneCaptureStatus,
+                    ],
+                );
 
                 return response()->json([
                     'ok' => true,

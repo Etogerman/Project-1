@@ -21,6 +21,8 @@ class Message extends Model
 
     public const KIND_OUTBOUND_AUTO_REPLY = 'outbound_auto_reply';
 
+    public const KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION = 'outbound_phone_capture_confirmation';
+
     public const KIND_OUTBOUND_MANUAL_REPLY = 'outbound_manual_reply';
 
     /**

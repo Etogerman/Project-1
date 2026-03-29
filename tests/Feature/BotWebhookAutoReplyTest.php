@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\ProcessAutoReplyJob;
+use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
@@ -200,7 +201,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertSame('2026-03-20 12:34:56', $message->received_at->utc()->format('Y-m-d H:i:s'));
     }
 
-    public function test_telegram_contact_share_webhook_saves_phone_and_does_not_queue_auto_reply(): void
+    public function test_telegram_contact_share_webhook_saves_phone_and_queues_confirmation_follow_up(): void
     {
         Queue::fake();
         Http::fake();
@@ -227,10 +228,13 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        Queue::assertNothingPushed();
-        Http::assertNothingSent();
-
         $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Http::assertNothingSent();
 
         $this->assertSame(Message::KIND_INBOUND_CONTACT_SHARE, $storedMessage->message_kind);
         $this->assertDatabaseHas('contact_phone_numbers', [
@@ -242,9 +246,13 @@ class BotWebhookAutoReplyTest extends TestCase
             'channel_id' => $channel->id,
             'event' => 'contact.phone_captured',
         ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_confirmation_queued',
+        ]);
     }
 
-    public function test_max_contact_share_webhook_saves_phone_and_does_not_queue_auto_reply(): void
+    public function test_max_contact_share_webhook_saves_phone_and_queues_confirmation_follow_up(): void
     {
         Queue::fake();
         Http::fake();
@@ -274,10 +282,13 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        Queue::assertNothingPushed();
-        Http::assertNothingSent();
-
         $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Http::assertNothingSent();
 
         $this->assertSame(Message::KIND_INBOUND_CONTACT_SHARE, $storedMessage->message_kind);
         $this->assertDatabaseHas('contact_phone_numbers', [
@@ -290,9 +301,13 @@ class BotWebhookAutoReplyTest extends TestCase
             'channel_id' => $channel->id,
             'event' => 'contact.phone_captured',
         ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_confirmation_queued',
+        ]);
     }
 
-    public function test_max_contact_share_with_unknown_format_logs_skip_event_and_does_not_queue_auto_reply(): void
+    public function test_max_contact_share_with_unknown_format_logs_skip_event_and_does_not_queue_follow_up(): void
     {
         Queue::fake();
         Http::fake();
@@ -329,6 +344,42 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'event' => 'max.contact_share_unknown_format',
+        ]);
+    }
+
+    public function test_telegram_contact_share_with_sender_mismatch_does_not_queue_follow_up(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $payload = $this->telegramPayload(messageId: 91, text: null);
+        $payload['message']['contact'] = [
+            'phone_number' => '+7 999 123 45 67',
+            'user_id' => 999,
+        ];
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNothingPushed();
+        Http::assertNothingSent();
+        $this->assertDatabaseCount('contact_phone_numbers', 0);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_skipped_sender_mismatch',
         ]);
     }
 

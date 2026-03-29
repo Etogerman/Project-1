@@ -567,6 +567,7 @@ class ContactResource extends Resource
             Message::KIND_INBOUND_USER => 'Пользователь',
             Message::KIND_INBOUND_CONTACT_SHARE => 'Поделился телефоном',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
+            Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Подтверждение телефона',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
             default => 'Не определен',
         };
@@ -578,6 +579,7 @@ class ContactResource extends Resource
             Message::KIND_INBOUND_USER => 'info',
             Message::KIND_INBOUND_CONTACT_SHARE => 'gray',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'warning',
+            Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'primary',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'success',
             default => 'gray',
         };

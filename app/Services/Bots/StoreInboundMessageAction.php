@@ -3,6 +3,7 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\IncomingBotMessage;
+use App\Data\Bots\StoredInboundMessageResult;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -19,9 +20,9 @@ class StoreInboundMessageAction
         protected ChannelActivityLogger $channelActivityLogger,
     ) {}
 
-    public function handle(Channel $channel, IncomingBotMessage $message): Message
+    public function handle(Channel $channel, IncomingBotMessage $message): StoredInboundMessageResult
     {
-        return DB::transaction(function () use ($channel, $message): Message {
+        return DB::transaction(function () use ($channel, $message): StoredInboundMessageResult {
             $identity = ContactIdentity::query()
                 ->with('contact')
                 ->where('channel_id', $channel->id)
@@ -81,7 +82,12 @@ class StoreInboundMessageAction
                 $existingMessage = $this->findExistingInboundMessage($channel, $message->providerEventKey);
 
                 if ($existingMessage !== null) {
-                    return $existingMessage;
+                    $existingMessage->loadMissing(['contact', 'contactIdentity']);
+
+                    return new StoredInboundMessageResult(
+                        message: $existingMessage,
+                        phoneCaptureStatus: $this->captureSharedPhoneIfNeeded($channel, $contact, $existingMessage, $message),
+                    );
                 }
             }
 
@@ -100,15 +106,22 @@ class StoreInboundMessageAction
                     'received_at' => $message->receivedAt,
                 ]);
 
-                $this->captureSharedPhoneIfNeeded($channel, $contact, $storedMessage, $message);
-
-                return $storedMessage;
+                return new StoredInboundMessageResult(
+                    message: $storedMessage,
+                    phoneCaptureStatus: $this->captureSharedPhoneIfNeeded($channel, $contact, $storedMessage, $message),
+                );
             } catch (QueryException $exception) {
                 if (! filled($message->providerEventKey) || ! $this->wasUniqueConstraintViolation($exception)) {
                     throw $exception;
                 }
 
-                return $this->findExistingInboundMessage($channel, $message->providerEventKey) ?? throw $exception;
+                $existingMessage = $this->findExistingInboundMessage($channel, $message->providerEventKey) ?? throw $exception;
+                $existingMessage->loadMissing(['contact', 'contactIdentity']);
+
+                return new StoredInboundMessageResult(
+                    message: $existingMessage,
+                    phoneCaptureStatus: $this->captureSharedPhoneIfNeeded($channel, $contact, $existingMessage, $message),
+                );
             }
         });
     }
@@ -139,12 +152,12 @@ class StoreInboundMessageAction
         ?Contact $contact,
         Message $storedMessage,
         IncomingBotMessage $message,
-    ): void {
+    ): string {
         if (
             $contact === null
             || $message->inboundKind !== IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
         ) {
-            return;
+            return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_NOT_APPLICABLE;
         }
 
         if (! filled($message->sharedPhoneNumber)) {
@@ -162,7 +175,7 @@ class StoreInboundMessageAction
                 );
             }
 
-            return;
+            return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_UNKNOWN_FORMAT;
         }
 
         if (
@@ -182,7 +195,7 @@ class StoreInboundMessageAction
                 ],
             );
 
-            return;
+            return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_SENDER_MISMATCH;
         }
 
         $phoneNumber = $this->addContactPhoneAction->handle(
@@ -194,7 +207,7 @@ class StoreInboundMessageAction
         );
 
         if (! $phoneNumber->wasRecentlyCreated) {
-            return;
+            return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_DUPLICATE;
         }
 
         $this->channelActivityLogger->info(
@@ -210,6 +223,8 @@ class StoreInboundMessageAction
                 'phone_masked' => AddContactPhoneAction::maskPhone($phoneNumber->phone_normalized),
             ],
         );
+
+        return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED;
     }
 
     /**
