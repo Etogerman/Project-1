@@ -364,6 +364,12 @@ class ContactResource extends Resource
                         $livewire->inlineReplyText = '';
                         $livewire->showAssignContactDialog = false;
                         $livewire->selectedAssigneeId = '';
+                        $livewire->showEditPhoneDialog = false;
+                        $livewire->editingPhoneId = '';
+                        $livewire->editingPhoneRaw = '';
+                        $livewire->showDeletePhoneDialog = false;
+                        $livewire->deletingPhoneId = '';
+                        $livewire->deletingPhoneLabel = '';
                     }),
             ])
             ->toolbarActions([]);
@@ -672,7 +678,7 @@ class ContactResource extends Resource
     }
 
     /**
-     * @return array{phoneNumbers: array<int, array{phone:string, source:string, is_primary:bool}>}
+     * @return array{phoneNumbers: array<int, array{id:int, phone:string, source:string, is_primary:bool}>}
      */
     protected static function buildPhoneNumbersViewData(Contact $record): array
     {
@@ -683,6 +689,7 @@ class ContactResource extends Resource
         return [
             'phoneNumbers' => $phoneNumbers
                 ->map(fn (ContactPhoneNumber $phoneNumber): array => [
+                    'id' => $phoneNumber->id,
                     'phone' => $phoneNumber->phone_raw,
                     'source' => static::formatPhoneSource($phoneNumber->source),
                     'is_primary' => $phoneNumber->is_primary,
@@ -695,6 +702,7 @@ class ContactResource extends Resource
     {
         return match ($source) {
             ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE => 'Telegram contact share',
+            ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE => 'MAX contact share',
             default => $source ?? '—',
         };
     }

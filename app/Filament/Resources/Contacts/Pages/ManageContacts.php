@@ -7,12 +7,15 @@ use App\Models\Contact;
 use App\Models\User;
 use App\Services\Bots\SendManualContactReplyAction;
 use App\Services\Contacts\ClaimContactAction;
+use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
 use App\Services\Contacts\SetContactAutoReplyEnabledAction;
 use App\Services\Contacts\SetContactAssigneeAction;
+use App\Services\Contacts\UpdateContactPhoneAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRecords;
+use RuntimeException;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -23,6 +26,12 @@ class ManageContacts extends ManageRecords
     public string $inlineReplyText = '';
     public bool $showAssignContactDialog = false;
     public string $selectedAssigneeId = '';
+    public bool $showEditPhoneDialog = false;
+    public string $editingPhoneId = '';
+    public string $editingPhoneRaw = '';
+    public bool $showDeletePhoneDialog = false;
+    public string $deletingPhoneId = '';
+    public string $deletingPhoneLabel = '';
 
     /**
      * @return array<Action>
@@ -219,6 +228,121 @@ class ManageContacts extends ManageRecords
         }
     }
 
+    public function openEditPhoneDialog(int|string $phoneId): void
+    {
+        try {
+            $phoneNumber = $this->resolveMountedContactPhoneNumber($phoneId);
+
+            $this->editingPhoneId = (string) $phoneNumber->id;
+            $this->editingPhoneRaw = $phoneNumber->phone_raw;
+            $this->showEditPhoneDialog = true;
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть редактирование номера')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function closeEditPhoneDialog(): void
+    {
+        $this->resetPhoneEditingState();
+    }
+
+    public function saveMountedContactPhone(): void
+    {
+        $validated = $this->validate([
+            'editingPhoneRaw' => ['required', 'string', 'max:64'],
+        ]);
+
+        try {
+            $record = $this->getMountedTableActionRecord();
+
+            if (! $record instanceof Contact) {
+                throw new RuntimeException('Не удалось определить текущий контакт.');
+            }
+
+            $phoneNumber = $this->resolveMountedContactPhoneNumber($this->editingPhoneId);
+
+            app(UpdateContactPhoneAction::class)->handle(
+                $phoneNumber,
+                (string) $validated['editingPhoneRaw'],
+            );
+
+            $this->resetPhoneEditingState();
+            $this->replaceMountedTableAction('view', (string) $record->id);
+
+            Notification::make()
+                ->success()
+                ->title('Номер обновлён')
+                ->body('Изменения сохранены.')
+                ->send();
+        } catch (RuntimeException $exception) {
+            throw ValidationException::withMessages([
+                'editingPhoneRaw' => $exception->getMessage(),
+            ]);
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось обновить номер')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function openDeletePhoneDialog(int|string $phoneId): void
+    {
+        try {
+            $phoneNumber = $this->resolveMountedContactPhoneNumber($phoneId);
+
+            $this->deletingPhoneId = (string) $phoneNumber->id;
+            $this->deletingPhoneLabel = $phoneNumber->phone_raw;
+            $this->showDeletePhoneDialog = true;
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть удаление номера')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function closeDeletePhoneDialog(): void
+    {
+        $this->resetPhoneDeletingState();
+    }
+
+    public function deleteMountedContactPhone(): void
+    {
+        try {
+            $record = $this->getMountedTableActionRecord();
+
+            if (! $record instanceof Contact) {
+                throw new RuntimeException('Не удалось определить текущий контакт.');
+            }
+
+            $phoneNumber = $this->resolveMountedContactPhoneNumber($this->deletingPhoneId);
+
+            app(DeleteContactPhoneAction::class)->handle($phoneNumber);
+
+            $this->resetPhoneDeletingState();
+            $this->replaceMountedTableAction('view', (string) $record->id);
+
+            Notification::make()
+                ->success()
+                ->title('Номер удалён')
+                ->body('Номер телефона удалён из контакта.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось удалить номер')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     public function enableMountedContactAutoReply(): void
     {
         $this->setMountedContactAutoReplyEnabled(true);
@@ -319,5 +443,39 @@ class ManageContacts extends ManageRecords
                 ->body($throwable->getMessage())
                 ->send();
         }
+    }
+
+    protected function resolveMountedContactPhoneNumber(int|string $phoneId): \App\Models\ContactPhoneNumber
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            throw new RuntimeException('Не удалось определить текущий контакт.');
+        }
+
+        $phoneNumber = $record->phoneNumbers()
+            ->whereKey((int) $phoneId)
+            ->first();
+
+        if (! $phoneNumber instanceof \App\Models\ContactPhoneNumber) {
+            throw new RuntimeException('Не удалось определить выбранный номер телефона.');
+        }
+
+        return $phoneNumber;
+    }
+
+    protected function resetPhoneEditingState(): void
+    {
+        $this->showEditPhoneDialog = false;
+        $this->editingPhoneId = '';
+        $this->editingPhoneRaw = '';
+        $this->resetErrorBag('editingPhoneRaw');
+    }
+
+    protected function resetPhoneDeletingState(): void
+    {
+        $this->showDeletePhoneDialog = false;
+        $this->deletingPhoneId = '';
+        $this->deletingPhoneLabel = '';
     }
 }

@@ -242,7 +242,109 @@ class FilamentContactsResourceTest extends TestCase
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Телефоны')
             ->assertMountedActionModalSee('+7 999 123 45 67')
-            ->assertMountedActionModalSee('Основной');
+            ->assertMountedActionModalSee('Основной')
+            ->assertMountedActionModalSee('Изменить')
+            ->assertMountedActionModalSee('Удалить');
+    }
+
+    public function test_admin_can_edit_saved_phone_number_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $phoneNumber = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('openEditPhoneDialog', $phoneNumber->id)
+            ->set('editingPhoneRaw', '+7 999 555 55 55')
+            ->call('saveMountedContactPhone')
+            ->assertHasNoErrors()
+            ->assertMountedActionModalSee('+7 999 555 55 55');
+
+        $phoneNumber->refresh();
+
+        $this->assertSame('+7 999 555 55 55', $phoneNumber->phone_raw);
+        $this->assertSame('+79995555555', $phoneNumber->phone_normalized);
+    }
+
+    public function test_admin_cannot_edit_phone_number_to_duplicate_value_for_same_contact(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $editablePhone = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 555 55 55',
+            'phone_normalized' => '+79995555555',
+            'is_primary' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('openEditPhoneDialog', $editablePhone->id)
+            ->set('editingPhoneRaw', '+7 999 555 55 55')
+            ->call('saveMountedContactPhone')
+            ->assertHasErrors(['editingPhoneRaw']);
+
+        $editablePhone->refresh();
+
+        $this->assertSame('+7 999 123 45 67', $editablePhone->phone_raw);
+        $this->assertSame('+79991234567', $editablePhone->phone_normalized);
+    }
+
+    public function test_admin_can_delete_primary_phone_number_from_contact_modal_and_promote_next_phone(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $primaryPhone = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        $nextPhone = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 555 55 55',
+            'phone_normalized' => '+79995555555',
+            'is_primary' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('openDeletePhoneDialog', $primaryPhone->id)
+            ->call('deleteMountedContactPhone')
+            ->assertMountedActionModalSee('+7 999 555 55 55')
+            ->assertMountedActionModalDontSee('+7 999 123 45 67');
+
+        $this->assertDatabaseMissing('contact_phone_numbers', [
+            'id' => $primaryPhone->id,
+        ]);
+        $this->assertDatabaseHas('contact_phone_numbers', [
+            'id' => $nextPhone->id,
+            'is_primary' => true,
+        ]);
     }
 
     public function test_contacts_table_displays_primary_phone_and_phone_count(): void
