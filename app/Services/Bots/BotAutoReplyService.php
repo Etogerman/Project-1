@@ -188,7 +188,7 @@ class BotAutoReplyService
             'keyboard' => [
                 [
                     [
-                        'text' => 'Запросить номер телефона',
+                        'text' => 'Поделиться номером телефона',
                         'request_contact' => true,
                     ],
                 ],
@@ -215,7 +215,7 @@ class BotAutoReplyService
             'payload' => [
                 'buttons' => [[[
                     'type' => 'request_contact',
-                    'text' => '📱 Поделиться номером телефона',
+                    'text' => 'Поделиться номером телефона',
                 ]]],
             ],
         ]];

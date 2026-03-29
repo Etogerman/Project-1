@@ -363,7 +363,7 @@ class ProcessAutoReplyJobTest extends TestCase
             return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
                 && $request['text'] === 'Нажмите кнопку ниже'
                 && data_get($request->data(), 'reply_markup.keyboard.0.0.request_contact') === true
-                && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Запросить номер телефона';
+                && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Поделиться номером телефона';
         });
     }
 
@@ -409,7 +409,7 @@ class ProcessAutoReplyJobTest extends TestCase
                 && $request['text'] === 'Нажмите кнопку ниже'
                 && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
                 && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'request_contact'
-                && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === '📱 Поделиться номером телефона';
+                && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'Поделиться номером телефона';
         });
     }
 

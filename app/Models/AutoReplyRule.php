@@ -116,7 +116,7 @@ class AutoReplyRule extends Model
     public static function telegramButtonTypeOptions(): array
     {
         return [
-            self::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE => 'Запросить номер телефона',
+            self::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE => 'Поделиться номером телефона',
         ];
     }
 
@@ -126,7 +126,7 @@ class AutoReplyRule extends Model
     public static function maxButtonTypeOptions(): array
     {
         return [
-            self::MAX_BUTTON_TYPE_REQUEST_PHONE => 'Запросить номер телефона',
+            self::MAX_BUTTON_TYPE_REQUEST_PHONE => 'Поделиться номером телефона',
         ];
     }
 
@@ -231,7 +231,7 @@ class AutoReplyRule extends Model
 
         if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_TELEGRAM) {
             throw ValidationException::withMessages([
-                'telegram_button_type' => 'Кнопка "Запросить номер телефона" доступна только для Telegram-каналов.',
+                'telegram_button_type' => 'Кнопка "Поделиться номером телефона" доступна только для Telegram-каналов.',
             ]);
         }
     }
@@ -254,7 +254,7 @@ class AutoReplyRule extends Model
 
         if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_MAX) {
             throw ValidationException::withMessages([
-                'max_button_type' => 'Кнопка "Запросить номер телефона" доступна только для MAX-каналов.',
+                'max_button_type' => 'Кнопка "Поделиться номером телефона" доступна только для MAX-каналов.',
             ]);
         }
     }
