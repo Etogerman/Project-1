@@ -24,11 +24,11 @@
         <textarea
             data-role="conversation-reply-textarea"
             wire:model.defer="inlineReplyText"
-            rows="5"
+            rows="3"
             maxlength="2000"
             placeholder="Введите текст ответа"
             @disabled(! $canReply)
-            style="display: block; box-sizing: border-box; width: 100%; min-width: 100%; min-height: 7rem; resize: vertical; border: 1px solid #9ca3af; border-radius: 14px; background: #fffbe6; color: #111827; padding: 1rem 1rem; font-size: 1rem; line-height: 1.55; box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06); opacity: {{ $canReply ? '1' : '0.75' }};"
+            style="display: block; box-sizing: border-box; width: 100%; min-width: 100%; min-height: 3.5rem; resize: vertical; border: 1px solid #9ca3af; border-radius: 14px; background: #fffbe6; color: #111827; padding: 0.75rem 0.85rem; font-size: 1rem; line-height: 1.45; box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06); opacity: {{ $canReply ? '1' : '0.75' }};"
         ></textarea>
 
         @error('inlineReplyText')

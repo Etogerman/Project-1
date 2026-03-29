@@ -1,6 +1,6 @@
 <div
     data-role="conversation-thread"
-    style="max-height: 36rem; overflow-y: auto; border: 1px solid #d1d5db; border-radius: 18px; background: #f8fafc; padding: 1rem;"
+    style="max-height: 36rem; overflow-y: auto; border: 1px solid #d1d5db; border-radius: 18px; background: #f8fafc; padding: 0.75rem;"
 >
     @if ($messages === [])
         <div
@@ -30,29 +30,31 @@
                 data-role="conversation-message"
                 data-direction="{{ $message['direction'] }}"
                 data-kind="{{ $message['kind'] }}"
-                style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-bottom: 0.75rem;"
+                style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-bottom: 0.5rem;"
             >
                 <article
                     style="
-                        display: inline-block;
-                        width: fit-content;
-                        max-width: 72%;
+                        display: inline-flex;
+                        flex-direction: column;
+                        align-items: flex-start;
+                        width: auto;
+                        max-width: 58%;
                         border: 1px solid {{ $message['is_outbound'] ? '#bbf7d0' : '#e5e7eb' }};
-                        border-radius: 18px;
-                        border-top-right-radius: {{ $message['is_outbound'] ? '6px' : '18px' }};
-                        border-top-left-radius: {{ $message['is_outbound'] ? '18px' : '6px' }};
+                        border-radius: 14px;
+                        border-top-right-radius: {{ $message['is_outbound'] ? '4px' : '14px' }};
+                        border-top-left-radius: {{ $message['is_outbound'] ? '14px' : '4px' }};
                         background: {{ $message['is_outbound'] ? '#ecfdf5' : '#ffffff' }};
-                        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
-                        padding: 0.85rem 1rem;
+                        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+                        padding: 0.45rem 0.65rem;
                         text-align: left;
                     "
                 >
-                    <div style="white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.55; color: #111827;">
+                    <div style="white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.4; color: #111827; text-align: left;">
                         {{ $message['display_text'] }}
                     </div>
 
-                    <div style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; margin-top: 0.5rem;">
-                        <time style="font-size: 0.75rem; line-height: 1; color: #6b7280; font-style: italic;">{{ $message['timestamp_label'] }}</time>
+                    <div style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-top: 0.2rem;">
+                        <time style="font-size: 0.68rem; line-height: 1; color: #6b7280; font-style: italic;">{{ $message['timestamp_label'] }}</time>
                     </div>
                 </article>
             </div>
