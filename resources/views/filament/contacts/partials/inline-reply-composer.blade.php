@@ -4,14 +4,8 @@
 >
     <div style="margin-bottom: 0.875rem;">
         <h3 style="margin: 0 0 0.375rem; font-size: 1rem; font-weight: 700; color: #111827;">Ответ</h3>
-        <p style="margin: 0 0 0.375rem; font-size: 0.875rem; color: #374151;">
-            Сообщение будет отправлено через последний активный канал контакта.
-        </p>
-        <p style="margin: 0; font-size: 0.8125rem; color: #4b5563;">
-            <strong>Ответственный:</strong> {{ $assignedUserLabel }}.
-        </p>
         @if (! $autoReplyEnabled)
-            <p style="margin: 0.375rem 0 0; font-size: 0.8125rem; color: #92400e;">
+            <p style="margin: 0 0 0.375rem; font-size: 0.8125rem; color: #92400e;">
                 Автоответы для этого контакта отключены. Это не влияет на ручной ответ.
             </p>
         @endif
@@ -30,11 +24,11 @@
         <textarea
             data-role="conversation-reply-textarea"
             wire:model.defer="inlineReplyText"
-            rows="10"
+            rows="5"
             maxlength="2000"
             placeholder="Введите текст ответа"
             @disabled(! $canReply)
-            style="display: block; box-sizing: border-box; width: 100%; min-width: 100%; min-height: 14rem; resize: vertical; border: 1px solid #9ca3af; border-radius: 14px; background: #fffbe6; color: #111827; padding: 1rem 1rem; font-size: 1rem; line-height: 1.55; box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06); opacity: {{ $canReply ? '1' : '0.75' }};"
+            style="display: block; box-sizing: border-box; width: 100%; min-width: 100%; min-height: 7rem; resize: vertical; border: 1px solid #9ca3af; border-radius: 14px; background: #fffbe6; color: #111827; padding: 1rem 1rem; font-size: 1rem; line-height: 1.55; box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06); opacity: {{ $canReply ? '1' : '0.75' }};"
         ></textarea>
 
         @error('inlineReplyText')

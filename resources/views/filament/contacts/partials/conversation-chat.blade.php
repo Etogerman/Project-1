@@ -30,11 +30,12 @@
                 data-role="conversation-message"
                 data-direction="{{ $message['direction'] }}"
                 data-kind="{{ $message['kind'] }}"
-                style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; margin-bottom: 0.75rem;"
+                style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-bottom: 0.75rem;"
             >
                 <article
                     style="
-                        width: auto;
+                        display: inline-block;
+                        width: fit-content;
                         max-width: 72%;
                         border: 1px solid {{ $message['is_outbound'] ? '#bbf7d0' : '#e5e7eb' }};
                         border-radius: 18px;
@@ -43,6 +44,7 @@
                         background: {{ $message['is_outbound'] ? '#ecfdf5' : '#ffffff' }};
                         box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
                         padding: 0.85rem 1rem;
+                        text-align: left;
                     "
                 >
                     <div style="white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.55; color: #111827;">
