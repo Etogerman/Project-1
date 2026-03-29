@@ -8,6 +8,7 @@ use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Contacts\AddContactPhoneAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
@@ -57,6 +58,11 @@ class ContactResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
+            ->addSelect([
+                'primary_phone_raw' => static::buildPrimaryPhoneSubquery('phone_raw'),
+                'primary_phone_normalized' => static::buildPrimaryPhoneSubquery('phone_normalized'),
+                'phone_count' => static::buildPhoneCountSubquery(),
+            ])
             ->with([
                 'assignedUser',
                 'primaryIdentity.channel',
@@ -254,14 +260,7 @@ class ContactResource extends Resource
                 TextColumn::make('display_name')
                     ->label('Контакт')
                     ->toggleable()
-                    ->searchable(query: function (Builder $query, string $search): Builder {
-                        return $query->where('name', 'ilike', "%{$search}%")
-                            ->orWhereHas('identities', function (Builder $identityQuery) use ($search): void {
-                                $identityQuery
-                                    ->where('external_user_id', 'ilike', "%{$search}%")
-                                    ->orWhere('external_username', 'ilike', "%{$search}%");
-                            });
-                    }),
+                    ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search)),
                 TextColumn::make('inbox_status')
                     ->label('Статус')
                     ->state(fn (Contact $record): string => static::formatInboxStatus($record))
@@ -271,6 +270,12 @@ class ContactResource extends Resource
                     ->label('Ответственный')
                     ->toggleable()
                     ->placeholder('Свободен'),
+                TextColumn::make('primary_phone_raw')
+                    ->label('Телефон')
+                    ->toggleable()
+                    ->placeholder('—')
+                    ->copyable(fn (Contact $record): bool => filled($record->getAttribute('primary_phone_raw')))
+                    ->copyableState(fn (Contact $record): ?string => $record->getAttribute('primary_phone_raw')),
                 TextColumn::make('latest_message_text')
                     ->label('Последнее сообщение')
                     ->toggleable()
@@ -307,6 +312,12 @@ class ContactResource extends Resource
                     ->badge()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('phone_count')
+                    ->label('Телефонов')
+                    ->state(fn (Contact $record): int => (int) ($record->getAttribute('phone_count') ?? 0))
+                    ->badge()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('latest_message_received_at')
                     ->label('Активность')
                     ->toggleable()
@@ -332,6 +343,12 @@ class ContactResource extends Resource
                 Filter::make('unassigned_contacts')
                     ->label('Свободные')
                     ->query(fn (Builder $query): Builder => $query->whereNull('assigned_user_id')),
+                Filter::make('has_phone')
+                    ->label('Есть телефон')
+                    ->query(fn (Builder $query): Builder => $query->whereHas('phoneNumbers')),
+                Filter::make('without_phone')
+                    ->label('Без телефона')
+                    ->query(fn (Builder $query): Builder => $query->whereDoesntHave('phoneNumbers')),
             ])
             ->columnManager()
             ->deferColumnManager(false)
@@ -455,6 +472,43 @@ class ContactResource extends Resource
         }
 
         return $query->where('assigned_user_id', $currentUserId);
+    }
+
+    protected static function applyTableSearch(Builder $query, string $search): Builder
+    {
+        $normalizedPhoneSearch = AddContactPhoneAction::normalizePhone($search);
+
+        return $query->where(function (Builder $query) use ($search, $normalizedPhoneSearch): void {
+            $query->where('name', 'ilike', "%{$search}%")
+                ->orWhereHas('identities', function (Builder $identityQuery) use ($search): void {
+                    $identityQuery
+                        ->where('external_user_id', 'ilike', "%{$search}%")
+                        ->orWhere('external_username', 'ilike', "%{$search}%");
+                });
+
+            if ($normalizedPhoneSearch !== '') {
+                $query->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($normalizedPhoneSearch): void {
+                    $phoneQuery->where('phone_normalized', 'ilike', "%{$normalizedPhoneSearch}%");
+                });
+            }
+        });
+    }
+
+    protected static function buildPrimaryPhoneSubquery(string $column): Builder
+    {
+        return ContactPhoneNumber::query()
+            ->select($column)
+            ->whereColumn('contact_id', 'contacts.id')
+            ->orderByDesc('is_primary')
+            ->orderBy('id')
+            ->limit(1);
+    }
+
+    protected static function buildPhoneCountSubquery(): Builder
+    {
+        return ContactPhoneNumber::query()
+            ->selectRaw('count(*)')
+            ->whereColumn('contact_id', 'contacts.id');
     }
 
     protected static function renderConversationHistory(Contact $record): HtmlString

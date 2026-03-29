@@ -245,6 +245,167 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Основной');
     }
 
+    public function test_contacts_table_displays_primary_phone_and_phone_count(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contactWithPrimary = Contact::factory()->create([
+            'name' => 'Контакт с primary',
+        ]);
+        $contactWithoutPrimary = Contact::factory()->create([
+            'name' => 'Контакт без primary',
+        ]);
+        $contactWithoutPhone = Contact::factory()->create([
+            'name' => 'Контакт без телефона',
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contactWithPrimary->id,
+            'phone_raw' => '+7 900 111 11 11',
+            'phone_normalized' => '+79001111111',
+            'is_primary' => false,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contactWithPrimary->id,
+            'phone_raw' => '+7 900 222 22 22',
+            'phone_normalized' => '+79002222222',
+            'is_primary' => true,
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contactWithoutPrimary->id,
+            'phone_raw' => '+7 900 333 33 33',
+            'phone_normalized' => '+79003333333',
+            'is_primary' => false,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contactWithoutPrimary->id,
+            'phone_raw' => '+7 900 444 44 44',
+            'phone_normalized' => '+79004444444',
+            'is_primary' => false,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableColumnVisible('primary_phone_raw')
+            ->assertTableColumnExists('phone_count')
+            ->assertCanSeeTableRecords([$contactWithPrimary, $contactWithoutPrimary, $contactWithoutPhone]);
+
+        $component
+            ->assertTableColumnStateSet('primary_phone_raw', '+7 900 222 22 22', $contactWithPrimary)
+            ->assertTableColumnStateSet('phone_count', 2, $contactWithPrimary)
+            ->assertTableColumnStateSet('primary_phone_raw', '+7 900 333 33 33', $contactWithoutPrimary)
+            ->assertTableColumnStateSet('phone_count', 2, $contactWithoutPrimary)
+            ->assertTableColumnStateSet('primary_phone_raw', null, $contactWithoutPhone)
+            ->assertTableColumnStateSet('phone_count', 0, $contactWithoutPhone);
+    }
+
+    public function test_contacts_table_phone_column_is_copyable_when_phone_exists(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт с номером',
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ManageContacts::class);
+
+        /** @var \Filament\Tables\Columns\TextColumn $column */
+        $column = $component->instance()->getTable()->getColumn('primary_phone_raw');
+        $record = $component->instance()->getTableRecord((string) $contact->getKey());
+
+        $column->record($record);
+        $column->clearCachedState();
+
+        $this->assertTrue($column->isCopyable($column->getState()));
+    }
+
+    public function test_contacts_table_can_filter_contacts_by_phone_presence(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contactWithPhone = Contact::factory()->create([
+            'name' => 'Контакт с телефоном',
+        ]);
+        $contactWithoutPhone = Contact::factory()->create([
+            'name' => 'Контакт без телефона',
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contactWithPhone->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableFilterExists('has_phone')
+            ->assertTableFilterExists('without_phone')
+            ->filterTable('has_phone')
+            ->assertCanSeeTableRecords([$contactWithPhone])
+            ->assertCanNotSeeTableRecords([$contactWithoutPhone]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->filterTable('without_phone')
+            ->assertCanSeeTableRecords([$contactWithoutPhone])
+            ->assertCanNotSeeTableRecords([$contactWithPhone]);
+    }
+
+    public function test_contacts_table_search_finds_contacts_by_phone(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт по телефону',
+        ]);
+        $otherContact = Contact::factory()->create([
+            'name' => 'Другой контакт',
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('+7 (926) 352-71-11')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('3527111')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('Контакт по телефону')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+    }
+
     public function test_contact_diagnostics_show_latest_message_even_with_same_received_at_second(): void
     {
         $admin = User::factory()->create([
