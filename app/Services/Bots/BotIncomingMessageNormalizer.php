@@ -81,7 +81,7 @@ class BotIncomingMessageNormalizer
             return null;
         }
 
-        $isDialog = filled($payload['user_locale'])
+        $isDialog = filled($payload['user_locale'] ?? null)
             || filled(data_get($message, 'recipient.user_id'))
             || ! filled(data_get($message, 'recipient.chat_id'));
 
@@ -97,6 +97,7 @@ class BotIncomingMessageNormalizer
         }
 
         $externalMessageId = $this->resolveMaxMessageId($message);
+        $sharedContact = $this->extractMaxSharedContact($message);
 
         return new IncomingBotMessage(
             platform: $channel->platform,
@@ -107,10 +108,14 @@ class BotIncomingMessageNormalizer
             externalMessageId: $externalMessageId,
             externalUsername: $this->normalizeUsername(data_get($message, 'sender.username')),
             contactName: $this->resolvePersonName(data_get($message, 'sender')),
-            text: $this->normalizeText(data_get($message, 'body.text')),
-            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
-            sharedPhoneNumber: null,
-            sharedContactUserId: null,
+            text: $sharedContact['is_contact_share']
+                ? null
+                : $this->normalizeText(data_get($message, 'body.text')),
+            inboundKind: $sharedContact['is_contact_share']
+                ? IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
+                : IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: $sharedContact['phone_number'],
+            sharedContactUserId: $sharedContact['shared_contact_user_id'],
             rawPayload: $payload,
             receivedAt: $this->resolveReceivedAt([
                 data_get($message, 'timestamp'),
@@ -183,6 +188,98 @@ class BotIncomingMessageNormalizer
                 ?? data_get($message, 'message_id')
                 ?? data_get($message, 'id')
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array{is_contact_share: bool, phone_number: ?string, shared_contact_user_id: ?string}
+     */
+    protected function extractMaxSharedContact(array $message): array
+    {
+        $candidateContainers = [];
+
+        foreach ([
+            data_get($message, 'contact'),
+            data_get($message, 'body.contact'),
+        ] as $container) {
+            if (is_array($container)) {
+                $candidateContainers[] = $container;
+            }
+        }
+
+        $body = data_get($message, 'body');
+
+        if (
+            is_array($body)
+            && in_array((string) data_get($body, 'type'), ['contact', 'request_contact', 'shared_contact'], true)
+        ) {
+            $candidateContainers[] = $body;
+        }
+
+        foreach ([
+            data_get($message, 'attachments'),
+            data_get($message, 'body.attachments'),
+        ] as $attachments) {
+            if (! is_array($attachments)) {
+                continue;
+            }
+
+            foreach ($attachments as $attachment) {
+                if (! is_array($attachment)) {
+                    continue;
+                }
+
+                $type = (string) data_get($attachment, 'type');
+                $contact = data_get($attachment, 'contact');
+                $payloadContact = data_get($attachment, 'payload.contact');
+
+                if (is_array($contact)) {
+                    $candidateContainers[] = $contact;
+                }
+
+                if (is_array($payloadContact)) {
+                    $candidateContainers[] = $payloadContact;
+                }
+
+                if (in_array($type, ['contact', 'request_contact', 'shared_contact'], true)) {
+                    $candidateContainers[] = $attachment;
+                    $candidateContainers[] = (array) data_get($attachment, 'payload', []);
+                }
+            }
+        }
+
+        $phoneNumber = null;
+        $sharedContactUserId = null;
+
+        foreach ($candidateContainers as $container) {
+            if (! is_array($container)) {
+                continue;
+            }
+
+            $phoneNumber = $phoneNumber
+                ?? $this->normalizeText(
+                    data_get($container, 'phone_number')
+                    ?? data_get($container, 'phone')
+                    ?? data_get($container, 'number')
+                    ?? data_get($container, 'contact.phone_number')
+                    ?? data_get($container, 'contact.phone')
+                    ?? data_get($container, 'payload.contact.phone_number')
+                    ?? data_get($container, 'payload.contact.phone')
+                );
+
+            $sharedContactUserId = $sharedContactUserId
+                ?? $this->normalizeExternalId(
+                    data_get($container, 'user_id')
+                    ?? data_get($container, 'contact.user_id')
+                    ?? data_get($container, 'payload.contact.user_id')
+                );
+        }
+
+        return [
+            'is_contact_share' => $candidateContainers !== [],
+            'phone_number' => $phoneNumber,
+            'shared_contact_user_id' => $sharedContactUserId,
+        ];
     }
 
     /**

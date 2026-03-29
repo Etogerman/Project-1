@@ -140,4 +140,52 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             'is_active' => true,
         ]);
     }
+
+    public function test_admin_can_save_request_phone_button_for_max_channel(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'keyword' => 'Телефон',
+                'reply_text' => 'Поделитесь номером',
+                'max_button_type' => AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE,
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        $this->assertSame(AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE, $rule->max_button_type);
+        $this->assertNull($rule->telegram_button_type);
+    }
+
+    public function test_request_phone_button_cannot_be_saved_for_non_max_channel(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $this->expectException(ValidationException::class);
+
+        AutoReplyRule::query()->create([
+            'channel_id' => $channel->id,
+            'keyword' => 'Телефон',
+            'normalized_keyword' => 'телефон',
+            'reply_text' => 'Поделитесь номером',
+            'max_button_type' => AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE,
+            'is_active' => true,
+        ]);
+    }
 }

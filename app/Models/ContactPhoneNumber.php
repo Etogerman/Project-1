@@ -12,6 +12,8 @@ class ContactPhoneNumber extends Model
 
     public const SOURCE_TELEGRAM_CONTACT_SHARE = 'telegram_contact_share';
 
+    public const SOURCE_MAX_CONTACT_SHARE = 'max_contact_share';
+
     /**
      * @var list<string>
      */

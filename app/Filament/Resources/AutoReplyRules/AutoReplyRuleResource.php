@@ -73,6 +73,13 @@ class AutoReplyRuleResource extends Resource
                             ->native(false)
                             ->helperText('Доступно только для Telegram-каналов.')
                             ->hidden(fn (Get $get): bool => ! static::channelSupportsTelegram((int) $get('channel_id'))),
+                        Select::make('max_button_type')
+                            ->label('Кнопка')
+                            ->options(AutoReplyRule::maxButtonTypeOptions())
+                            ->placeholder('Без кнопки')
+                            ->native(false)
+                            ->helperText('Доступно только для MAX-каналов.')
+                            ->hidden(fn (Get $get): bool => ! static::channelSupportsMax((int) $get('channel_id'))),
                         Toggle::make('is_active')
                             ->label('Активно')
                             ->default(true)
@@ -98,11 +105,14 @@ class AutoReplyRuleResource extends Resource
                     ->limit(60)
                     ->wrap()
                     ->tooltip(fn (AutoReplyRule $record): string => (string) $record->reply_text),
-                TextColumn::make('telegram_button_type')
+                TextColumn::make('button_type')
                     ->label('Кнопка')
                     ->placeholder('—')
+                    ->state(fn (AutoReplyRule $record): ?string => $record->telegram_button_type ?? $record->max_button_type)
                     ->formatStateUsing(fn (?string $state): string => filled($state)
-                        ? (AutoReplyRule::telegramButtonTypeOptions()[$state] ?? $state)
+                        ? (AutoReplyRule::telegramButtonTypeOptions()[$state]
+                            ?? AutoReplyRule::maxButtonTypeOptions()[$state]
+                            ?? $state)
                         : '—'),
                 TextColumn::make('is_active')
                     ->label('Активно')
@@ -158,6 +168,9 @@ class AutoReplyRuleResource extends Resource
             : $data['keyword'];
         $data['telegram_button_type'] = filled($data['telegram_button_type'] ?? null)
             ? trim((string) $data['telegram_button_type'])
+            : null;
+        $data['max_button_type'] = filled($data['max_button_type'] ?? null)
+            ? trim((string) $data['max_button_type'])
             : null;
         $data['normalized_keyword'] = AutoReplyRule::normalizeKeyword($data['keyword'] ?? null);
 
@@ -224,6 +237,18 @@ class AutoReplyRuleResource extends Resource
         return Channel::query()
             ->whereKey($channelId)
             ->where('platform', Channel::PLATFORM_TELEGRAM)
+            ->exists();
+    }
+
+    protected static function channelSupportsMax(int $channelId): bool
+    {
+        if ($channelId <= 0) {
+            return false;
+        }
+
+        return Channel::query()
+            ->whereKey($channelId)
+            ->where('platform', Channel::PLATFORM_MAX)
             ->exists();
     }
 }

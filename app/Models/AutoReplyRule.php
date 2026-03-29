@@ -15,6 +15,8 @@ class AutoReplyRule extends Model
 
     public const TELEGRAM_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
 
+    public const MAX_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
+
     /**
      * @var list<string>
      */
@@ -24,6 +26,7 @@ class AutoReplyRule extends Model
         'normalized_keyword',
         'reply_text',
         'telegram_button_type',
+        'max_button_type',
         'is_active',
     ];
 
@@ -38,6 +41,7 @@ class AutoReplyRule extends Model
     {
         static::saving(function (AutoReplyRule $rule): void {
             $rule->guardTelegramButtonType();
+            $rule->guardMaxButtonType();
         });
     }
 
@@ -70,6 +74,16 @@ class AutoReplyRule extends Model
         ];
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function maxButtonTypeOptions(): array
+    {
+        return [
+            self::MAX_BUTTON_TYPE_REQUEST_PHONE => 'Запросить номер телефона',
+        ];
+    }
+
     protected function keyword(): Attribute
     {
         return Attribute::make(
@@ -99,6 +113,29 @@ class AutoReplyRule extends Model
         if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_TELEGRAM) {
             throw ValidationException::withMessages([
                 'telegram_button_type' => 'Кнопка "Запросить номер телефона" доступна только для Telegram-каналов.',
+            ]);
+        }
+    }
+
+    protected function guardMaxButtonType(): void
+    {
+        if (! filled($this->max_button_type)) {
+            return;
+        }
+
+        if ($this->max_button_type !== self::MAX_BUTTON_TYPE_REQUEST_PHONE) {
+            throw ValidationException::withMessages([
+                'max_button_type' => 'Неизвестный тип MAX-кнопки.',
+            ]);
+        }
+
+        $channel = $this->relationLoaded('channel')
+            ? $this->channel
+            : Channel::query()->find($this->channel_id);
+
+        if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_MAX) {
+            throw ValidationException::withMessages([
+                'max_button_type' => 'Кнопка "Запросить номер телефона" доступна только для MAX-каналов.',
             ]);
         }
     }

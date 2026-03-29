@@ -143,8 +143,25 @@ class StoreInboundMessageAction
         if (
             $contact === null
             || $message->inboundKind !== IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
-            || ! filled($message->sharedPhoneNumber)
         ) {
+            return;
+        }
+
+        if (! filled($message->sharedPhoneNumber)) {
+            if ($channel->platform === Channel::PLATFORM_MAX) {
+                $this->channelActivityLogger->info(
+                    $channel,
+                    'max.contact_share_unknown_format',
+                    'Контакт из MAX получен, но номер не удалось извлечь из payload.',
+                    [
+                        'contact_id' => $contact->id,
+                        'channel_id' => $channel->id,
+                        'message_id' => $storedMessage->id,
+                        'payload_keys_preview' => $this->extractPayloadKeysPreview($message->rawPayload),
+                    ],
+                );
+            }
+
             return;
         }
 
@@ -171,7 +188,9 @@ class StoreInboundMessageAction
         $phoneNumber = $this->addContactPhoneAction->handle(
             $contact,
             $message->sharedPhoneNumber,
-            ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            $channel->platform === Channel::PLATFORM_MAX
+                ? ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE
+                : ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
         );
 
         if (! $phoneNumber->wasRecentlyCreated) {
@@ -191,5 +210,26 @@ class StoreInboundMessageAction
                 'phone_masked' => AddContactPhoneAction::maskPhone($phoneNumber->phone_normalized),
             ],
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<string>
+     */
+    protected function extractPayloadKeysPreview(array $payload): array
+    {
+        $topLevelKeys = array_keys($payload);
+        $messageKeys = is_array(data_get($payload, 'message'))
+            ? array_map(fn (string|int $key): string => 'message.'.$key, array_keys((array) data_get($payload, 'message')))
+            : [];
+        $bodyKeys = is_array(data_get($payload, 'message.body'))
+            ? array_map(fn (string|int $key): string => 'message.body.'.$key, array_keys((array) data_get($payload, 'message.body')))
+            : [];
+
+        return array_values(array_slice(array_map('strval', array_unique([
+            ...$topLevelKeys,
+            ...$messageKeys,
+            ...$bodyKeys,
+        ])), 0, 12));
     }
 }

@@ -255,6 +255,52 @@ class ProcessAutoReplyJobTest extends TestCase
         });
     }
 
+    public function test_job_sends_request_phone_button_for_max_rule(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'message_id' => 'max-request-phone-1',
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => 'Телефон',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Телефон'),
+            'reply_text' => 'Нажмите кнопку ниже',
+            'max_button_type' => AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE,
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'max-request-phone',
+            'text' => 'телефон',
+            'external_chat_id' => '700',
+        ], [
+            'external_user_id' => '500',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+                && $request['text'] === 'Нажмите кнопку ниже'
+                && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+                && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'request_contact'
+                && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === '📱 Поделиться номером телефона';
+        });
+    }
+
     public function test_job_skips_reply_when_channel_is_rules_only_and_no_rule_matches(): void
     {
         Http::fake();

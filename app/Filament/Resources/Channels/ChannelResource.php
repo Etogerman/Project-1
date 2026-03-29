@@ -632,6 +632,7 @@ class ChannelResource extends Resource
             'bot.reply_failed' => 'Ошибка ответа',
             'contact.phone_captured' => 'Номер телефона сохранён',
             'contact.phone_capture_skipped_sender_mismatch' => 'Номер телефона пропущен',
+            'max.contact_share_unknown_format' => 'Номер телефона не распознан',
             'contact.reply_sent' => 'Ручной ответ',
             'contact.reply_failed' => 'Ошибка ручного ответа',
             'webhook.duplicate_ignored' => 'Дубликат проигнорирован',

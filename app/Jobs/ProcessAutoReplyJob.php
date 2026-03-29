@@ -134,6 +134,16 @@ class ProcessAutoReplyJob implements ShouldQueue
             return null;
         }
 
-        return $resolveAutoReplyRuleAction->handle($channel, $message->text)?->telegram_button_type;
+        $rule = $resolveAutoReplyRuleAction->handle($channel, $message->text);
+
+        if ($rule === null) {
+            return null;
+        }
+
+        return match ($channel->platform) {
+            \App\Models\Channel::PLATFORM_TELEGRAM => $rule->telegram_button_type,
+            \App\Models\Channel::PLATFORM_MAX => $rule->max_button_type,
+            default => null,
+        };
     }
 }

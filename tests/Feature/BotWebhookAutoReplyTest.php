@@ -244,6 +244,94 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_max_contact_share_webhook_saves_phone_and_does_not_queue_auto_reply(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = $this->maxPayload(messageId: 'max-contact-90', text: null);
+        $payload['message']['body'] = [
+            'mid' => 'max-contact-90',
+            'contact' => [
+                'phone' => '+7 999 123 45 67',
+                'user_id' => 500,
+            ],
+        ];
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNothingPushed();
+        Http::assertNothingSent();
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertSame(Message::KIND_INBOUND_CONTACT_SHARE, $storedMessage->message_kind);
+        $this->assertDatabaseHas('contact_phone_numbers', [
+            'contact_id' => $storedMessage->contact_id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'source' => ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_captured',
+        ]);
+    }
+
+    public function test_max_contact_share_with_unknown_format_logs_skip_event_and_does_not_queue_auto_reply(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = $this->maxPayload(messageId: 'max-contact-91', text: null);
+        $payload['message']['body'] = [
+            'mid' => 'max-contact-91',
+            'contact' => [],
+        ];
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNothingPushed();
+        Http::assertNothingSent();
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertSame(Message::KIND_INBOUND_CONTACT_SHARE, $storedMessage->message_kind);
+        $this->assertDatabaseCount('contact_phone_numbers', 0);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'max.contact_share_unknown_format',
+        ]);
+    }
+
     public function test_repeated_telegram_webhook_with_same_update_id_does_not_queue_second_job_after_successful_auto_reply(): void
     {
         Queue::fake();

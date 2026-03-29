@@ -61,7 +61,7 @@ class BotAutoReplyService
         if ($matchedRule !== null) {
             $replyText = (string) $matchedRule->reply_text;
             $autoReplySource = 'rule';
-            $buttonType = $matchedRule->telegram_button_type;
+            $buttonType = $this->resolveButtonType($matchedRule, $channel->platform);
 
             $this->channelActivityLogger->info(
                 $channel,
@@ -130,6 +130,7 @@ class BotAutoReplyService
                 $externalChatId,
                 $externalUserId,
                 $replyText,
+                $this->buildMaxAttachments($matchedRule),
             ),
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
         };
@@ -188,5 +189,37 @@ class BotAutoReplyService
             'resize_keyboard' => true,
             'one_time_keyboard' => true,
         ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>|null
+     */
+    protected function buildMaxAttachments(?AutoReplyRule $matchedRule): ?array
+    {
+        if (
+            ! $matchedRule instanceof AutoReplyRule
+            || $matchedRule->max_button_type !== AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE
+        ) {
+            return null;
+        }
+
+        return [[
+            'type' => 'inline_keyboard',
+            'payload' => [
+                'buttons' => [[[
+                    'type' => 'request_contact',
+                    'text' => '📱 Поделиться номером телефона',
+                ]]],
+            ],
+        ]];
+    }
+
+    protected function resolveButtonType(AutoReplyRule $matchedRule, string $platform): ?string
+    {
+        return match ($platform) {
+            \App\Models\Channel::PLATFORM_TELEGRAM => $matchedRule->telegram_button_type,
+            \App\Models\Channel::PLATFORM_MAX => $matchedRule->max_button_type,
+            default => null,
+        };
     }
 }

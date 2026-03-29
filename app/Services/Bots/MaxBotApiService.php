@@ -18,7 +18,16 @@ class MaxBotApiService
         return $this->sendTextMessage($channel, $message->externalChatId, $message->externalUserId, $text);
     }
 
-    public function sendTextMessage(Channel $channel, ?string $externalChatId, ?string $externalUserId, string $text): AutoReplyDeliveryResult
+    /**
+     * @param  array<int, array<string, mixed>>|null  $attachments
+     */
+    public function sendTextMessage(
+        Channel $channel,
+        ?string $externalChatId,
+        ?string $externalUserId,
+        string $text,
+        ?array $attachments = null,
+    ): AutoReplyDeliveryResult
     {
         $query = [];
 
@@ -30,12 +39,18 @@ class MaxBotApiService
             throw new InvalidArgumentException("MAX message for channel [{$channel->id}] does not have chat or user id.");
         }
 
+        $payload = [
+            'text' => $text,
+        ];
+
+        if ($attachments !== null && $attachments !== []) {
+            $payload['attachments'] = $attachments;
+        }
+
         $response = $this->client($channel)
             ->post(
                 'https://platform-api.max.ru/messages?'.http_build_query($query),
-                [
-                    'text' => $text,
-                ],
+                $payload,
             )
             ->throw()
             ->json();
