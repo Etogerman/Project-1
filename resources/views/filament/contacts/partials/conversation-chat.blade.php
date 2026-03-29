@@ -49,13 +49,9 @@
                         text-align: left;
                     "
                 >
-                    <div style="white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.4; color: #111827; text-align: left;">
-                        {{ $message['display_text'] }}
-                    </div>
+                    <div style="white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.4; color: #111827; text-align: left;">{{ $message['display_text'] }}</div>
 
-                    <div style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-top: 0.2rem;">
-                        <time style="font-size: 0.68rem; line-height: 1; color: #6b7280; font-style: italic;">{{ $message['timestamp_label'] }}</time>
-                    </div>
+                    <div style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-top: 0.2rem;"><time style="font-size: 0.68rem; line-height: 1; color: #6b7280; font-style: italic;">{{ $message['timestamp_label'] }}</time></div>
                 </article>
             </div>
         @endforeach
