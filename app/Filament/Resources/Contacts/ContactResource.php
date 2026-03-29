@@ -569,6 +569,7 @@ class ContactResource extends Resource
                     'kind' => $message->message_kind ?? 'unknown',
                     'display_text' => static::resolveConversationDisplayText($message),
                     'time_label' => $messageAt?->format('H:i') ?? '—',
+                    'timestamp_label' => $messageAt?->format('H:i d.m.Y') ?? '—',
                     'date_key' => $messageAt?->format('Y-m-d') ?? 'unknown-date',
                     'date_label' => static::formatConversationDateLabel($messageAt),
                     'is_inbound' => $message->direction === Message::DIRECTION_INBOUND,

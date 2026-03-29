@@ -1,14 +1,25 @@
-<div data-role="conversation-thread" class="max-h-[36rem] space-y-3 overflow-y-auto rounded-2xl border border-gray-200/80 bg-gray-50/70 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+<div
+    data-role="conversation-thread"
+    style="max-height: 36rem; overflow-y: auto; border: 1px solid #d1d5db; border-radius: 18px; background: #f8fafc; padding: 1rem;"
+>
     @if ($messages === [])
-        <div data-role="conversation-empty" class="rounded-xl border border-dashed border-gray-200 bg-white/80 px-4 py-6 text-center text-sm text-gray-500 dark:border-white/10 dark:bg-white/[0.02] dark:text-gray-400">
+        <div
+            data-role="conversation-empty"
+            style="border: 1px dashed #d1d5db; border-radius: 14px; background: #ffffff; padding: 1.5rem 1rem; text-align: center; font-size: 0.875rem; color: #6b7280;"
+        >
             Сообщений ещё не было.
         </div>
     @else
         @php($previousDateKey = null)
         @foreach ($messages as $message)
             @if ($previousDateKey !== $message['date_key'])
-                <div data-role="conversation-date-separator" class="flex justify-center py-1">
-                    <span class="rounded-full border border-gray-200/80 bg-white/80 px-3 py-1 text-[11px] font-medium text-gray-500 shadow-sm dark:border-white/10 dark:bg-slate-900/70 dark:text-gray-400">
+                <div
+                    data-role="conversation-date-separator"
+                    style="display: flex; justify-content: center; padding: 0.25rem 0 0.75rem;"
+                >
+                    <span
+                        style="display: inline-flex; align-items: center; justify-content: center; border: 1px solid #d1d5db; border-radius: 999px; background: #ffffff; padding: 0.3rem 0.75rem; font-size: 0.75rem; font-weight: 600; color: #6b7280;"
+                    >
                         {{ $message['date_label'] }}
                     </span>
                 </div>
@@ -19,17 +30,27 @@
                 data-role="conversation-message"
                 data-direction="{{ $message['direction'] }}"
                 data-kind="{{ $message['kind'] }}"
-                class="flex {{ $message['is_outbound'] ? 'justify-end' : 'justify-start' }}"
+                style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; margin-bottom: 0.75rem;"
             >
-                <article class="w-full max-w-[75%] rounded-2xl px-4 py-3 shadow-sm {{ $message['is_outbound']
-                    ? 'rounded-tr-sm border border-emerald-200/80 bg-emerald-50/90 dark:border-emerald-500/20 dark:bg-emerald-500/10'
-                    : 'rounded-tl-sm border border-white/80 bg-white dark:border-white/10 dark:bg-slate-900/70' }}">
-                    <div class="whitespace-pre-wrap break-words text-sm leading-6 text-gray-950 dark:text-white">
+                <article
+                    style="
+                        width: auto;
+                        max-width: 72%;
+                        border: 1px solid {{ $message['is_outbound'] ? '#bbf7d0' : '#e5e7eb' }};
+                        border-radius: 18px;
+                        border-top-right-radius: {{ $message['is_outbound'] ? '6px' : '18px' }};
+                        border-top-left-radius: {{ $message['is_outbound'] ? '18px' : '6px' }};
+                        background: {{ $message['is_outbound'] ? '#ecfdf5' : '#ffffff' }};
+                        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+                        padding: 0.85rem 1rem;
+                    "
+                >
+                    <div style="white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.55; color: #111827;">
                         {{ $message['display_text'] }}
                     </div>
 
-                    <div class="mt-2 flex {{ $message['is_outbound'] ? 'justify-end' : 'justify-start' }}">
-                        <time class="text-[11px] text-gray-500 dark:text-gray-400">{{ $message['time_label'] }}</time>
+                    <div style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; margin-top: 0.5rem;">
+                        <time style="font-size: 0.75rem; line-height: 1; color: #6b7280; font-style: italic;">{{ $message['timestamp_label'] }}</time>
                     </div>
                 </article>
             </div>

@@ -629,8 +629,10 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('data-kind="outbound_auto_reply"', $historyHtml);
         $this->assertStringContainsString('Входящее сообщение от пользователя', $historyHtml);
         $this->assertStringContainsString('Исходящий автоответ', $historyHtml);
-        $this->assertStringContainsString(now()->format('H:i'), $historyHtml);
+        $this->assertStringContainsString(now()->format('H:i d.m.Y'), $historyHtml);
         $this->assertStringContainsString('Сегодня', $historyHtml);
+        $this->assertStringContainsString('justify-content: flex-start', $historyHtml);
+        $this->assertStringContainsString('justify-content: flex-end', $historyHtml);
         $this->assertStringNotContainsString('Event key: telegram-update-950', $historyHtml);
         $this->assertStringNotContainsString('Статус: Ответ отправлен', $historyHtml);
         $this->assertStringNotContainsString('Ответ на event key: telegram-update-950', $historyHtml);
