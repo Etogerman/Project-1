@@ -115,6 +115,16 @@ class ContactResource extends Resource
                     ])
                     ->columns(1)
                     ->columnSpanFull(),
+                Section::make('Анкета')
+                    ->schema([
+                        ViewEntry::make('contact_collector_status')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.contact-collector-status')
+                            ->viewData(fn (Contact $record): array => static::buildCollectorStatusViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
                 Section::make('Работа с контактом')
                     ->schema([
                         ViewEntry::make('ownership_controls')
@@ -588,6 +598,34 @@ class ContactResource extends Resource
         ];
     }
 
+    /**
+     * @return array{
+     *     statusLabel: string,
+     *     statusTone: string,
+     *     currentStepLabel: string,
+     *     attemptsLabel: string,
+     *     firstName: string,
+     *     country: string,
+     *     city: string
+     * }
+     */
+    protected static function buildCollectorStatusViewData(Contact $record): array
+    {
+        return [
+            'statusLabel' => static::formatDataCollectionStatus($record->data_collection_status),
+            'statusTone' => static::getDataCollectionStatusTone($record->data_collection_status),
+            'currentStepLabel' => $record->isInDataCollection()
+                ? static::formatDataCollectionField($record->data_collection_current_field)
+                : '—',
+            'attemptsLabel' => $record->isInDataCollection()
+                ? (string) ((int) $record->data_collection_attempts_count)
+                : '—',
+            'firstName' => $record->first_name ?: '—',
+            'country' => $record->country ?: '—',
+            'city' => $record->city ?: '—',
+        ];
+    }
+
     protected static function resolvePrimaryPhoneRaw(Contact $record): ?string
     {
         $primaryPhoneRaw = $record->getAttribute('primary_phone_raw');
@@ -763,6 +801,34 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'info',
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'success',
             default => 'gray',
+        };
+    }
+
+    protected static function formatDataCollectionStatus(?string $status): string
+    {
+        return match ($status) {
+            Contact::DATA_COLLECTION_STATUS_ACTIVE => 'В процессе',
+            Contact::DATA_COLLECTION_STATUS_COMPLETED => 'Завершена',
+            default => 'Не запущена',
+        };
+    }
+
+    protected static function getDataCollectionStatusTone(?string $status): string
+    {
+        return match ($status) {
+            Contact::DATA_COLLECTION_STATUS_ACTIVE => 'warning',
+            Contact::DATA_COLLECTION_STATUS_COMPLETED => 'success',
+            default => 'gray',
+        };
+    }
+
+    protected static function formatDataCollectionField(?string $field): string
+    {
+        return match ($field) {
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME => 'Имя',
+            Contact::DATA_COLLECTION_FIELD_COUNTRY => 'Страна',
+            Contact::DATA_COLLECTION_FIELD_CITY => 'Город',
+            default => '—',
         };
     }
 

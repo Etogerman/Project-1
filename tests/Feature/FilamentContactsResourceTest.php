@@ -143,6 +143,7 @@ class FilamentContactsResourceTest extends TestCase
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Контакт')
             ->assertMountedActionModalSee('Работа с контактом')
+            ->assertMountedActionModalSee('Анкета')
             ->assertMountedActionModalSee('Телефоны')
             ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Подробности')
@@ -171,6 +172,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame([
             'Контакт',
             'Профиль',
+            'Анкета',
             'Работа с контактом',
             'Телефоны',
             'История сообщений',
@@ -187,6 +189,7 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertFalse($sectionsByHeading['Контакт']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Профиль']->isCollapsible());
+        $this->assertFalse($sectionsByHeading['Анкета']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Работа с контактом']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Телефоны']->isCollapsible());
         $this->assertFalse($sectionsByHeading['История сообщений']->isCollapsible());
@@ -235,10 +238,84 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->assertTableActionExists('view', null, $contact)
             ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Анкета')
             ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('Ответ')
             ->assertMountedActionModalSee('Отправить');
+    }
+
+    public function test_contact_modal_shows_inactive_collector_status(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'data_collection_status' => null,
+            'data_collection_current_field' => null,
+            'data_collection_attempts_count' => 0,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Анкета')
+            ->assertMountedActionModalSee('Не запущена')
+            ->assertMountedActionModalSee('Текущий шаг')
+            ->assertMountedActionModalSee('Попыток')
+            ->assertMountedActionModalSee('Имя')
+            ->assertMountedActionModalSee('Страна')
+            ->assertMountedActionModalSee('Город');
+    }
+
+    public function test_contact_modal_shows_active_collector_state_and_attempts(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_attempts_count' => 1,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('В процессе')
+            ->assertMountedActionModalSee('Город')
+            ->assertMountedActionModalSee('1')
+            ->assertMountedActionModalSee('Герман')
+            ->assertMountedActionModalSee('Россия');
+    }
+
+    public function test_contact_modal_shows_completed_collector_status_without_current_step(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+            'data_collection_attempts_count' => 0,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Завершена')
+            ->assertMountedActionModalSee('Москва')
+            ->assertMountedActionModalSee('Россия')
+            ->assertMountedActionModalSee('Герман');
     }
 
     public function test_contact_display_name_prefers_operator_profile_names(): void
