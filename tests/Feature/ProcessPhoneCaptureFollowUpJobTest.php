@@ -420,6 +420,11 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
 
         Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '301'
+            && $request['text'] === "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Еще нет 18 лет'
+            && data_get($request->data(), 'reply_markup.keyboard.4.0.text') === 'Больше 40 лет');
         $this->assertDatabaseHas('messages', [
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,

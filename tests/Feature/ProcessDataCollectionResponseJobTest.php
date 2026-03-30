@@ -470,6 +470,9 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame('Москва', $contact->city);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Еще нет 18 лет'
+            && data_get($request->data(), 'reply_markup.keyboard.4.0.text') === 'Больше 40 лет');
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
@@ -592,6 +595,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Еще нет 18 лет');
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
@@ -747,6 +752,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame('24_29', $contact->age_range);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
         $this->assertNull($contact->data_collection_current_field);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
@@ -813,6 +820,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
         $this->assertSame(1, $contact->data_collection_attempts_count);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Еще нет 18 лет');
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
@@ -848,6 +857,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
 
         $this->assertNull($contact->age_range);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
@@ -886,6 +897,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertNull($contact->age_range);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
         $this->assertSame(0, $contact->data_collection_attempts_count);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,

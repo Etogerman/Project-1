@@ -546,6 +546,8 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             channelActivityLogger: $channelActivityLogger,
             activityEvent: 'contact.data_collection_retry_sent',
             activityMessage: 'Отправлено повторное сообщение сбора профиля.',
+            telegramReplyMarkup: $this->telegramReplyMarkupForField($currentField),
+            maxAttachments: $this->maxAttachmentsForField($currentField),
         );
     }
 
@@ -770,6 +772,8 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             channelActivityLogger: $channelActivityLogger,
             activityEvent: 'contact.data_collection_next_question_sent',
             activityMessage: 'Отправлен следующий вопрос сбора профиля.',
+            telegramReplyMarkup: $this->telegramReplyMarkupForField(Contact::DATA_COLLECTION_FIELD_AGE_RANGE),
+            maxAttachments: $this->maxAttachmentsForField(Contact::DATA_COLLECTION_FIELD_AGE_RANGE),
         );
     }
 
@@ -793,6 +797,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             channelActivityLogger: $channelActivityLogger,
             activityEvent: 'contact.data_collection_completion_sent',
             activityMessage: 'Финальное сообщение сбора профиля отправлено.',
+            telegramReplyMarkup: $this->telegramReplyMarkupForCompletion($contact),
         );
 
         $contact->completeDataCollection();
@@ -830,6 +835,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             channelActivityLogger: $channelActivityLogger,
             activityEvent: 'contact.data_collection_skipped',
             activityMessage: 'Шаг сбора профиля пропущен.',
+            telegramReplyMarkup: $this->telegramReplyMarkupForTerminalSkip($field),
         );
 
         $contact->completeDataCollection();
@@ -1008,6 +1014,8 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
         string $activityEvent,
         string $activityMessage,
+        ?array $telegramReplyMarkup = null,
+        ?array $maxAttachments = null,
     ): void {
         try {
             $deliveryResult = match ($channel->platform) {
@@ -1016,12 +1024,14 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                     $message->external_chat_id,
                     $message->contactIdentity?->external_user_id,
                     $text,
+                    $telegramReplyMarkup,
                 ),
                 Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
                     $channel,
                     $message->external_chat_id,
                     $message->contactIdentity?->external_user_id,
                     $text,
+                    $maxAttachments,
                 ),
                 default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
             };
@@ -1067,5 +1077,65 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
             throw $throwable;
         }
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function telegramReplyMarkupForField(?string $field): ?array
+    {
+        if ($field !== Contact::DATA_COLLECTION_FIELD_AGE_RANGE) {
+            return null;
+        }
+
+        $keyboard = [];
+
+        foreach ((array) config('bots.data_collection.age_range.options', []) as $option) {
+            if (! is_array($option) || ! filled($option['label'] ?? null)) {
+                continue;
+            }
+
+            $keyboard[] = [[
+                'text' => (string) $option['label'],
+            ]];
+        }
+
+        if ($keyboard === []) {
+            return null;
+        }
+
+        return [
+            'keyboard' => $keyboard,
+            'resize_keyboard' => true,
+            'one_time_keyboard' => true,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>|null
+     */
+    protected function maxAttachmentsForField(?string $field): ?array
+    {
+        return null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function telegramReplyMarkupForCompletion(Contact $contact): ?array
+    {
+        return $contact->data_collection_current_field === Contact::DATA_COLLECTION_FIELD_AGE_RANGE
+            ? ['remove_keyboard' => true]
+            : null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function telegramReplyMarkupForTerminalSkip(?string $field): ?array
+    {
+        return $field === Contact::DATA_COLLECTION_FIELD_AGE_RANGE
+            ? ['remove_keyboard' => true]
+            : null;
     }
 }

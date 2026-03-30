@@ -106,12 +106,14 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                     $message->external_chat_id,
                     $message->contactIdentity?->external_user_id,
                     $questionText,
+                    $this->resolveTelegramReplyMarkup($contact),
                 ),
                 Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
                     $channel,
                     $message->external_chat_id,
                     $message->contactIdentity?->external_user_id,
                     $questionText,
+                    $this->resolveMaxAttachments($contact),
                 ),
                 default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
             };
@@ -190,5 +192,45 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             ),
             default => null,
         };
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function resolveTelegramReplyMarkup(Contact $contact): ?array
+    {
+        if ($contact->data_collection_current_field !== Contact::DATA_COLLECTION_FIELD_AGE_RANGE) {
+            return null;
+        }
+
+        $buttons = [];
+
+        foreach ((array) config('bots.data_collection.age_range.options', []) as $option) {
+            if (! is_array($option) || ! filled($option['label'] ?? null)) {
+                continue;
+            }
+
+            $buttons[] = [[
+                'text' => (string) $option['label'],
+            ]];
+        }
+
+        if ($buttons === []) {
+            return null;
+        }
+
+        return [
+            'keyboard' => $buttons,
+            'resize_keyboard' => true,
+            'one_time_keyboard' => true,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>|null
+     */
+    protected function resolveMaxAttachments(Contact $contact): ?array
+    {
+        return null;
     }
 }
