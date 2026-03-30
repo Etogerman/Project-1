@@ -419,6 +419,8 @@ class ContactResource extends Resource
                         $livewire->showDeletePhoneDialog = false;
                         $livewire->deletingPhoneId = '';
                         $livewire->deletingPhoneLabel = '';
+                        $livewire->showDeleteContactDialog = false;
+                        $livewire->deletingContactLabel = '';
                     }),
             ])
             ->toolbarActions([]);

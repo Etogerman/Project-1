@@ -7,6 +7,7 @@ use App\Models\Contact;
 use App\Models\User;
 use App\Services\Bots\SendManualContactReplyAction;
 use App\Services\Contacts\ClaimContactAction;
+use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
 use App\Services\Contacts\SetContactAutoReplyEnabledAction;
@@ -41,6 +42,8 @@ class ManageContacts extends ManageRecords
     public bool $showDeletePhoneDialog = false;
     public string $deletingPhoneId = '';
     public string $deletingPhoneLabel = '';
+    public bool $showDeleteContactDialog = false;
+    public string $deletingContactLabel = '';
 
     /**
      * @return array<Action>
@@ -394,6 +397,57 @@ class ManageContacts extends ManageRecords
         $this->resetPhoneDeletingState();
     }
 
+    public function openDeleteContactDialog(): void
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть удаление контакта')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        $this->deletingContactLabel = $record->display_name;
+        $this->showDeleteContactDialog = true;
+    }
+
+    public function closeDeleteContactDialog(): void
+    {
+        $this->resetContactDeletingState();
+    }
+
+    public function deleteMountedContact(): void
+    {
+        try {
+            $record = $this->getMountedTableActionRecord();
+
+            if (! $record instanceof Contact) {
+                throw new RuntimeException('Не удалось определить текущий контакт.');
+            }
+
+            app(DeleteContactAction::class)->handle($record);
+
+            $this->resetContactDeletingState();
+            $this->unmountTableAction();
+
+            Notification::make()
+                ->success()
+                ->title('Контакт удалён')
+                ->body('Клиент и связанная история удалены.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось удалить контакт')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     public function deleteMountedContactPhone(): void
     {
         try {
@@ -630,5 +684,11 @@ class ManageContacts extends ManageRecords
         $this->showDeletePhoneDialog = false;
         $this->deletingPhoneId = '';
         $this->deletingPhoneLabel = '';
+    }
+
+    protected function resetContactDeletingState(): void
+    {
+        $this->showDeleteContactDialog = false;
+        $this->deletingContactLabel = '';
     }
 }

@@ -583,6 +583,66 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertTrue($contact->is_auto_reply_enabled);
     }
 
+    public function test_admin_can_delete_contact_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-delete-1',
+        ]);
+        $phoneNumber = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        $message = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-delete-1',
+            'external_message_id' => 'msg-delete-1',
+            'text' => 'Удалить меня',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Удалить клиента')
+            ->call('openDeleteContactDialog')
+            ->assertMountedActionModalSee('Контакт')
+            ->assertMountedActionModalSee('будет удалён вместе с телефонами, сообщениями и идентичностями.')
+            ->call('deleteMountedContact')
+            ->assertTableActionNotMounted('view')
+            ->assertCanNotSeeTableRecords([$contact]);
+
+        $this->assertDatabaseMissing('contacts', [
+            'id' => $contact->id,
+        ]);
+        $this->assertDatabaseMissing('contact_identities', [
+            'id' => $identity->id,
+        ]);
+        $this->assertDatabaseMissing('contact_phone_numbers', [
+            'id' => $phoneNumber->id,
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'id' => $message->id,
+        ]);
+    }
+
     public function test_contact_modal_displays_saved_phone_numbers(): void
     {
         $admin = User::factory()->create([
