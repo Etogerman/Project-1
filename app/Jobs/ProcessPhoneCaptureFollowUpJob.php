@@ -212,6 +212,10 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             return Contact::DATA_COLLECTION_FIELD_COUNTRY;
         }
 
+        if (! filled($contact->city)) {
+            return Contact::DATA_COLLECTION_FIELD_CITY;
+        }
+
         return null;
     }
 }

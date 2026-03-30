@@ -180,6 +180,10 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 'bots.data_collection.country.question',
                 'В какой стране вы находитесь?'
             ),
+            Contact::DATA_COLLECTION_FIELD_CITY => (string) config(
+                'bots.data_collection.city.question',
+                'В каком городе вы находитесь?'
+            ),
             default => null,
         };
     }

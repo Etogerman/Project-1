@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Services\DataCollection\ExtractCityAction;
 use App\Services\DataCollection\ExtractCountryAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Bots\ChannelActivityLogger;
@@ -57,6 +58,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
         ExtractFirstNameAction $extractFirstNameAction,
         ExtractCountryAction $extractCountryAction,
+        ExtractCityAction $extractCityAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
@@ -142,6 +144,17 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
                 extractCountryAction: $extractCountryAction,
+            ),
+            Contact::DATA_COLLECTION_FIELD_CITY => $this->handleCityReply(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                replyText: $replyText,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+                extractCityAction: $extractCityAction,
             ),
             default => null,
         };
@@ -264,6 +277,73 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             'country' => $country,
         ])->save();
 
+        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_COUNTRY);
+
+        $this->moveToCityStep(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+        );
+    }
+
+    protected function handleCityReply(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        string $replyText,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+        ExtractCityAction $extractCityAction,
+    ): void {
+        try {
+            $extraction = $extractCityAction->handle($replyText);
+        } catch (Throwable $throwable) {
+            $this->handleExtractionError(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                field: Contact::DATA_COLLECTION_FIELD_CITY,
+                errorMessage: 'Не удалось распознать город через Gemini.',
+                fallbackMessage: $this->fallbackErrorMessage(Contact::DATA_COLLECTION_FIELD_CITY),
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+                throwable: $throwable,
+            );
+
+            return;
+        }
+
+        if (($extraction['decision'] ?? null) !== ExtractCityAction::DECISION_ACCEPT) {
+            $this->handleRetry(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                currentField: Contact::DATA_COLLECTION_FIELD_CITY,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $city = (string) ($extraction['city'] ?? '');
+
+        $contact->forceFill([
+            'city' => $city,
+        ])->save();
+
+        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_CITY);
+
         $this->sendCompletion(
             message: $message,
             channel: $channel,
@@ -273,8 +353,6 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
         );
-
-        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_COUNTRY);
     }
 
     protected function handleBlankReply(
@@ -315,6 +393,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         if ($attempts >= $this->maxAttempts($currentField)) {
             if ($currentField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
                 $this->moveToCountryStep(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+
+            if ($currentField === Contact::DATA_COLLECTION_FIELD_COUNTRY) {
+                $this->moveToCityStep(
                     message: $message,
                     channel: $channel,
                     contact: $contact,
@@ -422,6 +514,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_COUNTRY) {
+            $this->moveToCityStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
         $this->sendTerminalSkip(
             message: $message,
             channel: $channel,
@@ -444,7 +550,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
     ): void {
         if (filled($contact->country)) {
-            $this->sendCompletion(
+            $this->moveToCityStep(
                 message: $message,
                 channel: $channel,
                 contact: $contact,
@@ -463,6 +569,45 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             message: $message,
             channel: $channel,
             text: $this->questionText(Contact::DATA_COLLECTION_FIELD_COUNTRY),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_next_question_sent',
+            activityMessage: 'Отправлен следующий вопрос сбора профиля.',
+        );
+    }
+
+    protected function moveToCityStep(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        if (filled($contact->city)) {
+            $this->sendCompletion(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $contact->startDataCollection(Contact::DATA_COLLECTION_FIELD_CITY);
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_CITY),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -627,6 +772,10 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             Contact::DATA_COLLECTION_FIELD_COUNTRY => (string) config(
                 'bots.data_collection.country.question',
                 'В какой стране вы находитесь?'
+            ),
+            Contact::DATA_COLLECTION_FIELD_CITY => (string) config(
+                'bots.data_collection.city.question',
+                'В каком городе вы находитесь?'
             ),
             default => '',
         };

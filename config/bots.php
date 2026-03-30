@@ -35,6 +35,17 @@ return [
                 'skip',
             ],
         ],
+        'city' => [
+            'question' => env('BOT_DATA_COLLECTION_CITY_QUESTION', 'В каком городе вы находитесь?'),
+            'retry_message' => env('BOT_DATA_COLLECTION_CITY_RETRY_MESSAGE', 'Подскажите, пожалуйста, город. Например: Москва, Алматы, Берлин.'),
+            'skip_message' => env('BOT_DATA_COLLECTION_CITY_SKIP_MESSAGE', 'Хорошо, город пока пропустим.'),
+            'fallback_error_message' => env('BOT_DATA_COLLECTION_CITY_FALLBACK_ERROR_MESSAGE', 'Не смогли распознать город. Напишите, пожалуйста, только название города.'),
+            'max_attempts' => (int) env('BOT_DATA_COLLECTION_CITY_MAX_ATTEMPTS', 2),
+            'skip_commands' => [
+                'пропустить',
+                'skip',
+            ],
+        ],
     ],
 
     'phone_capture_confirmation_text' => env(
