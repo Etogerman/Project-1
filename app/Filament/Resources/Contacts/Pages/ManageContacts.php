@@ -13,6 +13,7 @@ use App\Services\Contacts\SetContactAutoReplyEnabledAction;
 use App\Services\Contacts\SetContactAssigneeAction;
 use App\Services\Contacts\UpdateContactProfileAction;
 use App\Services\Contacts\UpdateContactPhoneAction;
+use App\Services\DataCollection\ResumeContactDataCollectionAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRecords;
@@ -433,6 +434,49 @@ class ManageContacts extends ManageRecords
         $this->setMountedContactAutoReplyEnabled(false);
     }
 
+    public function resumeMountedContactDataCollection(): void
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось возобновить анкету')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        try {
+            $nextField = app(ResumeContactDataCollectionAction::class)->handle($record);
+
+            if ($nextField === null) {
+                Notification::make()
+                    ->warning()
+                    ->title('Анкета уже заполнена')
+                    ->body('Для этого контакта нет незаполненных шагов анкеты.')
+                    ->send();
+
+                return;
+            }
+
+            $this->replaceMountedTableAction('view', (string) $record->id);
+
+            Notification::make()
+                ->success()
+                ->title('Анкета возобновлена')
+                ->body(sprintf('Анкета возобновлена с шага: %s.', $this->formatDataCollectionField($nextField)))
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось возобновить анкету')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     public function canClaimContact(?Contact $contact = null): bool
     {
         return $this->getContactOwnershipState($contact) === 'unassigned';
@@ -523,6 +567,16 @@ class ManageContacts extends ManageRecords
                 ->body($throwable->getMessage())
                 ->send();
         }
+    }
+
+    protected function formatDataCollectionField(?string $field): string
+    {
+        return match ($field) {
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME => 'Имя',
+            Contact::DATA_COLLECTION_FIELD_COUNTRY => 'Страна',
+            Contact::DATA_COLLECTION_FIELD_CITY => 'Город',
+            default => '—',
+        };
     }
 
     protected function resolveMountedContactPhoneNumber(int|string $phoneId): \App\Models\ContactPhoneNumber

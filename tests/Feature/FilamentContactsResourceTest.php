@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
+use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
@@ -18,6 +19,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use ReflectionMethod;
 use Tests\TestCase;
@@ -316,6 +318,171 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Москва')
             ->assertMountedActionModalSee('Россия')
             ->assertMountedActionModalSee('Герман');
+    }
+
+    public function test_contact_modal_shows_resume_button_for_incomplete_profile_with_phone(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => null,
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Возобновить анкету');
+    }
+
+    public function test_contact_modal_hides_resume_button_for_full_profile(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalDontSee('Возобновить анкету');
+    }
+
+    public function test_contact_modal_hides_resume_button_for_active_collector(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalDontSee('Возобновить анкету');
+    }
+
+    public function test_contact_modal_hides_resume_button_without_phone(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => null,
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalDontSee('Возобновить анкету');
+    }
+
+    public function test_admin_can_resume_contact_data_collection_from_first_missing_field(): void
+    {
+        Queue::fake();
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+            'data_collection_attempts_count' => 1,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-1001',
+        ]);
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'resume-message-1001',
+            'external_chat_id' => 'chat-1001',
+            'external_message_id' => 'msg-1001',
+            'text' => 'Продолжим',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('resumeMountedContactDataCollection')
+            ->assertMountedActionModalSee('В процессе')
+            ->assertMountedActionModalSee('Город');
+
+        $contact->refresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_CITY, $contact->data_collection_current_field);
+        $this->assertSame(0, $contact->data_collection_attempts_count);
+
+        Queue::assertPushed(ProcessDataCollectionQuestionJob::class, function (ProcessDataCollectionQuestionJob $job) use ($inboundMessage): bool {
+            return $job->sourceMessageId === $inboundMessage->id
+                && $job->forceSend === true;
+        });
     }
 
     public function test_contact_display_name_prefers_operator_profile_names(): void

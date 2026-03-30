@@ -28,7 +28,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
 
     public int $tries = 3;
 
-    public function __construct(public int $sourceMessageId) {}
+    public function __construct(public int $sourceMessageId, public bool $forceSend = false) {}
 
     /**
      * @return list<int>
@@ -77,7 +77,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
-        if ($this->questionAlreadyExists($message)) {
+        if (! $this->forceSend && $this->questionAlreadyExists($message)) {
             return;
         }
 

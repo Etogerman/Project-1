@@ -44,4 +44,20 @@
             <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $city }}</p>
         </div>
     </div>
+
+    @if ($canResume)
+        <div style="margin-top: 0.9rem; border-top: 1px solid #e5e7eb; padding-top: 0.8rem; display: flex; justify-content: flex-end;">
+            <button
+                data-role="contact-resume-data-collection"
+                type="button"
+                wire:click="resumeMountedContactDataCollection"
+                wire:loading.attr="disabled"
+                wire:target="resumeMountedContactDataCollection"
+                style="display: inline-flex; align-items: center; justify-content: center; border: 1px solid #1d4ed8; border-radius: 10px; background: #eff6ff; color: #1d4ed8; font-size: 0.8125rem; font-weight: 700; padding: 0.55rem 0.8rem; cursor: pointer;"
+            >
+                <span wire:loading.remove wire:target="resumeMountedContactDataCollection">Возобновить анкету</span>
+                <span wire:loading wire:target="resumeMountedContactDataCollection">Запускаем...</span>
+            </button>
+        </div>
+    @endif
 </section>

@@ -9,6 +9,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
@@ -604,6 +605,7 @@ class ContactResource extends Resource
      *     statusTone: string,
      *     currentStepLabel: string,
      *     attemptsLabel: string,
+     *     canResume: bool,
      *     firstName: string,
      *     country: string,
      *     city: string
@@ -620,10 +622,24 @@ class ContactResource extends Resource
             'attemptsLabel' => $record->isInDataCollection()
                 ? (string) ((int) $record->data_collection_attempts_count)
                 : '—',
+            'canResume' => static::canResumeDataCollection($record),
             'firstName' => $record->first_name ?: '—',
             'country' => $record->country ?: '—',
             'city' => $record->city ?: '—',
         ];
+    }
+
+    protected static function canResumeDataCollection(Contact $record): bool
+    {
+        if ($record->data_collection_status === Contact::DATA_COLLECTION_STATUS_ACTIVE) {
+            return false;
+        }
+
+        if (! filled(static::resolvePrimaryPhoneRaw($record))) {
+            return false;
+        }
+
+        return app(ResolveNextDataCollectionFieldAction::class)->handle($record) !== null;
     }
 
     protected static function resolvePrimaryPhoneRaw(Contact $record): ?string

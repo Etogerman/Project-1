@@ -6,6 +6,7 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
+use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\StorePhoneCaptureConfirmationAction;
 use App\Services\Bots\TelegramBotApiService;
@@ -53,6 +54,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StorePhoneCaptureConfirmationAction $storePhoneCaptureConfirmationAction,
         ChannelActivityLogger $channelActivityLogger,
+        ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
     ): void {
         $message = Message::query()
             ->with(['channel', 'contact', 'contactIdentity'])
@@ -136,7 +138,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             }
         }
 
-        $this->maybeStartDataCollection($message, $channel, $channelActivityLogger);
+        $this->maybeStartDataCollection($message, $channel, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
     }
 
     protected function confirmationAlreadyExists(Message $message): bool
@@ -164,6 +166,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         Message $message,
         Channel $channel,
         ChannelActivityLogger $channelActivityLogger,
+        ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
@@ -179,7 +182,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             return;
         }
 
-        $nextField = $this->resolveNextField($contact);
+        $nextField = $resolveNextDataCollectionFieldAction->handle($contact);
 
         if ($nextField === null) {
             return;
@@ -200,22 +203,5 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         );
 
         ProcessDataCollectionQuestionJob::dispatch($message->id);
-    }
-
-    protected function resolveNextField(Contact $contact): ?string
-    {
-        if (! filled($contact->first_name)) {
-            return Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
-        }
-
-        if (! filled($contact->country)) {
-            return Contact::DATA_COLLECTION_FIELD_COUNTRY;
-        }
-
-        if (! filled($contact->city)) {
-            return Contact::DATA_COLLECTION_FIELD_CITY;
-        }
-
-        return null;
     }
 }
