@@ -70,6 +70,10 @@ return [
                 'BOT_DATA_COLLECTION_AGE_RANGE_TELEGRAM_QUESTION',
                 'Укажите ваш возраст:'
             ),
+            'max_question' => env(
+                'BOT_DATA_COLLECTION_AGE_RANGE_MAX_QUESTION',
+                'Укажите ваш возраст:'
+            ),
             'retry_message' => env(
                 'BOT_DATA_COLLECTION_AGE_RANGE_RETRY_MESSAGE',
                 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.'

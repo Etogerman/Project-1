@@ -191,12 +191,15 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 'В каком городе вы живёте?'
             ),
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => (string) config(
-                $platform === Channel::PLATFORM_TELEGRAM
-                    ? 'bots.data_collection.age_range.telegram_question'
-                    : 'bots.data_collection.age_range.question',
-                $platform === Channel::PLATFORM_TELEGRAM
-                    ? 'Укажите ваш возраст:'
-                    : "Укажите ваш возраст:\n1. До 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+                match ($platform) {
+                    Channel::PLATFORM_TELEGRAM => 'bots.data_collection.age_range.telegram_question',
+                    Channel::PLATFORM_MAX => 'bots.data_collection.age_range.max_question',
+                    default => 'bots.data_collection.age_range.question',
+                },
+                match ($platform) {
+                    Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX => 'Укажите ваш возраст:',
+                    default => "Укажите ваш возраст:\n1. До 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет",
+                }
             ),
             default => null,
         };
@@ -274,6 +277,66 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
      */
     protected function resolveMaxAttachments(Contact $contact): ?array
     {
-        return null;
+        if ($contact->data_collection_current_field !== Contact::DATA_COLLECTION_FIELD_AGE_RANGE) {
+            return null;
+        }
+
+        return $this->maxAgeRangeAttachments();
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>|null
+     */
+    protected function maxAgeRangeAttachments(): ?array
+    {
+        $optionsByValue = [];
+
+        foreach ((array) config('bots.data_collection.age_range.options', []) as $option) {
+            if (! is_array($option) || ! filled($option['label'] ?? null) || ! filled($option['value'] ?? null)) {
+                continue;
+            }
+
+            $optionsByValue[(string) $option['value']] = (string) $option['label'];
+        }
+
+        $rows = [
+            ['under_18', '18_23'],
+            ['24_29', '30_39'],
+            ['over_40'],
+        ];
+
+        $buttons = [];
+
+        foreach ($rows as $rowValues) {
+            $row = [];
+
+            foreach ($rowValues as $value) {
+                $label = $optionsByValue[$value] ?? null;
+
+                if (! filled($label)) {
+                    continue;
+                }
+
+                $row[] = [
+                    'type' => 'message',
+                    'text' => $label,
+                ];
+            }
+
+            if ($row !== []) {
+                $buttons[] = $row;
+            }
+        }
+
+        if ($buttons === []) {
+            return null;
+        }
+
+        return [[
+            'type' => 'inline_keyboard',
+            'payload' => [
+                'buttons' => $buttons,
+            ],
+        ]];
     }
 }

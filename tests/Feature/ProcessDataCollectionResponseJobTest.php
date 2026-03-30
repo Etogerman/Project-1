@@ -1047,6 +1047,94 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         ]);
     }
 
+    public function test_job_retries_for_invalid_age_range_in_max_and_keeps_inline_buttons(): void
+    {
+        config()->set('bots.data_collection.age_range.retry_message', 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.');
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => ['message_id' => 'max-age-retry-1'],
+            ]),
+        ]);
+
+        $channel = $this->createMaxChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '31',
+        ], [
+            'external_user_id' => '500',
+        ], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+        $this->assertSame(1, $contact->data_collection_attempts_count);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+            && $request['text'] === 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.'
+            && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'message'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'До 18 лет'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.1.text') === '18 - 23 года'
+            && data_get($request->data(), 'attachments.0.payload.buttons.1.0.text') === '24 - 29 лет'
+            && data_get($request->data(), 'attachments.0.payload.buttons.1.1.text') === '30 - 39 лет'
+            && data_get($request->data(), 'attachments.0.payload.buttons.2.0.text') === 'Больше 40 лет'
+            && data_get($request->data(), 'attachments.0.payload.buttons.2.1') === null);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.',
+        ]);
+    }
+
+    public function test_job_saves_age_range_from_max_button_label_and_completes(): void
+    {
+        config()->set('bots.data_collection.completion_message', 'Спасибо, данные сохранили.');
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => ['message_id' => 'max-age-complete-1'],
+            ]),
+        ]);
+
+        $channel = $this->createMaxChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '24 - 29 лет',
+        ], [
+            'external_user_id' => '500',
+        ], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('24_29', $contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertNull($contact->data_collection_current_field);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+            && $request['text'] === 'Спасибо, данные сохранили.'
+            && data_get($request->data(), 'attachments') === null);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Спасибо, данные сохранили.',
+        ]);
+    }
+
     public function test_job_handles_age_range_skip_and_completes(): void
     {
         config()->set('bots.data_collection.age_range.skip_message', 'Хорошо, возраст пропустим.');
@@ -1130,6 +1218,16 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'platform' => Channel::PLATFORM_TELEGRAM,
             'credentials' => [
                 'token' => 'telegram-token',
+            ],
+        ]);
+    }
+
+    protected function createMaxChannel(): Channel
+    {
+        return Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
             ],
         ]);
     }

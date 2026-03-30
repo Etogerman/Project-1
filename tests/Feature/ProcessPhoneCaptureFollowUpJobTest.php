@@ -438,6 +438,82 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->fresh()->data_collection_current_field);
     }
 
+    public function test_job_starts_max_data_collection_from_age_range_with_short_text_and_inline_buttons(): void
+    {
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.age_range.max_question', 'Укажите ваш возраст:');
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::sequence()
+                ->push([
+                    'message' => [
+                        'message_id' => 'max-confirm-age',
+                    ],
+                ])
+                ->push([
+                    'message' => [
+                        'message_id' => 'max-question-age',
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'age_range' => null,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '500',
+            'external_username' => 'max_user_age',
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '700',
+            'external_message_id' => 'max-phone-share-age',
+            'provider_event_key' => 'max-phone-share-age',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+            && $request['text'] === 'Укажите ваш возраст:'
+            && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'message'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'До 18 лет'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.1.text') === '18 - 23 года'
+            && data_get($request->data(), 'attachments.0.payload.buttons.1.0.text') === '24 - 29 лет'
+            && data_get($request->data(), 'attachments.0.payload.buttons.1.1.text') === '30 - 39 лет'
+            && data_get($request->data(), 'attachments.0.payload.buttons.2.0.text') === 'Больше 40 лет'
+            && data_get($request->data(), 'attachments.0.payload.buttons.2.1') === null);
+        $this->assertDatabaseHas('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'external_message_id' => 'max-question-age',
+            'text' => 'Укажите ваш возраст:',
+        ]);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->fresh()->data_collection_current_field);
+    }
+
     /**
      * @param  array<string, mixed>  $messageOverrides
      * @param  array<string, mixed>  $identityOverrides
