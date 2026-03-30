@@ -286,6 +286,15 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         try {
             $extraction = $extractResidenceCityAction->handle($replyText);
         } catch (Throwable $throwable) {
+            Log::warning('contact.residence_city_extraction_exception', [
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'message_id' => $message->id,
+                'reply_preview' => $this->replyPreview($replyText),
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
             $this->handleExtractionError(
                 message: $message,
                 channel: $channel,

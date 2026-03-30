@@ -4,6 +4,7 @@ namespace App\Services\DataCollection;
 
 use App\Services\AI\GeminiApiService;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 class ExtractResidenceCityAction
@@ -62,12 +63,21 @@ class ExtractResidenceCityAction
             $countryConfidence = self::COUNTRY_CONFIDENCE_LOW;
         }
 
-        return [
+        $result = [
             'decision' => self::DECISION_ACCEPT,
             'city' => $city,
             'country' => $country,
             'country_confidence' => $countryConfidence,
         ];
+
+        if ((bool) config('bots.gemini.debug_logging', false)) {
+            Log::debug('residence_city.parsed_result', [
+                'reply_preview' => $this->preview($userReply),
+                'parsed_result' => $result,
+            ]);
+        }
+
+        return $result;
     }
 
     protected function systemPrompt(): string
@@ -179,5 +189,16 @@ TEXT;
             self::COUNTRY_CONFIDENCE_LOW => self::COUNTRY_CONFIDENCE_LOW,
             default => null,
         };
+    }
+
+    protected function preview(string $value): string
+    {
+        $normalized = preg_replace('/\s+/u', ' ', trim($value));
+
+        if (! is_string($normalized) || $normalized === '') {
+            return '';
+        }
+
+        return mb_substr($normalized, 0, 120);
     }
 }
