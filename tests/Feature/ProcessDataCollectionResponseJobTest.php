@@ -87,6 +87,89 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         ]);
     }
 
+    public function test_job_accepts_phrase_first_name_without_calling_gemini_and_asks_country(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.country.question', 'В какой стране вы находитесь?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9945],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Меня зовут Николай',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://generativelanguage.googleapis.com/'));
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->data_collection_current_field);
+        $this->assertSame(0, $contact->data_collection_attempts_count);
+    }
+
+    public function test_job_prioritizes_explicit_full_name_without_calling_gemini(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.country.question', 'В какой стране вы находитесь?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9946],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Обычно меня зовут Колян, а полное имя Николай',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://generativelanguage.googleapis.com/'));
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->data_collection_current_field);
+    }
+
+    public function test_job_accepts_short_multitoken_first_name_reply_without_calling_gemini(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.country.question', 'В какой стране вы находитесь?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9947],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Николай Первый',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://generativelanguage.googleapis.com/'));
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->data_collection_current_field);
+    }
+
     public function test_job_sends_retry_message_for_blank_first_name_answer_and_keeps_first_name_step_active(): void
     {
         config()->set('bots.data_collection.first_name.retry_message', 'Подскажите, пожалуйста, как к вам обращаться? Можно только имя.');

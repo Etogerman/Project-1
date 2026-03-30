@@ -188,6 +188,15 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         try {
             $extraction = $extractFirstNameAction->handle($replyText, $contact->name);
         } catch (Throwable $throwable) {
+            Log::warning('contact.first_name_extraction_exception', [
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'message_id' => $message->id,
+                'reply_preview' => $this->replyPreview($replyText),
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
             $this->handleExtractionError(
                 message: $message,
                 channel: $channel,
@@ -237,6 +246,17 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
         );
+    }
+
+    protected function replyPreview(string $value): string
+    {
+        $normalized = preg_replace('/\s+/u', ' ', trim($value));
+
+        if (! is_string($normalized) || $normalized === '') {
+            return '';
+        }
+
+        return mb_substr($normalized, 0, 120);
     }
 
     protected function handleCountryReply(
