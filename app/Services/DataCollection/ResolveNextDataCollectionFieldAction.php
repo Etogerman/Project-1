@@ -12,12 +12,16 @@ class ResolveNextDataCollectionFieldAction
             return Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
         }
 
-        if (! filled($contact->country)) {
-            return Contact::DATA_COLLECTION_FIELD_COUNTRY;
+        if (! filled($contact->city) && ! filled($contact->country)) {
+            return Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY;
         }
 
         if (! filled($contact->city)) {
             return Contact::DATA_COLLECTION_FIELD_CITY;
+        }
+
+        if (! filled($contact->country)) {
+            return Contact::DATA_COLLECTION_FIELD_COUNTRY;
         }
 
         if (! filled($contact->age_range)) {

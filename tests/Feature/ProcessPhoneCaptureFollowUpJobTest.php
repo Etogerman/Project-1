@@ -233,10 +233,10 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertDatabaseCount('messages', 1);
     }
 
-    public function test_job_starts_data_collection_from_country_when_first_name_is_already_filled(): void
+    public function test_job_starts_data_collection_from_residence_city_when_first_name_is_already_filled(): void
     {
         config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
-        config()->set('bots.data_collection.country.question', 'В какой стране вы находитесь?');
+        config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
 
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -291,16 +291,16 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => 'В какой стране вы находитесь?',
+            'text' => 'В каком городе вы живёте?',
         ]);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
-        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->fresh()->data_collection_current_field);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->fresh()->data_collection_current_field);
     }
 
     public function test_job_starts_data_collection_from_city_when_first_name_and_country_are_already_filled(): void
     {
         config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
-        config()->set('bots.data_collection.city.question', 'В каком городе вы находитесь?');
+        config()->set('bots.data_collection.city.question', 'В каком городе вы живёте?');
 
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -356,7 +356,7 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => 'В каком городе вы находитесь?',
+            'text' => 'В каком городе вы живёте?',
         ]);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_CITY, $contact->fresh()->data_collection_current_field);

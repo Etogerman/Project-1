@@ -178,13 +178,17 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 'bots.data_collection.first_name.question',
                 config('bots.data_collection.first_question', 'Как вас зовут?')
             ),
+            Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => (string) config(
+                'bots.data_collection.residence_city.question',
+                'В каком городе вы живёте?'
+            ),
             Contact::DATA_COLLECTION_FIELD_COUNTRY => (string) config(
                 'bots.data_collection.country.question',
-                'В какой стране вы находитесь?'
+                'В какой стране вы живёте?'
             ),
             Contact::DATA_COLLECTION_FIELD_CITY => (string) config(
                 'bots.data_collection.city.question',
-                'В каком городе вы находитесь?'
+                'В каком городе вы живёте?'
             ),
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => (string) config(
                 'bots.data_collection.age_range.question',

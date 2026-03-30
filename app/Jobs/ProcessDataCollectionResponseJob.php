@@ -8,6 +8,7 @@ use App\Models\Message;
 use App\Services\DataCollection\ExtractCityAction;
 use App\Services\DataCollection\ExtractCountryAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
+use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
@@ -57,6 +58,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ExtractFirstNameAction $extractFirstNameAction,
+        ExtractResidenceCityAction $extractResidenceCityAction,
         ExtractCountryAction $extractCountryAction,
         ExtractCityAction $extractCityAction,
     ): void {
@@ -148,6 +150,17 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 channelActivityLogger: $channelActivityLogger,
                 extractFirstNameAction: $extractFirstNameAction,
             ),
+            Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => $this->handleResidenceCityReply(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                replyText: $replyText,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+                extractResidenceCityAction: $extractResidenceCityAction,
+            ),
             Contact::DATA_COLLECTION_FIELD_COUNTRY => $this->handleCountryReply(
                 message: $message,
                 channel: $channel,
@@ -158,6 +171,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
                 extractCountryAction: $extractCountryAction,
+                extractCityAction: $extractCityAction,
             ),
             Contact::DATA_COLLECTION_FIELD_CITY => $this->handleCityReply(
                 message: $message,
@@ -247,6 +261,91 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
 
+        $this->moveToResidenceCityStep(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+        );
+    }
+
+    protected function handleResidenceCityReply(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        string $replyText,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+        ExtractResidenceCityAction $extractResidenceCityAction,
+    ): void {
+        try {
+            $extraction = $extractResidenceCityAction->handle($replyText);
+        } catch (Throwable $throwable) {
+            $this->handleExtractionError(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                field: Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+                errorMessage: 'Не удалось распознать город проживания через Gemini.',
+                fallbackMessage: $this->fallbackErrorMessage(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY),
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+                throwable: $throwable,
+            );
+
+            return;
+        }
+
+        if (($extraction['decision'] ?? null) !== ExtractResidenceCityAction::DECISION_ACCEPT) {
+            $this->handleRetry(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                currentField: Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $city = (string) ($extraction['city'] ?? '');
+        $country = $this->nullableString($extraction['country'] ?? null);
+        $countryConfidence = $this->nullableString($extraction['country_confidence'] ?? null);
+
+        $attributes = ['city' => $city];
+
+        if ($countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH && filled($country)) {
+            $attributes['country'] = $country;
+        }
+
+        $contact->forceFill($attributes)->save();
+
+        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY);
+
+        if ($countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH && filled($country)) {
+            $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
         $this->moveToCountryStep(
             message: $message,
             channel: $channel,
@@ -279,6 +378,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ExtractCountryAction $extractCountryAction,
+        ExtractCityAction $extractCityAction,
     ): void {
         try {
             $extraction = $extractCountryAction->handle($replyText);
@@ -317,11 +417,62 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $country = (string) ($extraction['country'] ?? '');
 
+        if (filled($contact->city)) {
+            try {
+                $cityMatchesCountry = $this->cityMatchesCountry($contact->city, $country, $extractCityAction);
+            } catch (Throwable $throwable) {
+                $this->handleExtractionError(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    field: Contact::DATA_COLLECTION_FIELD_COUNTRY,
+                    errorMessage: 'Не удалось проверить совместимость страны и города.',
+                    fallbackMessage: $this->fallbackErrorMessage(Contact::DATA_COLLECTION_FIELD_COUNTRY),
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                    throwable: $throwable,
+                );
+
+                return;
+            }
+
+            if (! $cityMatchesCountry) {
+                $this->handleCountryCityMismatch(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    attemptedCountry: $country,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+        }
+
         $contact->forceFill([
             'country' => $country,
         ])->save();
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_COUNTRY);
+
+        if (filled($contact->city)) {
+            $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
 
         $this->moveToCityStep(
             message: $message,
@@ -480,7 +631,21 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         if ($attempts >= $this->maxAttempts($currentField)) {
             if ($currentField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
-                $this->moveToCountryStep(
+                $this->moveToResidenceCityStep(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+
+            if ($currentField === Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY) {
+                $this->moveToAgeRangeStep(
                     message: $message,
                     channel: $channel,
                     contact: $contact,
@@ -494,6 +659,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             }
 
             if ($currentField === Contact::DATA_COLLECTION_FIELD_COUNTRY) {
+                if (filled($contact->city)) {
+                    $this->moveToAgeRangeStep(
+                        message: $message,
+                        channel: $channel,
+                        contact: $contact,
+                        telegramBotApiService: $telegramBotApiService,
+                        maxBotApiService: $maxBotApiService,
+                        storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                        channelActivityLogger: $channelActivityLogger,
+                    );
+
+                    return;
+                }
+
                 $this->moveToCityStep(
                     message: $message,
                     channel: $channel,
@@ -605,7 +784,21 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
     ): void {
         if ($currentField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
-            $this->moveToCountryStep(
+            $this->moveToResidenceCityStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY) {
+            $this->moveToAgeRangeStep(
                 message: $message,
                 channel: $channel,
                 contact: $contact,
@@ -619,6 +812,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         }
 
         if ($currentField === Contact::DATA_COLLECTION_FIELD_COUNTRY) {
+            if (filled($contact->city)) {
+                $this->moveToAgeRangeStep(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+
             $this->moveToCityStep(
                 message: $message,
                 channel: $channel,
@@ -668,6 +875,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
     ): void {
         if (filled($contact->country)) {
+            if (filled($contact->city)) {
+                $this->moveToAgeRangeStep(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+
             $this->moveToCityStep(
                 message: $message,
                 channel: $channel,
@@ -687,6 +908,73 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             message: $message,
             channel: $channel,
             text: $this->questionText(Contact::DATA_COLLECTION_FIELD_COUNTRY),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_next_question_sent',
+            activityMessage: 'Отправлен следующий вопрос сбора профиля.',
+        );
+    }
+
+    protected function moveToResidenceCityStep(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        if (filled($contact->city)) {
+            if (filled($contact->country)) {
+                $this->moveToAgeRangeStep(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+
+            $this->moveToCountryStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        if (filled($contact->country)) {
+            $this->moveToCityStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $contact->startDataCollection(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY);
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -930,13 +1218,17 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 'bots.data_collection.first_name.question',
                 config('bots.data_collection.first_question', 'Как вас зовут?')
             ),
+            Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => (string) config(
+                'bots.data_collection.residence_city.question',
+                'В каком городе вы живёте?'
+            ),
             Contact::DATA_COLLECTION_FIELD_COUNTRY => (string) config(
                 'bots.data_collection.country.question',
-                'В какой стране вы находитесь?'
+                'В какой стране вы живёте?'
             ),
             Contact::DATA_COLLECTION_FIELD_CITY => (string) config(
                 'bots.data_collection.city.question',
-                'В каком городе вы находитесь?'
+                'В каком городе вы живёте?'
             ),
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => (string) config(
                 'bots.data_collection.age_range.question',
@@ -944,6 +1236,78 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             ),
             default => '',
         };
+    }
+
+    protected function cityMatchesCountry(string $city, string $country, ExtractCityAction $extractCityAction): bool
+    {
+        $validation = $extractCityAction->handle($city, $country);
+
+        return ($validation['decision'] ?? null) === ExtractCityAction::DECISION_ACCEPT;
+    }
+
+    protected function handleCountryCityMismatch(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        string $attemptedCountry,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $attempts = $this->incrementAttempts($contact);
+
+        if ($attempts >= $this->maxAttempts(Contact::DATA_COLLECTION_FIELD_COUNTRY)) {
+            $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->countryCityMismatchMessage($contact->city, $attemptedCountry),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_retry_sent',
+            activityMessage: 'Отправлено сообщение о несоответствии страны и города.',
+        );
+    }
+
+    protected function countryCityMismatchMessage(?string $city, string $country): string
+    {
+        $template = (string) config(
+            'bots.data_collection.country.city_mismatch_message',
+            'Похоже, город «{city}» не относится к стране «{country}». Подскажите, пожалуйста, страну, где вы живёте.'
+        );
+
+        return str_replace(
+            ['{city}', '{country}'],
+            [$city ?: 'указанный город', $country],
+            $template,
+        );
+    }
+
+    protected function nullableString(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $normalized = trim($value);
+
+        return $normalized === '' ? null : $normalized;
     }
 
     protected function resolveAgeRangeValue(string $replyText): ?string

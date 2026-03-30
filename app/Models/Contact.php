@@ -19,6 +19,8 @@ class Contact extends Model
 
     public const DATA_COLLECTION_FIELD_FIRST_NAME = 'first_name';
 
+    public const DATA_COLLECTION_FIELD_RESIDENCE_CITY = 'residence_city';
+
     public const DATA_COLLECTION_FIELD_COUNTRY = 'country';
 
     public const DATA_COLLECTION_FIELD_CITY = 'city';

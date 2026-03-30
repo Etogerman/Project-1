@@ -26,7 +26,7 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
         );
     }
 
-    public function test_it_returns_country_when_first_name_is_filled(): void
+    public function test_it_returns_residence_city_when_first_name_is_filled_and_location_is_empty(): void
     {
         $contact = Contact::factory()->create([
             'first_name' => 'Герман',
@@ -36,12 +36,12 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
         ]);
 
         $this->assertSame(
-            Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
             app(ResolveNextDataCollectionFieldAction::class)->handle($contact),
         );
     }
 
-    public function test_it_returns_city_when_first_name_and_country_are_filled(): void
+    public function test_it_returns_city_when_country_is_filled_but_city_is_missing(): void
     {
         $contact = Contact::factory()->create([
             'first_name' => 'Герман',
@@ -52,6 +52,21 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
 
         $this->assertSame(
             Contact::DATA_COLLECTION_FIELD_CITY,
+            app(ResolveNextDataCollectionFieldAction::class)->handle($contact),
+        );
+    }
+
+    public function test_it_returns_country_when_city_is_filled_but_country_is_missing(): void
+    {
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => null,
+            'city' => 'Будапешт',
+            'age_range' => null,
+        ]);
+
+        $this->assertSame(
+            Contact::DATA_COLLECTION_FIELD_COUNTRY,
             app(ResolveNextDataCollectionFieldAction::class)->handle($contact),
         );
     }

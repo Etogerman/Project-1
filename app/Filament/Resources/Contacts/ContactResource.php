@@ -872,6 +872,7 @@ class ContactResource extends Resource
     {
         return match ($field) {
             Contact::DATA_COLLECTION_FIELD_FIRST_NAME => 'Имя',
+            Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => 'Город проживания',
             Contact::DATA_COLLECTION_FIELD_COUNTRY => 'Страна',
             Contact::DATA_COLLECTION_FIELD_CITY => 'Город',
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => 'Возраст',
