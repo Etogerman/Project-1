@@ -170,6 +170,7 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertSame([
             'Контакт',
+            'Профиль',
             'Работа с контактом',
             'Телефоны',
             'История сообщений',
@@ -185,6 +186,7 @@ class FilamentContactsResourceTest extends TestCase
             ->mapWithKeys(fn (Section $section): array => [(string) $section->getHeading() => $section]);
 
         $this->assertFalse($sectionsByHeading['Контакт']->isCollapsible());
+        $this->assertFalse($sectionsByHeading['Профиль']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Работа с контактом']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Телефоны']->isCollapsible());
         $this->assertFalse($sectionsByHeading['История сообщений']->isCollapsible());
@@ -237,6 +239,79 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('Ответ')
             ->assertMountedActionModalSee('Отправить');
+    }
+
+    public function test_contact_display_name_prefers_operator_profile_names(): void
+    {
+        $contact = Contact::factory()->create([
+            'name' => 'Имя из мессенджера',
+            'first_name' => 'Герман',
+            'last_name' => 'Абрикосов',
+        ]);
+
+        $this->assertSame('Герман Абрикосов', $contact->display_name);
+    }
+
+    public function test_contact_effective_age_years_prefers_birth_date_over_manual_age(): void
+    {
+        $birthDate = now()->subYears(25)->subDay()->toDateString();
+        $contact = Contact::factory()->create([
+            'birth_date' => $birthDate,
+            'age_years' => 40,
+        ]);
+
+        $this->assertSame(25, $contact->effective_age_years);
+    }
+
+    public function test_contact_effective_age_years_uses_manual_age_when_birth_date_is_missing(): void
+    {
+        $contact = Contact::factory()->create([
+            'birth_date' => null,
+            'age_years' => 34,
+        ]);
+
+        $this->assertSame(34, $contact->effective_age_years);
+    }
+
+    public function test_admin_can_edit_contact_profile_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Имя из мессенджера',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Профиль')
+            ->assertMountedActionModalSee('Имя из мессенджера')
+            ->call('openEditProfileDialog')
+            ->set('editingFirstName', 'Герман')
+            ->set('editingLastName', 'Абрикосов')
+            ->set('editingBirthDate', now()->subYears(29)->toDateString())
+            ->set('editingAgeYears', '35')
+            ->set('editingCountry', 'Россия')
+            ->set('editingCity', 'Москва')
+            ->call('saveMountedContactProfile')
+            ->assertHasNoErrors()
+            ->assertMountedActionModalSee('Герман')
+            ->assertMountedActionModalSee('Абрикосов')
+            ->assertMountedActionModalSee('Россия')
+            ->assertMountedActionModalSee('Москва')
+            ->assertMountedActionModalSee('Имя из мессенджера');
+
+        $contact->refresh();
+
+        $this->assertSame('Герман', $contact->first_name);
+        $this->assertSame('Абрикосов', $contact->last_name);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Москва', $contact->city);
+        $this->assertNotNull($contact->birth_date);
+        $this->assertNull($contact->age_years);
+        $this->assertSame('Герман Абрикосов', $contact->display_name);
     }
 
     public function test_admin_can_toggle_contact_auto_reply_from_contact_modal(): void

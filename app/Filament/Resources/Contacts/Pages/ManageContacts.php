@@ -11,6 +11,7 @@ use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
 use App\Services\Contacts\SetContactAutoReplyEnabledAction;
 use App\Services\Contacts\SetContactAssigneeAction;
+use App\Services\Contacts\UpdateContactProfileAction;
 use App\Services\Contacts\UpdateContactPhoneAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
@@ -29,6 +30,13 @@ class ManageContacts extends ManageRecords
     public bool $showEditPhoneDialog = false;
     public string $editingPhoneId = '';
     public string $editingPhoneRaw = '';
+    public bool $showEditProfileDialog = false;
+    public string $editingFirstName = '';
+    public string $editingLastName = '';
+    public string $editingAgeYears = '';
+    public string $editingBirthDate = '';
+    public string $editingCountry = '';
+    public string $editingCity = '';
     public bool $showDeletePhoneDialog = false;
     public string $deletingPhoneId = '';
     public string $deletingPhoneLabel = '';
@@ -240,6 +248,78 @@ class ManageContacts extends ManageRecords
             Notification::make()
                 ->danger()
                 ->title('Не удалось открыть редактирование номера')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function openEditProfileDialog(): void
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть редактирование профиля')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        $this->editingFirstName = (string) ($record->first_name ?? '');
+        $this->editingLastName = (string) ($record->last_name ?? '');
+        $this->editingAgeYears = $record->age_years !== null ? (string) $record->age_years : '';
+        $this->editingBirthDate = $record->birth_date?->toDateString() ?? '';
+        $this->editingCountry = (string) ($record->country ?? '');
+        $this->editingCity = (string) ($record->city ?? '');
+        $this->showEditProfileDialog = true;
+    }
+
+    public function closeEditProfileDialog(): void
+    {
+        $this->resetProfileEditingState();
+    }
+
+    public function saveMountedContactProfile(): void
+    {
+        $validated = $this->validate([
+            'editingFirstName' => ['nullable', 'string', 'max:255'],
+            'editingLastName' => ['nullable', 'string', 'max:255'],
+            'editingAgeYears' => ['nullable', 'integer', 'min:0', 'max:150'],
+            'editingBirthDate' => ['nullable', 'date', 'before_or_equal:today'],
+            'editingCountry' => ['nullable', 'string', 'max:255'],
+            'editingCity' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        try {
+            $record = $this->getMountedTableActionRecord();
+
+            if (! $record instanceof Contact) {
+                throw new RuntimeException('Не удалось определить текущий контакт.');
+            }
+
+            app(UpdateContactProfileAction::class)->handle($record, [
+                'first_name' => $validated['editingFirstName'] ?? null,
+                'last_name' => $validated['editingLastName'] ?? null,
+                'age_years' => $validated['editingAgeYears'] ?? null,
+                'birth_date' => $validated['editingBirthDate'] ?? null,
+                'country' => $validated['editingCountry'] ?? null,
+                'city' => $validated['editingCity'] ?? null,
+            ]);
+
+            $this->resetProfileEditingState();
+            $this->replaceMountedTableAction('view', (string) $record->id);
+
+            Notification::make()
+                ->success()
+                ->title('Профиль обновлён')
+                ->body('Изменения сохранены.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось обновить профиль')
                 ->body($throwable->getMessage())
                 ->send();
         }
@@ -470,6 +550,25 @@ class ManageContacts extends ManageRecords
         $this->editingPhoneId = '';
         $this->editingPhoneRaw = '';
         $this->resetErrorBag('editingPhoneRaw');
+    }
+
+    protected function resetProfileEditingState(): void
+    {
+        $this->showEditProfileDialog = false;
+        $this->editingFirstName = '';
+        $this->editingLastName = '';
+        $this->editingAgeYears = '';
+        $this->editingBirthDate = '';
+        $this->editingCountry = '';
+        $this->editingCity = '';
+        $this->resetErrorBag([
+            'editingFirstName',
+            'editingLastName',
+            'editingAgeYears',
+            'editingBirthDate',
+            'editingCountry',
+            'editingCity',
+        ]);
     }
 
     protected function resetPhoneDeletingState(): void

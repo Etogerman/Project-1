@@ -105,6 +105,16 @@ class ContactResource extends Resource
                     ])
                     ->columns(5)
                     ->columnSpanFull(),
+                Section::make('Профиль')
+                    ->schema([
+                        ViewEntry::make('contact_profile')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.contact-profile')
+                            ->viewData(fn (Contact $record): array => static::buildContactProfileViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
                 Section::make('Работа с контактом')
                     ->schema([
                         ViewEntry::make('ownership_controls')
@@ -388,6 +398,13 @@ class ContactResource extends Resource
                         $livewire->showEditPhoneDialog = false;
                         $livewire->editingPhoneId = '';
                         $livewire->editingPhoneRaw = '';
+                        $livewire->showEditProfileDialog = false;
+                        $livewire->editingFirstName = '';
+                        $livewire->editingLastName = '';
+                        $livewire->editingAgeYears = '';
+                        $livewire->editingBirthDate = '';
+                        $livewire->editingCountry = '';
+                        $livewire->editingCity = '';
                         $livewire->showDeletePhoneDialog = false;
                         $livewire->deletingPhoneId = '';
                         $livewire->deletingPhoneLabel = '';
@@ -536,6 +553,39 @@ class ContactResource extends Resource
         return ContactPhoneNumber::query()
             ->selectRaw('count(*)')
             ->whereColumn('contact_id', 'contacts.id');
+    }
+
+    /**
+     * @return array{
+     *     firstName: ?string,
+     *     lastName: ?string,
+     *     effectiveAgeLabel: string,
+     *     birthDateLabel: string,
+     *     country: string,
+     *     city: string,
+     *     messengerName: string
+     * }
+     */
+    protected static function buildContactProfileViewData(Contact $record): array
+    {
+        $effectiveAgeYears = $record->effective_age_years;
+        $ageSourceLabel = $record->birth_date !== null
+            ? 'из даты рождения'
+            : ($record->age_years !== null ? 'указан вручную' : null);
+
+        $effectiveAgeLabel = $effectiveAgeYears !== null
+            ? sprintf('%d лет%s', $effectiveAgeYears, $ageSourceLabel !== null ? ' ('.$ageSourceLabel.')' : '')
+            : '—';
+
+        return [
+            'firstName' => $record->first_name,
+            'lastName' => $record->last_name,
+            'effectiveAgeLabel' => $effectiveAgeLabel,
+            'birthDateLabel' => $record->birth_date?->format('d.m.Y') ?? '—',
+            'country' => $record->country ?? '—',
+            'city' => $record->city ?? '—',
+            'messengerName' => $record->name ?? '—',
+        ];
     }
 
     protected static function resolvePrimaryPhoneRaw(Contact $record): ?string

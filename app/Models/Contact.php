@@ -18,6 +18,12 @@ class Contact extends Model
      */
     protected $fillable = [
         'name',
+        'first_name',
+        'last_name',
+        'age_years',
+        'birth_date',
+        'country',
+        'city',
         'is_auto_reply_enabled',
         'assigned_user_id',
     ];
@@ -26,6 +32,7 @@ class Contact extends Model
      * @var array<string, string>
      */
     protected $casts = [
+        'birth_date' => 'date',
         'is_auto_reply_enabled' => 'boolean',
     ];
 
@@ -80,6 +87,15 @@ class Contact extends Model
     {
         return Attribute::make(
             get: function (): string {
+                $operatorFullName = trim(implode(' ', array_filter([
+                    $this->first_name,
+                    $this->last_name,
+                ], fn (mixed $value): bool => filled($value))));
+
+                if ($operatorFullName !== '') {
+                    return $operatorFullName;
+                }
+
                 if (filled($this->name)) {
                     return (string) $this->name;
                 }
@@ -97,6 +113,23 @@ class Contact extends Model
                 }
 
                 return sprintf('Контакт #%d', $this->id);
+            },
+        );
+    }
+
+    protected function effectiveAgeYears(): Attribute
+    {
+        return Attribute::make(
+            get: function (): ?int {
+                if ($this->birth_date instanceof \Illuminate\Support\Carbon) {
+                    if ($this->birth_date->isFuture()) {
+                        return null;
+                    }
+
+                    return $this->birth_date->age;
+                }
+
+                return $this->age_years !== null ? (int) $this->age_years : null;
             },
         );
     }
