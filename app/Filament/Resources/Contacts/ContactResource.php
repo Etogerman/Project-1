@@ -309,7 +309,8 @@ class ContactResource extends Resource
                     ->label('Статус')
                     ->state(fn (Contact $record): string => static::formatInboxStatus($record))
                     ->badge()
-                    ->color(fn (Contact $record): string => static::getInboxStatusColor($record)),
+                    ->color(fn (Contact $record): string => static::getInboxStatusColor($record))
+                    ->toggleable(),
                 TextColumn::make('assignedUser.name')
                     ->label('Ответственный')
                     ->toggleable()
