@@ -675,7 +675,7 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ответ оператора',
             Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, имя сохранили.',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
             default => 'Системное сообщение',
         };
     }

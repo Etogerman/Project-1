@@ -12,13 +12,24 @@ return [
     'data_collection' => [
         'enabled' => env('BOT_DATA_COLLECTION_ENABLED', true),
         'first_question' => env('BOT_DATA_COLLECTION_FIRST_QUESTION', 'Как вас зовут?'),
-        'completion_message' => env('BOT_DATA_COLLECTION_COMPLETION_MESSAGE', 'Спасибо, имя сохранили.'),
+        'completion_message' => env('BOT_DATA_COLLECTION_COMPLETION_MESSAGE', 'Спасибо, данные сохранили.'),
         'first_name' => [
             'question' => env('BOT_DATA_COLLECTION_FIRST_NAME_QUESTION', env('BOT_DATA_COLLECTION_FIRST_QUESTION', 'Как вас зовут?')),
             'retry_message' => env('BOT_DATA_COLLECTION_FIRST_NAME_RETRY_MESSAGE', 'Подскажите, пожалуйста, как к вам обращаться? Можно только имя.'),
             'skip_message' => env('BOT_DATA_COLLECTION_FIRST_NAME_SKIP_MESSAGE', 'Хорошо, имя пока пропустим.'),
             'fallback_error_message' => env('BOT_DATA_COLLECTION_FIRST_NAME_FALLBACK_ERROR_MESSAGE', 'Не смогли распознать имя. Напишите, пожалуйста, только имя.'),
             'max_attempts' => (int) env('BOT_DATA_COLLECTION_FIRST_NAME_MAX_ATTEMPTS', 2),
+            'skip_commands' => [
+                'пропустить',
+                'skip',
+            ],
+        ],
+        'country' => [
+            'question' => env('BOT_DATA_COLLECTION_COUNTRY_QUESTION', 'В какой стране вы находитесь?'),
+            'retry_message' => env('BOT_DATA_COLLECTION_COUNTRY_RETRY_MESSAGE', 'Подскажите, пожалуйста, страну. Например: Россия, Казахстан, Германия.'),
+            'skip_message' => env('BOT_DATA_COLLECTION_COUNTRY_SKIP_MESSAGE', 'Хорошо, страну пока пропустим.'),
+            'fallback_error_message' => env('BOT_DATA_COLLECTION_COUNTRY_FALLBACK_ERROR_MESSAGE', 'Не смогли распознать страну. Напишите, пожалуйста, только название страны.'),
+            'max_attempts' => (int) env('BOT_DATA_COLLECTION_COUNTRY_MAX_ATTEMPTS', 2),
             'skip_commands' => [
                 'пропустить',
                 'skip',

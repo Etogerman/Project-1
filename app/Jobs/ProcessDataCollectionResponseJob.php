@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Services\DataCollection\ExtractCountryAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
@@ -55,6 +56,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ExtractFirstNameAction $extractFirstNameAction,
+        ExtractCountryAction $extractCountryAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
@@ -83,18 +85,19 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
-        if (! $contact->isInDataCollection() || $contact->data_collection_current_field !== Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
+        if (! $contact->isInDataCollection()) {
             return;
         }
 
         $replyText = trim((string) ($message->text ?? ''));
+        $currentField = $contact->data_collection_current_field;
 
         if ($replyText === '') {
-            $this->handleRetry(
+            $this->handleBlankReply(
                 message: $message,
                 channel: $channel,
                 contact: $contact,
-                text: $this->retryMessage(),
+                currentField: $currentField,
                 telegramBotApiService: $telegramBotApiService,
                 maxBotApiService: $maxBotApiService,
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
@@ -103,52 +106,73 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
-        if ($this->isLocalSkipCommand($replyText)) {
-            $this->sendReply(
+        if ($this->isLocalSkipCommand($replyText, $currentField)) {
+            $this->handleLocalSkip(
                 message: $message,
                 channel: $channel,
-                text: $this->skipMessage(),
-                messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+                contact: $contact,
+                currentField: $currentField,
                 telegramBotApiService: $telegramBotApiService,
                 maxBotApiService: $maxBotApiService,
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
-                activityEvent: 'contact.data_collection_skipped',
-                activityMessage: 'Пользователь пропустил шаг сбора имени.',
             );
-
-            $contact->completeDataCollection();
-
             return;
         }
 
+        match ($currentField) {
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME => $this->handleFirstNameReply(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                replyText: $replyText,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+                extractFirstNameAction: $extractFirstNameAction,
+            ),
+            Contact::DATA_COLLECTION_FIELD_COUNTRY => $this->handleCountryReply(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                replyText: $replyText,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+                extractCountryAction: $extractCountryAction,
+            ),
+            default => null,
+        };
+    }
+
+    protected function handleFirstNameReply(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        string $replyText,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+        ExtractFirstNameAction $extractFirstNameAction,
+    ): void {
         try {
             $extraction = $extractFirstNameAction->handle($replyText, $contact->name);
         } catch (Throwable $throwable) {
-            $channelActivityLogger->error(
-                $channel,
-                'contact.data_collection_first_name_extraction_failed',
-                'Не удалось распознать имя через Gemini.',
-                [
-                    'contact_id' => $contact->id,
-                    'channel_id' => $channel->id,
-                    'message_id' => $message->id,
-                    'field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
-                    'error' => $throwable->getMessage(),
-                ],
-            );
-
-            $this->sendReply(
+            $this->handleExtractionError(
                 message: $message,
                 channel: $channel,
-                text: $this->fallbackErrorMessage(),
-                messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+                contact: $contact,
+                field: Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+                errorMessage: 'Не удалось распознать имя через Gemini.',
+                fallbackMessage: $this->fallbackErrorMessage(Contact::DATA_COLLECTION_FIELD_FIRST_NAME),
                 telegramBotApiService: $telegramBotApiService,
                 maxBotApiService: $maxBotApiService,
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
-                activityEvent: 'contact.data_collection_fallback_sent',
-                activityMessage: 'Отправлено безопасное сообщение после ошибки распознавания имени.',
+                throwable: $throwable,
             );
 
             return;
@@ -159,7 +183,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 message: $message,
                 channel: $channel,
                 contact: $contact,
-                text: $this->retryMessage(),
+                currentField: Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
                 telegramBotApiService: $telegramBotApiService,
                 maxBotApiService: $maxBotApiService,
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
@@ -175,6 +199,289 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             'first_name' => $firstName,
         ])->save();
 
+        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
+
+        $this->moveToCountryStep(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+        );
+    }
+
+    protected function handleCountryReply(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        string $replyText,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+        ExtractCountryAction $extractCountryAction,
+    ): void {
+        try {
+            $extraction = $extractCountryAction->handle($replyText);
+        } catch (Throwable $throwable) {
+            $this->handleExtractionError(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                field: Contact::DATA_COLLECTION_FIELD_COUNTRY,
+                errorMessage: 'Не удалось распознать страну через Gemini.',
+                fallbackMessage: $this->fallbackErrorMessage(Contact::DATA_COLLECTION_FIELD_COUNTRY),
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+                throwable: $throwable,
+            );
+
+            return;
+        }
+
+        if (($extraction['decision'] ?? null) !== ExtractCountryAction::DECISION_ACCEPT) {
+            $this->handleRetry(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                currentField: Contact::DATA_COLLECTION_FIELD_COUNTRY,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $country = (string) ($extraction['country'] ?? '');
+
+        $contact->forceFill([
+            'country' => $country,
+        ])->save();
+
+        $this->sendCompletion(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+        );
+
+        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_COUNTRY);
+    }
+
+    protected function handleBlankReply(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        ?string $currentField,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $this->handleRetry(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            currentField: $currentField,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+        );
+    }
+
+    protected function handleRetry(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        ?string $currentField,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $currentField = $currentField ?? Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
+        $attempts = $this->incrementAttempts($contact);
+
+        if ($attempts >= $this->maxAttempts($currentField)) {
+            if ($currentField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
+                $this->moveToCountryStep(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+
+            $this->sendTerminalSkip(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                field: $currentField,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->retryMessage($currentField),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_retry_sent',
+            activityMessage: 'Отправлено повторное сообщение сбора профиля.',
+        );
+    }
+
+    protected function incrementAttempts(Contact $contact): int
+    {
+        $attempts = (int) $contact->data_collection_attempts_count + 1;
+
+        $contact->forceFill([
+            'data_collection_attempts_count' => $attempts,
+        ])->save();
+
+        return $attempts;
+    }
+
+    protected function isLocalSkipCommand(string $text, ?string $currentField): bool
+    {
+        $normalized = mb_strtolower(trim($text));
+
+        return in_array($normalized, (array) $this->fieldConfig($currentField, 'skip_commands', ['пропустить', 'skip']), true);
+    }
+
+    protected function retryMessage(?string $field): string
+    {
+        return (string) $this->fieldConfig($field, 'retry_message', 'Подскажите, пожалуйста, как к вам обращаться? Можно только имя.');
+    }
+
+    protected function skipMessage(?string $field): string
+    {
+        return (string) $this->fieldConfig($field, 'skip_message', 'Хорошо, имя пока пропустим.');
+    }
+
+    protected function fallbackErrorMessage(?string $field): string
+    {
+        return (string) $this->fieldConfig($field, 'fallback_error_message', 'Не смогли распознать значение. Повторите ответ, пожалуйста.');
+    }
+
+    protected function completionMessage(): string
+    {
+        return (string) config('bots.data_collection.completion_message', 'Спасибо, данные сохранили.');
+    }
+
+    protected function maxAttempts(?string $field): int
+    {
+        return max(1, (int) $this->fieldConfig($field, 'max_attempts', 2));
+    }
+
+    protected function handleLocalSkip(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        ?string $currentField,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
+            $this->moveToCountryStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $this->sendTerminalSkip(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            field: $currentField,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+        );
+    }
+
+    protected function moveToCountryStep(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        if (filled($contact->country)) {
+            $this->sendCompletion(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $contact->startDataCollection(Contact::DATA_COLLECTION_FIELD_COUNTRY);
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_COUNTRY),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_next_question_sent',
+            activityMessage: 'Отправлен следующий вопрос сбора профиля.',
+        );
+    }
+
+    protected function sendCompletion(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
         $this->sendReply(
             message: $message,
             channel: $channel,
@@ -192,110 +499,137 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $channelActivityLogger->info(
             $channel,
+            'contact.data_collection_completed',
+            'Сбор профиля завершён.',
+            [
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'message_id' => $message->id,
+            ],
+        );
+    }
+
+    protected function sendTerminalSkip(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        ?string $field,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->skipMessage($field),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_skipped',
+            activityMessage: 'Шаг сбора профиля пропущен.',
+        );
+
+        $contact->completeDataCollection();
+
+        $channelActivityLogger->info(
+            $channel,
+            'contact.data_collection_completed',
+            'Сбор профиля завершён после пропуска шага.',
+            [
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'message_id' => $message->id,
+                'field' => $field,
+            ],
+        );
+    }
+
+    protected function handleExtractionError(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        string $field,
+        string $errorMessage,
+        string $fallbackMessage,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+        Throwable $throwable,
+    ): void {
+        $channelActivityLogger->error(
+            $channel,
+            'contact.data_collection_extraction_failed',
+            $errorMessage,
+            [
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'message_id' => $message->id,
+                'field' => $field,
+                'error' => $throwable->getMessage(),
+            ],
+        );
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $fallbackMessage,
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_fallback_sent',
+            activityMessage: 'Отправлено безопасное сообщение после ошибки распознавания шага анкеты.',
+        );
+    }
+
+    protected function logFieldSaved(Channel $channel, Contact $contact, Message $message, string $field): void
+    {
+        $channelActivityLogger = app(ChannelActivityLogger::class);
+
+        $channelActivityLogger->info(
+            $channel,
             'contact.data_collection_field_saved',
             'Ответ пользователя сохранён в профиль контакта.',
             [
                 'contact_id' => $contact->id,
                 'channel_id' => $channel->id,
                 'message_id' => $message->id,
-                'field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+                'field' => $field,
                 'attempts_count' => $contact->data_collection_attempts_count,
             ],
         );
     }
 
-    protected function handleRetry(
-        Message $message,
-        Channel $channel,
-        Contact $contact,
-        string $text,
-        TelegramBotApiService $telegramBotApiService,
-        MaxBotApiService $maxBotApiService,
-        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
-        ChannelActivityLogger $channelActivityLogger,
-    ): void {
-        $attempts = $this->incrementAttempts($contact);
-
-        if ($attempts >= $this->maxAttempts()) {
-            $this->sendReply(
-                message: $message,
-                channel: $channel,
-                text: $this->skipMessage(),
-                messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
-                telegramBotApiService: $telegramBotApiService,
-                maxBotApiService: $maxBotApiService,
-                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                channelActivityLogger: $channelActivityLogger,
-                activityEvent: 'contact.data_collection_skipped_after_attempts',
-                activityMessage: 'Шаг сбора имени завершён после превышения лимита попыток.',
-            );
-
-            $contact->completeDataCollection();
-
-            return;
+    /**
+     * @param  mixed  $default
+     */
+    protected function fieldConfig(?string $field, string $key, mixed $default = null): mixed
+    {
+        if (! is_string($field) || $field === '') {
+            return $default;
         }
 
-        $this->sendReply(
-            message: $message,
-            channel: $channel,
-            text: $text,
-            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
-            telegramBotApiService: $telegramBotApiService,
-            maxBotApiService: $maxBotApiService,
-            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-            channelActivityLogger: $channelActivityLogger,
-            activityEvent: 'contact.data_collection_retry_sent',
-            activityMessage: 'Отправлено повторное сообщение сбора имени.',
-        );
+        return config("bots.data_collection.{$field}.{$key}", $default);
     }
 
-    protected function incrementAttempts(Contact $contact): int
+    protected function questionText(string $field): string
     {
-        $attempts = (int) $contact->data_collection_attempts_count + 1;
-
-        $contact->forceFill([
-            'data_collection_attempts_count' => $attempts,
-        ])->save();
-
-        return $attempts;
-    }
-
-    protected function isLocalSkipCommand(string $text): bool
-    {
-        $normalized = mb_strtolower(trim($text));
-
-        return in_array($normalized, (array) config('bots.data_collection.first_name.skip_commands', ['пропустить', 'skip']), true);
-    }
-
-    protected function retryMessage(): string
-    {
-        return (string) config(
-            'bots.data_collection.first_name.retry_message',
-            'Подскажите, пожалуйста, как к вам обращаться? Можно только имя.'
-        );
-    }
-
-    protected function skipMessage(): string
-    {
-        return (string) config('bots.data_collection.first_name.skip_message', 'Хорошо, имя пока пропустим.');
-    }
-
-    protected function fallbackErrorMessage(): string
-    {
-        return (string) config(
-            'bots.data_collection.first_name.fallback_error_message',
-            'Не смогли распознать имя. Напишите, пожалуйста, только имя.'
-        );
-    }
-
-    protected function completionMessage(): string
-    {
-        return (string) config('bots.data_collection.completion_message', 'Спасибо, имя сохранили.');
-    }
-
-    protected function maxAttempts(): int
-    {
-        return max(1, (int) config('bots.data_collection.first_name.max_attempts', 2));
+        return match ($field) {
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME => (string) config(
+                'bots.data_collection.first_name.question',
+                config('bots.data_collection.first_question', 'Как вас зовут?')
+            ),
+            Contact::DATA_COLLECTION_FIELD_COUNTRY => (string) config(
+                'bots.data_collection.country.question',
+                'В какой стране вы находитесь?'
+            ),
+            default => '',
+        };
     }
 
     protected function sendReply(

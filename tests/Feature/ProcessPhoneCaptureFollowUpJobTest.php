@@ -233,17 +233,25 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertDatabaseCount('messages', 1);
     }
 
-    public function test_job_does_not_start_data_collection_when_first_name_is_already_filled(): void
+    public function test_job_starts_data_collection_from_country_when_first_name_is_already_filled(): void
     {
         config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.country.question', 'В какой стране вы находитесь?');
 
         Http::fake([
-            'https://api.telegram.org/*' => Http::response([
-                'ok' => true,
-                'result' => [
-                    'message_id' => 9914,
-                ],
-            ]),
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9914,
+                    ],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9915,
+                    ],
+                ]),
         ]);
 
         $channel = Channel::factory()->create([
@@ -279,12 +287,14 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
 
         ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
 
-        Http::assertSentCount(1);
-        $this->assertDatabaseMissing('messages', [
+        Http::assertSentCount(2);
+        $this->assertDatabaseHas('messages', [
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
+            'text' => 'В какой стране вы находитесь?',
         ]);
-        $this->assertNull($contact->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->fresh()->data_collection_current_field);
     }
 
     /**

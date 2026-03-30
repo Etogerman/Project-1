@@ -175,11 +175,17 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             return;
         }
 
-        if ($contact->isInDataCollection() || filled($contact->first_name)) {
+        if ($contact->isInDataCollection()) {
             return;
         }
 
-        $contact->startDataCollection(Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
+        $nextField = $this->resolveNextField($contact);
+
+        if ($nextField === null) {
+            return;
+        }
+
+        $contact->startDataCollection($nextField);
 
         $channelActivityLogger->info(
             $channel,
@@ -189,10 +195,23 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                 'contact_id' => $contact->id,
                 'channel_id' => $channel->id,
                 'message_id' => $message->id,
-                'current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+                'current_field' => $nextField,
             ],
         );
 
         ProcessDataCollectionQuestionJob::dispatch($message->id);
+    }
+
+    protected function resolveNextField(Contact $contact): ?string
+    {
+        if (! filled($contact->first_name)) {
+            return Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
+        }
+
+        if (! filled($contact->country)) {
+            return Contact::DATA_COLLECTION_FIELD_COUNTRY;
+        }
+
+        return null;
     }
 }

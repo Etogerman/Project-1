@@ -73,7 +73,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
-        if (! $contact->isInDataCollection() || $contact->data_collection_current_field !== Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
+        if (! $contact->isInDataCollection()) {
             return;
         }
 
@@ -81,8 +81,23 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
-        $questionText = (string) config('bots.data_collection.first_name.question',
-            config('bots.data_collection.first_question', 'Как вас зовут?'));
+        $questionText = $this->resolveQuestionText($contact);
+
+        if ($questionText === null) {
+            $channelActivityLogger->error(
+                $channel,
+                'contact.data_collection_question_unknown_field',
+                'Не удалось определить текст вопроса для текущего шага сбора профиля.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $message->id,
+                    'current_field' => $contact->data_collection_current_field,
+                ],
+            );
+
+            return;
+        }
 
         try {
             $deliveryResult = match ($channel->platform) {
@@ -152,5 +167,20 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         return $message->replies()
             ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
             ->exists();
+    }
+
+    protected function resolveQuestionText(Contact $contact): ?string
+    {
+        return match ($contact->data_collection_current_field) {
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME => (string) config(
+                'bots.data_collection.first_name.question',
+                config('bots.data_collection.first_question', 'Как вас зовут?')
+            ),
+            Contact::DATA_COLLECTION_FIELD_COUNTRY => (string) config(
+                'bots.data_collection.country.question',
+                'В какой стране вы находитесь?'
+            ),
+            default => null,
+        };
     }
 }

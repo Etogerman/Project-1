@@ -19,6 +19,8 @@ class Contact extends Model
 
     public const DATA_COLLECTION_FIELD_FIRST_NAME = 'first_name';
 
+    public const DATA_COLLECTION_FIELD_COUNTRY = 'country';
+
     /**
      * @var list<string>
      */
