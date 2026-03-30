@@ -8,6 +8,75 @@ use Tests\TestCase;
 
 class ExtractFirstNameActionTest extends TestCase
 {
+    public function test_action_accepts_exact_first_name_without_calling_gemini(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake();
+
+        $result = app(ExtractFirstNameAction::class)->handle('Николай');
+
+        Http::assertNothingSent();
+
+        $this->assertSame([
+            'decision' => 'accept',
+            'first_name' => 'Николай',
+        ], $result);
+    }
+
+    public function test_action_normalizes_lowercase_exact_first_name_without_calling_gemini(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake();
+
+        $result = app(ExtractFirstNameAction::class)->handle('николай');
+
+        Http::assertNothingSent();
+
+        $this->assertSame([
+            'decision' => 'accept',
+            'first_name' => 'Николай',
+        ], $result);
+    }
+
+    public function test_action_accepts_short_form_first_name_without_calling_gemini(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake();
+
+        $result = app(ExtractFirstNameAction::class)->handle('Коля');
+
+        Http::assertNothingSent();
+
+        $this->assertSame([
+            'decision' => 'accept',
+            'first_name' => 'Коля',
+        ], $result);
+    }
+
+    public function test_action_does_not_accept_country_name_as_direct_first_name_match(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'retry',
+                'first_name' => null,
+            ])),
+        ]);
+
+        $result = app(ExtractFirstNameAction::class)->handle('Россия');
+
+        Http::assertSentCount(1);
+
+        $this->assertSame([
+            'decision' => 'retry',
+            'first_name' => null,
+        ], $result);
+    }
+
     public function test_action_accepts_valid_first_name(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
