@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
@@ -260,6 +261,10 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ])->save();
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
+
+        if (! filled($contact->gender)) {
+            InferContactGenderFromFirstNameJob::dispatch($contact->id, $firstName);
+        }
 
         $this->moveToResidenceCityStep(
             message: $message,

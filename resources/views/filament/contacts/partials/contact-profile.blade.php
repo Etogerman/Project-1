@@ -12,6 +12,10 @@
             <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $lastName ?: '—' }}</p>
         </div>
         <div>
+            <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Пол</p>
+            <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $genderLabel }}</p>
+        </div>
+        <div>
             <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Возраст</p>
             <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $effectiveAgeLabel }}</p>
         </div>
@@ -134,6 +138,23 @@
                             Если указана дата рождения, возраст рассчитывается автоматически.
                         </p>
                         @error('editingAgeYears')
+                            <p style="margin: 0.45rem 0 0; font-size: 0.75rem; color: #dc2626;">{{ $message }}</p>
+                        @enderror
+                    </div>
+
+                    <div>
+                        <label for="contact-profile-gender" style="display: block; margin-bottom: 0.45rem; font-size: 0.875rem; font-weight: 600; color: #111827;">Пол</label>
+                        <select
+                            id="contact-profile-gender"
+                            wire:model.defer="editingGender"
+                            style="display: block; width: 100%; box-sizing: border-box; border: 1px solid #9ca3af; border-radius: 12px; background: #ffffff; color: #111827; padding: 0.85rem 0.95rem; font-size: 0.95rem;"
+                        >
+                            <option value="">Не указан</option>
+                            @foreach ($genderOptions as $value => $label)
+                                <option value="{{ $value }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                        @error('editingGender')
                             <p style="margin: 0.45rem 0 0; font-size: 0.75rem; color: #dc2626;">{{ $message }}</p>
                         @enderror
                     </div>

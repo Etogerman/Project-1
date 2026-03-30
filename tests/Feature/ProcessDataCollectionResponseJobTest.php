@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -9,6 +10,7 @@ use App\Models\ContactIdentity;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class ProcessDataCollectionResponseJobTest extends TestCase
@@ -19,6 +21,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
+
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
 
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -48,12 +52,19 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'reply_to_message_id' => $message->id,
             'text' => 'В каком городе вы живёте?',
         ]);
+
+        Queue::assertPushed(InferContactGenderFromFirstNameJob::class, function (InferContactGenderFromFirstNameJob $job) use ($contact): bool {
+            return $job->contactId === $contact->id
+                && $job->expectedFirstName === 'Николай';
+        });
     }
 
     public function test_job_saves_first_name_and_asks_residence_city(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
+
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -92,6 +103,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
 
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
+
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
@@ -121,6 +134,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
 
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
+
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
@@ -147,6 +162,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
+
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
 
         Http::fake([
             'https://api.telegram.org/*' => Http::response([

@@ -14,6 +14,7 @@ class UpdateContactProfileAction
     {
         $firstName = $this->normalizeNullableString($attributes['first_name'] ?? null);
         $lastName = $this->normalizeNullableString($attributes['last_name'] ?? null);
+        $gender = $this->normalizeGender($attributes['gender'] ?? null);
         $country = $this->normalizeNullableString($attributes['country'] ?? null);
         $city = $this->normalizeNullableString($attributes['city'] ?? null);
         $ageRange = $this->normalizeAgeRange($attributes['age_range'] ?? null);
@@ -25,6 +26,7 @@ class UpdateContactProfileAction
         $contact->forceFill([
             'first_name' => $firstName,
             'last_name' => $lastName,
+            'gender' => $gender,
             'birth_date' => $birthDate,
             'age_years' => $ageYears,
             'age_range' => $ageRange,
@@ -77,5 +79,20 @@ class UpdateContactProfileAction
         }
 
         return array_key_exists($trimmed, Contact::ageRangeOptions()) ? $trimmed : null;
+    }
+
+    private function normalizeGender(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        if ($trimmed === '') {
+            return null;
+        }
+
+        return array_key_exists($trimmed, Contact::genderOptions()) ? $trimmed : null;
     }
 }

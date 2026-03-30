@@ -34,6 +34,7 @@ class Contact extends Model
         'name',
         'first_name',
         'last_name',
+        'gender',
         'age_years',
         'age_range',
         'birth_date',
@@ -71,6 +72,27 @@ class Contact extends Model
             '30_39' => '30 - 39 лет',
             'over_40' => 'Больше 40 лет',
         ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function genderOptions(): array
+    {
+        return [
+            'male' => 'Мужской',
+            'female' => 'Женский',
+            'unknown' => 'Непонятно',
+        ];
+    }
+
+    public static function formatGender(?string $value): string
+    {
+        if (! filled($value)) {
+            return '—';
+        }
+
+        return self::genderOptions()[$value] ?? (string) $value;
     }
 
     public static function formatAgeRange(?string $value): string

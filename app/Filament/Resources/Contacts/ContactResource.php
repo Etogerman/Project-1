@@ -594,12 +594,14 @@ class ContactResource extends Resource
      * @return array{
      *     firstName: ?string,
      *     lastName: ?string,
+     *     genderLabel: string,
      *     effectiveAgeLabel: string,
      *     ageRangeLabel: string,
      *     birthDateLabel: string,
      *     country: string,
      *     city: string,
      *     messengerName: string,
+     *     genderOptions: array<string, string>,
      *     ageRangeOptions: array<string, string>
      * }
      */
@@ -617,12 +619,14 @@ class ContactResource extends Resource
         return [
             'firstName' => $record->first_name,
             'lastName' => $record->last_name,
+            'genderLabel' => Contact::formatGender($record->gender),
             'effectiveAgeLabel' => $effectiveAgeLabel,
             'ageRangeLabel' => Contact::formatAgeRange($record->age_range),
             'birthDateLabel' => $record->birth_date?->format('d.m.Y') ?? '—',
             'country' => $record->country ?? '—',
             'city' => $record->city ?? '—',
             'messengerName' => $record->name ?? '—',
+            'genderOptions' => Contact::genderOptions(),
             'ageRangeOptions' => Contact::ageRangeOptions(),
         ];
     }

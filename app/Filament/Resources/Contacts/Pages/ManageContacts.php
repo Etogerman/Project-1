@@ -36,6 +36,7 @@ class ManageContacts extends ManageRecords
     public bool $showEditProfileDialog = false;
     public string $editingFirstName = '';
     public string $editingLastName = '';
+    public string $editingGender = '';
     public string $editingAgeYears = '';
     public string $editingAgeRange = '';
     public string $editingBirthDate = '';
@@ -275,6 +276,7 @@ class ManageContacts extends ManageRecords
 
         $this->editingFirstName = (string) ($record->first_name ?? '');
         $this->editingLastName = (string) ($record->last_name ?? '');
+        $this->editingGender = (string) ($record->gender ?? '');
         $this->editingAgeYears = $record->age_years !== null ? (string) $record->age_years : '';
         $this->editingAgeRange = (string) ($record->age_range ?? '');
         $this->editingBirthDate = $record->birth_date?->toDateString() ?? '';
@@ -293,6 +295,7 @@ class ManageContacts extends ManageRecords
         $validated = $this->validate([
             'editingFirstName' => ['nullable', 'string', 'max:255'],
             'editingLastName' => ['nullable', 'string', 'max:255'],
+            'editingGender' => ['nullable', 'string', Rule::in(array_keys(Contact::genderOptions()))],
             'editingAgeYears' => ['nullable', 'integer', 'min:0', 'max:150'],
             'editingAgeRange' => ['nullable', 'string', Rule::in(array_keys(Contact::ageRangeOptions()))],
             'editingBirthDate' => ['nullable', 'date', 'before_or_equal:today'],
@@ -310,6 +313,7 @@ class ManageContacts extends ManageRecords
             app(UpdateContactProfileAction::class)->handle($record, [
                 'first_name' => $validated['editingFirstName'] ?? null,
                 'last_name' => $validated['editingLastName'] ?? null,
+                'gender' => $validated['editingGender'] ?? null,
                 'age_years' => $validated['editingAgeYears'] ?? null,
                 'age_range' => $validated['editingAgeRange'] ?? null,
                 'birth_date' => $validated['editingBirthDate'] ?? null,
@@ -672,6 +676,7 @@ class ManageContacts extends ManageRecords
         $this->showEditProfileDialog = false;
         $this->editingFirstName = '';
         $this->editingLastName = '';
+        $this->editingGender = '';
         $this->editingAgeYears = '';
         $this->editingAgeRange = '';
         $this->editingBirthDate = '';
@@ -680,6 +685,7 @@ class ManageContacts extends ManageRecords
         $this->resetErrorBag([
             'editingFirstName',
             'editingLastName',
+            'editingGender',
             'editingAgeYears',
             'editingAgeRange',
             'editingBirthDate',

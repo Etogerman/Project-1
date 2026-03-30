@@ -544,6 +544,7 @@ class FilamentContactsResourceTest extends TestCase
             ->call('openEditProfileDialog')
             ->set('editingFirstName', 'Герман')
             ->set('editingLastName', 'Абрикосов')
+            ->set('editingGender', 'male')
             ->set('editingBirthDate', now()->subYears(29)->toDateString())
             ->set('editingAgeYears', '35')
             ->set('editingAgeRange', '30_39')
@@ -553,6 +554,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertHasNoErrors()
             ->assertMountedActionModalSee('Герман')
             ->assertMountedActionModalSee('Абрикосов')
+            ->assertMountedActionModalSee('Мужской')
             ->assertMountedActionModalSee('30 - 39 лет')
             ->assertMountedActionModalSee('Россия')
             ->assertMountedActionModalSee('Москва')
@@ -562,6 +564,7 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertSame('Герман', $contact->first_name);
         $this->assertSame('Абрикосов', $contact->last_name);
+        $this->assertSame('male', $contact->gender);
         $this->assertSame('Россия', $contact->country);
         $this->assertSame('Москва', $contact->city);
         $this->assertSame('30_39', $contact->age_range);
