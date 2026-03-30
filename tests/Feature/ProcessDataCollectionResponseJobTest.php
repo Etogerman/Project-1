@@ -321,6 +321,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.country.question', 'В какой стране вы живёте?');
+        config()->set('bots.data_collection.country.after_residence_city_question', 'Подскажите, пожалуйста, страну, где вы живёте. Для города «{city}» это нужно уточнить.');
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -354,7 +355,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => 'В какой стране вы живёте?',
+            'text' => 'Подскажите, пожалуйста, страну, где вы живёте. Для города «Сан-Хосе» это нужно уточнить.',
         ]);
     }
 
@@ -362,6 +363,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.country.question', 'В какой стране вы живёте?');
+        config()->set('bots.data_collection.country.after_residence_city_question', 'Подскажите, пожалуйста, страну, где вы живёте. Для города «{city}» это нужно уточнить.');
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -396,7 +398,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => 'В какой стране вы живёте?',
+            'text' => 'Подскажите, пожалуйста, страну, где вы живёте. Для города «Мапуто» это нужно уточнить.',
         ]);
     }
 

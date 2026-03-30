@@ -354,6 +354,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             maxBotApiService: $maxBotApiService,
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
+            questionOverride: $this->countryQuestionAfterResidenceCity($city),
         );
     }
 
@@ -873,6 +874,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        ?string $questionOverride = null,
     ): void {
         if (filled($contact->country)) {
             if (filled($contact->city)) {
@@ -907,7 +909,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $this->sendReply(
             message: $message,
             channel: $channel,
-            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_COUNTRY),
+            text: $questionOverride ?? $this->questionText(Contact::DATA_COLLECTION_FIELD_COUNTRY),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -1297,6 +1299,16 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             [$city ?: 'указанный город', $country],
             $template,
         );
+    }
+
+    protected function countryQuestionAfterResidenceCity(string $city): string
+    {
+        $template = (string) config(
+            'bots.data_collection.country.after_residence_city_question',
+            'Подскажите, пожалуйста, страну, где вы живёте. Для города «{city}» это нужно уточнить.'
+        );
+
+        return str_replace('{city}', $city, $template);
     }
 
     protected function nullableString(mixed $value): ?string

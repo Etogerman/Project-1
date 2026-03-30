@@ -38,6 +38,7 @@ return [
         'country' => [
             'question' => env('BOT_DATA_COLLECTION_COUNTRY_QUESTION', 'В какой стране вы живёте?'),
             'retry_message' => env('BOT_DATA_COLLECTION_COUNTRY_RETRY_MESSAGE', 'Подскажите, пожалуйста, страну, где вы живёте. Например: Венгрия, Кения, Казахстан.'),
+            'after_residence_city_question' => env('BOT_DATA_COLLECTION_COUNTRY_AFTER_RESIDENCE_CITY_QUESTION', 'Подскажите, пожалуйста, страну, где вы живёте. Для города «{city}» это нужно уточнить.'),
             'city_mismatch_message' => env('BOT_DATA_COLLECTION_COUNTRY_CITY_MISMATCH_MESSAGE', 'Похоже, город «{city}» не относится к стране «{country}». Подскажите, пожалуйста, страну, где вы живёте.'),
             'skip_message' => env('BOT_DATA_COLLECTION_COUNTRY_SKIP_MESSAGE', 'Хорошо, страну пока пропустим.'),
             'fallback_error_message' => env('BOT_DATA_COLLECTION_COUNTRY_FALLBACK_ERROR_MESSAGE', 'Не смогли распознать страну. Напишите, пожалуйста, только название страны.'),
