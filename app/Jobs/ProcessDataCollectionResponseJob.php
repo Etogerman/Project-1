@@ -94,6 +94,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $replyText = trim((string) ($message->text ?? ''));
         $currentField = $contact->data_collection_current_field;
 
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY && ! filled($contact->country)) {
+            $this->moveToCountryStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
         if ($replyText === '') {
             $this->handleBlankReply(
                 message: $message,
@@ -302,7 +316,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ExtractCityAction $extractCityAction,
     ): void {
         try {
-            $extraction = $extractCityAction->handle($replyText);
+            $extraction = $extractCityAction->handle($replyText, $contact->country);
         } catch (Throwable $throwable) {
             $this->handleExtractionError(
                 message: $message,

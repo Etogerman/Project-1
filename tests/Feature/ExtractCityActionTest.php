@@ -25,6 +25,35 @@ class ExtractCityActionTest extends TestCase
             'decision' => 'accept',
             'city' => 'Москва',
         ], $result);
+
+        Http::assertSent(fn ($request): bool => ! str_contains(
+            (string) data_get($request->data(), 'systemInstruction.parts.0.text'),
+            'Контакт уже указал страну:'
+        ));
+    }
+
+    public function test_action_uses_country_context_and_retries_for_mismatch(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'retry',
+                'city' => null,
+            ])),
+        ]);
+
+        $result = app(ExtractCityAction::class)->handle('Берлин', 'Россия');
+
+        $this->assertSame([
+            'decision' => 'retry',
+            'city' => null,
+        ], $result);
+
+        Http::assertSent(fn ($request): bool => str_contains(
+            (string) data_get($request->data(), 'systemInstruction.parts.0.text'),
+            'Контакт уже указал страну: Россия'
+        ));
     }
 
     public function test_action_returns_retry_for_refusal(): void

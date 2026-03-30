@@ -363,6 +363,44 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         ]);
     }
 
+    public function test_job_retries_for_city_that_does_not_match_country_and_passes_country_to_extractor(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.city.retry_message', 'Подскажите, пожалуйста, город. Например: Москва, Алматы, Берлин.');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'retry',
+                'city' => null,
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9941],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Берлин',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://generativelanguage.googleapis.com/')
+            && str_contains((string) data_get($request->data(), 'systemInstruction.parts.0.text'), 'Контакт уже указал страну: Россия'));
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->city);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_CITY, $contact->data_collection_current_field);
+        $this->assertSame(1, $contact->data_collection_attempts_count);
+    }
+
     public function test_job_handles_city_skip_without_calling_gemini_and_completes(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
@@ -440,6 +478,50 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
             'text' => 'Не смогли распознать город. Напишите, пожалуйста, только название города.',
+        ]);
+    }
+
+    public function test_job_moves_back_to_country_when_city_step_has_no_country(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.country.question', 'В какой стране вы находитесь?');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Не должно использоваться',
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9942],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Москва',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_attempts_count' => 1,
+            'first_name' => 'Герман',
+            'country' => null,
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://generativelanguage.googleapis.com/'));
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->city);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->data_collection_current_field);
+        $this->assertSame(0, $contact->data_collection_attempts_count);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'В какой стране вы находитесь?',
         ]);
     }
 

@@ -19,10 +19,10 @@ class ExtractCityAction
     /**
      * @return array{decision: string, city: ?string}
      */
-    public function handle(string $userReply): array
+    public function handle(string $userReply, ?string $country = null): array
     {
         $response = $this->geminiApiService->generateStructured(
-            $this->systemPrompt(),
+            $this->systemPrompt($country),
             $this->userPrompt($userReply),
             $this->schema(),
         );
@@ -52,9 +52,9 @@ class ExtractCityAction
         ];
     }
 
-    protected function systemPrompt(): string
+    protected function systemPrompt(?string $country): string
     {
-        return <<<'TEXT'
+        $prompt = <<<'TEXT'
 Ты проверяешь ответ пользователя на вопрос "В каком городе вы находитесь?".
 
 Верни только JSON по заданной схеме.
@@ -72,6 +72,12 @@ class ExtractCityAction
 - "Не скажу" -> {"decision":"retry","city":null}
 - "12345" -> {"decision":"retry","city":null}
 TEXT;
+
+        if (! filled($country)) {
+            return $prompt;
+        }
+
+        return $prompt."\n\nКонтакт уже указал страну: {$country}. Принимай город только если он реалистично находится в этой стране. Если город не соответствует стране, верни decision=\"retry\" и city=null.";
     }
 
     protected function userPrompt(string $userReply): string
