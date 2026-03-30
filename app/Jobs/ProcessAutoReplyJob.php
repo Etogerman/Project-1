@@ -70,6 +70,10 @@ class ProcessAutoReplyJob implements ShouldQueue
             return;
         }
 
+        if ($message->contact?->isInDataCollection()) {
+            return;
+        }
+
         try {
             $botAutoReplyService->handle($message);
         } catch (Throwable $throwable) {

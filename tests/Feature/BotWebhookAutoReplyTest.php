@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
+use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
@@ -820,6 +822,59 @@ class BotWebhookAutoReplyTest extends TestCase
             'channel_id' => $channel->id,
             'external_user_id' => '201',
             'external_username' => 'telegram_user_2',
+        ]);
+    }
+
+    public function test_active_data_collection_routes_inbound_user_to_collector_instead_of_auto_reply(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_started_at' => now(),
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 901,
+            text: 'Герман',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessDataCollectionResponseJob::class, function (ProcessDataCollectionResponseJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_response_queued',
         ]);
     }
 

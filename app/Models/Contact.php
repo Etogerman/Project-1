@@ -13,6 +13,12 @@ class Contact extends Model
 {
     use HasFactory;
 
+    public const DATA_COLLECTION_STATUS_ACTIVE = 'active';
+
+    public const DATA_COLLECTION_STATUS_COMPLETED = 'completed';
+
+    public const DATA_COLLECTION_FIELD_FIRST_NAME = 'first_name';
+
     /**
      * @var list<string>
      */
@@ -24,6 +30,10 @@ class Contact extends Model
         'birth_date',
         'country',
         'city',
+        'data_collection_status',
+        'data_collection_current_field',
+        'data_collection_started_at',
+        'data_collection_completed_at',
         'is_auto_reply_enabled',
         'assigned_user_id',
     ];
@@ -33,6 +43,8 @@ class Contact extends Model
      */
     protected $casts = [
         'birth_date' => 'date',
+        'data_collection_started_at' => 'datetime',
+        'data_collection_completed_at' => 'datetime',
         'is_auto_reply_enabled' => 'boolean',
     ];
 
@@ -81,6 +93,31 @@ class Contact extends Model
     public function isAssignedTo(User $user): bool
     {
         return (int) $this->assigned_user_id === $user->id;
+    }
+
+    public function isInDataCollection(): bool
+    {
+        return $this->data_collection_status === self::DATA_COLLECTION_STATUS_ACTIVE
+            && filled($this->data_collection_current_field);
+    }
+
+    public function startDataCollection(string $field): void
+    {
+        $this->forceFill([
+            'data_collection_status' => self::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => $field,
+            'data_collection_started_at' => $this->data_collection_started_at ?? now(),
+            'data_collection_completed_at' => null,
+        ])->save();
+    }
+
+    public function completeDataCollection(): void
+    {
+        $this->forceFill([
+            'data_collection_status' => self::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+            'data_collection_completed_at' => now(),
+        ])->save();
     }
 
     protected function displayName(): Attribute

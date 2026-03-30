@@ -719,6 +719,8 @@ class ChannelResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Подтверждение телефона',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Анкета завершена',
             default => 'Не определен',
         };
     }
@@ -731,6 +733,8 @@ class ChannelResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'inline-flex items-center rounded-md border border-cyan-200 bg-cyan-50 px-2 py-1 text-xs text-cyan-800 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'inline-flex items-center rounded-md border border-lime-200 bg-lime-50 px-2 py-1 text-xs text-lime-700 dark:border-lime-500/30 dark:bg-lime-500/10 dark:text-lime-200',
             default => 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200',
         };
     }

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
@@ -147,6 +148,28 @@ class BotWebhookController extends Controller
             }
 
             if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
+                return response()->json([
+                    'ok' => true,
+                ]);
+            }
+
+            $storedMessage->loadMissing('contact');
+
+            if ($storedMessage->contact?->isInDataCollection()) {
+                ProcessDataCollectionResponseJob::dispatch($storedMessage->id)->afterCommit();
+
+                $channelActivityLogger->info(
+                    $channel,
+                    'contact.data_collection_response_queued',
+                    'Ответ пользователя поставлен в очередь на обработку сборщиком профиля.',
+                    [
+                        'platform' => $channel->platform,
+                        'message_id' => $storedMessage->id,
+                        'contact_id' => $storedMessage->contact_id,
+                        'current_field' => $storedMessage->contact?->data_collection_current_field,
+                    ],
+                );
+
                 return response()->json([
                     'ok' => true,
                 ]);

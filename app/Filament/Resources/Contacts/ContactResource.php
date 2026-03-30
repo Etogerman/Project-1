@@ -674,6 +674,8 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Спасибо, номер получили.',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ответ оператора',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, имя сохранили.',
             default => 'Системное сообщение',
         };
     }
@@ -744,6 +746,8 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Подтверждение телефона',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Анкета завершена',
             default => 'Не определен',
         };
     }
@@ -756,6 +760,8 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'warning',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'primary',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'success',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'info',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'success',
             default => 'gray',
         };
     }

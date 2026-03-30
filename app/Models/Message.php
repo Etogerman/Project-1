@@ -25,6 +25,10 @@ class Message extends Model
 
     public const KIND_OUTBOUND_MANUAL_REPLY = 'outbound_manual_reply';
 
+    public const KIND_OUTBOUND_DATA_COLLECTION_QUESTION = 'outbound_data_collection_question';
+
+    public const KIND_OUTBOUND_DATA_COLLECTION_COMPLETION = 'outbound_data_collection_completion';
+
     /**
      * @var list<string>
      */

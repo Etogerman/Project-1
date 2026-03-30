@@ -798,4 +798,39 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $skipLog->context['auto_reply_mode']);
         $this->assertSame('skipped_no_rule', $skipLog->context['auto_reply_source']);
     }
+
+    public function test_job_does_not_send_auto_reply_when_contact_is_in_data_collection(): void
+    {
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Не должен отправиться.',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-data-collection-skip',
+            'text' => 'Герман',
+        ], [], [
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_started_at' => now(),
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+        $this->assertDatabaseCount('messages', 1);
+    }
 }

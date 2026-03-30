@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Channel;
+use App\Models\Contact;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
@@ -82,60 +83,60 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                 'Подтверждение после получения номера уже существует.',
                 $this->baseContext($message, $channel),
             );
+        } else {
+            $confirmationText = (string) config('bots.phone_capture_confirmation_text');
 
-            return;
-        }
+            try {
+                $deliveryResult = match ($channel->platform) {
+                    Channel::PLATFORM_TELEGRAM => $telegramBotApiService->sendTextMessage(
+                        $channel,
+                        $message->external_chat_id,
+                        $message->contactIdentity?->external_user_id,
+                        $confirmationText,
+                        ['remove_keyboard' => true],
+                    ),
+                    Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
+                        $channel,
+                        $message->external_chat_id,
+                        $message->contactIdentity?->external_user_id,
+                        $confirmationText,
+                    ),
+                    default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
+                };
 
-        $confirmationText = (string) config('bots.phone_capture_confirmation_text');
+                $storePhoneCaptureConfirmationAction->handle($channel, $message, $deliveryResult);
+                $channel->markReplySent();
 
-        try {
-            $deliveryResult = match ($channel->platform) {
-                Channel::PLATFORM_TELEGRAM => $telegramBotApiService->sendTextMessage(
+                $channelActivityLogger->info(
                     $channel,
-                    $message->external_chat_id,
-                    $message->contactIdentity?->external_user_id,
-                    $confirmationText,
-                    ['remove_keyboard' => true],
-                ),
-                Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
+                    'contact.phone_capture_confirmed',
+                    'Подтверждение после получения номера отправлено.',
+                    $this->baseContext($message, $channel),
+                );
+            } catch (Throwable $throwable) {
+                $channel->markError($throwable);
+
+                $channelActivityLogger->error(
                     $channel,
-                    $message->external_chat_id,
-                    $message->contactIdentity?->external_user_id,
-                    $confirmationText,
-                ),
-                default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-            };
+                    'contact.phone_capture_confirmation_failed',
+                    'Не удалось отправить подтверждение после получения номера.',
+                    $this->baseContext($message, $channel) + [
+                        'error' => $throwable->getMessage(),
+                    ],
+                );
 
-            $storePhoneCaptureConfirmationAction->handle($channel, $message, $deliveryResult);
-            $channel->markReplySent();
-
-            $channelActivityLogger->info(
-                $channel,
-                'contact.phone_capture_confirmed',
-                'Подтверждение после получения номера отправлено.',
-                $this->baseContext($message, $channel),
-            );
-        } catch (Throwable $throwable) {
-            $channel->markError($throwable);
-
-            $channelActivityLogger->error(
-                $channel,
-                'contact.phone_capture_confirmation_failed',
-                'Не удалось отправить подтверждение после получения номера.',
-                $this->baseContext($message, $channel) + [
+                Log::error('phone capture confirmation failed', [
+                    'channel_id' => $channel->id,
+                    'platform' => $channel->platform,
+                    'message_id' => $message->id,
                     'error' => $throwable->getMessage(),
-                ],
-            );
+                ]);
 
-            Log::error('phone capture confirmation failed', [
-                'channel_id' => $channel->id,
-                'platform' => $channel->platform,
-                'message_id' => $message->id,
-                'error' => $throwable->getMessage(),
-            ]);
-
-            throw $throwable;
+                throw $throwable;
+            }
         }
+
+        $this->maybeStartDataCollection($message, $channel, $channelActivityLogger);
     }
 
     protected function confirmationAlreadyExists(Message $message): bool
@@ -157,5 +158,41 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             'platform' => $channel->platform,
             'button_type' => 'request_phone',
         ];
+    }
+
+    protected function maybeStartDataCollection(
+        Message $message,
+        Channel $channel,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        if (! (bool) config('bots.data_collection.enabled', true)) {
+            return;
+        }
+
+        $contact = $message->contact;
+
+        if (! $contact instanceof Contact) {
+            return;
+        }
+
+        if ($contact->isInDataCollection() || filled($contact->first_name)) {
+            return;
+        }
+
+        $contact->startDataCollection(Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
+
+        $channelActivityLogger->info(
+            $channel,
+            'contact.data_collection_started',
+            'После получения номера запущен сбор профиля.',
+            [
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'message_id' => $message->id,
+                'current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            ],
+        );
+
+        ProcessDataCollectionQuestionJob::dispatch($message->id);
     }
 }
