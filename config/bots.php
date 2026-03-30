@@ -6,7 +6,8 @@ return [
         'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
         'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
         'temperature' => (float) env('GEMINI_TEMPERATURE', 0.2),
-        'max_output_tokens' => (int) env('GEMINI_MAX_OUTPUT_TOKENS', 128),
+        'max_output_tokens' => (int) env('GEMINI_MAX_OUTPUT_TOKENS', 512),
+        'thinking_budget' => (int) env('GEMINI_THINKING_BUDGET', 0),
         'debug_logging' => (bool) env('BOT_GEMINI_DEBUG_LOGGING', false),
     ],
 

@@ -43,7 +43,10 @@ class GeminiApiService
                 ],
                 'generationConfig' => [
                     'temperature' => (float) config('bots.gemini.temperature', 0.2),
-                    'maxOutputTokens' => (int) config('bots.gemini.max_output_tokens', 128),
+                    'maxOutputTokens' => (int) config('bots.gemini.max_output_tokens', 512),
+                    'thinkingConfig' => [
+                        'thinkingBudget' => (int) config('bots.gemini.thinking_budget', 0),
+                    ],
                     'responseMimeType' => 'application/json',
                     'responseJsonSchema' => $responseJsonSchema,
                 ],

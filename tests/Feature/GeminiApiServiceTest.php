@@ -14,6 +14,8 @@ class GeminiApiServiceTest extends TestCase
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.gemini.model', 'gemini-2.5-flash');
+        config()->set('bots.gemini.max_output_tokens', 512);
+        config()->set('bots.gemini.thinking_budget', 0);
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response([
@@ -56,7 +58,9 @@ class GeminiApiServiceTest extends TestCase
                 && data_get($data, 'systemInstruction.parts.0.text') === 'system prompt'
                 && data_get($data, 'contents.0.parts.0.text') === 'user prompt'
                 && data_get($data, 'generationConfig.responseMimeType') === 'application/json'
-                && data_get($data, 'generationConfig.responseJsonSchema.type') === 'object';
+                && data_get($data, 'generationConfig.responseJsonSchema.type') === 'object'
+                && data_get($data, 'generationConfig.maxOutputTokens') === 512
+                && data_get($data, 'generationConfig.thinkingConfig.thinkingBudget') === 0;
         });
     }
 
