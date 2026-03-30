@@ -27,6 +27,38 @@ class ExtractCountryActionTest extends TestCase
         ], $result);
     }
 
+    public function test_action_accepts_exact_country_name_without_calling_gemini(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake();
+
+        $result = app(ExtractCountryAction::class)->handle('Мозамбик');
+
+        Http::assertNothingSent();
+
+        $this->assertSame([
+            'decision' => 'accept',
+            'country' => 'Мозамбик',
+        ], $result);
+    }
+
+    public function test_action_normalizes_exact_english_country_name_to_russian_without_calling_gemini(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake();
+
+        $result = app(ExtractCountryAction::class)->handle('Mozambique');
+
+        Http::assertNothingSent();
+
+        $this->assertSame([
+            'decision' => 'accept',
+            'country' => 'Мозамбик',
+        ], $result);
+    }
+
     public function test_action_returns_retry_for_refusal(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');

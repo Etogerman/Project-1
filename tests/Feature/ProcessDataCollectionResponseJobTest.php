@@ -204,6 +204,44 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         ]);
     }
 
+    public function test_job_accepts_exact_country_name_without_calling_gemini(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.city.question', 'В каком городе вы находитесь?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9943],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Мозамбик',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'first_name' => 'Герман',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://generativelanguage.googleapis.com/'));
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Мозамбик', $contact->country);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_CITY, $contact->data_collection_current_field);
+        $this->assertSame(0, $contact->data_collection_attempts_count);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'В каком городе вы находитесь?',
+        ]);
+    }
+
     public function test_job_moves_to_city_after_second_invalid_country_attempt(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');

@@ -3,6 +3,8 @@
 namespace App\Services\DataCollection;
 
 use App\Services\AI\GeminiApiService;
+use Locale;
+use ResourceBundle;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -21,6 +23,15 @@ class ExtractCountryAction
      */
     public function handle(string $userReply): array
     {
+        $directCountry = $this->resolveDirectCountryMatch($userReply);
+
+        if ($directCountry !== null) {
+            return [
+                'decision' => self::DECISION_ACCEPT,
+                'country' => $directCountry,
+            ];
+        }
+
         $response = $this->geminiApiService->generateStructured(
             $this->systemPrompt(),
             $this->userPrompt($userReply),
@@ -61,6 +72,7 @@ class ExtractCountryAction
 
 Правила:
 - Если пользователь назвал страну, верни decision="accept" и извлеки только название страны в поле country.
+- Если пользователь написал ровно название страны, даже редкой или неевропейской, это валидный ответ.
 - Если пользователь отказался, ушёл от ответа, задал встречный вопрос, написал мусор, цифры или фразу, не похожую на название страны, верни decision="retry" и country=null.
 - Не придумывай страну, если её нет в ответе.
 - Допустимо нормализовать название страны до обычной записи.
@@ -69,6 +81,8 @@ class ExtractCountryAction
 - "Россия" -> {"decision":"accept","country":"Россия"}
 - "Я из России" -> {"decision":"accept","country":"Россия"}
 - "Казахстан" -> {"decision":"accept","country":"Казахстан"}
+- "Мозамбик" -> {"decision":"accept","country":"Мозамбик"}
+- "Я из Мозамбика" -> {"decision":"accept","country":"Мозамбик"}
 - "Не скажу" -> {"decision":"retry","country":null}
 - "12345" -> {"decision":"retry","country":null}
 TEXT;
@@ -118,6 +132,75 @@ TEXT;
             return null;
         }
 
-        return Str::limit($normalized, 255, '');
+        $limited = Str::limit($normalized, 255, '');
+
+        return $this->resolveDirectCountryMatch($limited) ?? $limited;
+    }
+
+    protected function resolveDirectCountryMatch(string $value): ?string
+    {
+        $normalized = $this->normalizeLookupKey($value);
+
+        if ($normalized === null) {
+            return null;
+        }
+
+        return $this->countryLookup()[$normalized] ?? null;
+    }
+
+    protected function normalizeLookupKey(string $value): ?string
+    {
+        $normalized = preg_replace('/\s+/u', ' ', trim($value, " \t\n\r\0\x0B.,!?;:\"'«»()[]{}"));
+
+        if (! is_string($normalized) || $normalized === '') {
+            return null;
+        }
+
+        return mb_strtolower($normalized);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function countryLookup(): array
+    {
+        static $lookup;
+
+        if (is_array($lookup)) {
+            return $lookup;
+        }
+
+        $lookup = [];
+
+        foreach (['ru', 'en'] as $locale) {
+            $bundle = ResourceBundle::create($locale, 'ICUDATA-region');
+            $countries = $bundle instanceof ResourceBundle ? ($bundle['Countries'] ?? null) : null;
+
+            if (! $countries instanceof ResourceBundle) {
+                continue;
+            }
+
+            foreach ($countries as $code => $name) {
+                if (! is_string($code) || ! preg_match('/^[A-Z]{2}$/', $code) || ! is_string($name) || $name === '') {
+                    continue;
+                }
+
+                $normalizedName = $this->normalizeLookupKey($name);
+
+                if ($normalizedName === null) {
+                    continue;
+                }
+
+                $canonicalName = Locale::getDisplayRegion('und_'.$code, 'ru');
+
+                if (! is_string($canonicalName) || trim($canonicalName) === '') {
+                    $canonicalName = $name;
+                }
+
+                $lookup[$normalizedName] = Str::limit(trim($canonicalName), 255, '');
+            }
+        }
+
+        return $lookup;
     }
 }
