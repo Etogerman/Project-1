@@ -52,15 +52,14 @@ class ExtractResidenceCityAction
             throw new RuntimeException('Gemini residence city extraction accepted the value but did not return a city.');
         }
 
-        $countryConfidence = $this->normalizeCountryConfidence(data_get($response, 'country_confidence'));
         $country = $this->normalizeCountry(data_get($response, 'country'));
+        $countryConfidence = $this->normalizeCountryConfidence(data_get($response, 'country_confidence'));
 
-        if ($countryConfidence === self::COUNTRY_CONFIDENCE_HIGH && $country === null) {
-            throw new RuntimeException('Gemini residence city extraction marked country confidence as high but did not return a country.');
-        }
-
-        if ($countryConfidence === self::COUNTRY_CONFIDENCE_LOW) {
+        if ($countryConfidence !== self::COUNTRY_CONFIDENCE_HIGH || $country === null) {
+            // Be conservative on malformed or partial responses: keep the city,
+            // drop country inference, and let the collector ask country explicitly.
             $country = null;
+            $countryConfidence = self::COUNTRY_CONFIDENCE_LOW;
         }
 
         return [
@@ -90,6 +89,8 @@ class ExtractResidenceCityAction
 Примеры:
 - "Будапешт" -> {"decision":"accept","city":"Будапешт","country":"Венгрия","country_confidence":"high"}
 - "Живу в Найроби" -> {"decision":"accept","city":"Найроби","country":"Кения","country_confidence":"high"}
+- "Мапуто" -> {"decision":"accept","city":"Мапуто","country":"Мозамбик","country_confidence":"high"}
+- "Мапуту" -> {"decision":"accept","city":"Мапуто","country":"Мозамбик","country_confidence":"high"}
 - "Будапешт, Венгрия" -> {"decision":"accept","city":"Будапешт","country":"Венгрия","country_confidence":"high"}
 - "Сан-Хосе" -> {"decision":"accept","city":"Сан-Хосе","country":null,"country_confidence":"low"}
 - "Не скажу" -> {"decision":"retry","city":null,"country":null,"country_confidence":null}
@@ -176,7 +177,7 @@ TEXT;
         return match (trim($value)) {
             self::COUNTRY_CONFIDENCE_HIGH => self::COUNTRY_CONFIDENCE_HIGH,
             self::COUNTRY_CONFIDENCE_LOW => self::COUNTRY_CONFIDENCE_LOW,
-            default => throw new RuntimeException('Gemini residence city extraction returned an invalid country confidence.'),
+            default => null,
         };
     }
 }

@@ -57,6 +57,29 @@ class ExtractResidenceCityActionTest extends TestCase
         ], $result);
     }
 
+    public function test_action_keeps_city_and_downgrades_to_low_confidence_for_malformed_country_confidence(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Мапуто',
+                'country' => 'Мозамбик',
+                'country_confidence' => 'medium',
+            ])),
+        ]);
+
+        $result = app(ExtractResidenceCityAction::class)->handle('Мапуто');
+
+        $this->assertSame([
+            'decision' => 'accept',
+            'city' => 'Мапуто',
+            'country' => null,
+            'country_confidence' => 'low',
+        ], $result);
+    }
+
     public function test_action_retries_for_non_city_answer(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
