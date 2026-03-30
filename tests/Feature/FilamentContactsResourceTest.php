@@ -73,7 +73,9 @@ class FilamentContactsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get('/admin/contacts')
             ->assertOk()
-            ->assertSee('Контакты');
+            ->assertSee('Контакты')
+            ->assertSee('Кнопки')
+            ->assertSee('Просмотр');
 
         $this->assertSame('Контакты', ContactResource::getNavigationLabel());
 
@@ -86,6 +88,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableFilterExists('assigned_to_me')
             ->assertTableFilterExists('unassigned_contacts')
             ->assertTableActionExists('view', null, $contact)
+            ->assertTableActionExists('delete', null, $contact)
             ->assertTableActionDoesNotExist('edit', null, $contact)
             ->assertTableHeaderActionsExistInOrder([]);
     }
@@ -666,6 +669,56 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Основной')
             ->assertMountedActionModalSee('Изменить')
             ->assertMountedActionModalSee('Удалить');
+    }
+
+    public function test_admin_can_delete_contact_from_table_actions_column(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-delete-table-1',
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 111 22 33',
+            'phone_normalized' => '+79991112233',
+            'is_primary' => true,
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-delete-table-1',
+            'external_message_id' => 'msg-delete-table-1',
+            'text' => 'Удалить запись',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableActionExists('delete', null, $contact)
+            ->callTableAction('delete', $contact)
+            ->assertHasNoTableActionErrors()
+            ->assertCanNotSeeTableRecords([$contact]);
+
+        $this->assertModelMissing($contact);
+        $this->assertDatabaseMissing('contact_identities', [
+            'id' => $identity->id,
+        ]);
     }
 
     public function test_admin_can_edit_saved_phone_number_from_contact_modal(): void

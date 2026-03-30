@@ -27,6 +27,12 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->login()
             ->brandName('Abrikosoff Connector')
+            ->sidebarFullyCollapsibleOnDesktop()
+            ->maxContentWidth('fi-admin-content-wide')
+            ->renderHook(
+                PanelsRenderHook::STYLES_AFTER,
+                fn (): string => view('filament.components.admin-theme-overrides')->render(),
+            )
             ->renderHook(
                 PanelsRenderHook::SIDEBAR_LOGO_AFTER,
                 fn (): string => view('filament.components.environment-indicator')->render(),

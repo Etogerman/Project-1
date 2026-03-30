@@ -9,9 +9,11 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\DeleteContactAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use BackedEnum;
 use Filament\Actions\Action;
+use Filament\Actions\DeleteAction;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Infolists\Components\ViewEntry;
@@ -398,8 +400,13 @@ class ContactResource extends Resource
             ->defaultSort('latest_message_id', 'desc')
             ->emptyStateHeading('Контактов ещё нет')
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')
+            ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
                 ViewAction::make()
+                    ->label('Просмотр')
+                    ->icon(null)
+                    ->button()
+                    ->outlined()
                     ->modalWidth(Width::SevenExtraLarge)
                     ->mountUsing(function (Action $action, ?Schema $schema, ManageContacts $livewire): void {
                         $schema?->fill();
@@ -421,6 +428,19 @@ class ContactResource extends Resource
                         $livewire->deletingPhoneLabel = '';
                         $livewire->showDeleteContactDialog = false;
                         $livewire->deletingContactLabel = '';
+                    }),
+                DeleteAction::make()
+                    ->label('Удалить')
+                    ->icon(null)
+                    ->button()
+                    ->authorize(fn (): bool => (bool) (auth()->user()?->is_active && auth()->user()?->is_admin))
+                    ->modalHeading('Удалить клиента?')
+                    ->modalDescription('Контакт будет удалён вместе с телефонами, сообщениями и идентичностями.')
+                    ->successNotificationTitle('Клиент удалён')
+                    ->using(function (Contact $record): bool {
+                        app(DeleteContactAction::class)->handle($record);
+
+                        return true;
                     }),
             ])
             ->toolbarActions([]);
