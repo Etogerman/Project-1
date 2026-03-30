@@ -334,6 +334,53 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
     }
 
+    public function test_job_saves_resolved_region_after_residence_city_for_russia(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Московская область',
+            'Республика Татарстан',
+        ]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::sequence()
+                ->push($this->geminiResponse([
+                    'decision' => 'accept',
+                    'city' => 'Москва',
+                    'country' => 'Россия',
+                    'country_confidence' => 'high',
+                ]))
+                ->push($this->geminiResponse([
+                    'status' => Contact::REGION_STATUS_RESOLVED,
+                    'region' => 'Московская область',
+                ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9954],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Москва',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            'first_name' => 'Герман',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Москва', $contact->city);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame(Contact::REGION_STATUS_RESOLVED, $contact->region_status);
+        $this->assertSame(Contact::REGION_SOURCE_AI, $contact->region_source);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+    }
+
     public function test_job_saves_residence_city_and_asks_country_on_low_confidence(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
@@ -662,6 +709,305 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'reply_to_message_id' => $message->id,
             'text' => 'Укажите ваш возраст:',
         ]);
+    }
+
+    public function test_job_marks_region_as_ambiguous_without_breaking_city_flow(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Волгоградская область',
+            'Приморский край',
+        ]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::sequence()
+                ->push($this->geminiResponse([
+                    'decision' => 'accept',
+                    'city' => 'Михайловка',
+                ]))
+                ->push($this->geminiResponse([
+                    'status' => Contact::REGION_STATUS_AMBIGUOUS,
+                    'region' => null,
+                ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9937],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Михайловка',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Михайловка', $contact->city);
+        $this->assertNull($contact->region);
+        $this->assertSame(Contact::REGION_STATUS_AMBIGUOUS, $contact->region_status);
+        $this->assertNull($contact->region_source);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+    }
+
+    public function test_job_moves_to_russian_region_confirm_when_region_clarification_is_needed(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Волгоградская область',
+            'Приморский край',
+            'Воронежская область',
+        ]);
+        config()->set('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::sequence()
+                ->push($this->geminiResponse([
+                    'decision' => 'accept',
+                    'city' => 'Михайловка',
+                ]))
+                ->push($this->geminiResponse([
+                    'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+                    'region' => null,
+                    'candidate_regions' => [
+                        'Волгоградская область',
+                        'Приморский край',
+                        'Воронежская область',
+                    ],
+                ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9937],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Михайловка',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM, $contact->data_collection_current_field);
+        $this->assertSame(Contact::REGION_STATUS_CLARIFICATION_PENDING, $contact->region_status);
+        $this->assertSame([
+            'Волгоградская область',
+            'Приморский край',
+            'Воронежская область',
+        ], $contact->pending_region_candidates);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && str_contains((string) $request['text'], 'Уточните ваш регион:')
+            && str_contains((string) $request['text'], '1. Волгоградская область')
+            && str_contains((string) $request['text'], '2. Приморский край')
+            && str_contains((string) $request['text'], '3. Воронежская область')
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Волгоградская область'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.1.text') === 'Приморский край'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.1.0.text') === 'Воронежская область'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.2.0.text') === 'Пропустить');
+    }
+
+    public function test_job_saves_russian_region_from_numeric_reply_and_moves_to_age_range(): void
+    {
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9954],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '2',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Михайловка',
+            'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+            'pending_region_candidates' => ['Волгоградская область', 'Приморский край'],
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Приморский край', $contact->region);
+        $this->assertSame(Contact::REGION_STATUS_RESOLVED, $contact->region_status);
+        $this->assertSame(Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT, $contact->region_source);
+        $this->assertNull($contact->pending_region_candidates);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+    }
+
+    public function test_job_retries_for_invalid_russian_region_and_keeps_same_buttons(): void
+    {
+        config()->set('bots.data_collection.russian_region_confirm.retry_message', 'Уточните ваш регион:');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9954],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '99',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Михайловка',
+            'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+            'pending_region_candidates' => ['Волгоградская область', 'Приморский край'],
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->region);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM, $contact->data_collection_current_field);
+        $this->assertSame(1, $contact->data_collection_attempts_count);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && str_contains((string) $request['text'], 'Уточните ваш регион:')
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Волгоградская область'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.1.text') === 'Приморский край'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.1.0.text') === 'Пропустить');
+    }
+
+    public function test_job_skips_russian_region_confirm_and_moves_to_age_range(): void
+    {
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9954],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'пропустить',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Михайловка',
+            'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+            'pending_region_candidates' => ['Волгоградская область', 'Приморский край'],
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->region);
+        $this->assertSame(Contact::REGION_STATUS_AMBIGUOUS, $contact->region_status);
+        $this->assertNull($contact->pending_region_candidates);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+    }
+
+    public function test_job_sends_russian_region_confirm_question_with_max_inline_buttons(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Волгоградская область',
+            'Приморский край',
+            'Воронежская область',
+        ]);
+        config()->set('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::sequence()
+                ->push($this->geminiResponse([
+                    'decision' => 'accept',
+                    'city' => 'Михайловка',
+                ]))
+                ->push($this->geminiResponse([
+                    'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+                    'region' => null,
+                    'candidate_regions' => [
+                        'Волгоградская область',
+                        'Приморский край',
+                        'Воронежская область',
+                    ],
+                ])),
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => ['message_id' => 'max-region-confirm-1'],
+            ]),
+        ]);
+
+        $channel = $this->createMaxChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Михайловка',
+        ], [
+            'external_user_id' => '500',
+        ], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM, $contact->data_collection_current_field);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+            && str_contains((string) $request['text'], 'Уточните ваш регион:')
+            && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'Волгоградская область'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.1.text') === 'Приморский край'
+            && data_get($request->data(), 'attachments.0.payload.buttons.1.0.text') === 'Воронежская область'
+            && data_get($request->data(), 'attachments.0.payload.buttons.2.0.text') === 'Пропустить');
+    }
+
+    public function test_job_saves_russian_region_from_max_button_label_and_moves_to_age_range(): void
+    {
+        config()->set('bots.data_collection.age_range.max_question', 'Укажите ваш возраст:');
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => ['message_id' => 'max-region-complete-1'],
+            ]),
+        ]);
+
+        $channel = $this->createMaxChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Приморский край',
+        ], [
+            'external_user_id' => '500',
+        ], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Михайловка',
+            'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+            'pending_region_candidates' => ['Волгоградская область', 'Приморский край'],
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Приморский край', $contact->region);
+        $this->assertSame(Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT, $contact->region_source);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
     }
 
     public function test_job_retries_for_invalid_city_and_keeps_city_step_active(): void

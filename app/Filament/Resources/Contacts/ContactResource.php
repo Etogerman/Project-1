@@ -600,9 +600,12 @@ class ContactResource extends Resource
      *     birthDateLabel: string,
      *     country: string,
      *     city: string,
+     *     region: string,
+     *     regionStatusLabel: string,
      *     messengerName: string,
      *     genderOptions: array<string, string>,
-     *     ageRangeOptions: array<string, string>
+     *     ageRangeOptions: array<string, string>,
+     *     regionOptions: array<string, string>
      * }
      */
     protected static function buildContactProfileViewData(Contact $record): array
@@ -625,9 +628,12 @@ class ContactResource extends Resource
             'birthDateLabel' => $record->birth_date?->format('d.m.Y') ?? '—',
             'country' => $record->country ?? '—',
             'city' => $record->city ?? '—',
+            'region' => $record->region ?? '—',
+            'regionStatusLabel' => Contact::formatRegionStatus($record->region_status),
             'messengerName' => $record->name ?? '—',
             'genderOptions' => Contact::genderOptions(),
             'ageRangeOptions' => Contact::ageRangeOptions(),
+            'regionOptions' => Contact::russianRegionOptions(),
         ];
     }
 

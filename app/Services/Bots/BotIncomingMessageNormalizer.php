@@ -123,13 +123,23 @@ class BotIncomingMessageNormalizer
 
     protected function normalizeTelegramCallbackData(?string $value): ?string
     {
-        if (! filled($value) || ! str_starts_with($value, 'age_range:')) {
+        if (! filled($value)) {
             return null;
         }
 
-        $normalized = trim(substr($value, strlen('age_range:')));
+        if (str_starts_with($value, 'age_range:')) {
+            $normalized = trim(substr($value, strlen('age_range:')));
 
-        return $normalized !== '' ? $normalized : null;
+            return $normalized !== '' ? $normalized : null;
+        }
+
+        if (str_starts_with($value, 'russian_region_confirm:')) {
+            $normalized = trim(substr($value, strlen('russian_region_confirm:')));
+
+            return $normalized !== '' ? 'russian_region_confirm:'.$normalized : null;
+        }
+
+        return null;
     }
 
     /**

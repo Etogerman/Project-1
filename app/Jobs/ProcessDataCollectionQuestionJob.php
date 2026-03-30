@@ -190,6 +190,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 'bots.data_collection.city.question',
                 'В каком городе вы живёте?'
             ),
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => $this->russianRegionConfirmQuestionText($contact),
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => (string) config(
                 match ($platform) {
                     Channel::PLATFORM_TELEGRAM => 'bots.data_collection.age_range.telegram_question',
@@ -210,11 +211,11 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
      */
     protected function resolveTelegramReplyMarkup(Contact $contact): ?array
     {
-        if ($contact->data_collection_current_field !== Contact::DATA_COLLECTION_FIELD_AGE_RANGE) {
-            return null;
-        }
-
-        $buttons = $this->telegramAgeRangeInlineKeyboard();
+        $buttons = match ($contact->data_collection_current_field) {
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->telegramAgeRangeInlineKeyboard(),
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => $this->telegramRussianRegionConfirmInlineKeyboard($contact),
+            default => null,
+        };
 
         if ($buttons === null) {
             return null;
@@ -277,11 +278,11 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
      */
     protected function resolveMaxAttachments(Contact $contact): ?array
     {
-        if ($contact->data_collection_current_field !== Contact::DATA_COLLECTION_FIELD_AGE_RANGE) {
-            return null;
-        }
-
-        return $this->maxAgeRangeAttachments();
+        return match ($contact->data_collection_current_field) {
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->maxAgeRangeAttachments(),
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => $this->maxRussianRegionConfirmAttachments($contact),
+            default => null,
+        };
     }
 
     /**
@@ -338,5 +339,135 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 'buttons' => $buttons,
             ],
         ]];
+    }
+
+    protected function russianRegionConfirmQuestionText(Contact $contact): ?string
+    {
+        $candidates = $this->russianRegionCandidates($contact);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $lines = [(string) config('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:')];
+
+        foreach ($candidates as $index => $candidate) {
+            $lines[] = sprintf('%d. %s', $index + 1, $candidate);
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @return array<int, array<int, array{text: string, callback_data: string}>>|null
+     */
+    protected function telegramRussianRegionConfirmInlineKeyboard(Contact $contact): ?array
+    {
+        $candidates = $this->russianRegionCandidates($contact);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $keyboard = [];
+
+        foreach (array_chunk(array_values($candidates), 2, true) as $chunk) {
+            $row = [];
+
+            foreach ($chunk as $index => $candidate) {
+                $position = array_search($candidate, $candidates, true);
+
+                if ($position === false) {
+                    continue;
+                }
+
+                $row[] = [
+                    'text' => $candidate,
+                    'callback_data' => 'russian_region_confirm:'.($position + 1),
+                ];
+            }
+
+            if ($row !== []) {
+                $keyboard[] = $row;
+            }
+        }
+
+        $keyboard[] = [[
+            'text' => (string) config('bots.data_collection.russian_region_confirm.skip_button_label', 'Пропустить'),
+            'callback_data' => 'russian_region_confirm:skip',
+        ]];
+
+        return $keyboard;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>|null
+     */
+    protected function maxRussianRegionConfirmAttachments(Contact $contact): ?array
+    {
+        $candidates = $this->russianRegionCandidates($contact);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $buttons = [];
+
+        foreach (array_chunk(array_values($candidates), 2) as $chunk) {
+            $row = [];
+
+            foreach ($chunk as $candidate) {
+                $row[] = [
+                    'type' => 'message',
+                    'text' => $candidate,
+                ];
+            }
+
+            if ($row !== []) {
+                $buttons[] = $row;
+            }
+        }
+
+        $buttons[] = [[
+            'type' => 'message',
+            'text' => (string) config('bots.data_collection.russian_region_confirm.skip_button_label', 'Пропустить'),
+        ]];
+
+        return [[
+            'type' => 'inline_keyboard',
+            'payload' => [
+                'buttons' => $buttons,
+            ],
+        ]];
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function russianRegionCandidates(Contact $contact): array
+    {
+        $candidates = $contact->pending_region_candidates;
+
+        if (! is_array($candidates)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($candidates as $candidate) {
+            if (! is_string($candidate)) {
+                continue;
+            }
+
+            $trimmed = trim($candidate);
+
+            if ($trimmed === '' || in_array($trimmed, $normalized, true)) {
+                continue;
+            }
+
+            $normalized[] = $trimmed;
+        }
+
+        return $normalized;
     }
 }

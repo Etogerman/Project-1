@@ -12,6 +12,7 @@ use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
+use App\Services\Contacts\SyncContactRussianRegionAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Bus\Queueable;
@@ -62,6 +63,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ExtractResidenceCityAction $extractResidenceCityAction,
         ExtractCountryAction $extractCountryAction,
         ExtractCityAction $extractCityAction,
+        SyncContactRussianRegionAction $syncContactRussianRegionAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
@@ -161,6 +163,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
                 extractResidenceCityAction: $extractResidenceCityAction,
+                syncContactRussianRegionAction: $syncContactRussianRegionAction,
             ),
             Contact::DATA_COLLECTION_FIELD_COUNTRY => $this->handleCountryReply(
                 message: $message,
@@ -173,6 +176,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 channelActivityLogger: $channelActivityLogger,
                 extractCountryAction: $extractCountryAction,
                 extractCityAction: $extractCityAction,
+                syncContactRussianRegionAction: $syncContactRussianRegionAction,
             ),
             Contact::DATA_COLLECTION_FIELD_CITY => $this->handleCityReply(
                 message: $message,
@@ -184,6 +188,17 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
                 extractCityAction: $extractCityAction,
+                syncContactRussianRegionAction: $syncContactRussianRegionAction,
+            ),
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => $this->handleRussianRegionConfirmReply(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                replyText: $replyText,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
             ),
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->handleAgeRangeReply(
                 message: $message,
@@ -287,6 +302,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ExtractResidenceCityAction $extractResidenceCityAction,
+        SyncContactRussianRegionAction $syncContactRussianRegionAction,
     ): void {
         try {
             $extraction = $extractResidenceCityAction->handle($replyText);
@@ -343,6 +359,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         }
 
         $contact->forceFill($attributes)->save();
+        $syncContactRussianRegionAction->handle($contact, true);
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY);
 
@@ -394,6 +411,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
         ExtractCountryAction $extractCountryAction,
         ExtractCityAction $extractCityAction,
+        SyncContactRussianRegionAction $syncContactRussianRegionAction,
     ): void {
         try {
             $extraction = $extractCountryAction->handle($replyText);
@@ -472,6 +490,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $contact->forceFill([
             'country' => $country,
         ])->save();
+        $syncContactRussianRegionAction->handle($contact, true);
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_COUNTRY);
 
@@ -510,6 +529,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ExtractCityAction $extractCityAction,
+        SyncContactRussianRegionAction $syncContactRussianRegionAction,
     ): void {
         try {
             $extraction = $extractCityAction->handle($replyText, $contact->country);
@@ -551,8 +571,77 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $contact->forceFill([
             'city' => $city,
         ])->save();
+        $syncContactRussianRegionAction->handle($contact, true);
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_CITY);
+
+        $this->moveToAgeRangeStep(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+        );
+    }
+
+    protected function handleRussianRegionConfirmReply(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        string $replyText,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $resolution = $this->resolveRussianRegionConfirmInput($contact, $replyText);
+
+        if ($resolution === 'skip') {
+            $contact->forceFill([
+                'region' => null,
+                'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
+                'region_source' => null,
+                'pending_region_candidates' => null,
+            ])->save();
+
+            $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        if ($resolution === null) {
+            $this->handleRetry(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                currentField: Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $contact->forceFill([
+            'region' => $resolution,
+            'region_status' => Contact::REGION_STATUS_RESOLVED,
+            'region_source' => Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT,
+            'pending_region_candidates' => null,
+        ])->save();
+
+        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM);
 
         $this->moveToAgeRangeStep(
             message: $message,
@@ -715,6 +804,27 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 return;
             }
 
+            if ($currentField === Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM) {
+                $contact->forceFill([
+                    'region' => null,
+                    'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
+                    'region_source' => null,
+                    'pending_region_candidates' => null,
+                ])->save();
+
+                $this->moveToAgeRangeStep(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+
             $this->sendTerminalSkip(
                 message: $message,
                 channel: $channel,
@@ -732,7 +842,9 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $this->sendReply(
             message: $message,
             channel: $channel,
-            text: $this->retryMessage($currentField),
+            text: $currentField === Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM
+                ? $this->russianRegionConfirmRetryText($contact)
+                : $this->retryMessage($currentField),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -740,8 +852,8 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             channelActivityLogger: $channelActivityLogger,
             activityEvent: 'contact.data_collection_retry_sent',
             activityMessage: 'Отправлено повторное сообщение сбора профиля.',
-            telegramReplyMarkup: $this->telegramReplyMarkupForField($currentField),
-            maxAttachments: $this->maxAttachmentsForField($currentField),
+            telegramReplyMarkup: $this->telegramReplyMarkupForField($currentField, $contact),
+            maxAttachments: $this->maxAttachmentsForField($currentField, $contact),
         );
     }
 
@@ -855,6 +967,27 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         }
 
         if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY) {
+            $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM) {
+            $contact->forceFill([
+                'region' => null,
+                'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
+                'region_source' => null,
+                'pending_region_candidates' => null,
+            ])->save();
+
             $this->moveToAgeRangeStep(
                 message: $message,
                 channel: $channel,
@@ -1049,6 +1182,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
     ): void {
+        if ($this->shouldAskRussianRegionConfirmation($contact)) {
+            $this->moveToRussianRegionConfirmStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
         if (filled($contact->age_range)) {
             $this->sendCompletion(
                 message: $message,
@@ -1078,6 +1225,47 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             activityMessage: 'Отправлен следующий вопрос сбора профиля.',
             telegramReplyMarkup: $this->telegramReplyMarkupForField(Contact::DATA_COLLECTION_FIELD_AGE_RANGE),
             maxAttachments: $this->maxAttachmentsForField(Contact::DATA_COLLECTION_FIELD_AGE_RANGE),
+        );
+    }
+
+    protected function moveToRussianRegionConfirmStep(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        if (! $this->shouldAskRussianRegionConfirmation($contact)) {
+            $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $contact->startDataCollection(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM);
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->russianRegionConfirmQuestionText($contact),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_next_question_sent',
+            activityMessage: 'Отправлен следующий вопрос сбора профиля.',
+            telegramReplyMarkup: $this->telegramReplyMarkupForField(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM, $contact),
+            maxAttachments: $this->maxAttachmentsForField(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM, $contact),
         );
     }
 
@@ -1389,6 +1577,50 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         return null;
     }
 
+    /**
+     * @return string|'skip'|null
+     */
+    protected function resolveRussianRegionConfirmInput(Contact $contact, string $replyText): string|null
+    {
+        $candidates = $this->russianRegionCandidates($contact);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $callbackValue = $this->normalizeRussianRegionConfirmCallbackValue($replyText);
+
+        if ($callbackValue === 'skip') {
+            return 'skip';
+        }
+
+        if ($callbackValue !== null && ctype_digit($callbackValue)) {
+            $candidate = $this->candidateByOneBasedIndex($candidates, (int) $callbackValue);
+
+            if ($candidate !== null) {
+                return $candidate;
+            }
+        }
+
+        $normalizedReply = $this->normalizeAgeRangeInput($replyText);
+
+        if ($normalizedReply === '') {
+            return null;
+        }
+
+        foreach ($candidates as $index => $candidate) {
+            if ($normalizedReply === (string) ($index + 1)) {
+                return $candidate;
+            }
+
+            if ($normalizedReply === $this->normalizeAgeRangeInput($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
     protected function normalizeAgeRangeInput(string $value): string
     {
         $normalized = mb_strtolower(trim($value));
@@ -1479,13 +1711,15 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
     /**
      * @return array<string, mixed>|null
      */
-    protected function telegramReplyMarkupForField(?string $field): ?array
+    protected function telegramReplyMarkupForField(?string $field, ?Contact $contact = null): ?array
     {
-        if ($field !== Contact::DATA_COLLECTION_FIELD_AGE_RANGE) {
-            return null;
-        }
-
-        $keyboard = $this->telegramAgeRangeInlineKeyboard();
+        $keyboard = match ($field) {
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->telegramAgeRangeInlineKeyboard(),
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => $contact instanceof Contact
+                ? $this->telegramRussianRegionConfirmInlineKeyboard($contact)
+                : null,
+            default => null,
+        };
 
         if ($keyboard === null) {
             return null;
@@ -1544,15 +1778,51 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
     }
 
     /**
-     * @return array<int, array<string, mixed>>|null
+     * @return array<int, array<int, array{text: string, callback_data: string}>>|null
      */
-    protected function maxAttachmentsForField(?string $field): ?array
+    protected function telegramRussianRegionConfirmInlineKeyboard(Contact $contact): ?array
     {
-        if ($field !== Contact::DATA_COLLECTION_FIELD_AGE_RANGE) {
+        $candidates = $this->russianRegionCandidates($contact);
+
+        if ($candidates === []) {
             return null;
         }
 
-        return $this->maxAgeRangeAttachments();
+        $keyboard = [];
+
+        foreach (array_chunk($candidates, 2) as $offset => $chunk) {
+            $row = [];
+
+            foreach ($chunk as $index => $candidate) {
+                $row[] = [
+                    'text' => $candidate,
+                    'callback_data' => 'russian_region_confirm:'.(($offset * 2) + $index + 1),
+                ];
+            }
+
+            $keyboard[] = $row;
+        }
+
+        $keyboard[] = [[
+            'text' => (string) config('bots.data_collection.russian_region_confirm.skip_button_label', 'Пропустить'),
+            'callback_data' => 'russian_region_confirm:skip',
+        ]];
+
+        return $keyboard;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>|null
+     */
+    protected function maxAttachmentsForField(?string $field, ?Contact $contact = null): ?array
+    {
+        return match ($field) {
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->maxAgeRangeAttachments(),
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => $contact instanceof Contact
+                ? $this->maxRussianRegionConfirmAttachments($contact)
+                : null,
+            default => null,
+        };
     }
 
     /**
@@ -1612,6 +1882,45 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
     }
 
     /**
+     * @return array<int, array<string, mixed>>|null
+     */
+    protected function maxRussianRegionConfirmAttachments(Contact $contact): ?array
+    {
+        $candidates = $this->russianRegionCandidates($contact);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $buttons = [];
+
+        foreach (array_chunk($candidates, 2) as $chunk) {
+            $row = [];
+
+            foreach ($chunk as $candidate) {
+                $row[] = [
+                    'type' => 'message',
+                    'text' => $candidate,
+                ];
+            }
+
+            $buttons[] = $row;
+        }
+
+        $buttons[] = [[
+            'type' => 'message',
+            'text' => (string) config('bots.data_collection.russian_region_confirm.skip_button_label', 'Пропустить'),
+        ]];
+
+        return [[
+            'type' => 'inline_keyboard',
+            'payload' => [
+                'buttons' => $buttons,
+            ],
+        ]];
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     protected function telegramReplyMarkupForCompletion(Contact $contact): ?array
@@ -1629,5 +1938,94 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         return $field === Contact::DATA_COLLECTION_FIELD_AGE_RANGE
             ? ['remove_keyboard' => true]
             : null;
+    }
+
+    protected function shouldAskRussianRegionConfirmation(Contact $contact): bool
+    {
+        $candidates = $this->russianRegionCandidates($contact);
+
+        return $contact->region_status === Contact::REGION_STATUS_CLARIFICATION_PENDING
+            && ! filled($contact->region)
+            && count($candidates) >= 2
+            && count($candidates) <= 4;
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function russianRegionCandidates(Contact $contact): array
+    {
+        $candidates = $contact->pending_region_candidates;
+
+        if (! is_array($candidates)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($candidates as $candidate) {
+            if (! is_string($candidate)) {
+                continue;
+            }
+
+            $trimmed = trim($candidate);
+
+            if ($trimmed === '' || in_array($trimmed, $normalized, true)) {
+                continue;
+            }
+
+            $normalized[] = $trimmed;
+        }
+
+        return $normalized;
+    }
+
+    protected function russianRegionConfirmQuestionText(Contact $contact): string
+    {
+        $lines = [(string) config('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:')];
+
+        foreach ($this->russianRegionCandidates($contact) as $index => $candidate) {
+            $lines[] = sprintf('%d. %s', $index + 1, $candidate);
+        }
+
+        return implode("\n", $lines);
+    }
+
+    protected function russianRegionConfirmRetryText(Contact $contact): string
+    {
+        $lines = [(string) config('bots.data_collection.russian_region_confirm.retry_message', 'Уточните ваш регион:')];
+
+        foreach ($this->russianRegionCandidates($contact) as $index => $candidate) {
+            $lines[] = sprintf('%d. %s', $index + 1, $candidate);
+        }
+
+        return implode("\n", $lines);
+    }
+
+    protected function normalizeRussianRegionConfirmCallbackValue(string $replyText): ?string
+    {
+        $normalized = trim($replyText);
+
+        if (! str_starts_with($normalized, 'russian_region_confirm:')) {
+            return null;
+        }
+
+        $value = trim(substr($normalized, strlen('russian_region_confirm:')));
+
+        return $value !== '' ? $value : null;
+    }
+
+    /**
+     * @param  list<string>  $candidates
+     */
+    protected function candidateByOneBasedIndex(array $candidates, int $index): ?string
+    {
+        if ($index < 1) {
+            return null;
+        }
+
+        $position = $index - 1;
+
+        return $candidates[$position] ?? null;
     }
 }

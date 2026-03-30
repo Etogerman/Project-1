@@ -25,7 +25,25 @@ class Contact extends Model
 
     public const DATA_COLLECTION_FIELD_CITY = 'city';
 
+    public const DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM = 'russian_region_confirm';
+
     public const DATA_COLLECTION_FIELD_AGE_RANGE = 'age_range';
+
+    public const REGION_STATUS_RESOLVED = 'resolved';
+
+    public const REGION_STATUS_CLARIFICATION_PENDING = 'clarification_pending';
+
+    public const REGION_STATUS_AMBIGUOUS = 'ambiguous';
+
+    public const REGION_STATUS_UNKNOWN = 'unknown';
+
+    public const REGION_STATUS_OUT_OF_SCOPE = 'out_of_scope';
+
+    public const REGION_SOURCE_AI = 'ai';
+
+    public const REGION_SOURCE_CONFIRMED_BY_CONTACT = 'confirmed_by_contact';
+
+    public const REGION_SOURCE_MANUAL = 'manual';
 
     /**
      * @var list<string>
@@ -40,6 +58,10 @@ class Contact extends Model
         'birth_date',
         'country',
         'city',
+        'region',
+        'region_status',
+        'region_source',
+        'pending_region_candidates',
         'data_collection_status',
         'data_collection_current_field',
         'data_collection_started_at',
@@ -57,6 +79,7 @@ class Contact extends Model
         'data_collection_started_at' => 'datetime',
         'data_collection_completed_at' => 'datetime',
         'data_collection_attempts_count' => 'integer',
+        'pending_region_candidates' => 'array',
         'is_auto_reply_enabled' => 'boolean',
     ];
 
@@ -86,6 +109,50 @@ class Contact extends Model
         ];
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function russianRegionOptions(): array
+    {
+        $regions = config('bots.data_collection.russian_region.allowed_regions', []);
+
+        if (! is_array($regions)) {
+            return [];
+        }
+
+        $options = [];
+
+        foreach ($regions as $region) {
+            if (! is_string($region)) {
+                continue;
+            }
+
+            $trimmed = trim($region);
+
+            if ($trimmed === '') {
+                continue;
+            }
+
+            $options[$trimmed] = $trimmed;
+        }
+
+        return $options;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function regionStatusOptions(): array
+    {
+        return [
+            self::REGION_STATUS_RESOLVED => 'Определён',
+            self::REGION_STATUS_CLARIFICATION_PENDING => 'Нужно уточнение',
+            self::REGION_STATUS_AMBIGUOUS => 'Неоднозначно',
+            self::REGION_STATUS_UNKNOWN => 'Не определён',
+            self::REGION_STATUS_OUT_OF_SCOPE => 'Не Россия',
+        ];
+    }
+
     public static function formatGender(?string $value): string
     {
         if (! filled($value)) {
@@ -102,6 +169,15 @@ class Contact extends Model
         }
 
         return self::ageRangeOptions()[$value] ?? (string) $value;
+    }
+
+    public static function formatRegionStatus(?string $value): string
+    {
+        if (! filled($value)) {
+            return '—';
+        }
+
+        return self::regionStatusOptions()[$value] ?? (string) $value;
     }
 
     public function assignedUser(): BelongsTo

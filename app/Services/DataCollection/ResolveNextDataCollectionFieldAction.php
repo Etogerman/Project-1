@@ -24,6 +24,16 @@ class ResolveNextDataCollectionFieldAction
             return Contact::DATA_COLLECTION_FIELD_COUNTRY;
         }
 
+        if (
+            $contact->region_status === Contact::REGION_STATUS_CLARIFICATION_PENDING
+            && is_array($contact->pending_region_candidates)
+            && count($contact->pending_region_candidates) >= 2
+            && count($contact->pending_region_candidates) <= 4
+            && ! filled($contact->region)
+        ) {
+            return Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM;
+        }
+
         if (! filled($contact->age_range)) {
             return Contact::DATA_COLLECTION_FIELD_AGE_RANGE;
         }

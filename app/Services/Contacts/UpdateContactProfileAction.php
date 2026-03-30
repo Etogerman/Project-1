@@ -7,6 +7,10 @@ use Illuminate\Support\Carbon;
 
 class UpdateContactProfileAction
 {
+    public function __construct(
+        private readonly SyncContactRussianRegionAction $syncContactRussianRegionAction,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $attributes
      */
@@ -17,13 +21,16 @@ class UpdateContactProfileAction
         $gender = $this->normalizeGender($attributes['gender'] ?? null);
         $country = $this->normalizeNullableString($attributes['country'] ?? null);
         $city = $this->normalizeNullableString($attributes['city'] ?? null);
+        $region = $this->normalizeRegion($attributes['region'] ?? null);
         $ageRange = $this->normalizeAgeRange($attributes['age_range'] ?? null);
         $birthDate = $this->normalizeBirthDate($attributes['birth_date'] ?? null);
         $ageYears = $birthDate === null
             ? $this->normalizeNullableInt($attributes['age_years'] ?? null)
             : null;
+        $countryOrCityChanged = $contact->country !== $country || $contact->city !== $city;
+        $regionChanged = $contact->region !== $region;
 
-        $contact->forceFill([
+        $payload = [
             'first_name' => $firstName,
             'last_name' => $lastName,
             'gender' => $gender,
@@ -32,7 +39,35 @@ class UpdateContactProfileAction
             'age_range' => $ageRange,
             'country' => $country,
             'city' => $city,
-        ])->save();
+        ];
+
+        if ($country !== null && ! $this->isRussianCountry($country)) {
+            $contact->forceFill(array_merge($payload, [
+                'region' => null,
+                'region_status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
+                'region_source' => null,
+                'pending_region_candidates' => null,
+            ]))->save();
+
+            return $contact->fresh();
+        }
+
+        if ($regionChanged) {
+            $contact->forceFill(array_merge($payload, [
+                'region' => $region,
+                'region_status' => $region === null ? null : Contact::REGION_STATUS_RESOLVED,
+                'region_source' => $region === null ? null : Contact::REGION_SOURCE_MANUAL,
+                'pending_region_candidates' => null,
+            ]))->save();
+
+            return $contact->fresh();
+        }
+
+        $contact->forceFill($payload)->save();
+
+        if ($countryOrCityChanged) {
+            $this->syncContactRussianRegionAction->handle($contact, false);
+        }
 
         return $contact->fresh();
     }
@@ -94,5 +129,27 @@ class UpdateContactProfileAction
         }
 
         return array_key_exists($trimmed, Contact::genderOptions()) ? $trimmed : null;
+    }
+
+    private function normalizeRegion(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        if ($trimmed === '') {
+            return null;
+        }
+
+        return array_key_exists($trimmed, Contact::russianRegionOptions()) ? $trimmed : null;
+    }
+
+    private function isRussianCountry(string $country): bool
+    {
+        $normalized = mb_strtolower(trim($country));
+
+        return in_array($normalized, ['россия', 'российская федерация', 'рф', 'russia'], true);
     }
 }

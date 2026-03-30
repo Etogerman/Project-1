@@ -42,6 +42,7 @@ class ManageContacts extends ManageRecords
     public string $editingBirthDate = '';
     public string $editingCountry = '';
     public string $editingCity = '';
+    public string $editingRegion = '';
     public bool $showDeletePhoneDialog = false;
     public string $deletingPhoneId = '';
     public string $deletingPhoneLabel = '';
@@ -282,6 +283,7 @@ class ManageContacts extends ManageRecords
         $this->editingBirthDate = $record->birth_date?->toDateString() ?? '';
         $this->editingCountry = (string) ($record->country ?? '');
         $this->editingCity = (string) ($record->city ?? '');
+        $this->editingRegion = (string) ($record->region ?? '');
         $this->showEditProfileDialog = true;
     }
 
@@ -301,6 +303,7 @@ class ManageContacts extends ManageRecords
             'editingBirthDate' => ['nullable', 'date', 'before_or_equal:today'],
             'editingCountry' => ['nullable', 'string', 'max:255'],
             'editingCity' => ['nullable', 'string', 'max:255'],
+            'editingRegion' => ['nullable', 'string', Rule::in(array_keys(Contact::russianRegionOptions()))],
         ]);
 
         try {
@@ -319,6 +322,7 @@ class ManageContacts extends ManageRecords
                 'birth_date' => $validated['editingBirthDate'] ?? null,
                 'country' => $validated['editingCountry'] ?? null,
                 'city' => $validated['editingCity'] ?? null,
+                'region' => $validated['editingRegion'] ?? null,
             ]);
 
             $this->resetProfileEditingState();
@@ -639,6 +643,7 @@ class ManageContacts extends ManageRecords
             Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => 'Город проживания',
             Contact::DATA_COLLECTION_FIELD_COUNTRY => 'Страна',
             Contact::DATA_COLLECTION_FIELD_CITY => 'Город',
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => 'Регион',
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => 'Возраст',
             default => '—',
         };
@@ -682,6 +687,7 @@ class ManageContacts extends ManageRecords
         $this->editingBirthDate = '';
         $this->editingCountry = '';
         $this->editingCity = '';
+        $this->editingRegion = '';
         $this->resetErrorBag([
             'editingFirstName',
             'editingLastName',
@@ -691,6 +697,7 @@ class ManageContacts extends ManageRecords
             'editingBirthDate',
             'editingCountry',
             'editingCity',
+            'editingRegion',
         ]);
     }
 

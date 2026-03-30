@@ -550,6 +550,7 @@ class FilamentContactsResourceTest extends TestCase
             ->set('editingAgeRange', '30_39')
             ->set('editingCountry', 'Россия')
             ->set('editingCity', 'Москва')
+            ->set('editingRegion', 'Московская область')
             ->call('saveMountedContactProfile')
             ->assertHasNoErrors()
             ->assertMountedActionModalSee('Герман')
@@ -558,6 +559,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('30 - 39 лет')
             ->assertMountedActionModalSee('Россия')
             ->assertMountedActionModalSee('Москва')
+            ->assertMountedActionModalSee('Московская область')
+            ->assertMountedActionModalSee('Определён')
             ->assertMountedActionModalSee('Имя из мессенджера');
 
         $contact->refresh();
@@ -567,6 +570,9 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame('male', $contact->gender);
         $this->assertSame('Россия', $contact->country);
         $this->assertSame('Москва', $contact->city);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame(Contact::REGION_STATUS_RESOLVED, $contact->region_status);
+        $this->assertSame(Contact::REGION_SOURCE_MANUAL, $contact->region_source);
         $this->assertSame('30_39', $contact->age_range);
         $this->assertNotNull($contact->birth_date);
         $this->assertNull($contact->age_years);

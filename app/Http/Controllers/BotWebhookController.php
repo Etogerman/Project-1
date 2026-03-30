@@ -238,9 +238,9 @@ class BotWebhookController extends Controller
             $telegramBotApiService->answerCallbackQuery($channel, $callbackQueryId);
         }
 
-        $callbackValue = $this->normalizeTelegramAgeRangeCallbackValue($payload);
+        $callback = $this->normalizeTelegramDataCollectionCallback($payload);
 
-        if ($callbackValue === null || ! $this->isTelegramAgeRangeCallbackActionable($channel, $payload)) {
+        if ($callback === null || ! $this->isTelegramDataCollectionCallbackActionable($channel, $payload, $callback['field'])) {
             return response()->json([
                 'ok' => true,
             ]);
@@ -289,23 +289,37 @@ class BotWebhookController extends Controller
     /**
      * @param  array<string, mixed>  $payload
      */
-    protected function normalizeTelegramAgeRangeCallbackValue(array $payload): ?string
+    protected function normalizeTelegramDataCollectionCallback(array $payload): ?array
     {
         $data = trim((string) data_get($payload, 'callback_query.data', ''));
 
-        if (! str_starts_with($data, 'age_range:')) {
-            return null;
+        foreach ([
+            'age_range:' => \App\Models\Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'russian_region_confirm:' => \App\Models\Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+        ] as $prefix => $field) {
+            if (! str_starts_with($data, $prefix)) {
+                continue;
+            }
+
+            $value = trim(substr($data, strlen($prefix)));
+
+            if ($value === '') {
+                return null;
+            }
+
+            return [
+                'field' => $field,
+                'value' => $value,
+            ];
         }
 
-        $value = trim(substr($data, strlen('age_range:')));
-
-        return $value !== '' ? $value : null;
+        return null;
     }
 
     /**
      * @param  array<string, mixed>  $payload
      */
-    protected function isTelegramAgeRangeCallbackActionable(Channel $channel, array $payload): bool
+    protected function isTelegramDataCollectionCallbackActionable(Channel $channel, array $payload, string $field): bool
     {
         $externalUserId = trim((string) data_get($payload, 'callback_query.from.id', ''));
 
@@ -320,7 +334,7 @@ class BotWebhookController extends Controller
             ->first();
 
         return $identity?->contact?->isInDataCollection() === true
-            && $identity->contact->data_collection_current_field === \App\Models\Contact::DATA_COLLECTION_FIELD_AGE_RANGE;
+            && $identity->contact->data_collection_current_field === $field;
     }
 
     /**

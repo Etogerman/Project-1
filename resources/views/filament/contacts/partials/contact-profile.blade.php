@@ -35,6 +35,14 @@
             <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Город</p>
             <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $city }}</p>
         </div>
+        <div>
+            <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Регион</p>
+            <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $region }}</p>
+        </div>
+        <div>
+            <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Статус региона</p>
+            <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $regionStatusLabel }}</p>
+        </div>
     </div>
 
     <div style="margin-top: 0.9rem; border-top: 1px solid #e5e7eb; padding-top: 0.8rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
@@ -200,6 +208,26 @@
                             style="display: block; width: 100%; box-sizing: border-box; border: 1px solid #9ca3af; border-radius: 12px; background: #ffffff; color: #111827; padding: 0.85rem 0.95rem; font-size: 0.95rem;"
                         />
                         @error('editingCity')
+                            <p style="margin: 0.45rem 0 0; font-size: 0.75rem; color: #dc2626;">{{ $message }}</p>
+                        @enderror
+                    </div>
+
+                    <div style="grid-column: span 2;">
+                        <label for="contact-profile-region" style="display: block; margin-bottom: 0.45rem; font-size: 0.875rem; font-weight: 600; color: #111827;">Регион</label>
+                        <select
+                            id="contact-profile-region"
+                            wire:model.defer="editingRegion"
+                            style="display: block; width: 100%; box-sizing: border-box; border: 1px solid #9ca3af; border-radius: 12px; background: #ffffff; color: #111827; padding: 0.85rem 0.95rem; font-size: 0.95rem;"
+                        >
+                            <option value="">Не указан</option>
+                            @foreach ($regionOptions as $value => $label)
+                                <option value="{{ $value }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                        <p style="margin: 0.45rem 0 0; font-size: 0.75rem; color: #6b7280;">
+                            Для России регион можно задать вручную. Если меняются страна или город, регион пересчитывается автоматически.
+                        </p>
+                        @error('editingRegion')
                             <p style="margin: 0.45rem 0 0; font-size: 0.75rem; color: #dc2626;">{{ $message }}</p>
                         @enderror
                     </div>
