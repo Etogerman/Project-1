@@ -923,7 +923,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $this->sendReply(
             message: $message,
             channel: $channel,
-            text: $questionOverride ?? $this->questionText(Contact::DATA_COLLECTION_FIELD_COUNTRY),
+            text: $questionOverride ?? $this->questionText(Contact::DATA_COLLECTION_FIELD_COUNTRY, $channel->platform),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -990,7 +990,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $this->sendReply(
             message: $message,
             channel: $channel,
-            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY),
+            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $channel->platform),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -1029,7 +1029,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $this->sendReply(
             message: $message,
             channel: $channel,
-            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_CITY),
+            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_CITY, $channel->platform),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -1068,7 +1068,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $this->sendReply(
             message: $message,
             channel: $channel,
-            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_AGE_RANGE),
+            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $channel->platform),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -1227,7 +1227,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         return config("bots.data_collection.{$field}.{$key}", $default);
     }
 
-    protected function questionText(string $field): string
+    protected function questionText(string $field, ?string $platform = null): string
     {
         return match ($field) {
             Contact::DATA_COLLECTION_FIELD_FIRST_NAME => (string) config(
@@ -1247,8 +1247,12 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 'В каком городе вы живёте?'
             ),
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => (string) config(
-                'bots.data_collection.age_range.question',
-                "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+                $platform === Channel::PLATFORM_TELEGRAM
+                    ? 'bots.data_collection.age_range.telegram_question'
+                    : 'bots.data_collection.age_range.question',
+                $platform === Channel::PLATFORM_TELEGRAM
+                    ? 'Укажите ваш возраст:'
+                    : "Укажите ваш возраст:\n1. До 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
             ),
             default => '',
         };
@@ -1478,27 +1482,62 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return null;
         }
 
-        $keyboard = [];
+        $keyboard = $this->telegramAgeRangeInlineKeyboard();
 
-        foreach ((array) config('bots.data_collection.age_range.options', []) as $option) {
-            if (! is_array($option) || ! filled($option['label'] ?? null)) {
-                continue;
-            }
-
-            $keyboard[] = [[
-                'text' => (string) $option['label'],
-            ]];
-        }
-
-        if ($keyboard === []) {
+        if ($keyboard === null) {
             return null;
         }
 
         return [
-            'keyboard' => $keyboard,
-            'resize_keyboard' => true,
-            'one_time_keyboard' => true,
+            'inline_keyboard' => $keyboard,
         ];
+    }
+
+    /**
+     * @return array<int, array<int, array{text: string, callback_data: string}>>|null
+     */
+    protected function telegramAgeRangeInlineKeyboard(): ?array
+    {
+        $optionsByValue = [];
+
+        foreach ((array) config('bots.data_collection.age_range.options', []) as $option) {
+            if (! is_array($option) || ! filled($option['label'] ?? null) || ! filled($option['value'] ?? null)) {
+                continue;
+            }
+
+            $optionsByValue[(string) $option['value']] = (string) $option['label'];
+        }
+
+        $rows = [
+            ['under_18', '18_23'],
+            ['24_29', '30_39'],
+            ['over_40'],
+        ];
+
+        $keyboard = [];
+
+        foreach ($rows as $rowValues) {
+            $row = [];
+
+            foreach ($rowValues as $value) {
+                $label = $optionsByValue[$value] ?? null;
+
+                if (! filled($label)) {
+                    continue;
+                }
+
+                $row[] = [
+                    'text' => $label,
+                    'callback_data' => 'age_range:'.$value,
+                ];
+            }
+
+            if ($row !== []) {
+                $keyboard[] = $row;
+            }
+        }
+
+        return $keyboard !== [] ? $keyboard : null;
     }
 
     /**

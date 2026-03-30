@@ -7,9 +7,11 @@ use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Models\ContactIdentity;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\StoreInboundMessageAction;
+use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -22,6 +24,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        TelegramBotApiService $telegramBotApiService,
     ): JsonResponse {
         return $this->handle(
             request: $request,
@@ -30,6 +33,7 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
+            telegramBotApiService: $telegramBotApiService,
         );
     }
 
@@ -57,6 +61,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        ?TelegramBotApiService $telegramBotApiService = null,
     ): JsonResponse {
         abort_unless(
             $channel->is_active
@@ -79,7 +84,7 @@ class BotWebhookController extends Controller
         Log::info('bot webhook received', [
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
-            'update_type' => $payload['update_type'] ?? null,
+            'update_type' => $payload['update_type'] ?? $this->telegramUpdateType($payload),
         ]);
         $channelActivityLogger->info(
             $channel,
@@ -87,11 +92,22 @@ class BotWebhookController extends Controller
             'Получен входящий webhook.',
             [
                 'platform' => $channel->platform,
-                'update_type' => $payload['update_type'] ?? null,
+                'update_type' => $payload['update_type'] ?? $this->telegramUpdateType($payload),
             ],
         );
 
         $channel->markWebhookReceived();
+
+        if ($expectedPlatform === Channel::PLATFORM_TELEGRAM && isset($payload['callback_query'])) {
+            return $this->handleTelegramCallbackQuery(
+                channel: $channel,
+                payload: $payload,
+                telegramBotApiService: $telegramBotApiService,
+                botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
+                storeInboundMessageAction: $storeInboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+        }
 
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
@@ -203,5 +219,119 @@ class BotWebhookController extends Controller
         return response()->json([
             'ok' => true,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function handleTelegramCallbackQuery(
+        Channel $channel,
+        array $payload,
+        ?TelegramBotApiService $telegramBotApiService,
+        BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
+        StoreInboundMessageAction $storeInboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): JsonResponse {
+        $callbackQueryId = trim((string) data_get($payload, 'callback_query.id', ''));
+
+        if ($telegramBotApiService instanceof TelegramBotApiService && $callbackQueryId !== '') {
+            $telegramBotApiService->answerCallbackQuery($channel, $callbackQueryId);
+        }
+
+        $callbackValue = $this->normalizeTelegramAgeRangeCallbackValue($payload);
+
+        if ($callbackValue === null || ! $this->isTelegramAgeRangeCallbackActionable($channel, $payload)) {
+            return response()->json([
+                'ok' => true,
+            ]);
+        }
+
+        $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
+
+        if ($message === null) {
+            return response()->json([
+                'ok' => true,
+            ]);
+        }
+
+        $storedResult = $storeInboundMessageAction->handle($channel, $message);
+        $storedMessage = $storedResult->message;
+
+        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
+            return response()->json([
+                'ok' => true,
+            ]);
+        }
+
+        $storedMessage->loadMissing('contact');
+
+        if ($storedMessage->contact?->isInDataCollection()) {
+            ProcessDataCollectionResponseJob::dispatch($storedMessage->id)->afterCommit();
+
+            $channelActivityLogger->info(
+                $channel,
+                'contact.data_collection_response_queued',
+                'Ответ пользователя поставлен в очередь на обработку сборщиком профиля.',
+                [
+                    'platform' => $channel->platform,
+                    'message_id' => $storedMessage->id,
+                    'contact_id' => $storedMessage->contact_id,
+                    'current_field' => $storedMessage->contact?->data_collection_current_field,
+                ],
+            );
+        }
+
+        return response()->json([
+            'ok' => true,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function normalizeTelegramAgeRangeCallbackValue(array $payload): ?string
+    {
+        $data = trim((string) data_get($payload, 'callback_query.data', ''));
+
+        if (! str_starts_with($data, 'age_range:')) {
+            return null;
+        }
+
+        $value = trim(substr($data, strlen('age_range:')));
+
+        return $value !== '' ? $value : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function isTelegramAgeRangeCallbackActionable(Channel $channel, array $payload): bool
+    {
+        $externalUserId = trim((string) data_get($payload, 'callback_query.from.id', ''));
+
+        if ($externalUserId === '') {
+            return false;
+        }
+
+        $identity = ContactIdentity::query()
+            ->with('contact')
+            ->where('channel_id', $channel->id)
+            ->where('external_user_id', $externalUserId)
+            ->first();
+
+        return $identity?->contact?->isInDataCollection() === true
+            && $identity->contact->data_collection_current_field === \App\Models\Contact::DATA_COLLECTION_FIELD_AGE_RANGE;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function telegramUpdateType(array $payload): ?string
+    {
+        if (isset($payload['callback_query'])) {
+            return 'callback_query';
+        }
+
+        return isset($payload['message']) ? 'message' : null;
     }
 }

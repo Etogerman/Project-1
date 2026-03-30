@@ -50,6 +50,43 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('77', $message->providerEventKey);
     }
 
+    public function test_telegram_age_range_callback_query_is_normalized(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 91,
+            'callback_query' => [
+                'id' => 'callback-91',
+                'data' => 'age_range:24_29',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'first_name' => 'Герман',
+                    'is_bot' => false,
+                ],
+                'message' => [
+                    'message_id' => 88,
+                    'date' => 1_711_539_200,
+                    'chat' => [
+                        'id' => 300,
+                        'type' => 'private',
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
+        $this->assertSame('24_29', $message->text);
+        $this->assertSame('callback-91', $message->externalMessageId);
+        $this->assertSame('91', $message->providerEventKey);
+    }
+
     public function test_max_contact_share_payload_is_normalized(): void
     {
         $channel = Channel::factory()->create([

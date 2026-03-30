@@ -27,6 +27,12 @@ class BotIncomingMessageNormalizer
      */
     protected function normalizeTelegram(Channel $channel, array $payload): ?IncomingBotMessage
     {
+        $callbackQuery = $payload['callback_query'] ?? null;
+
+        if (is_array($callbackQuery)) {
+            return $this->normalizeTelegramCallbackQuery($channel, $payload, $callbackQuery);
+        }
+
         $message = $payload['message'] ?? null;
 
         if (! is_array($message) || data_get($message, 'from.is_bot') === true) {
@@ -64,6 +70,66 @@ class BotIncomingMessageNormalizer
                 data_get($message, 'date'),
             ]),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $callbackQuery
+     */
+    protected function normalizeTelegramCallbackQuery(Channel $channel, array $payload, array $callbackQuery): ?IncomingBotMessage
+    {
+        if (data_get($callbackQuery, 'from.is_bot') === true) {
+            return null;
+        }
+
+        if (data_get($callbackQuery, 'message.chat.type') !== 'private') {
+            return null;
+        }
+
+        $normalizedCallbackData = $this->normalizeTelegramCallbackData(
+            $this->normalizeText(data_get($callbackQuery, 'data')),
+        );
+
+        if (! filled($normalizedCallbackData)) {
+            return null;
+        }
+
+        $chatId = $this->normalizeExternalId(data_get($callbackQuery, 'message.chat.id'));
+        $userId = $this->normalizeExternalId(data_get($callbackQuery, 'from.id'));
+
+        if (! filled($chatId) || ! filled($userId)) {
+            return null;
+        }
+
+        return new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $chatId,
+            externalUserId: $userId,
+            providerEventKey: $this->normalizeExternalId($payload['update_id'] ?? null),
+            externalMessageId: $this->normalizeExternalId($callbackQuery['id'] ?? null),
+            externalUsername: $this->normalizeUsername(data_get($callbackQuery, 'from.username')),
+            contactName: $this->resolvePersonName(data_get($callbackQuery, 'from')),
+            text: $normalizedCallbackData,
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: $payload,
+            receivedAt: $this->resolveReceivedAt([
+                data_get($callbackQuery, 'message.date'),
+            ]),
+        );
+    }
+
+    protected function normalizeTelegramCallbackData(?string $value): ?string
+    {
+        if (! filled($value) || ! str_starts_with($value, 'age_range:')) {
+            return null;
+        }
+
+        $normalized = trim(substr($value, strlen('age_range:')));
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     /**

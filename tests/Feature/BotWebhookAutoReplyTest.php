@@ -878,6 +878,113 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_active_age_range_callback_routes_to_collector_and_answers_callback(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_started_at' => now(),
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramCallbackPayload(
+            userId: 200,
+            chatId: 300,
+            callbackId: 'callback-901',
+            callbackData: 'age_range:24_29',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertSame('24_29', $storedMessage->text);
+        Queue::assertPushed(ProcessDataCollectionResponseJob::class, function (ProcessDataCollectionResponseJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/answerCallbackQuery'
+            && $request['callback_query_id'] === 'callback-901');
+    }
+
+    public function test_stale_age_range_callback_is_answered_and_ignored(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramCallbackPayload(
+            userId: 200,
+            chatId: 300,
+            callbackId: 'callback-902',
+            callbackData: 'age_range:24_29',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertDatabaseCount('messages', 0);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/answerCallbackQuery'
+            && $request['callback_query_id'] === 'callback-902');
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -903,6 +1010,46 @@ class BotWebhookAutoReplyTest extends TestCase
                 'chat' => [
                     'id' => $chatId,
                     'type' => 'private',
+                ],
+            ],
+        ];
+
+        if ($includeUpdateId) {
+            $payload['update_id'] = $messageId;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function telegramCallbackPayload(
+        int|string $userId = 200,
+        int|string $chatId = 300,
+        string $callbackId = 'callback-1',
+        string $callbackData = 'age_range:24_29',
+        int|string $messageId = 10,
+        ?string $username = 'telegram_user',
+        int $date = 1_711_539_200,
+        bool $includeUpdateId = true,
+    ): array {
+        $payload = [
+            'callback_query' => [
+                'id' => $callbackId,
+                'data' => $callbackData,
+                'from' => [
+                    'id' => $userId,
+                    'username' => $username,
+                    'is_bot' => false,
+                ],
+                'message' => [
+                    'message_id' => $messageId,
+                    'date' => $date,
+                    'chat' => [
+                        'id' => $chatId,
+                        'type' => 'private',
+                    ],
                 ],
             ],
         ];

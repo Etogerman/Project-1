@@ -72,7 +72,7 @@ class ChannelWebhookRegistrationTest extends TestCase
             return $request->url() === 'https://api.telegram.org/bottelegram-token/setWebhook'
                 && $request['url'] === "https://connector.example/webhooks/telegram/{$channel->id}"
                 && $request['secret_token'] === $channel->getWebhookSecret()
-                && $request['allowed_updates'] === ['message'];
+                && $request['allowed_updates'] === ['message', 'callback_query'];
         });
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getMe');

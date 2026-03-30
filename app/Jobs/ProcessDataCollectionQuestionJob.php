@@ -81,7 +81,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
-        $questionText = $this->resolveQuestionText($contact);
+        $questionText = $this->resolveQuestionText($contact, $channel->platform);
 
         if ($questionText === null) {
             $channelActivityLogger->error(
@@ -171,7 +171,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             ->exists();
     }
 
-    protected function resolveQuestionText(Contact $contact): ?string
+    protected function resolveQuestionText(Contact $contact, string $platform): ?string
     {
         return match ($contact->data_collection_current_field) {
             Contact::DATA_COLLECTION_FIELD_FIRST_NAME => (string) config(
@@ -191,8 +191,12 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 'В каком городе вы живёте?'
             ),
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => (string) config(
-                'bots.data_collection.age_range.question',
-                "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+                $platform === Channel::PLATFORM_TELEGRAM
+                    ? 'bots.data_collection.age_range.telegram_question'
+                    : 'bots.data_collection.age_range.question',
+                $platform === Channel::PLATFORM_TELEGRAM
+                    ? 'Укажите ваш возраст:'
+                    : "Укажите ваш возраст:\n1. До 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
             ),
             default => null,
         };
@@ -207,27 +211,62 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return null;
         }
 
-        $buttons = [];
+        $buttons = $this->telegramAgeRangeInlineKeyboard();
 
-        foreach ((array) config('bots.data_collection.age_range.options', []) as $option) {
-            if (! is_array($option) || ! filled($option['label'] ?? null)) {
-                continue;
-            }
-
-            $buttons[] = [[
-                'text' => (string) $option['label'],
-            ]];
-        }
-
-        if ($buttons === []) {
+        if ($buttons === null) {
             return null;
         }
 
         return [
-            'keyboard' => $buttons,
-            'resize_keyboard' => true,
-            'one_time_keyboard' => true,
+            'inline_keyboard' => $buttons,
         ];
+    }
+
+    /**
+     * @return array<int, array<int, array{text: string, callback_data: string}>>|null
+     */
+    protected function telegramAgeRangeInlineKeyboard(): ?array
+    {
+        $optionsByValue = [];
+
+        foreach ((array) config('bots.data_collection.age_range.options', []) as $option) {
+            if (! is_array($option) || ! filled($option['label'] ?? null) || ! filled($option['value'] ?? null)) {
+                continue;
+            }
+
+            $optionsByValue[(string) $option['value']] = (string) $option['label'];
+        }
+
+        $rows = [
+            ['under_18', '18_23'],
+            ['24_29', '30_39'],
+            ['over_40'],
+        ];
+
+        $keyboard = [];
+
+        foreach ($rows as $rowValues) {
+            $row = [];
+
+            foreach ($rowValues as $value) {
+                $label = $optionsByValue[$value] ?? null;
+
+                if (! filled($label)) {
+                    continue;
+                }
+
+                $row[] = [
+                    'text' => $label,
+                    'callback_data' => 'age_range:'.$value,
+                ];
+            }
+
+            if ($row !== []) {
+                $keyboard[] = $row;
+            }
+        }
+
+        return $keyboard !== [] ? $keyboard : null;
     }
 
     /**

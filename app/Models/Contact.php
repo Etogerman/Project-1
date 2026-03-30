@@ -66,7 +66,7 @@ class Contact extends Model
     public static function ageRangeOptions(): array
     {
         return [
-            'under_18' => 'Еще нет 18 лет',
+            'under_18' => 'До 18 лет',
             '18_23' => '18 - 23 года',
             '24_29' => '24 - 29 лет',
             '30_39' => '30 - 39 лет',

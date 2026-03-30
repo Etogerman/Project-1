@@ -365,7 +365,7 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
     public function test_job_starts_data_collection_from_age_range_when_profile_is_filled_without_age_range(): void
     {
         config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
-        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
 
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -422,13 +422,17 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         Http::assertSentCount(2);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === '301'
-            && $request['text'] === "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
-            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Еще нет 18 лет'
-            && data_get($request->data(), 'reply_markup.keyboard.4.0.text') === 'Больше 40 лет');
+            && $request['text'] === 'Укажите ваш возраст:'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'До 18 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.1.text') === '18 - 23 года'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.1.0.text') === '24 - 29 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.1.1.text') === '30 - 39 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.2.0.text') === 'Больше 40 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.2.1') === null);
         $this->assertDatabaseHas('messages', [
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет",
+            'text' => 'Укажите ваш возраст:',
         ]);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->fresh()->data_collection_current_field);

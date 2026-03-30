@@ -302,7 +302,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     public function test_job_saves_residence_city_and_country_on_high_confidence_and_asks_age_range(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
-        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -620,7 +620,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     public function test_job_saves_city_and_asks_age_range_instead_of_completing(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
-        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -650,13 +650,17 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Еще нет 18 лет'
-            && data_get($request->data(), 'reply_markup.keyboard.4.0.text') === 'Больше 40 лет');
+            && $request['text'] === 'Укажите ваш возраст:'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'До 18 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.1.text') === '18 - 23 года'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.1.0.text') === '24 - 29 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.1.1.text') === '30 - 39 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.2.0.text') === 'Больше 40 лет');
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет",
+            'text' => 'Укажите ваш возраст:',
         ]);
     }
 
@@ -742,7 +746,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     public function test_job_handles_city_skip_without_calling_gemini_and_moves_to_age_range(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
-        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -775,12 +779,13 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Еще нет 18 лет');
+            && $request['text'] === 'Укажите ваш возраст:'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'До 18 лет');
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет",
+            'text' => 'Укажите ваш возраст:',
         ]);
     }
 
@@ -788,7 +793,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.city.max_attempts', 2);
-        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -970,6 +975,35 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
     }
 
+    public function test_job_saves_age_range_from_canonical_value_and_completes(): void
+    {
+        config()->set('bots.data_collection.completion_message', 'Спасибо, данные сохранили.');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9954],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '24_29',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('24_29', $contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+    }
+
     public function test_job_retries_for_invalid_age_range_and_keeps_age_range_step_active(): void
     {
         config()->set('bots.data_collection.age_range.retry_message', 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.');
@@ -1000,7 +1034,11 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
         $this->assertSame(1, $contact->data_collection_attempts_count);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Еще нет 18 лет');
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'До 18 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.1.text') === '18 - 23 года'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.1.0.text') === '24 - 29 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.1.1.text') === '30 - 39 лет'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.2.0.text') === 'Больше 40 лет');
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,

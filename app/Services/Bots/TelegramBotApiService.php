@@ -76,6 +76,24 @@ class TelegramBotApiService
             ->throw();
     }
 
+    public function answerCallbackQuery(Channel $channel, string $callbackQueryId, ?string $text = null): void
+    {
+        $payload = [
+            'callback_query_id' => $callbackQueryId,
+        ];
+
+        if (filled($text)) {
+            $payload['text'] = $text;
+        }
+
+        Http::asJson()
+            ->post(
+                sprintf('https://api.telegram.org/bot%s/answerCallbackQuery', $this->token($channel)),
+                $payload,
+            )
+            ->throw();
+    }
+
     public function fetchBotMetadata(Channel $channel): BotMetadata
     {
         $response = Http::asJson()

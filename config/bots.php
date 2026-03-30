@@ -64,7 +64,11 @@ return [
         'age_range' => [
             'question' => env(
                 'BOT_DATA_COLLECTION_AGE_RANGE_QUESTION',
-                "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+                "Укажите ваш возраст:\n1. До 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+            ),
+            'telegram_question' => env(
+                'BOT_DATA_COLLECTION_AGE_RANGE_TELEGRAM_QUESTION',
+                'Укажите ваш возраст:'
             ),
             'retry_message' => env(
                 'BOT_DATA_COLLECTION_AGE_RANGE_RETRY_MESSAGE',
@@ -81,7 +85,7 @@ return [
                 'skip',
             ],
             'options' => [
-                ['value' => 'under_18', 'label' => 'Еще нет 18 лет', 'aliases' => ['1']],
+                ['value' => 'under_18', 'label' => 'До 18 лет', 'aliases' => ['1']],
                 ['value' => '18_23', 'label' => '18 - 23 года', 'aliases' => ['2']],
                 ['value' => '24_29', 'label' => '24 - 29 лет', 'aliases' => ['3']],
                 ['value' => '30_39', 'label' => '30 - 39 лет', 'aliases' => ['4']],
@@ -101,6 +105,7 @@ return [
         'webhook_secret_header' => 'X-Telegram-Bot-Api-Secret-Token',
         'allowed_updates' => [
             'message',
+            'callback_query',
         ],
     ],
 
