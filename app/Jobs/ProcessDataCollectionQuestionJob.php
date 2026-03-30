@@ -81,7 +81,8 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
-        $questionText = (string) config('bots.data_collection.first_question', 'Как вас зовут?');
+        $questionText = (string) config('bots.data_collection.first_name.question',
+            config('bots.data_collection.first_question', 'Как вас зовут?'));
 
         try {
             $deliveryResult = match ($channel->platform) {

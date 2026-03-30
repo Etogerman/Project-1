@@ -34,6 +34,7 @@ class Contact extends Model
         'data_collection_current_field',
         'data_collection_started_at',
         'data_collection_completed_at',
+        'data_collection_attempts_count',
         'is_auto_reply_enabled',
         'assigned_user_id',
     ];
@@ -45,6 +46,7 @@ class Contact extends Model
         'birth_date' => 'date',
         'data_collection_started_at' => 'datetime',
         'data_collection_completed_at' => 'datetime',
+        'data_collection_attempts_count' => 'integer',
         'is_auto_reply_enabled' => 'boolean',
     ];
 
@@ -108,6 +110,7 @@ class Contact extends Model
             'data_collection_current_field' => $field,
             'data_collection_started_at' => $this->data_collection_started_at ?? now(),
             'data_collection_completed_at' => null,
+            'data_collection_attempts_count' => 0,
         ])->save();
     }
 
@@ -117,6 +120,7 @@ class Contact extends Model
             'data_collection_status' => self::DATA_COLLECTION_STATUS_COMPLETED,
             'data_collection_current_field' => null,
             'data_collection_completed_at' => now(),
+            'data_collection_attempts_count' => 0,
         ])->save();
     }
 
