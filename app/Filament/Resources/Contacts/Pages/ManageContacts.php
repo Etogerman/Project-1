@@ -19,6 +19,7 @@ use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRecords;
 use RuntimeException;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -36,6 +37,7 @@ class ManageContacts extends ManageRecords
     public string $editingFirstName = '';
     public string $editingLastName = '';
     public string $editingAgeYears = '';
+    public string $editingAgeRange = '';
     public string $editingBirthDate = '';
     public string $editingCountry = '';
     public string $editingCity = '';
@@ -274,6 +276,7 @@ class ManageContacts extends ManageRecords
         $this->editingFirstName = (string) ($record->first_name ?? '');
         $this->editingLastName = (string) ($record->last_name ?? '');
         $this->editingAgeYears = $record->age_years !== null ? (string) $record->age_years : '';
+        $this->editingAgeRange = (string) ($record->age_range ?? '');
         $this->editingBirthDate = $record->birth_date?->toDateString() ?? '';
         $this->editingCountry = (string) ($record->country ?? '');
         $this->editingCity = (string) ($record->city ?? '');
@@ -291,6 +294,7 @@ class ManageContacts extends ManageRecords
             'editingFirstName' => ['nullable', 'string', 'max:255'],
             'editingLastName' => ['nullable', 'string', 'max:255'],
             'editingAgeYears' => ['nullable', 'integer', 'min:0', 'max:150'],
+            'editingAgeRange' => ['nullable', 'string', Rule::in(array_keys(Contact::ageRangeOptions()))],
             'editingBirthDate' => ['nullable', 'date', 'before_or_equal:today'],
             'editingCountry' => ['nullable', 'string', 'max:255'],
             'editingCity' => ['nullable', 'string', 'max:255'],
@@ -307,6 +311,7 @@ class ManageContacts extends ManageRecords
                 'first_name' => $validated['editingFirstName'] ?? null,
                 'last_name' => $validated['editingLastName'] ?? null,
                 'age_years' => $validated['editingAgeYears'] ?? null,
+                'age_range' => $validated['editingAgeRange'] ?? null,
                 'birth_date' => $validated['editingBirthDate'] ?? null,
                 'country' => $validated['editingCountry'] ?? null,
                 'city' => $validated['editingCity'] ?? null,
@@ -629,6 +634,7 @@ class ManageContacts extends ManageRecords
             Contact::DATA_COLLECTION_FIELD_FIRST_NAME => 'Имя',
             Contact::DATA_COLLECTION_FIELD_COUNTRY => 'Страна',
             Contact::DATA_COLLECTION_FIELD_CITY => 'Город',
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => 'Возраст',
             default => '—',
         };
     }
@@ -666,6 +672,7 @@ class ManageContacts extends ManageRecords
         $this->editingFirstName = '';
         $this->editingLastName = '';
         $this->editingAgeYears = '';
+        $this->editingAgeRange = '';
         $this->editingBirthDate = '';
         $this->editingCountry = '';
         $this->editingCity = '';
@@ -673,6 +680,7 @@ class ManageContacts extends ManageRecords
             'editingFirstName',
             'editingLastName',
             'editingAgeYears',
+            'editingAgeRange',
             'editingBirthDate',
             'editingCountry',
             'editingCity',

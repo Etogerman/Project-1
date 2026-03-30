@@ -43,6 +43,10 @@
             <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Город</p>
             <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $city }}</p>
         </div>
+        <div>
+            <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Возраст</p>
+            <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $ageRange }}</p>
+        </div>
     </div>
 
     @if ($canResume)

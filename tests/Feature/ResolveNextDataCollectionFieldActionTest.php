@@ -17,6 +17,7 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
             'first_name' => null,
             'country' => null,
             'city' => null,
+            'age_range' => null,
         ]);
 
         $this->assertSame(
@@ -31,6 +32,7 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
             'first_name' => 'Герман',
             'country' => null,
             'city' => null,
+            'age_range' => null,
         ]);
 
         $this->assertSame(
@@ -45,10 +47,26 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
             'first_name' => 'Герман',
             'country' => 'Россия',
             'city' => null,
+            'age_range' => null,
         ]);
 
         $this->assertSame(
             Contact::DATA_COLLECTION_FIELD_CITY,
+            app(ResolveNextDataCollectionFieldAction::class)->handle($contact),
+        );
+    }
+
+    public function test_it_returns_age_range_when_location_profile_is_filled(): void
+    {
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'age_range' => null,
+        ]);
+
+        $this->assertSame(
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
             app(ResolveNextDataCollectionFieldAction::class)->handle($contact),
         );
     }
@@ -59,6 +77,7 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
             'first_name' => 'Герман',
             'country' => 'Россия',
             'city' => 'Москва',
+            'age_range' => '30_39',
         ]);
 
         $this->assertNull(app(ResolveNextDataCollectionFieldAction::class)->handle($contact));

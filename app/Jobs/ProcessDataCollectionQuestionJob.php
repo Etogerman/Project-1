@@ -184,6 +184,10 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 'bots.data_collection.city.question',
                 'В каком городе вы находитесь?'
             ),
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => (string) config(
+                'bots.data_collection.age_range.question',
+                "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+            ),
             default => null,
         };
     }

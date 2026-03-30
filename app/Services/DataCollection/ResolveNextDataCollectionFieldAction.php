@@ -20,6 +20,10 @@ class ResolveNextDataCollectionFieldAction
             return Contact::DATA_COLLECTION_FIELD_CITY;
         }
 
+        if (! filled($contact->age_range)) {
+            return Contact::DATA_COLLECTION_FIELD_AGE_RANGE;
+        }
+
         return null;
     }
 }

@@ -16,6 +16,10 @@
             <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $effectiveAgeLabel }}</p>
         </div>
         <div>
+            <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Возрастной диапазон</p>
+            <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $ageRangeLabel }}</p>
+        </div>
+        <div>
             <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Дата рождения</p>
             <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $birthDateLabel }}</p>
         </div>
@@ -130,6 +134,23 @@
                             Если указана дата рождения, возраст рассчитывается автоматически.
                         </p>
                         @error('editingAgeYears')
+                            <p style="margin: 0.45rem 0 0; font-size: 0.75rem; color: #dc2626;">{{ $message }}</p>
+                        @enderror
+                    </div>
+
+                    <div>
+                        <label for="contact-profile-age-range" style="display: block; margin-bottom: 0.45rem; font-size: 0.875rem; font-weight: 600; color: #111827;">Возрастной диапазон</label>
+                        <select
+                            id="contact-profile-age-range"
+                            wire:model.defer="editingAgeRange"
+                            style="display: block; width: 100%; box-sizing: border-box; border: 1px solid #9ca3af; border-radius: 12px; background: #ffffff; color: #111827; padding: 0.85rem 0.95rem; font-size: 0.95rem;"
+                        >
+                            <option value="">Не указан</option>
+                            @foreach ($ageRangeOptions as $value => $label)
+                                <option value="{{ $value }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                        @error('editingAgeRange')
                             <p style="margin: 0.45rem 0 0; font-size: 0.75rem; color: #dc2626;">{{ $message }}</p>
                         @enderror
                     </div>

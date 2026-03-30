@@ -16,6 +16,7 @@ class UpdateContactProfileAction
         $lastName = $this->normalizeNullableString($attributes['last_name'] ?? null);
         $country = $this->normalizeNullableString($attributes['country'] ?? null);
         $city = $this->normalizeNullableString($attributes['city'] ?? null);
+        $ageRange = $this->normalizeAgeRange($attributes['age_range'] ?? null);
         $birthDate = $this->normalizeBirthDate($attributes['birth_date'] ?? null);
         $ageYears = $birthDate === null
             ? $this->normalizeNullableInt($attributes['age_years'] ?? null)
@@ -26,6 +27,7 @@ class UpdateContactProfileAction
             'last_name' => $lastName,
             'birth_date' => $birthDate,
             'age_years' => $ageYears,
+            'age_range' => $ageRange,
             'country' => $country,
             'city' => $city,
         ])->save();
@@ -60,5 +62,20 @@ class UpdateContactProfileAction
         }
 
         return Carbon::parse($value)->toDateString();
+    }
+
+    private function normalizeAgeRange(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        if ($trimmed === '') {
+            return null;
+        }
+
+        return array_key_exists($trimmed, Contact::ageRangeOptions()) ? $trimmed : null;
     }
 }

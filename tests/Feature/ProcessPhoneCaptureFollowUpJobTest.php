@@ -362,6 +362,73 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_CITY, $contact->fresh()->data_collection_current_field);
     }
 
+    public function test_job_starts_data_collection_from_age_range_when_profile_is_filled_without_age_range(): void
+    {
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9918,
+                    ],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9919,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'age_range' => null,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '201',
+            'external_username' => 'telegram_user_age',
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '301',
+            'external_message_id' => 'phone-share-has-profile',
+            'provider_event_key' => 'phone-share-has-profile',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+        $this->assertDatabaseHas('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет",
+        ]);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->fresh()->data_collection_current_field);
+    }
+
     /**
      * @param  array<string, mixed>  $messageOverrides
      * @param  array<string, mixed>  $identityOverrides

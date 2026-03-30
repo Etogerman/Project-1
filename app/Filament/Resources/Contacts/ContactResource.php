@@ -421,6 +421,7 @@ class ContactResource extends Resource
                         $livewire->editingFirstName = '';
                         $livewire->editingLastName = '';
                         $livewire->editingAgeYears = '';
+                        $livewire->editingAgeRange = '';
                         $livewire->editingBirthDate = '';
                         $livewire->editingCountry = '';
                         $livewire->editingCity = '';
@@ -594,10 +595,12 @@ class ContactResource extends Resource
      *     firstName: ?string,
      *     lastName: ?string,
      *     effectiveAgeLabel: string,
+     *     ageRangeLabel: string,
      *     birthDateLabel: string,
      *     country: string,
      *     city: string,
-     *     messengerName: string
+     *     messengerName: string,
+     *     ageRangeOptions: array<string, string>
      * }
      */
     protected static function buildContactProfileViewData(Contact $record): array
@@ -615,10 +618,12 @@ class ContactResource extends Resource
             'firstName' => $record->first_name,
             'lastName' => $record->last_name,
             'effectiveAgeLabel' => $effectiveAgeLabel,
+            'ageRangeLabel' => Contact::formatAgeRange($record->age_range),
             'birthDateLabel' => $record->birth_date?->format('d.m.Y') ?? '—',
             'country' => $record->country ?? '—',
             'city' => $record->city ?? '—',
             'messengerName' => $record->name ?? '—',
+            'ageRangeOptions' => Contact::ageRangeOptions(),
         ];
     }
 
@@ -631,7 +636,8 @@ class ContactResource extends Resource
      *     canResume: bool,
      *     firstName: string,
      *     country: string,
-     *     city: string
+     *     city: string,
+     *     ageRange: string
      * }
      */
     protected static function buildCollectorStatusViewData(Contact $record): array
@@ -649,6 +655,7 @@ class ContactResource extends Resource
             'firstName' => $record->first_name ?: '—',
             'country' => $record->country ?: '—',
             'city' => $record->city ?: '—',
+            'ageRange' => Contact::formatAgeRange($record->age_range),
         ];
     }
 
@@ -867,6 +874,7 @@ class ContactResource extends Resource
             Contact::DATA_COLLECTION_FIELD_FIRST_NAME => 'Имя',
             Contact::DATA_COLLECTION_FIELD_COUNTRY => 'Страна',
             Contact::DATA_COLLECTION_FIELD_CITY => 'Город',
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => 'Возраст',
             default => '—',
         };
     }

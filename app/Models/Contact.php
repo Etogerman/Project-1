@@ -23,6 +23,8 @@ class Contact extends Model
 
     public const DATA_COLLECTION_FIELD_CITY = 'city';
 
+    public const DATA_COLLECTION_FIELD_AGE_RANGE = 'age_range';
+
     /**
      * @var list<string>
      */
@@ -31,6 +33,7 @@ class Contact extends Model
         'first_name',
         'last_name',
         'age_years',
+        'age_range',
         'birth_date',
         'country',
         'city',
@@ -53,6 +56,29 @@ class Contact extends Model
         'data_collection_attempts_count' => 'integer',
         'is_auto_reply_enabled' => 'boolean',
     ];
+
+    /**
+     * @return array<string, string>
+     */
+    public static function ageRangeOptions(): array
+    {
+        return [
+            'under_18' => 'Еще нет 18 лет',
+            '18_23' => '18 - 23 года',
+            '24_29' => '24 - 29 лет',
+            '30_39' => '30 - 39 лет',
+            'over_40' => 'Больше 40 лет',
+        ];
+    }
+
+    public static function formatAgeRange(?string $value): string
+    {
+        if (! filled($value)) {
+            return '—';
+        }
+
+        return self::ageRangeOptions()[$value] ?? (string) $value;
+    }
 
     public function assignedUser(): BelongsTo
     {

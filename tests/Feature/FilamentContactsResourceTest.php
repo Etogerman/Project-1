@@ -271,7 +271,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Попыток')
             ->assertMountedActionModalSee('Имя')
             ->assertMountedActionModalSee('Страна')
-            ->assertMountedActionModalSee('Город');
+            ->assertMountedActionModalSee('Город')
+            ->assertMountedActionModalSee('Возраст');
     }
 
     public function test_contact_modal_shows_active_collector_state_and_attempts(): void
@@ -284,6 +285,7 @@ class FilamentContactsResourceTest extends TestCase
             'first_name' => 'Герман',
             'country' => 'Россия',
             'city' => null,
+            'age_range' => null,
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
             'data_collection_attempts_count' => 1,
@@ -309,6 +311,7 @@ class FilamentContactsResourceTest extends TestCase
             'first_name' => 'Герман',
             'country' => 'Россия',
             'city' => 'Москва',
+            'age_range' => '30_39',
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
             'data_collection_current_field' => null,
             'data_collection_attempts_count' => 0,
@@ -320,7 +323,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Завершена')
             ->assertMountedActionModalSee('Москва')
             ->assertMountedActionModalSee('Россия')
-            ->assertMountedActionModalSee('Герман');
+            ->assertMountedActionModalSee('Герман')
+            ->assertMountedActionModalSee('30 - 39 лет');
     }
 
     public function test_contact_modal_shows_resume_button_for_incomplete_profile_with_phone(): void
@@ -360,6 +364,7 @@ class FilamentContactsResourceTest extends TestCase
             'first_name' => 'Герман',
             'country' => 'Россия',
             'city' => 'Москва',
+            'age_range' => '30_39',
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
             'data_collection_current_field' => null,
         ]);
@@ -387,6 +392,7 @@ class FilamentContactsResourceTest extends TestCase
             'first_name' => 'Герман',
             'country' => 'Россия',
             'city' => null,
+            'age_range' => null,
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
         ]);
@@ -540,12 +546,14 @@ class FilamentContactsResourceTest extends TestCase
             ->set('editingLastName', 'Абрикосов')
             ->set('editingBirthDate', now()->subYears(29)->toDateString())
             ->set('editingAgeYears', '35')
+            ->set('editingAgeRange', '30_39')
             ->set('editingCountry', 'Россия')
             ->set('editingCity', 'Москва')
             ->call('saveMountedContactProfile')
             ->assertHasNoErrors()
             ->assertMountedActionModalSee('Герман')
             ->assertMountedActionModalSee('Абрикосов')
+            ->assertMountedActionModalSee('30 - 39 лет')
             ->assertMountedActionModalSee('Россия')
             ->assertMountedActionModalSee('Москва')
             ->assertMountedActionModalSee('Имя из мессенджера');
@@ -556,6 +564,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame('Абрикосов', $contact->last_name);
         $this->assertSame('Россия', $contact->country);
         $this->assertSame('Москва', $contact->city);
+        $this->assertSame('30_39', $contact->age_range);
         $this->assertNotNull($contact->birth_date);
         $this->assertNull($contact->age_years);
         $this->assertSame('Герман Абрикосов', $contact->display_name);

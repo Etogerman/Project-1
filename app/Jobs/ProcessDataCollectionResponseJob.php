@@ -170,6 +170,16 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 channelActivityLogger: $channelActivityLogger,
                 extractCityAction: $extractCityAction,
             ),
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->handleAgeRangeReply(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                replyText: $replyText,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            ),
             default => null,
         };
     }
@@ -378,6 +388,50 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_CITY);
 
+        $this->moveToAgeRangeStep(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+        );
+    }
+
+    protected function handleAgeRangeReply(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        string $replyText,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $ageRange = $this->resolveAgeRangeValue($replyText);
+
+        if ($ageRange === null) {
+            $this->handleRetry(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                currentField: Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $contact->forceFill([
+            'age_range' => $ageRange,
+        ])->save();
+
+        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_AGE_RANGE);
+
         $this->sendCompletion(
             message: $message,
             channel: $channel,
@@ -441,6 +495,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
             if ($currentField === Contact::DATA_COLLECTION_FIELD_COUNTRY) {
                 $this->moveToCityStep(
+                    message: $message,
+                    channel: $channel,
+                    contact: $contact,
+                    telegramBotApiService: $telegramBotApiService,
+                    maxBotApiService: $maxBotApiService,
+                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                    channelActivityLogger: $channelActivityLogger,
+                );
+
+                return;
+            }
+
+            if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY) {
+                $this->moveToAgeRangeStep(
                     message: $message,
                     channel: $channel,
                     contact: $contact,
@@ -562,6 +630,20 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY) {
+            $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
         $this->sendTerminalSkip(
             message: $message,
             channel: $channel,
@@ -623,7 +705,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
     ): void {
         if (filled($contact->city)) {
-            $this->sendCompletion(
+            $this->moveToAgeRangeStep(
                 message: $message,
                 channel: $channel,
                 contact: $contact,
@@ -642,6 +724,45 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             message: $message,
             channel: $channel,
             text: $this->questionText(Contact::DATA_COLLECTION_FIELD_CITY),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_next_question_sent',
+            activityMessage: 'Отправлен следующий вопрос сбора профиля.',
+        );
+    }
+
+    protected function moveToAgeRangeStep(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        if (filled($contact->age_range)) {
+            $this->sendCompletion(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $contact->startDataCollection(Contact::DATA_COLLECTION_FIELD_AGE_RANGE);
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_AGE_RANGE),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -811,8 +932,69 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 'bots.data_collection.city.question',
                 'В каком городе вы находитесь?'
             ),
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => (string) config(
+                'bots.data_collection.age_range.question',
+                "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+            ),
             default => '',
         };
+    }
+
+    protected function resolveAgeRangeValue(string $replyText): ?string
+    {
+        $normalizedReply = $this->normalizeAgeRangeInput($replyText);
+
+        if ($normalizedReply === '') {
+            return null;
+        }
+
+        $options = config('bots.data_collection.age_range.options', []);
+
+        if (! is_array($options)) {
+            return null;
+        }
+
+        foreach ($options as $option) {
+            if (! is_array($option)) {
+                continue;
+            }
+
+            $value = (string) ($option['value'] ?? '');
+
+            if ($value === '') {
+                continue;
+            }
+
+            $candidates = [
+                $value,
+                (string) ($option['label'] ?? ''),
+            ];
+
+            foreach ((array) ($option['aliases'] ?? []) as $alias) {
+                if (is_scalar($alias)) {
+                    $candidates[] = (string) $alias;
+                }
+            }
+
+            foreach ($candidates as $candidate) {
+                if ($candidate !== '' && $normalizedReply === $this->normalizeAgeRangeInput($candidate)) {
+                    return $value;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    protected function normalizeAgeRangeInput(string $value): string
+    {
+        $normalized = mb_strtolower(trim($value));
+        $normalized = str_replace('ё', 'е', $normalized);
+        $normalized = preg_replace('/[–—−]/u', '-', $normalized) ?? $normalized;
+        $normalized = preg_replace('/\s*-\s*/u', '-', $normalized) ?? $normalized;
+        $normalized = preg_replace('/\s+/u', ' ', $normalized) ?? $normalized;
+
+        return trim($normalized);
     }
 
     protected function sendReply(

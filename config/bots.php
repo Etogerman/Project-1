@@ -46,6 +46,33 @@ return [
                 'skip',
             ],
         ],
+        'age_range' => [
+            'question' => env(
+                'BOT_DATA_COLLECTION_AGE_RANGE_QUESTION',
+                "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет"
+            ),
+            'retry_message' => env(
+                'BOT_DATA_COLLECTION_AGE_RANGE_RETRY_MESSAGE',
+                'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.'
+            ),
+            'skip_message' => env('BOT_DATA_COLLECTION_AGE_RANGE_SKIP_MESSAGE', 'Хорошо, возраст пропустим.'),
+            'fallback_error_message' => env(
+                'BOT_DATA_COLLECTION_AGE_RANGE_FALLBACK_ERROR_MESSAGE',
+                'Пожалуйста, укажите возраст одним из вариантов: 1, 2, 3, 4 или 5.'
+            ),
+            'max_attempts' => (int) env('BOT_DATA_COLLECTION_AGE_RANGE_MAX_ATTEMPTS', 2),
+            'skip_commands' => [
+                'пропустить',
+                'skip',
+            ],
+            'options' => [
+                ['value' => 'under_18', 'label' => 'Еще нет 18 лет', 'aliases' => ['1']],
+                ['value' => '18_23', 'label' => '18 - 23 года', 'aliases' => ['2']],
+                ['value' => '24_29', 'label' => '24 - 29 лет', 'aliases' => ['3']],
+                ['value' => '30_39', 'label' => '30 - 39 лет', 'aliases' => ['4']],
+                ['value' => 'over_40', 'label' => 'Больше 40 лет', 'aliases' => ['5']],
+            ],
+        ],
     ],
 
     'phone_capture_confirmation_text' => env(

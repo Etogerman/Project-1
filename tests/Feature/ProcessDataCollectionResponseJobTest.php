@@ -438,10 +438,10 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(0, $contact->data_collection_attempts_count);
     }
 
-    public function test_job_saves_city_sends_completion_and_completes_data_collection(): void
+    public function test_job_saves_city_and_asks_age_range_instead_of_completing(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
-        config()->set('bots.data_collection.completion_message', 'Спасибо, данные сохранили.');
+        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -468,13 +468,13 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $contact = $message->contact()->firstOrFail()->fresh();
 
         $this->assertSame('Москва', $contact->city);
-        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
-        $this->assertNull($contact->data_collection_current_field);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
-            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => 'Спасибо, данные сохранили.',
+            'text' => "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет",
         ]);
     }
 
@@ -557,10 +557,10 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(1, $contact->data_collection_attempts_count);
     }
 
-    public function test_job_handles_city_skip_without_calling_gemini_and_completes(): void
+    public function test_job_handles_city_skip_without_calling_gemini_and_moves_to_age_range(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
-        config()->set('bots.data_collection.city.skip_message', 'Хорошо, город пока пропустим.');
+        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
 
         Http::fake([
             'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
@@ -589,14 +589,52 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $contact = $message->contact()->firstOrFail()->fresh();
 
         $this->assertNull($contact->city);
-        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
-            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
-            'text' => 'Хорошо, город пока пропустим.',
+            'text' => "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет",
         ]);
+    }
+
+    public function test_job_moves_to_age_range_after_second_invalid_city_attempt(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.city.max_attempts', 2);
+        config()->set('bots.data_collection.age_range.question', "Укажите ваш возраст:\n1. Еще нет 18 лет\n2. 18 - 23 года\n3. 24 - 29 лет\n4. 30 - 39 лет\n5. Больше 40 лет");
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'retry',
+                'city' => null,
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9948],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Не скажу',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_attempts_count' => 1,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->city);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+        $this->assertSame(0, $contact->data_collection_attempts_count);
     }
 
     public function test_job_sends_fallback_message_when_city_extraction_fails_and_keeps_attempts_unchanged(): void
@@ -678,6 +716,181 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
             'text' => 'В какой стране вы находитесь?',
+        ]);
+    }
+
+    public function test_job_saves_age_range_from_numeric_option_and_completes(): void
+    {
+        config()->set('bots.data_collection.completion_message', 'Спасибо, данные сохранили.');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9949],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '3',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('24_29', $contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertNull($contact->data_collection_current_field);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Спасибо, данные сохранили.',
+        ]);
+    }
+
+    public function test_job_saves_age_range_from_label_and_completes(): void
+    {
+        config()->set('bots.data_collection.completion_message', 'Спасибо, данные сохранили.');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9950],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '24 - 29 лет',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('24_29', $contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+    }
+
+    public function test_job_retries_for_invalid_age_range_and_keeps_age_range_step_active(): void
+    {
+        config()->set('bots.data_collection.age_range.retry_message', 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9951],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '31',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+        $this->assertSame(1, $contact->data_collection_attempts_count);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.',
+        ]);
+    }
+
+    public function test_job_handles_age_range_skip_and_completes(): void
+    {
+        config()->set('bots.data_collection.age_range.skip_message', 'Хорошо, возраст пропустим.');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9952],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'пропустить',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Хорошо, возраст пропустим.',
+        ]);
+    }
+
+    public function test_job_completes_after_second_invalid_age_range_attempt(): void
+    {
+        config()->set('bots.data_collection.age_range.max_attempts', 2);
+        config()->set('bots.data_collection.age_range.skip_message', 'Хорошо, возраст пропустим.');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9953],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'мне 31',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_attempts_count' => 1,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertSame(0, $contact->data_collection_attempts_count);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Хорошо, возраст пропустим.',
         ]);
     }
 
