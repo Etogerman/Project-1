@@ -9,6 +9,7 @@ class ResolveRussianRegionAction
 {
     public function __construct(
         private readonly GeminiApiService $geminiApiService,
+        private readonly ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
     ) {}
 
     /**
@@ -40,6 +41,32 @@ class ResolveRussianRegionAction
         if ($allowedRegions === []) {
             return [
                 'status' => Contact::REGION_STATUS_UNKNOWN,
+                'region' => null,
+                'candidate_regions' => [],
+            ];
+        }
+
+        $lookupCandidateRegions = $this->lookupCandidateRegions($normalizedCity, $allowedRegions);
+
+        if (count($lookupCandidateRegions) === 1) {
+            return [
+                'status' => Contact::REGION_STATUS_RESOLVED,
+                'region' => $lookupCandidateRegions[0],
+                'candidate_regions' => [],
+            ];
+        }
+
+        if (count($lookupCandidateRegions) >= 2 && count($lookupCandidateRegions) <= 4) {
+            return [
+                'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+                'region' => null,
+                'candidate_regions' => $lookupCandidateRegions,
+            ];
+        }
+
+        if (count($lookupCandidateRegions) >= 5) {
+            return [
+                'status' => Contact::REGION_STATUS_AMBIGUOUS,
                 'region' => null,
                 'candidate_regions' => [],
             ];
@@ -98,21 +125,11 @@ PROMPT;
         $response = $this->geminiApiService->generateStructured($systemPrompt, $userPrompt, $schema);
         $status = $this->normalizeStatus($response['status'] ?? null);
         $region = $this->normalizeRegion($response['region'] ?? null, $allowedRegions);
-        $candidateRegions = $this->normalizeCandidateRegions($response['candidate_regions'] ?? null, $allowedRegions);
-
         if ($status === Contact::REGION_STATUS_RESOLVED && $region !== null) {
             return [
                 'status' => Contact::REGION_STATUS_RESOLVED,
                 'region' => $region,
                 'candidate_regions' => [],
-            ];
-        }
-
-        if ($status === Contact::REGION_STATUS_CLARIFICATION_PENDING && count($candidateRegions) >= 2 && count($candidateRegions) <= 4) {
-            return [
-                'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
-                'region' => null,
-                'candidate_regions' => $candidateRegions,
             ];
         }
 
@@ -166,29 +183,38 @@ PROMPT;
      * @param  list<string>  $allowedRegions
      * @return list<string>
      */
-    private function normalizeCandidateRegions(mixed $value, array $allowedRegions): array
+    private function lookupCandidateRegions(string $city, array $allowedRegions): array
     {
-        if (! is_array($value)) {
+        $lookup = $this->resolveRussianRegionCandidatesLookupAction->handle($city);
+        $rawCandidates = $lookup['candidate_regions'] ?? null;
+
+        if (! is_array($rawCandidates)) {
             return [];
         }
 
-        $normalized = [];
+        $normalizedCandidates = [];
 
-        foreach ($value as $candidate) {
+        foreach ($rawCandidates as $candidate) {
             if (! is_string($candidate)) {
-                continue;
+                return [];
             }
 
             $trimmed = trim($candidate);
 
-            if ($trimmed === '' || ! in_array($trimmed, $allowedRegions, true) || in_array($trimmed, $normalized, true)) {
-                continue;
+            if ($trimmed === '') {
+                return [];
             }
 
-            $normalized[] = $trimmed;
+            if (! in_array($trimmed, $allowedRegions, true)) {
+                return [];
+            }
+
+            if (! in_array($trimmed, $normalizedCandidates, true)) {
+                $normalizedCandidates[] = $trimmed;
+            }
         }
 
-        return $normalized;
+        return $normalizedCandidates;
     }
 
     private function normalizeNullableString(mixed $value): ?string

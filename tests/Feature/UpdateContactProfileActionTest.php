@@ -19,13 +19,15 @@ class UpdateContactProfileActionTest extends TestCase
             'Московская область',
             'Республика Татарстан',
         ]);
-
-        Http::fake([
-            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
-                'status' => Contact::REGION_STATUS_RESOLVED,
-                'region' => 'Московская область',
-            ])),
+        config()->set('russian_region_cities.cities', [
+            'москва' => [
+                'city' => 'Москва',
+                'aliases' => [],
+                'regions' => ['Московская область'],
+            ],
         ]);
+
+        Http::fake();
 
         $contact = Contact::factory()->create([
             'country' => null,
@@ -46,26 +48,6 @@ class UpdateContactProfileActionTest extends TestCase
         $this->assertSame('Московская область', $updated->region);
         $this->assertSame(Contact::REGION_STATUS_RESOLVED, $updated->region_status);
         $this->assertSame(Contact::REGION_SOURCE_AI, $updated->region_source);
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     * @return array<string, mixed>
-     */
-    protected function geminiResponse(array $payload): array
-    {
-        return [
-            'candidates' => [
-                [
-                    'content' => [
-                        'parts' => [
-                            [
-                                'text' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                            ],
-                        ],
-                    ],
-                ],
-            ],
-        ];
+        Http::assertNothingSent();
     }
 }

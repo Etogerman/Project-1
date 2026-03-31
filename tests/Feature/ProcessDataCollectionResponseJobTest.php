@@ -342,19 +342,21 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'Московская область',
             'Республика Татарстан',
         ]);
+        config()->set('russian_region_cities.cities', [
+            'москва' => [
+                'city' => 'Москва',
+                'aliases' => [],
+                'regions' => ['Московская область'],
+            ],
+        ]);
 
         Http::fake([
-            'https://generativelanguage.googleapis.com/*' => Http::sequence()
-                ->push($this->geminiResponse([
-                    'decision' => 'accept',
-                    'city' => 'Москва',
-                    'country' => 'Россия',
-                    'country_confidence' => 'high',
-                ]))
-                ->push($this->geminiResponse([
-                    'status' => Contact::REGION_STATUS_RESOLVED,
-                    'region' => 'Московская область',
-                ])),
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Москва',
+                'country' => 'Россия',
+                'country_confidence' => 'high',
+            ])),
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
                 'result' => ['message_id' => 9954],
@@ -718,18 +720,29 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         config()->set('bots.data_collection.russian_region.allowed_regions', [
             'Волгоградская область',
             'Приморский край',
+            'Воронежская область',
+            'Тульская область',
+            'Калужская область',
+        ]);
+        config()->set('russian_region_cities.cities', [
+            'александровка' => [
+                'city' => 'Александровка',
+                'aliases' => [],
+                'regions' => [
+                    'Волгоградская область',
+                    'Приморский край',
+                    'Воронежская область',
+                    'Тульская область',
+                    'Калужская область',
+                ],
+            ],
         ]);
 
         Http::fake([
-            'https://generativelanguage.googleapis.com/*' => Http::sequence()
-                ->push($this->geminiResponse([
-                    'decision' => 'accept',
-                    'city' => 'Михайловка',
-                ]))
-                ->push($this->geminiResponse([
-                    'status' => Contact::REGION_STATUS_AMBIGUOUS,
-                    'region' => null,
-                ])),
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Александровка',
+            ])),
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
                 'result' => ['message_id' => 9937],
@@ -738,7 +751,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
 
         $channel = $this->createTelegramChannel();
         $message = $this->createInboundUserMessage($channel, [
-            'text' => 'Михайловка',
+            'text' => 'Александровка',
         ], [], [
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
             'first_name' => 'Герман',
@@ -749,7 +762,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
 
         $contact = $message->contact()->firstOrFail()->fresh();
 
-        $this->assertSame('Михайловка', $contact->city);
+        $this->assertSame('Александровка', $contact->city);
         $this->assertNull($contact->region);
         $this->assertSame(Contact::REGION_STATUS_AMBIGUOUS, $contact->region_status);
         $this->assertNull($contact->region_source);
@@ -765,22 +778,19 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'Воронежская область',
         ]);
         config()->set('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:');
+        config()->set('russian_region_cities.cities', [
+            'михайловка' => [
+                'city' => 'Михайловка',
+                'aliases' => [],
+                'regions' => ['Волгоградская область', 'Приморский край', 'Воронежская область'],
+            ],
+        ]);
 
         Http::fake([
-            'https://generativelanguage.googleapis.com/*' => Http::sequence()
-                ->push($this->geminiResponse([
-                    'decision' => 'accept',
-                    'city' => 'Михайловка',
-                ]))
-                ->push($this->geminiResponse([
-                    'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
-                    'region' => null,
-                    'candidate_regions' => [
-                        'Волгоградская область',
-                        'Приморский край',
-                        'Воронежская область',
-                    ],
-                ])),
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Михайловка',
+            ])),
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
                 'result' => ['message_id' => 9937],
@@ -931,22 +941,19 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'Воронежская область',
         ]);
         config()->set('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:');
+        config()->set('russian_region_cities.cities', [
+            'михайловка' => [
+                'city' => 'Михайловка',
+                'aliases' => [],
+                'regions' => ['Волгоградская область', 'Приморский край', 'Воронежская область'],
+            ],
+        ]);
 
         Http::fake([
-            'https://generativelanguage.googleapis.com/*' => Http::sequence()
-                ->push($this->geminiResponse([
-                    'decision' => 'accept',
-                    'city' => 'Михайловка',
-                ]))
-                ->push($this->geminiResponse([
-                    'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
-                    'region' => null,
-                    'candidate_regions' => [
-                        'Волгоградская область',
-                        'Приморский край',
-                        'Воронежская область',
-                    ],
-                ])),
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Михайловка',
+            ])),
             'https://platform-api.max.ru/*' => Http::response([
                 'message' => ['message_id' => 'max-region-confirm-1'],
             ]),
@@ -975,6 +982,68 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             && data_get($request->data(), 'attachments.0.payload.buttons.0.1.text') === 'Приморский край'
             && data_get($request->data(), 'attachments.0.payload.buttons.1.0.text') === 'Воронежская область'
             && data_get($request->data(), 'attachments.0.payload.buttons.2.0.text') === 'Пропустить');
+    }
+
+    public function test_job_after_country_answer_uses_exact_candidates_without_mixing_similar_city_names(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Свердловская область',
+            'Ставропольский край',
+            'Волгоградская область',
+            'Приморский край',
+            'Воронежская область',
+        ]);
+        config()->set('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:');
+        config()->set('russian_region_cities.cities', [
+            'михайловск' => [
+                'city' => 'Михайловск',
+                'aliases' => [],
+                'regions' => ['Свердловская область', 'Ставропольский край'],
+            ],
+            'михайловка' => [
+                'city' => 'Михайловка',
+                'aliases' => [],
+                'regions' => ['Волгоградская область', 'Приморский край', 'Воронежская область'],
+            ],
+        ]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Михайловск',
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9963],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Россия',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'first_name' => 'Герман',
+            'city' => 'Михайловск',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM, $contact->data_collection_current_field);
+        $this->assertSame(Contact::REGION_STATUS_CLARIFICATION_PENDING, $contact->region_status);
+        $this->assertSame(['Свердловская область', 'Ставропольский край'], $contact->pending_region_candidates);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && str_contains((string) $request['text'], '1. Свердловская область')
+            && str_contains((string) $request['text'], '2. Ставропольский край')
+            && ! str_contains((string) $request['text'], 'Волгоградская область')
+            && ! str_contains((string) $request['text'], 'Приморский край')
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Свердловская область'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.1.text') === 'Ставропольский край');
     }
 
     public function test_job_saves_russian_region_from_max_button_label_and_moves_to_age_range(): void
