@@ -2,21 +2,43 @@
 
 namespace App\Filament\Resources\Dialogs;
 
+use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
+use App\Models\Channel;
 use App\Models\Dialog;
+use App\Models\Message;
+use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Dialogs\BuildConversationFeedViewDataAction;
+use BackedEnum;
 use Filament\Resources\Resource;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Collection;
+use UnitEnum;
 
 class DialogResource extends Resource
 {
     protected static ?string $model = Dialog::class;
 
-    protected static bool $shouldRegisterNavigation = false;
+    protected static bool $shouldRegisterNavigation = true;
 
     protected static ?string $modelLabel = 'Диалог';
 
     protected static ?string $pluralModelLabel = 'Диалоги';
+
+    protected static ?string $navigationLabel = 'Диалоги';
+
+    protected static string|UnitEnum|null $navigationGroup = 'Аудитория';
+
+    protected static ?int $navigationSort = 5;
+
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedChatBubbleLeftRight;
 
     public static function getEloquentQuery(): Builder
     {
@@ -28,6 +50,136 @@ class DialogResource extends Resource
                 'contact.phoneNumbers',
                 'contact.primaryIdentity',
             ]);
+    }
+
+    public static function getTableRecordQuery(bool $excludeMerged = true): Builder
+    {
+        $query = parent::getEloquentQuery()
+            ->addSelect([
+                'preview_message_id' => static::buildPreviewMessageSubquery(),
+            ])
+            ->with([
+                'channel',
+                'currentContactIdentity',
+                'contact.assignedUser',
+                'contact.primaryIdentity',
+                'previewMessage.channel',
+                'previewMessage.sentByUser',
+            ])
+            ->withMax(['messages as latest_inbound_user_message_id' => fn (Builder $query): Builder => $query
+                ->where('message_kind', Message::KIND_INBOUND_USER)], 'id')
+            ->withMax(['messages as latest_outbound_manual_reply_message_id' => fn (Builder $query): Builder => $query
+                ->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)], 'id');
+
+        if ($excludeMerged) {
+            $query->whereHas('contact', fn (Builder $query): Builder => $query->whereNull('merged_into_contact_id'));
+        }
+
+        return $query;
+    }
+
+    public static function table(Table $table): Table
+    {
+        return $table
+            ->columns([
+                TextColumn::make('id')
+                    ->label('ID')
+                    ->sortable()
+                    ->toggleable(),
+                TextColumn::make('contact_label')
+                    ->label('Контакт')
+                    ->state(fn (Dialog $record): string => $record->contact?->display_name ?? 'Контакт не найден')
+                    ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search))
+                    ->toggleable(),
+                TextColumn::make('inbox_status')
+                    ->label('Статус')
+                    ->state(fn (Dialog $record): string => static::formatInboxStatus($record))
+                    ->badge()
+                    ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
+                    ->toggleable(),
+                TextColumn::make('assigned_user')
+                    ->label('Ответственный')
+                    ->state(fn (Dialog $record): string => filled($record->contact?->assignedUser?->name)
+                        ? (string) $record->contact->assignedUser->name
+                        : 'Свободен')
+                    ->toggleable(),
+                TextColumn::make('channel_label')
+                    ->label('Канал')
+                    ->state(fn (Dialog $record): string => static::formatChannelLabel($record))
+                    ->toggleable(),
+                TextColumn::make('route_status')
+                    ->label('Маршрут')
+                    ->state(fn (Dialog $record): string => static::resolveDialogRouteStatus($record)['label'])
+                    ->badge()
+                    ->color(fn (Dialog $record): string => static::resolveDialogRouteStatus($record)['tone'])
+                    ->toggleable(),
+                TextColumn::make('preview_sender_label')
+                    ->label('Кто')
+                    ->state(fn (Dialog $record): ?string => static::resolvePreviewSenderLabel($record))
+                    ->badge()
+                    ->color(fn (Dialog $record): string => static::resolvePreviewSenderTone($record))
+                    ->placeholder('—')
+                    ->toggleable(),
+                TextColumn::make('preview_text')
+                    ->label('Последнее сообщение')
+                    ->state(fn (Dialog $record): string => static::resolvePreviewText($record))
+                    ->tooltip(fn (Dialog $record): string => static::resolvePreviewText($record))
+                    ->limit(80)
+                    ->toggleable(),
+                TextColumn::make('last_message_at')
+                    ->label('Активность')
+                    ->dateTime('d.m.Y H:i')
+                    ->placeholder('—')
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
+                        ->orderBy('dialogs.last_message_at', $direction)
+                        ->orderBy('dialogs.id', $direction))
+                    ->toggleable(),
+                TextColumn::make('phone_label')
+                    ->label('Телефон канала')
+                    ->state(fn (Dialog $record): string => static::formatDialogPhoneLabel($record))
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('route_source')
+                    ->label('Route source')
+                    ->state(fn (Dialog $record): string => static::formatDialogRouteIdentityLabel($record))
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('external_chat_id')
+                    ->label('Chat ID')
+                    ->state(fn (Dialog $record): string => filled($record->external_chat_id) ? (string) $record->external_chat_id : 'Не задан')
+                    ->toggleable(isToggledHiddenByDefault: true),
+            ])
+            ->filters([
+                Filter::make('requires_manual_reply')
+                    ->label('Требует ответа')
+                    ->default()
+                    ->query(fn (Builder $query): Builder => static::applyRequiresManualReplyFilter($query)),
+                Filter::make('assigned_to_me')
+                    ->label('Мои')
+                    ->query(fn (Builder $query): Builder => static::applyAssignedToMeFilter($query)),
+                Filter::make('unassigned_dialogs')
+                    ->label('Свободные')
+                    ->query(fn (Builder $query): Builder => $query->whereHas('contact', fn (Builder $query): Builder => $query->whereNull('assigned_user_id'))),
+                SelectFilter::make('channel_id')
+                    ->label('Канал')
+                    ->options(fn (): array => Channel::query()
+                        ->orderBy('name')
+                        ->orderBy('id')
+                        ->get()
+                        ->mapWithKeys(fn (Channel $channel): array => [$channel->id => $channel->display_title])
+                        ->all()),
+                Filter::make('route_ready')
+                    ->label('Маршрут готов')
+                    ->query(fn (Builder $query): Builder => static::applyRouteReadyFilter($query)),
+                Filter::make('route_problem')
+                    ->label('Проблема маршрута')
+                    ->query(fn (Builder $query): Builder => static::applyRouteProblemFilter($query)),
+            ])
+            ->defaultSort('last_message_at', 'desc')
+            ->recordUrl(fn (Dialog $record): string => static::getUrl('view', ['record' => $record]))
+            ->emptyStateHeading('Диалогов ещё нет')
+            ->emptyStateDescription('Диалоги появятся после первых входящих сообщений от внешней аудитории.')
+            ->columnManager()
+            ->deferColumnManager(false)
+            ->reorderableColumns();
     }
 
     public static function getRecordTitle(?Model $record): ?string
@@ -44,7 +196,353 @@ class DialogResource extends Resource
     public static function getPages(): array
     {
         return [
+            'index' => ListDialogs::route('/'),
             'view' => ViewDialog::route('/{record}'),
         ];
+    }
+
+    protected static function buildPreviewMessageSubquery(): Builder
+    {
+        return Message::query()
+            ->select('id')
+            ->whereColumn('dialog_id', 'dialogs.id')
+            ->orderByRaw('coalesce(received_at, created_at) desc')
+            ->orderByDesc('id')
+            ->limit(1);
+    }
+
+    protected static function resolvePreviewMessage(Dialog $record): ?Message
+    {
+        if ($record->relationLoaded('previewMessage')) {
+            return $record->previewMessage;
+        }
+
+        $previewMessageId = $record->getAttribute('preview_message_id');
+
+        if (! filled($previewMessageId)) {
+            return null;
+        }
+
+        return Message::query()
+            ->with(['channel', 'sentByUser'])
+            ->find($previewMessageId);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected static function resolvePreviewFeed(Dialog $record): ?array
+    {
+        $message = static::resolvePreviewMessage($record);
+
+        if (! $message instanceof Message) {
+            return null;
+        }
+
+        /** @var array<int, array<string, mixed>> $cache */
+        static $cache = [];
+
+        if (array_key_exists($message->id, $cache)) {
+            return $cache[$message->id];
+        }
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(new Collection([$message]));
+
+        return $cache[$message->id] = $feed[0] ?? null;
+    }
+
+    protected static function resolvePreviewText(Dialog $record): string
+    {
+        $previewFeed = static::resolvePreviewFeed($record);
+
+        if (is_array($previewFeed) && filled($previewFeed['display_text'] ?? null)) {
+            return (string) $previewFeed['display_text'];
+        }
+
+        return 'Сообщений ещё не было.';
+    }
+
+    protected static function resolvePreviewSenderLabel(Dialog $record): ?string
+    {
+        $previewMessage = static::resolvePreviewMessage($record);
+
+        if (! $previewMessage instanceof Message) {
+            return null;
+        }
+
+        if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
+            return 'Контакт';
+        }
+
+        $previewFeed = static::resolvePreviewFeed($record);
+
+        if (is_array($previewFeed) && filled($previewFeed['sender_label'] ?? null)) {
+            return (string) $previewFeed['sender_label'];
+        }
+
+        return 'Система';
+    }
+
+    protected static function resolvePreviewSenderTone(Dialog $record): string
+    {
+        $previewMessage = static::resolvePreviewMessage($record);
+
+        if (! $previewMessage instanceof Message) {
+            return 'gray';
+        }
+
+        if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
+            return 'info';
+        }
+
+        return match ($previewMessage->sent_by_type) {
+            Message::SENT_BY_TYPE_OPERATOR => 'success',
+            Message::SENT_BY_TYPE_AUTO_REPLY => 'warning',
+            Message::SENT_BY_TYPE_COLLECTOR => 'primary',
+            Message::SENT_BY_TYPE_SYSTEM => 'gray',
+            default => 'gray',
+        };
+    }
+
+    protected static function dialogRequiresManualReply(Dialog $record): bool
+    {
+        $latestInboundUserMessageId = $record->getAttribute('latest_inbound_user_message_id');
+        $latestOutboundManualReplyMessageId = $record->getAttribute('latest_outbound_manual_reply_message_id');
+
+        if (! filled($latestInboundUserMessageId)) {
+            return false;
+        }
+
+        if (! filled($latestOutboundManualReplyMessageId)) {
+            return true;
+        }
+
+        return (int) $latestInboundUserMessageId > (int) $latestOutboundManualReplyMessageId;
+    }
+
+    protected static function formatInboxStatus(Dialog $record): string
+    {
+        return static::dialogRequiresManualReply($record)
+            ? 'Требует ответа'
+            : 'Нет новых';
+    }
+
+    protected static function getInboxStatusColor(Dialog $record): string
+    {
+        return static::dialogRequiresManualReply($record) ? 'warning' : 'success';
+    }
+
+    protected static function applyRequiresManualReplyFilter(Builder $query): Builder
+    {
+        return $query
+            ->whereExists(function (QueryBuilder $subquery): void {
+                $subquery
+                    ->selectRaw('1')
+                    ->from('messages')
+                    ->whereColumn('messages.dialog_id', 'dialogs.id')
+                    ->where('messages.message_kind', Message::KIND_INBOUND_USER);
+            })
+            ->where(function (Builder $query): Builder {
+                return $query
+                    ->whereNotExists(function (QueryBuilder $subquery): void {
+                        $subquery
+                            ->selectRaw('1')
+                            ->from('messages')
+                            ->whereColumn('messages.dialog_id', 'dialogs.id')
+                            ->where('messages.message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY);
+                    })
+                    ->orWhereRaw(
+                        '(select max(id) from messages where messages.dialog_id = dialogs.id and messages.message_kind = ?) > (select max(id) from messages where messages.dialog_id = dialogs.id and messages.message_kind = ?)',
+                        [Message::KIND_INBOUND_USER, Message::KIND_OUTBOUND_MANUAL_REPLY],
+                    );
+            });
+    }
+
+    protected static function applyAssignedToMeFilter(Builder $query): Builder
+    {
+        $currentUserId = auth()->user()?->id;
+
+        if ($currentUserId === null) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->whereHas('contact', fn (Builder $query): Builder => $query->where('assigned_user_id', $currentUserId));
+    }
+
+    protected static function applyTableSearch(Builder $query, string $search): Builder
+    {
+        $normalizedPhoneSearch = AddContactPhoneAction::normalizePhone($search);
+
+        return $query->where(function (Builder $query) use ($search, $normalizedPhoneSearch): void {
+            $query
+                ->where('external_chat_id', 'ilike', "%{$search}%")
+                ->orWhereHas('contact', function (Builder $contactQuery) use ($search, $normalizedPhoneSearch): void {
+                    $contactQuery
+                        ->where('name', 'ilike', "%{$search}%")
+                        ->orWhere('first_name', 'ilike', "%{$search}%")
+                        ->orWhere('last_name', 'ilike', "%{$search}%");
+
+                    if ($normalizedPhoneSearch !== '') {
+                        $contactQuery->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($normalizedPhoneSearch): void {
+                            $phoneQuery->where('phone_normalized', 'ilike', "%{$normalizedPhoneSearch}%");
+                        });
+                    }
+                })
+                ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($search): void {
+                    $identityQuery
+                        ->where('external_user_id', 'ilike', "%{$search}%")
+                        ->orWhere('external_username', 'ilike', "%{$search}%");
+                });
+        });
+    }
+
+    protected static function applyRouteReadyFilter(Builder $query): Builder
+    {
+        return $query
+            ->whereHas('channel', fn (Builder $query): Builder => $query
+                ->where('is_active', true)
+                ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
+                ->whereNotNull('credentials'))
+            ->where(function (Builder $query): void {
+                $query
+                    ->where(function (Builder $telegramQuery): void {
+                        $telegramQuery
+                            ->whereHas('channel', fn (Builder $query): Builder => $query->where('platform', Channel::PLATFORM_TELEGRAM))
+                            ->whereNotNull('external_chat_id');
+                    })
+                    ->orWhere(function (Builder $maxQuery): void {
+                        $maxQuery
+                            ->whereHas('channel', fn (Builder $query): Builder => $query->where('platform', Channel::PLATFORM_MAX))
+                            ->where(function (Builder $routeQuery): void {
+                                $routeQuery
+                                    ->whereNotNull('external_chat_id')
+                                    ->orWhereHas('currentContactIdentity', fn (Builder $query): Builder => $query->whereNotNull('external_user_id'));
+                            });
+                    });
+            });
+    }
+
+    protected static function applyRouteProblemFilter(Builder $query): Builder
+    {
+        return $query->where(function (Builder $query): void {
+            $query
+                ->whereDoesntHave('channel')
+                ->orWhereHas('channel', function (Builder $query): void {
+                    $query
+                        ->where('is_active', false)
+                        ->orWhere('connection_type', '!=', Channel::CONNECTION_TYPE_BOT)
+                        ->orWhereNull('credentials')
+                        ->orWhereNotIn('platform', [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX]);
+                })
+                ->orWhere(function (Builder $telegramQuery): void {
+                    $telegramQuery
+                        ->whereHas('channel', fn (Builder $query): Builder => $query
+                            ->where('platform', Channel::PLATFORM_TELEGRAM)
+                            ->where('is_active', true)
+                            ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
+                            ->whereNotNull('credentials'))
+                        ->whereNull('external_chat_id');
+                })
+                ->orWhere(function (Builder $maxQuery): void {
+                    $maxQuery
+                        ->whereHas('channel', fn (Builder $query): Builder => $query
+                            ->where('platform', Channel::PLATFORM_MAX)
+                            ->where('is_active', true)
+                            ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
+                            ->whereNotNull('credentials'))
+                        ->whereNull('external_chat_id')
+                        ->whereDoesntHave('currentContactIdentity', fn (Builder $query): Builder => $query->whereNotNull('external_user_id'));
+                });
+        });
+    }
+
+    /**
+     * @return array{label:string,tone:string}
+     */
+    protected static function resolveDialogRouteStatus(Dialog $dialog): array
+    {
+        $channel = $dialog->channel;
+
+        if ($channel === null) {
+            return ['label' => 'Канал не найден', 'tone' => 'gray'];
+        }
+
+        if (! $channel->is_active) {
+            return ['label' => 'Канал неактивен', 'tone' => 'gray'];
+        }
+
+        if ($channel->connection_type !== Channel::CONNECTION_TYPE_BOT) {
+            return ['label' => 'Не bot-канал', 'tone' => 'gray'];
+        }
+
+        if (! filled($channel->getToken())) {
+            return ['label' => 'Нет токена', 'tone' => 'warning'];
+        }
+
+        return match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => filled($dialog->external_chat_id)
+                ? ['label' => 'Маршрут готов', 'tone' => 'success']
+                : ['label' => 'Нет chat id', 'tone' => 'warning'],
+            Channel::PLATFORM_MAX => filled($dialog->external_chat_id) || filled($dialog->currentContactIdentity?->external_user_id)
+                ? ['label' => 'Маршрут готов', 'tone' => 'success']
+                : ['label' => 'Нет route source', 'tone' => 'warning'],
+            default => ['label' => 'Платформа не поддерживается', 'tone' => 'gray'],
+        };
+    }
+
+    protected static function formatChannelLabel(Dialog $dialog): string
+    {
+        $channel = $dialog->channel;
+
+        if ($channel === null) {
+            return 'Неизвестный канал';
+        }
+
+        $platformLabel = filled($channel->platform)
+            ? (Channel::platformOptions()[$channel->platform] ?? $channel->platform)
+            : null;
+
+        if (filled($channel->name) && filled($platformLabel)) {
+            return sprintf('%s (%s)', $channel->name, $platformLabel);
+        }
+
+        return $channel->name ?: $platformLabel ?: 'Неизвестный канал';
+    }
+
+    protected static function formatDialogPhoneLabel(Dialog $dialog): string
+    {
+        if (filled($dialog->confirmed_phone_raw)) {
+            return (string) $dialog->confirmed_phone_raw;
+        }
+
+        if (filled($dialog->confirmed_phone_normalized)) {
+            return (string) $dialog->confirmed_phone_normalized;
+        }
+
+        return 'Телефон в этом канале не подтвержден';
+    }
+
+    protected static function formatDialogRouteIdentityLabel(Dialog $dialog): string
+    {
+        $identity = $dialog->currentContactIdentity;
+        $parts = [];
+
+        if (filled($identity?->external_user_id)) {
+            $parts[] = 'ID: '.$identity->external_user_id;
+        }
+
+        if (filled($identity?->external_username)) {
+            $parts[] = '@'.ltrim((string) $identity->external_username, '@');
+        }
+
+        if ($parts !== []) {
+            return implode(' · ', $parts);
+        }
+
+        if ($dialog->current_contact_identity_id !== null) {
+            return 'Identity #'.$dialog->current_contact_identity_id;
+        }
+
+        return 'Не задан';
     }
 }

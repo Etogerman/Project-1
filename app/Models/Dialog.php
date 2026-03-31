@@ -59,4 +59,9 @@ class Dialog extends Model
     {
         return $this->hasMany(Message::class);
     }
+
+    public function previewMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'preview_message_id');
+    }
 }
