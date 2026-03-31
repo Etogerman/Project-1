@@ -51,10 +51,11 @@ Abrikosoff Connector — операторская платформа для ра
   - остальные города РФ: `Yandex Geocoder + Haversine`
   - ambiguous-city кейсы считают расстояние только после
     подтверждения `region` и deterministic geocode query
-- просмотр контактов и истории в админке
-- чатовый view истории в карточке контакта
+- просмотр контактов, диалогов и истории в админке
+- overview-only карточка контакта с профилем, ownership и списком диалогов
+- отдельная страница диалога как рабочее место оператора
 - телефоны в списке контактов: колонка, фильтры, поиск
-- ручной ответ из карточки контакта
+- ручной ответ со страницы диалога
 - CRUD телефонов из карточки контакта
 - ownership контакта (назначение ответственного оператора)
 - редактирование профиля контакта из карточки
@@ -93,15 +94,21 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Services/Bots/` — webhook, автоответ, ручной ответ, действия с каналами
 - `app/Services/DataCollection/` — extractor/action-классы и collector orchestration helpers
 - `app/Services/Contacts/` — ownership-действия и phone CRUD/action-классы
+- `app/Services/Dialogs/` — dialog routing, history loading, feed building и overview-данные
 - `app/Jobs/` — queued orchestration для автоответа, phone capture follow-up и collector flow
 - `app/Http/Controllers/` — тонкие HTTP-контроллеры
 - `app/Filament/Resources/` — UI админки (Resources + Pages)
 - `app/Filament/Resources/*/Pages/` — page-level state и modal orchestration
-- `resources/views/filament/` — Blade-партиалы для чата, collector status и profile UI
+- `resources/views/filament/` — Blade-партиалы для dialog workspace, contact overview, collector status и profile UI
 
 Ветвление по провайдерам через `match($channel->platform)` в сервисах.
 Общий интерфейс провайдера — преждевременная абстракция,
 пока не появится третий провайдер или реальная проблема с дублированием.
+
+Рабочий UI-принцип:
+- `Contact` — обзорная карточка клиента
+- `Dialog` — канальный thread и основное рабочее место оператора
+- ownership остаётся на `Contact`, не на `Dialog`
 
 ## Доменная модель (стабильная часть)
 
@@ -130,6 +137,12 @@ Abrikosoff Connector — операторская платформа для ра
   - `phone_raw`, `phone_normalized`, `source`, `is_primary`
   - unique constraint на `[contact_id, phone_normalized]`
   - primary переустанавливается автоматически при удалении текущего primary
+- **Dialog** — канальный thread контакта
+  - уникален на пару `[contact_id, channel_id]`
+  - хранит route context канала:
+    `current_contact_identity_id`, `external_chat_id`,
+    `confirmed_phone_*`, `last_message_at`, `last_inbound_at`, `last_outbound_at`
+  - manual reply из operator UI отправляется через точный `dialog_id`
 - **Message** — единая таблица входящих и исходящих сообщений
   - `direction`: inbound | outbound
   - `message_kind`:
@@ -190,7 +203,11 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Jobs/ProcessDataCollectionResponseJob.php` — обработка ответа на collector field
 - `app/Jobs/CalculateDistanceToMoscowJob.php` — queued sync `distance_to_moscow_*`
 - `app/Services/Bots/StoreOutboundAutoReplyMessageAction.php` — сохранение исходящего автоответа
-- `app/Services/Bots/SendManualContactReplyAction.php` — ручной ответ оператора
+- `app/Services/Bots/SendManualDialogReplyAction.php` — ручной ответ оператора через точный dialog route
+- `app/Services/Dialogs/ResolveDialogRouteSourceAction.php` — определение route source для dialog/provider
+- `app/Services/Dialogs/LoadDialogMessagesPageAction.php` — порционная загрузка истории диалога
+- `app/Services/Dialogs/BuildConversationFeedViewDataAction.php` — общий builder bubble/feed view-data
+- `app/Services/Dialogs/LoadContactDialogsOverviewAction.php` — overview карточек диалогов на странице контакта
 - `app/Services/Contacts/AddContactPhoneAction.php` — нормализация и сохранение телефона
 - `app/Services/Contacts/UpdateContactPhoneAction.php` — редактирование телефона
 - `app/Services/Contacts/DeleteContactPhoneAction.php` — удаление телефона
@@ -199,8 +216,12 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Services/Contacts/UpdateContactProfileAction.php` — обновление профильных полей контакта
 - `app/Services/Contacts/DeleteContactAction.php` — удаление контакта и связанных сущностей
 - `app/Services/Contacts/ClaimContactAction.php` — взятие контакта в работу
-- `app/Filament/Resources/Contacts/ContactResource.php` — карточка контакта
+- `app/Filament/Resources/Contacts/ContactResource.php` — overview карточка контакта
 - `app/Filament/Resources/Contacts/Pages/ManageContacts.php` — Livewire-логика контактов
+- `app/Filament/Resources/Dialogs/DialogResource.php` — hidden resource страницы диалога
+- `app/Filament/Resources/Dialogs/Pages/ViewDialog.php` — operator workspace конкретного диалога
+- `resources/views/filament/dialogs/pages/view-dialog.blade.php` — layout страницы диалога
+- `resources/views/filament/contacts/partials/contact-dialogs.blade.php` — overview карточки диалогов на контакте
 
 ## Принципы разработки
 
@@ -208,7 +229,8 @@ Abrikosoff Connector — операторская платформа для ра
 2. Расширять существующие пути, прежде чем добавлять новые абстракции.
 3. Read-only улучшения предпочтительнее тяжёлых рефакторингов.
 4. Использовать существующие Filament Resource / ViewAction modal.
-   Новые resource или page — только с явным обоснованием.
+   Для рабочего chat workflow приоритет у уже существующей dialog page,
+   а не у расширения contact modal.
 5. Новая таблица или сущность — только после обоснования,
    почему текущие модели недостаточны.
 6. Transport-логика остаётся локализованной в сервисных классах.
@@ -233,7 +255,7 @@ Abrikosoff Connector — операторская платформа для ра
 - Тестировать тот слой, который реально меняется.
 - Покрывать идемпотентность и edge cases.
 - UI wiring тестировать через Livewire structural assertions.
-- Уже покрытые webhook и manual reply сценарии повторно не дублировать.
+- Уже покрытые webhook, dialog reply и ownership сценарии повторно не дублировать.
 - При сомнениях в доменной модели сначала смотреть миграции, модели и текущие feature tests.
 
 ## Соглашения по ТЗ
@@ -252,7 +274,7 @@ Abrikosoff Connector — операторская платформа для ра
 - SLA-движок или таймеры
 - Round-robin назначение
 - История назначений (assignment history)
-- Conversation / thread как отдельная сущность
+- Новая Conversation / thread сущность поверх уже существующего `Dialog`
 - Generic config-driven collector engine
 - Auto re-entry / cooldown policy
 - Interactions API для Gemini
