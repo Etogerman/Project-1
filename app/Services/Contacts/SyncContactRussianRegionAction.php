@@ -65,6 +65,17 @@ class SyncContactRussianRegionAction
             return $contact;
         }
 
+        if ($allowClarification && $status === Contact::REGION_STATUS_AMBIGUOUS && count($candidateRegions) >= 5) {
+            $contact->forceFill([
+                'region' => null,
+                'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
+                'region_source' => null,
+                'pending_region_candidates' => $candidateRegions,
+            ])->save();
+
+            return $contact;
+        }
+
         if ($status === Contact::REGION_STATUS_CLARIFICATION_PENDING) {
             $status = Contact::REGION_STATUS_AMBIGUOUS;
         }

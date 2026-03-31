@@ -65,7 +65,7 @@ class ResolveRussianRegionActionTest extends TestCase
         $this->assertSame([
             'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
             'region' => null,
-            'candidate_regions' => ['Волгоградская область', 'Приморский край', 'Воронежская область'],
+            'candidate_regions' => ['Волгоградская область', 'Воронежская область', 'Приморский край'],
         ], $result);
     }
 
@@ -102,7 +102,13 @@ class ResolveRussianRegionActionTest extends TestCase
         $this->assertSame([
             'status' => Contact::REGION_STATUS_AMBIGUOUS,
             'region' => null,
-            'candidate_regions' => [],
+            'candidate_regions' => [
+                'Волгоградская область',
+                'Воронежская область',
+                'Калужская область',
+                'Приморский край',
+                'Тульская область',
+            ],
         ], $result);
     }
 

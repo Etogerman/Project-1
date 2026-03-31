@@ -33,6 +33,10 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
+    protected const RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS = 'candidate_buttons';
+
+    protected const RUSSIAN_REGION_CONFIRM_MODE_FREE_TEXT = 'free_text_region';
+
     public int $tries = 3;
 
     public function __construct(public int $inboundMessageId) {}
@@ -837,15 +841,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             }
 
             if ($currentField === Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM) {
-                $contact->forceFill([
-                    'region' => null,
-                    'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
-                    'region_source' => null,
-                    'pending_region_candidates' => null,
-                ])->save();
-                $this->dispatchDistanceToMoscowCalculation($contact);
-
-                $this->moveToAgeRangeStep(
+                $this->moveToCityAfterRussianRegionFailure(
                     message: $message,
                     channel: $channel,
                     contact: $contact,
@@ -1176,6 +1172,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        ?string $questionOverride = null,
     ): void {
         if (filled($contact->city)) {
             $this->moveToAgeRangeStep(
@@ -1196,7 +1193,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $this->sendReply(
             message: $message,
             channel: $channel,
-            text: $this->questionText(Contact::DATA_COLLECTION_FIELD_CITY, $channel->platform),
+            text: $questionOverride ?? $this->questionText(Contact::DATA_COLLECTION_FIELD_CITY, $channel->platform),
             messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             telegramBotApiService: $telegramBotApiService,
             maxBotApiService: $maxBotApiService,
@@ -1204,6 +1201,38 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             channelActivityLogger: $channelActivityLogger,
             activityEvent: 'contact.data_collection_next_question_sent',
             activityMessage: 'Отправлен следующий вопрос сбора профиля.',
+        );
+    }
+
+    protected function moveToCityAfterRussianRegionFailure(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $contact->forceFill([
+            'city' => null,
+            'region' => null,
+            'region_status' => Contact::REGION_STATUS_UNKNOWN,
+            'region_source' => null,
+            'pending_region_candidates' => null,
+            'distance_to_moscow_km' => null,
+            'distance_to_moscow_status' => Contact::DISTANCE_TO_MOSCOW_STATUS_UNKNOWN,
+            'distance_to_moscow_calculated_at' => null,
+        ])->save();
+
+        $this->moveToCityStep(
+            message: $message,
+            channel: $channel,
+            contact: $contact,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            questionOverride: $this->russianRegionFallbackToCityMessage(),
         );
     }
 
@@ -1597,7 +1626,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             'region' => null,
             'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
             'region_source' => null,
-            'pending_region_candidates' => null,
+            'pending_region_candidates' => $candidateRegions,
         ]))->save();
 
         return true;
@@ -1637,17 +1666,25 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             }
 
             $trimmed = trim($candidate);
+            $key = $this->normalizeComparableText($trimmed);
 
             if ($trimmed === '' || ! in_array($trimmed, $allowedRegions, true)) {
                 return [];
             }
 
-            if (! in_array($trimmed, $normalized, true)) {
-                $normalized[] = $trimmed;
+            if (! array_key_exists($key, $normalized)) {
+                $normalized[$key] = $trimmed;
             }
         }
 
-        return $normalized;
+        $values = array_values($normalized);
+
+        usort($values, fn (string $left, string $right): int => strnatcasecmp(
+            $this->normalizeComparableText($left),
+            $this->normalizeComparableText($right),
+        ));
+
+        return $values;
     }
 
     protected function nullableString(mixed $value): ?string
@@ -1712,9 +1749,10 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
      */
     protected function resolveRussianRegionConfirmInput(Contact $contact, string $replyText): string|null
     {
+        $mode = $this->russianRegionConfirmMode($contact);
         $candidates = $this->russianRegionCandidates($contact);
 
-        if ($candidates === []) {
+        if ($mode === null || $candidates === []) {
             return null;
         }
 
@@ -1724,7 +1762,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return 'skip';
         }
 
-        if ($callbackValue !== null && ctype_digit($callbackValue)) {
+        if ($mode === self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS && $callbackValue !== null && ctype_digit($callbackValue)) {
             $candidate = $this->candidateByOneBasedIndex($candidates, (int) $callbackValue);
 
             if ($candidate !== null) {
@@ -1739,7 +1777,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         }
 
         foreach ($candidates as $index => $candidate) {
-            if ($normalizedReply === (string) ($index + 1)) {
+            if ($mode === self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS && $normalizedReply === (string) ($index + 1)) {
                 return $candidate;
             }
 
@@ -1912,25 +1950,19 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
      */
     protected function telegramRussianRegionConfirmInlineKeyboard(Contact $contact): ?array
     {
-        $candidates = $this->russianRegionCandidates($contact);
-
-        if ($candidates === []) {
+        if ($this->russianRegionConfirmMode($contact) !== self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS) {
             return null;
         }
 
+        $candidates = $this->russianRegionCandidates($contact);
+
         $keyboard = [];
 
-        foreach (array_chunk($candidates, 2) as $offset => $chunk) {
-            $row = [];
-
-            foreach ($chunk as $index => $candidate) {
-                $row[] = [
-                    'text' => $candidate,
-                    'callback_data' => 'russian_region_confirm:'.(($offset * 2) + $index + 1),
-                ];
-            }
-
-            $keyboard[] = $row;
+        foreach ($candidates as $index => $candidate) {
+            $keyboard[] = [[
+                'text' => $candidate,
+                'callback_data' => 'russian_region_confirm:'.($index + 1),
+            ]];
         }
 
         $keyboard[] = [[
@@ -2016,25 +2048,19 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
      */
     protected function maxRussianRegionConfirmAttachments(Contact $contact): ?array
     {
-        $candidates = $this->russianRegionCandidates($contact);
-
-        if ($candidates === []) {
+        if ($this->russianRegionConfirmMode($contact) !== self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS) {
             return null;
         }
 
+        $candidates = $this->russianRegionCandidates($contact);
+
         $buttons = [];
 
-        foreach (array_chunk($candidates, 2) as $chunk) {
-            $row = [];
-
-            foreach ($chunk as $candidate) {
-                $row[] = [
-                    'type' => 'message',
-                    'text' => $candidate,
-                ];
-            }
-
-            $buttons[] = $row;
+        foreach ($candidates as $candidate) {
+            $buttons[] = [[
+                'type' => 'message',
+                'text' => $candidate,
+            ]];
         }
 
         $buttons[] = [[
@@ -2072,12 +2098,12 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
     protected function shouldAskRussianRegionConfirmation(Contact $contact): bool
     {
-        $candidates = $this->russianRegionCandidates($contact);
-
-        return $contact->region_status === Contact::REGION_STATUS_CLARIFICATION_PENDING
-            && ! filled($contact->region)
-            && count($candidates) >= 2
-            && count($candidates) <= 4;
+        return ! filled($contact->region)
+            && $this->russianRegionConfirmMode($contact) !== null
+            && in_array($contact->region_status, [
+                Contact::REGION_STATUS_CLARIFICATION_PENDING,
+                Contact::REGION_STATUS_AMBIGUOUS,
+            ], true);
     }
 
     /**
@@ -2099,37 +2125,85 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             }
 
             $trimmed = trim($candidate);
+            $key = $this->normalizeComparableText($trimmed);
 
-            if ($trimmed === '' || in_array($trimmed, $normalized, true)) {
+            if ($key === '' || array_key_exists($key, $normalized)) {
                 continue;
             }
 
-            $normalized[] = $trimmed;
+            $normalized[$key] = $trimmed;
         }
 
-        return $normalized;
+        $values = array_values($normalized);
+
+        usort($values, fn (string $left, string $right): int => strnatcasecmp(
+            $this->normalizeComparableText($left),
+            $this->normalizeComparableText($right),
+        ));
+
+        return $values;
     }
 
     protected function russianRegionConfirmQuestionText(Contact $contact): string
     {
-        $lines = [(string) config('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:')];
-
-        foreach ($this->russianRegionCandidates($contact) as $index => $candidate) {
-            $lines[] = sprintf('%d. %s', $index + 1, $candidate);
-        }
-
-        return implode("\n", $lines);
+        return match ($this->russianRegionConfirmMode($contact)) {
+            self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS => (string) config(
+                'bots.data_collection.russian_region_confirm.question_candidate_buttons',
+                config('bots.data_collection.russian_region_confirm.question', 'Уточните, пожалуйста, ваш регион проживания.')
+            ),
+            self::RUSSIAN_REGION_CONFIRM_MODE_FREE_TEXT => (string) config(
+                'bots.data_collection.russian_region_confirm.question_free_text',
+                'Уточните, пожалуйста, регион проживания. В какой области, крае или республике находится ваш город?'
+            ),
+            default => (string) config('bots.data_collection.russian_region_confirm.question', 'Уточните, пожалуйста, ваш регион проживания.'),
+        };
     }
 
     protected function russianRegionConfirmRetryText(Contact $contact): string
     {
-        $lines = [(string) config('bots.data_collection.russian_region_confirm.retry_message', 'Уточните ваш регион:')];
+        return match ($this->russianRegionConfirmMode($contact)) {
+            self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS => (string) config(
+                'bots.data_collection.russian_region_confirm.retry_candidate_buttons',
+                config('bots.data_collection.russian_region_confirm.retry_message', 'Уточните, пожалуйста, ваш регион проживания.')
+            ),
+            self::RUSSIAN_REGION_CONFIRM_MODE_FREE_TEXT => (string) config(
+                'bots.data_collection.russian_region_confirm.retry_free_text',
+                'Уточните, пожалуйста, регион проживания. В какой области, крае или республике находится ваш город?'
+            ),
+            default => (string) config('bots.data_collection.russian_region_confirm.retry_message', 'Уточните, пожалуйста, ваш регион проживания.'),
+        };
+    }
 
-        foreach ($this->russianRegionCandidates($contact) as $index => $candidate) {
-            $lines[] = sprintf('%d. %s', $index + 1, $candidate);
+    protected function russianRegionFallbackToCityMessage(): string
+    {
+        return (string) config(
+            'bots.data_collection.russian_region_confirm.fallback_to_city_message',
+            'Не смогли точно определить регион. Уточните, пожалуйста, город проживания ещё раз.'
+        );
+    }
+
+    protected function russianRegionConfirmMode(Contact $contact): ?string
+    {
+        $candidateCount = count($this->russianRegionCandidates($contact));
+
+        if ($candidateCount >= 2 && $candidateCount <= 4) {
+            return self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS;
         }
 
-        return implode("\n", $lines);
+        if ($candidateCount >= 5) {
+            return self::RUSSIAN_REGION_CONFIRM_MODE_FREE_TEXT;
+        }
+
+        return null;
+    }
+
+    protected function normalizeComparableText(string $value): string
+    {
+        $normalized = mb_strtolower(trim($value));
+        $normalized = str_replace('ё', 'е', $normalized);
+        $normalized = preg_replace('/\s+/u', ' ', $normalized) ?? $normalized;
+
+        return trim($normalized);
     }
 
     protected function normalizeRussianRegionConfirmCallbackValue(string $replyText): ?string

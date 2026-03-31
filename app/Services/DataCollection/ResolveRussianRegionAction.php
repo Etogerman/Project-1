@@ -68,7 +68,7 @@ class ResolveRussianRegionAction
             return [
                 'status' => Contact::REGION_STATUS_AMBIGUOUS,
                 'region' => null,
-                'candidate_regions' => [],
+                'candidate_regions' => $lookupCandidateRegions,
             ];
         }
 
@@ -209,12 +209,21 @@ PROMPT;
                 return [];
             }
 
-            if (! in_array($trimmed, $normalizedCandidates, true)) {
-                $normalizedCandidates[] = $trimmed;
+            $key = $this->normalizeComparableText($trimmed);
+
+            if (! array_key_exists($key, $normalizedCandidates)) {
+                $normalizedCandidates[$key] = $trimmed;
             }
         }
 
-        return $normalizedCandidates;
+        $values = array_values($normalizedCandidates);
+
+        usort($values, fn (string $left, string $right): int => strnatcasecmp(
+            $this->normalizeComparableText($left),
+            $this->normalizeComparableText($right),
+        ));
+
+        return $values;
     }
 
     private function normalizeNullableString(mixed $value): ?string
@@ -226,5 +235,14 @@ PROMPT;
         $trimmed = trim($value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    private function normalizeComparableText(string $value): string
+    {
+        $normalized = mb_strtolower(trim($value));
+        $normalized = str_replace('ё', 'е', $normalized);
+        $normalized = preg_replace('/\s+/u', ' ', $normalized) ?? $normalized;
+
+        return trim($normalized);
     }
 }

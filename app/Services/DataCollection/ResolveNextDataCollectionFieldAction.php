@@ -24,12 +24,17 @@ class ResolveNextDataCollectionFieldAction
             return Contact::DATA_COLLECTION_FIELD_COUNTRY;
         }
 
+        $candidateCount = is_array($contact->pending_region_candidates)
+            ? count($contact->pending_region_candidates)
+            : 0;
+
         if (
-            $contact->region_status === Contact::REGION_STATUS_CLARIFICATION_PENDING
-            && is_array($contact->pending_region_candidates)
-            && count($contact->pending_region_candidates) >= 2
-            && count($contact->pending_region_candidates) <= 4
-            && ! filled($contact->region)
+            ! filled($contact->region)
+            && $candidateCount >= 2
+            && (
+                ($contact->region_status === Contact::REGION_STATUS_CLARIFICATION_PENDING && $candidateCount <= 4)
+                || ($contact->region_status === Contact::REGION_STATUS_AMBIGUOUS && $candidateCount >= 5)
+            )
         ) {
             return Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM;
         }

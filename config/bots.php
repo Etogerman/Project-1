@@ -153,6 +153,26 @@ return [
         'russian_region_confirm' => [
             'question' => env('BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_QUESTION', 'Уточните ваш регион:'),
             'retry_message' => env('BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_RETRY_MESSAGE', 'Уточните ваш регион:'),
+            'question_candidate_buttons' => env(
+                'BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_QUESTION_CANDIDATE_BUTTONS',
+                env('BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_QUESTION', 'Уточните, пожалуйста, ваш регион проживания.')
+            ),
+            'retry_candidate_buttons' => env(
+                'BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_RETRY_CANDIDATE_BUTTONS',
+                env('BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_RETRY_MESSAGE', 'Уточните, пожалуйста, ваш регион проживания.')
+            ),
+            'question_free_text' => env(
+                'BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_QUESTION_FREE_TEXT',
+                'Уточните, пожалуйста, регион проживания. В какой области, крае или республике находится ваш город?'
+            ),
+            'retry_free_text' => env(
+                'BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_RETRY_FREE_TEXT',
+                'Уточните, пожалуйста, регион проживания. В какой области, крае или республике находится ваш город?'
+            ),
+            'fallback_to_city_message' => env(
+                'BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_FALLBACK_TO_CITY_MESSAGE',
+                'Не смогли точно определить регион. Уточните, пожалуйста, город проживания ещё раз.'
+            ),
             'skip_message' => env('BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_SKIP_MESSAGE', 'Хорошо, регион пропустим.'),
             'skip_button_label' => env('BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_SKIP_BUTTON_LABEL', 'Пропустить'),
             'max_attempts' => (int) env('BOT_DATA_COLLECTION_RUSSIAN_REGION_CONFIRM_MAX_ATTEMPTS', 2),

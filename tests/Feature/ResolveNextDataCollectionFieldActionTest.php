@@ -104,6 +104,30 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
         );
     }
 
+    public function test_it_returns_russian_region_confirm_when_ambiguous_region_has_many_candidates(): void
+    {
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Александровка',
+            'region' => null,
+            'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
+            'pending_region_candidates' => [
+                'Волгоградская область',
+                'Приморский край',
+                'Воронежская область',
+                'Тульская область',
+                'Калужская область',
+            ],
+            'age_range' => null,
+        ]);
+
+        $this->assertSame(
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            app(ResolveNextDataCollectionFieldAction::class)->handle($contact),
+        );
+    }
+
     public function test_it_returns_null_when_profile_is_complete(): void
     {
         $contact = Contact::factory()->create([

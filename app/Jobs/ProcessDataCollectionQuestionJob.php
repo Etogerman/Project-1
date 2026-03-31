@@ -26,6 +26,10 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
+    protected const RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS = 'candidate_buttons';
+
+    protected const RUSSIAN_REGION_CONFIRM_MODE_FREE_TEXT = 'free_text_region';
+
     public int $tries = 3;
 
     public function __construct(public int $sourceMessageId, public bool $forceSend = false) {}
@@ -343,19 +347,17 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
 
     protected function russianRegionConfirmQuestionText(Contact $contact): ?string
     {
-        $candidates = $this->russianRegionCandidates($contact);
-
-        if ($candidates === []) {
-            return null;
-        }
-
-        $lines = [(string) config('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:')];
-
-        foreach ($candidates as $index => $candidate) {
-            $lines[] = sprintf('%d. %s', $index + 1, $candidate);
-        }
-
-        return implode("\n", $lines);
+        return match ($this->russianRegionConfirmMode($contact)) {
+            self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS => (string) config(
+                'bots.data_collection.russian_region_confirm.question_candidate_buttons',
+                config('bots.data_collection.russian_region_confirm.question', 'Уточните, пожалуйста, ваш регион проживания.')
+            ),
+            self::RUSSIAN_REGION_CONFIRM_MODE_FREE_TEXT => (string) config(
+                'bots.data_collection.russian_region_confirm.question_free_text',
+                'Уточните, пожалуйста, регион проживания. В какой области, крае или республике находится ваш город?'
+            ),
+            default => null,
+        };
     }
 
     /**
@@ -363,33 +365,19 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
      */
     protected function telegramRussianRegionConfirmInlineKeyboard(Contact $contact): ?array
     {
-        $candidates = $this->russianRegionCandidates($contact);
-
-        if ($candidates === []) {
+        if ($this->russianRegionConfirmMode($contact) !== self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS) {
             return null;
         }
 
+        $candidates = $this->russianRegionCandidates($contact);
+
         $keyboard = [];
 
-        foreach (array_chunk(array_values($candidates), 2, true) as $chunk) {
-            $row = [];
-
-            foreach ($chunk as $index => $candidate) {
-                $position = array_search($candidate, $candidates, true);
-
-                if ($position === false) {
-                    continue;
-                }
-
-                $row[] = [
-                    'text' => $candidate,
-                    'callback_data' => 'russian_region_confirm:'.($position + 1),
-                ];
-            }
-
-            if ($row !== []) {
-                $keyboard[] = $row;
-            }
+        foreach ($candidates as $index => $candidate) {
+            $keyboard[] = [[
+                'text' => $candidate,
+                'callback_data' => 'russian_region_confirm:'.($index + 1),
+            ]];
         }
 
         $keyboard[] = [[
@@ -405,27 +393,19 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
      */
     protected function maxRussianRegionConfirmAttachments(Contact $contact): ?array
     {
-        $candidates = $this->russianRegionCandidates($contact);
-
-        if ($candidates === []) {
+        if ($this->russianRegionConfirmMode($contact) !== self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS) {
             return null;
         }
 
+        $candidates = $this->russianRegionCandidates($contact);
+
         $buttons = [];
 
-        foreach (array_chunk(array_values($candidates), 2) as $chunk) {
-            $row = [];
-
-            foreach ($chunk as $candidate) {
-                $row[] = [
-                    'type' => 'message',
-                    'text' => $candidate,
-                ];
-            }
-
-            if ($row !== []) {
-                $buttons[] = $row;
-            }
+        foreach ($candidates as $candidate) {
+            $buttons[] = [[
+                'type' => 'message',
+                'text' => $candidate,
+            ]];
         }
 
         $buttons[] = [[
@@ -460,14 +440,46 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             }
 
             $trimmed = trim($candidate);
+            $key = $this->normalizeComparableText($trimmed);
 
-            if ($trimmed === '' || in_array($trimmed, $normalized, true)) {
+            if ($key === '' || array_key_exists($key, $normalized)) {
                 continue;
             }
 
-            $normalized[] = $trimmed;
+            $normalized[$key] = $trimmed;
         }
 
-        return $normalized;
+        $values = array_values($normalized);
+
+        usort($values, fn (string $left, string $right): int => strnatcasecmp(
+            $this->normalizeComparableText($left),
+            $this->normalizeComparableText($right),
+        ));
+
+        return $values;
+    }
+
+    protected function russianRegionConfirmMode(Contact $contact): ?string
+    {
+        $candidateCount = count($this->russianRegionCandidates($contact));
+
+        if ($candidateCount >= 2 && $candidateCount <= 4) {
+            return self::RUSSIAN_REGION_CONFIRM_MODE_CANDIDATE_BUTTONS;
+        }
+
+        if ($candidateCount >= 5) {
+            return self::RUSSIAN_REGION_CONFIRM_MODE_FREE_TEXT;
+        }
+
+        return null;
+    }
+
+    protected function normalizeComparableText(string $value): string
+    {
+        $normalized = mb_strtolower(trim($value));
+        $normalized = str_replace('ё', 'е', $normalized);
+        $normalized = preg_replace('/\s+/u', ' ', $normalized) ?? $normalized;
+
+        return trim($normalized);
     }
 }
