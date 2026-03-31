@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\CalculateDistanceToMoscowJob;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Models\Channel;
@@ -587,6 +588,130 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'contact_id' => $contact->id,
             'text' => 'Подскажите, пожалуйста, страну, где вы живёте. Для города «Александровка» это нужно уточнить.',
         ]);
+    }
+
+    public function test_job_dispatches_distance_calculation_after_residence_city_for_russia(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Московская область',
+        ]);
+        config()->set('russian_region_cities.cities', [
+            'москва' => [
+                'city' => 'Москва',
+                'aliases' => [],
+                'regions' => ['Московская область'],
+            ],
+        ]);
+
+        Queue::fake([CalculateDistanceToMoscowJob::class]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Москва',
+                'country' => 'Россия',
+                'country_confidence' => 'high',
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9954],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Москва',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            'first_name' => 'Герман',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        Queue::assertPushed(CalculateDistanceToMoscowJob::class, function (CalculateDistanceToMoscowJob $job) use ($contact): bool {
+            return $job->contactId === $contact->id;
+        });
+    }
+
+    public function test_job_updates_distance_after_country_reply_when_city_exists(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Московская область',
+        ]);
+        config()->set('russian_region_cities.cities', [
+            'москва' => [
+                'city' => 'Москва',
+                'aliases' => [],
+                'regions' => ['Московская область'],
+            ],
+        ]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Москва',
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9958],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Россия',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'first_name' => 'Герман',
+            'city' => 'Москва',
+            'country' => null,
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame(0, $contact->distance_to_moscow_km);
+        $this->assertSame(Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED, $contact->distance_to_moscow_status);
+    }
+
+    public function test_job_dispatches_distance_calculation_after_russian_region_confirmation(): void
+    {
+        Queue::fake([CalculateDistanceToMoscowJob::class]);
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9961],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '1',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Михайловск',
+            'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+            'pending_region_candidates' => ['Свердловская область', 'Ставропольский край'],
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        Queue::assertPushed(CalculateDistanceToMoscowJob::class, function (CalculateDistanceToMoscowJob $job) use ($contact): bool {
+            return $job->contactId === $contact->id;
+        });
     }
 
     public function test_job_keeps_residence_city_and_asks_country_when_country_confidence_is_malformed(): void

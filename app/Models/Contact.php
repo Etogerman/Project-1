@@ -45,6 +45,16 @@ class Contact extends Model
 
     public const REGION_SOURCE_MANUAL = 'manual';
 
+    public const DISTANCE_TO_MOSCOW_STATUS_RESOLVED = 'resolved';
+
+    public const DISTANCE_TO_MOSCOW_STATUS_PENDING = 'pending';
+
+    public const DISTANCE_TO_MOSCOW_STATUS_UNKNOWN = 'unknown';
+
+    public const DISTANCE_TO_MOSCOW_STATUS_OUT_OF_SCOPE = 'out_of_scope';
+
+    public const DISTANCE_TO_MOSCOW_STATUS_FAILED = 'failed';
+
     /**
      * @var list<string>
      */
@@ -61,6 +71,9 @@ class Contact extends Model
         'region',
         'region_status',
         'region_source',
+        'distance_to_moscow_km',
+        'distance_to_moscow_status',
+        'distance_to_moscow_calculated_at',
         'pending_region_candidates',
         'data_collection_status',
         'data_collection_current_field',
@@ -76,6 +89,8 @@ class Contact extends Model
      */
     protected $casts = [
         'birth_date' => 'date',
+        'distance_to_moscow_km' => 'integer',
+        'distance_to_moscow_calculated_at' => 'datetime',
         'data_collection_started_at' => 'datetime',
         'data_collection_completed_at' => 'datetime',
         'data_collection_attempts_count' => 'integer',
@@ -178,6 +193,29 @@ class Contact extends Model
         }
 
         return self::regionStatusOptions()[$value] ?? (string) $value;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function distanceToMoscowStatusOptions(): array
+    {
+        return [
+            self::DISTANCE_TO_MOSCOW_STATUS_RESOLVED => 'Рассчитано',
+            self::DISTANCE_TO_MOSCOW_STATUS_PENDING => 'Ожидает расчёта',
+            self::DISTANCE_TO_MOSCOW_STATUS_UNKNOWN => 'Не удалось определить',
+            self::DISTANCE_TO_MOSCOW_STATUS_OUT_OF_SCOPE => 'Не Россия',
+            self::DISTANCE_TO_MOSCOW_STATUS_FAILED => 'Ошибка расчёта',
+        ];
+    }
+
+    public static function formatDistanceToMoscowStatus(?string $value): string
+    {
+        if (! filled($value)) {
+            return '—';
+        }
+
+        return self::distanceToMoscowStatusOptions()[$value] ?? (string) $value;
     }
 
     public function assignedUser(): BelongsTo

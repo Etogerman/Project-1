@@ -365,6 +365,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         if ($countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH && filled($country)) {
             $contact->forceFill($attributes)->save();
             $syncContactRussianRegionAction->handle($contact, true);
+            $this->dispatchDistanceToMoscowCalculation($contact);
 
             $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY);
 
@@ -386,6 +387,8 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY);
 
         if ($this->applyResidenceCityRussianShortcut($contact, $city, $resolveRussianRegionCandidatesLookupAction)) {
+            $this->dispatchDistanceToMoscowCalculation($contact);
+
             $this->moveToAgeRangeStep(
                 message: $message,
                 channel: $channel,
@@ -400,6 +403,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         }
 
         $syncContactRussianRegionAction->handle($contact, true);
+        $this->dispatchDistanceToMoscowCalculation($contact);
 
         $this->moveToCountryStep(
             message: $message,
@@ -515,6 +519,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             'country' => $country,
         ])->save();
         $syncContactRussianRegionAction->handle($contact, true);
+        $this->dispatchDistanceToMoscowCalculation($contact);
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_COUNTRY);
 
@@ -596,6 +601,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             'city' => $city,
         ])->save();
         $syncContactRussianRegionAction->handle($contact, true);
+        $this->dispatchDistanceToMoscowCalculation($contact);
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_CITY);
 
@@ -629,6 +635,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 'region_source' => null,
                 'pending_region_candidates' => null,
             ])->save();
+            $this->dispatchDistanceToMoscowCalculation($contact);
 
             $this->moveToAgeRangeStep(
                 message: $message,
@@ -664,6 +671,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             'region_source' => Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT,
             'pending_region_candidates' => null,
         ])->save();
+        $this->dispatchDistanceToMoscowCalculation($contact);
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM);
 
@@ -835,6 +843,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                     'region_source' => null,
                     'pending_region_candidates' => null,
                 ])->save();
+                $this->dispatchDistanceToMoscowCalculation($contact);
 
                 $this->moveToAgeRangeStep(
                     message: $message,
@@ -1011,6 +1020,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 'region_source' => null,
                 'pending_region_candidates' => null,
             ])->save();
+            $this->dispatchDistanceToMoscowCalculation($contact);
 
             $this->moveToAgeRangeStep(
                 message: $message,
@@ -1591,6 +1601,17 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ]))->save();
 
         return true;
+    }
+
+    protected function dispatchDistanceToMoscowCalculation(Contact $contact): void
+    {
+        CalculateDistanceToMoscowJob::dispatch(
+            $contact->id,
+            $contact->city,
+            $contact->country,
+            $contact->region,
+            $contact->region_status,
+        );
     }
 
     /**

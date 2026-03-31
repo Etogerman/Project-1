@@ -35,4 +35,14 @@ return [
         ],
     ],
 
+    'yandex_geocoder' => [
+        'api_key' => env('YANDEX_GEOCODER_API_KEY'),
+        'base_url' => env('YANDEX_GEOCODER_BASE_URL', 'https://geocode-maps.yandex.ru/1.x/'),
+    ],
+
+    'moscow_distance' => [
+        'reference_lat' => (float) env('MOSCOW_REFERENCE_LAT', 55.7558),
+        'reference_lng' => (float) env('MOSCOW_REFERENCE_LNG', 37.6173),
+    ],
+
 ];

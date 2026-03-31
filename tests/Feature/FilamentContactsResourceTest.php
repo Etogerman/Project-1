@@ -579,6 +579,27 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame('Герман Абрикосов', $contact->display_name);
     }
 
+    public function test_contact_modal_displays_distance_to_moscow_fields(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'distance_to_moscow_km' => 0,
+            'distance_to_moscow_status' => Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Расстояние до Москвы')
+            ->assertMountedActionModalSee('0 км')
+            ->assertMountedActionModalSee('Рассчитано');
+    }
+
     public function test_admin_can_toggle_contact_auto_reply_from_contact_modal(): void
     {
         $admin = User::factory()->create([

@@ -43,6 +43,14 @@
             <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Статус региона</p>
             <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $regionStatusLabel }}</p>
         </div>
+        <div>
+            <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Расстояние до Москвы</p>
+            <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $distanceToMoscowLabel }}</p>
+        </div>
+        <div>
+            <p style="margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">Статус расчёта</p>
+            <p style="margin: 0; font-size: 0.95rem; color: #111827;">{{ $distanceToMoscowStatusLabel }}</p>
+        </div>
     </div>
 
     <div style="margin-top: 0.9rem; border-top: 1px solid #e5e7eb; padding-top: 0.8rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">

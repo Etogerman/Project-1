@@ -2,6 +2,7 @@
 
 namespace App\Services\Contacts;
 
+use App\Jobs\CalculateDistanceToMoscowJob;
 use App\Models\Contact;
 use Illuminate\Support\Carbon;
 
@@ -29,6 +30,7 @@ class UpdateContactProfileAction
             : null;
         $countryOrCityChanged = $contact->country !== $country || $contact->city !== $city;
         $regionChanged = $contact->region !== $region;
+        $locationChanged = $countryOrCityChanged || $regionChanged;
 
         $payload = [
             'first_name' => $firstName,
@@ -49,6 +51,10 @@ class UpdateContactProfileAction
                 'pending_region_candidates' => null,
             ]))->save();
 
+            if ($locationChanged) {
+                $this->dispatchDistanceToMoscowCalculation($contact);
+            }
+
             return $contact->fresh();
         }
 
@@ -60,6 +66,10 @@ class UpdateContactProfileAction
                 'pending_region_candidates' => null,
             ]))->save();
 
+            if ($locationChanged) {
+                $this->dispatchDistanceToMoscowCalculation($contact);
+            }
+
             return $contact->fresh();
         }
 
@@ -69,7 +79,22 @@ class UpdateContactProfileAction
             $this->syncContactRussianRegionAction->handle($contact, false);
         }
 
+        if ($locationChanged) {
+            $this->dispatchDistanceToMoscowCalculation($contact);
+        }
+
         return $contact->fresh();
+    }
+
+    private function dispatchDistanceToMoscowCalculation(Contact $contact): void
+    {
+        CalculateDistanceToMoscowJob::dispatch(
+            $contact->id,
+            $contact->city,
+            $contact->country,
+            $contact->region,
+            $contact->region_status,
+        );
     }
 
     private function normalizeNullableString(mixed $value): ?string

@@ -602,6 +602,8 @@ class ContactResource extends Resource
      *     city: string,
      *     region: string,
      *     regionStatusLabel: string,
+     *     distanceToMoscowLabel: string,
+     *     distanceToMoscowStatusLabel: string,
      *     messengerName: string,
      *     genderOptions: array<string, string>,
      *     ageRangeOptions: array<string, string>,
@@ -630,6 +632,10 @@ class ContactResource extends Resource
             'city' => $record->city ?? '—',
             'region' => $record->region ?? '—',
             'regionStatusLabel' => Contact::formatRegionStatus($record->region_status),
+            'distanceToMoscowLabel' => $record->distance_to_moscow_km !== null
+                ? $record->distance_to_moscow_km.' км'
+                : '—',
+            'distanceToMoscowStatusLabel' => Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status),
             'messengerName' => $record->name ?? '—',
             'genderOptions' => Contact::genderOptions(),
             'ageRangeOptions' => Contact::ageRangeOptions(),

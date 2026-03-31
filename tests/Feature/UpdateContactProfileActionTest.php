@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\CalculateDistanceToMoscowJob;
 use App\Models\Contact;
 use App\Services\Contacts\UpdateContactProfileAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class UpdateContactProfileActionTest extends TestCase
@@ -27,6 +29,7 @@ class UpdateContactProfileActionTest extends TestCase
             ],
         ]);
 
+        Queue::fake([CalculateDistanceToMoscowJob::class]);
         Http::fake();
 
         $contact = Contact::factory()->create([
@@ -48,6 +51,9 @@ class UpdateContactProfileActionTest extends TestCase
         $this->assertSame('Московская область', $updated->region);
         $this->assertSame(Contact::REGION_STATUS_RESOLVED, $updated->region_status);
         $this->assertSame(Contact::REGION_SOURCE_AI, $updated->region_source);
+        Queue::assertPushed(CalculateDistanceToMoscowJob::class, function (CalculateDistanceToMoscowJob $job) use ($contact): bool {
+            return $job->contactId === $contact->id;
+        });
         Http::assertNothingSent();
     }
 }
