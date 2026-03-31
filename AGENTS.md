@@ -45,6 +45,12 @@ Abrikosoff Connector — операторская платформа для ра
     сначала пытаемся определить `region` или exact candidate set,
     и только потом задаём fallback-вопрос про страну
   - max 2 попытки на поле, затем мягкий skip на следующий безопасный шаг
+- для российских контактов после точного определения локации
+  асинхронно считается `distance_to_moscow_km`
+  - `Москва -> 0`
+  - остальные города РФ: `Yandex Geocoder + Haversine`
+  - ambiguous-city кейсы считают расстояние только после
+    подтверждения `region` и deterministic geocode query
 - просмотр контактов и истории в админке
 - чатовый view истории в карточке контакта
 - телефоны в списке контактов: колонка, фильтры, поиск
@@ -105,13 +111,18 @@ Abrikosoff Connector — операторская платформа для ра
   и флаг `is_auto_reply_enabled`
   - профильные поля: `first_name`, `last_name`, `birth_date`,
     `age_years`, `age_range`, `country`, `city`,
-    `region`, `region_status`, `region_source`
+    `region`, `region_status`, `region_source`,
+    `distance_to_moscow_km`, `distance_to_moscow_status`,
+    `distance_to_moscow_calculated_at`
   - collector state: `data_collection_status`,
     `data_collection_current_field`, `data_collection_started_at`,
     `data_collection_completed_at`, `data_collection_attempts_count`,
     `pending_region_candidates`
   - `region` — канонический российский business-region для фильтров,
     а не обязательно официальный административный субъект
+  - `distance_to_moscow_*` — best-effort вычисляемое поле
+    для квалификации только по России; считается асинхронно,
+    не влияет на progression collector-а
   - вычисляемые поля: `display_name`, `effective_age_years`
 - **ContactIdentity** — связь Contact ↔ Channel через external_user_id;
   unique constraint на `[channel_id, external_user_id]`
@@ -143,7 +154,12 @@ Abrikosoff Connector — операторская платформа для ра
   Gemini settings (`api_key`, `model`, `max_output_tokens`, `thinking_budget`),
   allowed Russian business regions и тексты `russian_region_confirm`
 - `config/russian_region_cities.php` — deterministic source of truth
-  для `российский город -> exact candidate regions`
+  для `российский город -> exact candidate regions` и
+  geocode hints для `distance_to_moscow`
+- `config/services.php` — внешние сервисы; в текущем runtime
+  здесь лежат `yandex_geocoder` и reference point для Москвы
+- `YANDEX_GEOCODER_API_KEY` — обязательный env var
+  для расчёта `distance_to_moscow` вне special-case `Москва = 0`
 - Токены ботов хранятся в `Channel.credentials` (encrypted:array), а не в .env
 - Webhook-секреты генерируются и хранятся в том же поле credentials
 
@@ -165,16 +181,21 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Services/DataCollection/ResolveRussianRegionAction.php` — Russian region resolution поверх lookup и AI fallback
 - `app/Services/DataCollection/ResolveNextDataCollectionFieldAction.php` — определение следующего collector field
 - `app/Services/DataCollection/ResumeContactDataCollectionAction.php` — ручное возобновление анкеты
+- `app/Services/Geo/YandexGeocoderService.php` — geocode coordinates для российских населённых пунктов
+- `app/Services/Geo/ResolveRussianLocalityGeocodeQueryAction.php` — deterministic geocode query resolver для distance-path
+- `app/Services/Geo/CalculateDistanceToMoscowAction.php` — расчёт `distance_to_moscow_km` через Haversine
 - `app/Jobs/ProcessAutoReplyJob.php` — queued auto-reply
 - `app/Jobs/ProcessPhoneCaptureFollowUpJob.php` — queued confirmation после phone share
 - `app/Jobs/ProcessDataCollectionQuestionJob.php` — отправка следующего вопроса collector-а
 - `app/Jobs/ProcessDataCollectionResponseJob.php` — обработка ответа на collector field
+- `app/Jobs/CalculateDistanceToMoscowJob.php` — queued sync `distance_to_moscow_*`
 - `app/Services/Bots/StoreOutboundAutoReplyMessageAction.php` — сохранение исходящего автоответа
 - `app/Services/Bots/SendManualContactReplyAction.php` — ручной ответ оператора
 - `app/Services/Contacts/AddContactPhoneAction.php` — нормализация и сохранение телефона
 - `app/Services/Contacts/UpdateContactPhoneAction.php` — редактирование телефона
 - `app/Services/Contacts/DeleteContactPhoneAction.php` — удаление телефона
 - `app/Services/Contacts/SyncContactRussianRegionAction.php` — синхронизация `region` и `pending_region_candidates` после изменения `city/country`
+- `app/Services/Contacts/SyncContactDistanceToMoscowAction.php` — синхронизация `distance_to_moscow_*` после изменения location
 - `app/Services/Contacts/UpdateContactProfileAction.php` — обновление профильных полей контакта
 - `app/Services/Contacts/DeleteContactAction.php` — удаление контакта и связанных сущностей
 - `app/Services/Contacts/ClaimContactAction.php` — взятие контакта в работу
@@ -236,11 +257,23 @@ Abrikosoff Connector — операторская платформа для ра
 - Auto re-entry / cooldown policy
 - Interactions API для Gemini
 - Phone-country inference для location
-- Geocoder service
+- Generic geocoder / routing engine вне текущего узкого кейса `distance_to_moscow`
+- Routing API / Distance Matrix для точного расстояния по дорогам
+- Distance buckets / qualification categories
 - generic `location_confirm` / non-Russian ambiguous-city engine
 - Код интеграции с Битрикс24
 
 ## Рабочий стиль для агентов
+
+Жёсткое правило:
+- без явной команды пользователя на реализацию и без чёткого согласованного ТЗ
+  агент не меняет код, конфиги, миграции, тесты, документацию,
+  git-состояние и окружения
+- если пользователь просит анализ, review, критику, сравнение вариантов,
+  план или ТЗ, агент работает только в read-only режиме
+- если ТЗ неполное или двусмысленное, агент сначала уточняет
+  и не начинает реализацию
+- commit, push, migrate, deploy — только по отдельной явной команде пользователя
 
 Перед предложением изменений:
 1. Изучить существующие пути в коде.
