@@ -2,6 +2,11 @@
     data-role="conversation-reply-form"
     style="margin-top: 1rem; border: 1px solid #d1d5db; border-radius: 18px; background: #fff7cc; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); padding: 1.25rem;"
 >
+    @php
+        $replyTextModel = $replyTextModel ?? 'inlineReplyText';
+        $submitMethod = $submitMethod ?? 'sendInlineReply';
+    @endphp
+
     <div style="margin-bottom: 0.875rem;">
         <h3 style="margin: 0 0 0.375rem; font-size: 1rem; font-weight: 700; color: #111827;">Ответ</h3>
         @if (! $autoReplyEnabled)
@@ -9,13 +14,13 @@
                 Автоответы для этого контакта отключены. Это не влияет на ручной ответ.
             </p>
         @endif
-        @if ($canClaim)
-            <p style="margin: 0.375rem 0 0; font-size: 0.8125rem; color: #92400e;">
-                Ответственный пока не выбран. Его можно выбрать выше, либо просто отправить сообщение — контакт закрепится за вами автоматически.
-            </p>
-        @elseif (filled($blockedReason))
+        @if (filled($blockedReason))
             <p style="margin: 0.375rem 0 0; font-size: 0.8125rem; color: #991b1b;">
                 {{ $blockedReason }}
+            </p>
+        @elseif ($canClaim)
+            <p style="margin: 0.375rem 0 0; font-size: 0.8125rem; color: #92400e;">
+                Ответственный пока не выбран. Его можно выбрать выше, либо просто отправить сообщение — контакт закрепится за вами автоматически.
             </p>
         @endif
     </div>
@@ -23,7 +28,7 @@
     <div>
         <textarea
             data-role="conversation-reply-textarea"
-            wire:model.defer="inlineReplyText"
+            wire:model.defer="{{ $replyTextModel }}"
             rows="3"
             maxlength="2000"
             placeholder="Введите текст ответа"
@@ -40,14 +45,14 @@
         <button
             data-role="conversation-reply-submit"
             type="button"
-            wire:click="sendInlineReply"
+            wire:click="{{ $submitMethod }}"
             @disabled(! $canReply)
             wire:loading.attr="disabled"
-            wire:target="sendInlineReply"
+            wire:target="{{ $submitMethod }}"
             style="display: inline-flex; align-items: center; justify-content: center; border: 1px solid #15803d; border-radius: 12px; background: #16a34a; color: #ffffff; font-size: 0.9375rem; font-weight: 700; padding: 0.8rem 1.4rem; box-shadow: 0 8px 18px rgba(22, 163, 74, 0.22); cursor: {{ $canReply ? 'pointer' : 'not-allowed' }}; opacity: {{ $canReply ? '1' : '0.6' }};"
         >
-            <span wire:loading.remove wire:target="sendInlineReply">Отправить</span>
-            <span wire:loading wire:target="sendInlineReply">Отправка...</span>
+            <span wire:loading.remove wire:target="{{ $submitMethod }}">Отправить</span>
+            <span wire:loading wire:target="{{ $submitMethod }}">Отправка...</span>
         </button>
     </div>
 </section>

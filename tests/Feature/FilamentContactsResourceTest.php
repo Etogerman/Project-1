@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
+use App\Filament\Resources\Dialogs\DialogResource;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
@@ -17,9 +18,8 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
-use Illuminate\Http\Client\Request;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -150,8 +150,17 @@ class FilamentContactsResourceTest extends TestCase
             'external_user_id' => 'max-200',
             'external_username' => 'max_customer',
         ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'chat-500',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
 
         Message::query()->create([
+            'dialog_id' => $dialog->id,
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
@@ -176,9 +185,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Анкета')
             ->assertMountedActionModalSee('Телефоны')
             ->assertMountedActionModalSee('Диалоги')
-            ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Подробности')
-            ->assertMountedActionModalSee('Последнее сообщение')
             ->assertMountedActionModalSee('Диагностика webhook')
             ->assertMountedActionModalSee('Свободен')
             ->assertMountedActionModalSee('Изменить')
@@ -187,10 +194,13 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('MAX Support')
             ->assertMountedActionModalSee('msg-700')
             ->assertMountedActionModalSee('max-debug')
+            ->assertMountedActionModalSee('Нужна помощь по заказу')
+            ->assertMountedActionModalDontSee('История сообщений')
+            ->assertMountedActionModalDontSee('Последнее сообщение')
+            ->assertMountedActionModalDontSee('Введите текст ответа')
             ->assertMountedActionModalDontSee('Назначение')
             ->assertMountedActionModalDontSee('Identities list')
-            ->assertMountedActionModalDontSee('Recent messages')
-            ->assertMountedActionModalSee('Нужна помощь по заказу');
+            ->assertMountedActionModalDontSee('Recent messages');
     }
 
     public function test_contacts_table_shows_pending_duplicate_review_badge_and_filter(): void
@@ -272,9 +282,7 @@ class FilamentContactsResourceTest extends TestCase
             'Работа с контактом',
             'Телефоны',
             'Диалоги',
-            'История сообщений',
             'Подробности',
-            'Последнее сообщение',
             'Диагностика webhook',
         ], array_map(
             fn (Section $section): string => (string) $section->getHeading(),
@@ -289,19 +297,16 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertFalse($sectionsByHeading['Анкета']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Работа с контактом']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Телефоны']->isCollapsible());
-        $this->assertFalse($sectionsByHeading['История сообщений']->isCollapsible());
+        $this->assertFalse($sectionsByHeading['Диалоги']->isCollapsible());
 
         $this->assertTrue($sectionsByHeading['Подробности']->isCollapsible());
         $this->assertTrue($sectionsByHeading['Подробности']->isCollapsed());
-
-        $this->assertTrue($sectionsByHeading['Последнее сообщение']->isCollapsible());
-        $this->assertTrue($sectionsByHeading['Последнее сообщение']->isCollapsed());
 
         $this->assertTrue($sectionsByHeading['Диагностика webhook']->isCollapsible());
         $this->assertTrue($sectionsByHeading['Диагностика webhook']->isCollapsed());
     }
 
-    public function test_admin_can_see_inline_reply_composer_in_contact_modal(): void
+    public function test_contact_modal_no_longer_shows_history_and_inline_reply_sections(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -336,10 +341,11 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableActionExists('view', null, $contact)
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Анкета')
-            ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Диагностика webhook')
-            ->assertMountedActionModalSee('Ответ')
-            ->assertMountedActionModalSee('Отправить');
+            ->assertMountedActionModalDontSee('История сообщений')
+            ->assertMountedActionModalDontSee('Последнее сообщение')
+            ->assertMountedActionModalDontSee('Введите текст ответа')
+            ->assertMountedActionModalDontSee('Отправить');
     }
 
     public function test_contact_modal_shows_inactive_collector_status(): void
@@ -1648,7 +1654,7 @@ class FilamentContactsResourceTest extends TestCase
             'external_user_id' => '',
         ]);
 
-        Dialog::factory()->create([
+        $telegramDialog = Dialog::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $telegramChannel->id,
             'current_contact_identity_id' => $telegramIdentity->id,
@@ -1658,7 +1664,7 @@ class FilamentContactsResourceTest extends TestCase
             'last_inbound_at' => now()->subMinute(),
             'last_outbound_at' => now()->subSeconds(10),
         ]);
-        Dialog::factory()->create([
+        $maxDialog = Dialog::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $maxChannel->id,
             'current_contact_identity_id' => $maxIdentity->id,
@@ -1668,6 +1674,32 @@ class FilamentContactsResourceTest extends TestCase
             'last_message_at' => now()->subHour(),
             'last_inbound_at' => now()->subHours(2),
             'last_outbound_at' => null,
+        ]);
+
+        Message::query()->create([
+            'dialog_id' => $telegramDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $telegramIdentity->id,
+            'channel_id' => $telegramChannel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'external_chat_id' => 'tg-chat-1',
+            'text' => 'Свежий ответ оператором в Telegram',
+            'raw_payload' => ['provider' => 'manual'],
+            'received_at' => now(),
+        ]);
+        Message::query()->create([
+            'dialog_id' => $maxDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $maxIdentity->id,
+            'channel_id' => $maxChannel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '',
+            'text' => null,
+            'raw_payload' => ['provider' => 'max'],
+            'received_at' => now()->subHour(),
         ]);
 
         $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
@@ -1684,6 +1716,14 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('+7 999 111-11-11', $dialogsHtml);
         $this->assertStringContainsString('Телефон в этом канале не подтвержден', $dialogsHtml);
         $this->assertStringContainsString('ID: telegram-dialog-1', $dialogsHtml);
+        $this->assertStringContainsString('Свежий ответ оператором в Telegram', $dialogsHtml);
+        $this->assertStringContainsString('Поделился номером телефона', $dialogsHtml);
+        $this->assertStringContainsString('data-role="dialog-preview"', $dialogsHtml);
+        $this->assertStringContainsString('data-role="dialog-preview-sender"', $dialogsHtml);
+        $this->assertStringContainsString('Оператор', $dialogsHtml);
+        $this->assertStringContainsString('Контакт', $dialogsHtml);
+        $this->assertStringContainsString(DialogResource::getUrl('view', ['record' => $telegramDialog]), $dialogsHtml);
+        $this->assertStringContainsString('data-role="dialog-card-link"', $dialogsHtml);
         $this->assertLessThan(
             strpos($dialogsHtml, 'MAX Sales'),
             strpos($dialogsHtml, 'Telegram Support'),
@@ -1702,6 +1742,68 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('data-role="contact-dialogs"', $dialogsHtml);
         $this->assertStringContainsString('data-role="contact-dialogs-empty"', $dialogsHtml);
         $this->assertStringContainsString('Диалоги ещё не появились.', $dialogsHtml);
+    }
+
+    public function test_contact_dialogs_overview_uses_batched_preview_query_without_contact_history_query(): void
+    {
+        $contact = Contact::factory()->create();
+
+        foreach (range(1, 3) as $index) {
+            $channel = Channel::factory()->create([
+                'name' => 'Telegram Support '.$index,
+                'platform' => Channel::PLATFORM_TELEGRAM,
+            ]);
+            $identity = ContactIdentity::factory()->create([
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'external_user_id' => 'telegram-overview-'.$index,
+            ]);
+
+            $dialog = Dialog::factory()->create([
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'current_contact_identity_id' => $identity->id,
+                'external_chat_id' => 'chat-overview-'.$index,
+                'last_message_at' => now()->subMinutes($index),
+            ]);
+
+            Message::query()->create([
+                'dialog_id' => $dialog->id,
+                'contact_id' => $contact->id,
+                'contact_identity_id' => $identity->id,
+                'channel_id' => $channel->id,
+                'direction' => Message::DIRECTION_INBOUND,
+                'message_kind' => Message::KIND_INBOUND_USER,
+                'external_chat_id' => 'chat-overview-'.$index,
+                'text' => 'Preview '.$index,
+                'raw_payload' => ['provider' => 'telegram'],
+                'received_at' => now()->subMinutes($index),
+            ]);
+        }
+
+        $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
+        $dialogsBuilder->setAccessible(true);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $dialogsHtml = view('filament.contacts.partials.contact-dialogs', $dialogsBuilder->invoke(null, $contact))->render();
+
+        $messageQueries = collect(DB::getQueryLog())
+            ->pluck('query')
+            ->filter(fn (string $query): bool => str_contains($query, 'from "messages"'));
+
+        $this->assertStringContainsString('Preview 1', $dialogsHtml);
+        $this->assertCount(1, $messageQueries->filter(
+            fn (string $query): bool => str_contains($query, 'distinct on (dialog_id)')
+        ));
+        $this->assertFalse($messageQueries->contains(
+            fn (string $query): bool => str_contains($query, '"messages"."contact_id"') && str_contains($query, 'coalesce(received_at, created_at) desc')
+        ));
+        $this->assertFalse($messageQueries->contains(
+            fn (string $query): bool => str_contains($query, '"messages"."dialog_id" =')
+        ));
     }
 
     public function test_contacts_table_marks_contact_as_requires_reply_when_auto_reply_is_latest_message(): void
@@ -1960,341 +2062,6 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$newerContact, $olderContact], inOrder: true);
     }
 
-    public function test_inline_reply_composer_sends_telegram_message_and_creates_outbound_message(): void
-    {
-        Http::fake([
-            'https://api.telegram.org/*/sendMessage' => Http::response([
-                'ok' => true,
-                'result' => [
-                    'message_id' => 99001,
-                ],
-            ]),
-        ]);
-
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $contact = Contact::factory()->create([
-            'name' => 'Герман Абрикосов',
-            'assigned_user_id' => $admin->id,
-        ]);
-        $channel = Channel::factory()->create([
-            'name' => 'Telegram Support',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-        ]);
-        $identity = ContactIdentity::factory()->create([
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'external_user_id' => 'telegram-902',
-        ]);
-
-        $inboundMessage = Message::query()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'provider_event_key' => 'telegram-update-902',
-            'external_chat_id' => 'chat-902',
-            'external_message_id' => 'msg-902',
-            'text' => 'Входящее сообщение от пользователя',
-            'raw_payload' => ['message' => 'payload'],
-            'received_at' => now(),
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $contact)
-            ->set('inlineReplyText', '  Ручной ответ сотрудника  ')
-            ->call('sendInlineReply')
-            ->assertNotified()
-            ->assertSet('inlineReplyText', '');
-
-        Http::assertSent(function (Request $request) use ($channel): bool {
-            return $request->url() === 'https://api.telegram.org/bot'.$channel->getToken().'/sendMessage'
-                && $request['chat_id'] === 'chat-902'
-                && $request['text'] === 'Ручной ответ сотрудника';
-        });
-
-        $outboundMessage = Message::query()
-            ->where('contact_id', $contact->id)
-            ->where('direction', Message::DIRECTION_OUTBOUND)
-            ->firstOrFail();
-
-        $this->assertSame($identity->id, $outboundMessage->contact_identity_id);
-        $this->assertSame($channel->id, $outboundMessage->channel_id);
-        $this->assertSame('chat-902', $outboundMessage->external_chat_id);
-        $this->assertSame('99001', $outboundMessage->external_message_id);
-        $this->assertSame('Ручной ответ сотрудника', $outboundMessage->text);
-        $this->assertSame(Message::KIND_OUTBOUND_MANUAL_REPLY, $outboundMessage->message_kind);
-        $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
-
-        $channel->refresh();
-
-        $this->assertNotNull($channel->last_reply_sent_at);
-        $this->assertDatabaseHas(ChannelActivityLog::class, [
-            'channel_id' => $channel->id,
-            'event' => 'contact.reply_sent',
-            'level' => 'info',
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('Ручной ответ сотрудника')
-            ->assertMountedActionModalSee('Исходящее')
-            ->assertMountedActionModalSee('Ручной ответ')
-            ->assertMountedActionModalSee('Ответ');
-    }
-
-    public function test_inline_reply_from_merged_contact_modal_uses_root_route_and_switches_modal_to_root(): void
-    {
-        Http::fake([
-            'https://api.telegram.org/*/sendMessage' => Http::response([
-                'ok' => true,
-                'result' => [
-                    'message_id' => 99123,
-                ],
-            ]),
-        ]);
-
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $root = Contact::factory()->create([
-            'name' => 'Основной контакт',
-            'assigned_user_id' => null,
-        ]);
-        $merged = Contact::factory()->create([
-            'name' => 'Архивный дубль',
-            'merged_into_contact_id' => $root->id,
-            'merged_at' => now(),
-        ]);
-        $channel = Channel::factory()->create([
-            'name' => 'Telegram Support',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-        ]);
-        $identity = ContactIdentity::factory()->create([
-            'contact_id' => $root->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'external_user_id' => 'telegram-root-manual',
-        ]);
-        $inboundMessage = Message::query()->create([
-            'contact_id' => $root->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'provider_event_key' => 'telegram-update-root-manual',
-            'external_chat_id' => 'chat-root-manual',
-            'external_message_id' => 'msg-root-manual',
-            'text' => 'Входящее сообщение от root',
-            'raw_payload' => ['message' => 'payload'],
-            'received_at' => now(),
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $merged)
-            ->set('inlineReplyText', 'Ответ через merged modal')
-            ->call('sendInlineReply')
-            ->assertNotified()
-            ->assertSet('inlineReplyText', '')
-            ->assertSet('mountedActions.0.context.recordKey', (string) $root->id);
-
-        $root->refresh();
-
-        $this->assertSame($admin->id, $root->assigned_user_id);
-
-        $this->assertDatabaseHas('messages', [
-            'contact_id' => $root->id,
-            'contact_identity_id' => $identity->id,
-            'direction' => Message::DIRECTION_OUTBOUND,
-            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
-            'reply_to_message_id' => $inboundMessage->id,
-            'text' => 'Ответ через merged modal',
-        ]);
-    }
-
-    public function test_inline_reply_composer_sends_max_message_and_creates_outbound_message(): void
-    {
-        Http::fake([
-            'https://platform-api.max.ru/messages*' => Http::response([
-                'message' => [
-                    'message_id' => 'max-manual-001',
-                ],
-            ]),
-        ]);
-
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $contact = Contact::factory()->create();
-        $contact->update(['assigned_user_id' => $admin->id]);
-        $channel = Channel::factory()->create([
-            'name' => 'MAX Support',
-            'platform' => Channel::PLATFORM_MAX,
-        ]);
-        $identity = ContactIdentity::factory()->create([
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'external_user_id' => '228532008',
-        ]);
-
-        $inboundMessage = Message::query()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'provider_event_key' => 'mid.0000000003f780cc019d33311ef013fa',
-            'external_chat_id' => '',
-            'external_message_id' => 'mid.0000000003f780cc019d33311ef013fa',
-            'text' => 'MAX входящее сообщение',
-            'raw_payload' => ['message' => 'payload'],
-            'received_at' => now(),
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $contact)
-            ->set('inlineReplyText', 'Ручной ответ MAX')
-            ->call('sendInlineReply')
-            ->assertNotified()
-            ->assertSet('inlineReplyText', '');
-
-        Http::assertSent(function (Request $request): bool {
-            return str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
-                && str_contains($request->url(), 'user_id=228532008')
-                && $request['text'] === 'Ручной ответ MAX';
-        });
-
-        $outboundMessage = Message::query()
-            ->where('contact_id', $contact->id)
-            ->where('direction', Message::DIRECTION_OUTBOUND)
-            ->firstOrFail();
-
-        $this->assertSame($identity->id, $outboundMessage->contact_identity_id);
-        $this->assertSame($channel->id, $outboundMessage->channel_id);
-        $this->assertSame('', $outboundMessage->external_chat_id);
-        $this->assertSame('max-manual-001', $outboundMessage->external_message_id);
-        $this->assertSame('Ручной ответ MAX', $outboundMessage->text);
-        $this->assertSame(Message::KIND_OUTBOUND_MANUAL_REPLY, $outboundMessage->message_kind);
-        $this->assertSame($inboundMessage->id, $outboundMessage->reply_to_message_id);
-    }
-
-    public function test_inline_reply_composer_does_not_create_outbound_message_when_provider_fails(): void
-    {
-        Http::fake([
-            'https://api.telegram.org/*/sendMessage' => Http::response([
-                'ok' => false,
-            ], 500),
-        ]);
-
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $contact = Contact::factory()->create([
-            'assigned_user_id' => $admin->id,
-        ]);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-        ]);
-        $identity = ContactIdentity::factory()->create([
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'external_user_id' => 'telegram-903',
-        ]);
-
-        Message::query()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'provider_event_key' => 'telegram-update-903',
-            'external_chat_id' => 'chat-903',
-            'external_message_id' => 'msg-903',
-            'text' => 'Входящее сообщение',
-            'raw_payload' => ['message' => 'payload'],
-            'received_at' => now(),
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $contact)
-            ->set('inlineReplyText', 'Ответ с ошибкой провайдера')
-            ->call('sendInlineReply')
-            ->assertNotified()
-            ->assertSet('inlineReplyText', 'Ответ с ошибкой провайдера');
-
-        $this->assertDatabaseCount('messages', 1);
-
-        $channel->refresh();
-
-        $this->assertNull($channel->last_reply_sent_at);
-        $this->assertNotNull($channel->last_error_at);
-        $this->assertDatabaseHas(ChannelActivityLog::class, [
-            'channel_id' => $channel->id,
-            'event' => 'contact.reply_failed',
-            'level' => 'error',
-        ]);
-    }
-
-    public function test_inline_reply_composer_shows_error_when_contact_has_no_active_route_source(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $contact = Contact::factory()->create([
-            'assigned_user_id' => $admin->id,
-        ]);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => false,
-        ]);
-        $identity = ContactIdentity::factory()->create([
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'external_user_id' => 'telegram-904',
-        ]);
-
-        Message::query()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'provider_event_key' => 'telegram-update-904',
-            'external_chat_id' => 'chat-904',
-            'external_message_id' => 'msg-904',
-            'text' => 'Входящее сообщение',
-            'raw_payload' => ['message' => 'payload'],
-            'received_at' => now(),
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $contact)
-            ->set('inlineReplyText', 'Ручной ответ без маршрута')
-            ->call('sendInlineReply')
-            ->assertNotified()
-            ->assertSet('inlineReplyText', 'Ручной ответ без маршрута');
-
-        $this->assertDatabaseCount('messages', 1);
-        $this->assertDatabaseMissing(ChannelActivityLog::class, [
-            'event' => 'contact.reply_sent',
-        ]);
-    }
-
     public function test_contact_modal_can_assign_current_employee_via_responsible_dialog(): void
     {
         $admin = User::factory()->create([
@@ -2434,116 +2201,6 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$myContact, $otherContact]);
     }
 
-    public function test_inline_reply_composer_auto_claims_free_contact_before_sending_reply(): void
-    {
-        Http::fake([
-            'https://api.telegram.org/*/sendMessage' => Http::response([
-                'ok' => true,
-                'result' => [
-                    'message_id' => 99011,
-                ],
-            ]),
-        ]);
-
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $contact = Contact::factory()->create();
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-        ]);
-        $identity = ContactIdentity::factory()->create([
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'external_user_id' => 'telegram-unassigned',
-        ]);
-
-        Message::query()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'provider_event_key' => 'telegram-update-unassigned',
-            'external_chat_id' => 'chat-unassigned',
-            'external_message_id' => 'msg-unassigned',
-            'text' => 'Входящее сообщение',
-            'raw_payload' => ['message' => 'payload'],
-            'received_at' => now(),
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('Ответственный пока не выбран.')
-            ->set('inlineReplyText', 'Ответ с авто-claim')
-            ->call('sendInlineReply')
-            ->assertNotified()
-            ->assertSet('inlineReplyText', '');
-
-        $contact->refresh();
-
-        $this->assertSame($admin->id, $contact->assigned_user_id);
-        $this->assertDatabaseHas('messages', [
-            'contact_id' => $contact->id,
-            'direction' => Message::DIRECTION_OUTBOUND,
-            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
-            'text' => 'Ответ с авто-claim',
-        ]);
-    }
-
-    public function test_inline_reply_composer_blocks_manual_reply_for_contact_owned_by_another_user(): void
-    {
-        $owner = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-            'name' => 'Другой сотрудник',
-        ]);
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $contact = Contact::factory()->create([
-            'assigned_user_id' => $owner->id,
-        ]);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-        ]);
-        $identity = ContactIdentity::factory()->create([
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-            'external_user_id' => 'telegram-owned-by-other',
-        ]);
-
-        Message::query()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'provider_event_key' => 'telegram-update-owned-by-other',
-            'external_chat_id' => 'chat-owned-by-other',
-            'external_message_id' => 'msg-owned-by-other',
-            'text' => 'Входящее сообщение',
-            'raw_payload' => ['message' => 'payload'],
-            'received_at' => now(),
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageContacts::class)
-            ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('Контакт уже назначен сотруднику Другой сотрудник.')
-            ->set('inlineReplyText', 'Ответ чужому контакту')
-            ->call('sendInlineReply')
-            ->assertNotified()
-            ->assertSet('inlineReplyText', 'Ответ чужому контакту');
-
-        $this->assertDatabaseCount('messages', 1);
-    }
-
     public function test_contact_modal_keeps_webhook_diagnostics_bound_to_latest_inbound_message(): void
     {
         $admin = User::factory()->create([
@@ -2658,7 +2315,6 @@ class FilamentContactsResourceTest extends TestCase
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('mid.0000000003e3748c019d30476b8e52e7')
             ->assertMountedActionModalSee('new-payload')
-            ->assertMountedActionModalSee('тест3')
             ->assertMountedActionModalDontSee('old-payload');
     }
 

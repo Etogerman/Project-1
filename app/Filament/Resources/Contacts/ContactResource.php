@@ -15,6 +15,8 @@ use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
+use App\Services\Dialogs\BuildConversationFeedViewDataAction;
+use App\Services\Dialogs\LoadContactDialogsOverviewAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
@@ -190,20 +192,6 @@ class ContactResource extends Resource
                     ])
                     ->columns(1)
                     ->columnSpanFull(),
-                Section::make('История сообщений')
-                    ->schema([
-                        TextEntry::make('conversation_history')
-                            ->label('Последние сообщения контакта')
-                            ->state(fn (Contact $record): HtmlString => static::renderConversationHistory($record))
-                            ->html()
-                            ->columnSpanFull(),
-                        ViewEntry::make('conversation_reply_composer')
-                            ->hiddenLabel()
-                            ->view('filament.contacts.partials.inline-reply-composer')
-                            ->viewData(fn (Contact $record): array => static::buildInlineReplyComposerViewData($record))
-                            ->columnSpanFull(),
-                    ])
-                    ->columnSpanFull(),
                 Section::make('Подробности')
                     ->schema([
                         TextEntry::make('id')
@@ -231,55 +219,6 @@ class ContactResource extends Resource
                         TextEntry::make('created_at')
                             ->label('Создан')
                             ->dateTime('d.m.Y H:i'),
-                    ])
-                    ->columns(4)
-                    ->collapsible()
-                    ->collapsed()
-                    ->columnSpanFull(),
-                Section::make('Последнее сообщение')
-                    ->schema([
-                        TextEntry::make('latest_message_received_at')
-                            ->label('Получено')
-                            ->placeholder('Сообщений ещё не было')
-                            ->state(fn (Contact $record) => static::resolveLatestConversationMessage($record)?->received_at)
-                            ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('latest_message_channel')
-                            ->label('Канал')
-                            ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->channel?->name),
-                        TextEntry::make('latest_message_direction')
-                            ->label('Направление')
-                            ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->direction)
-                            ->badge()
-                            ->formatStateUsing(fn (?string $state): string => static::formatMessageDirection($state))
-                            ->color(fn (?string $state): string => static::getMessageDirectionColor($state)),
-                        TextEntry::make('latest_message_external_id')
-                            ->label('Внешний message ID')
-                            ->placeholder('Не задан')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->external_message_id)
-                            ->copyable(),
-                        TextEntry::make('latest_message_chat_id')
-                            ->label('Chat ID')
-                            ->placeholder('Не задан')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->external_chat_id)
-                            ->copyable(),
-                        TextEntry::make('latest_message_reply_link')
-                            ->label('Связь')
-                            ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::formatConversationReplyLink(static::resolveLatestConversationMessage($record)))
-                            ->visible(fn (Contact $record): bool => static::resolveLatestConversationMessage($record)?->direction === Message::DIRECTION_OUTBOUND),
-                        TextEntry::make('latest_message_text')
-                            ->label('Текст')
-                            ->placeholder('—')
-                            ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->text)
-                            ->wrap()
-                            ->columnSpanFull(),
-                        TextEntry::make('latest_message_saved_at')
-                            ->label('Сохранено в системе')
-                            ->placeholder('Не задано')
-                            ->state(fn (Contact $record) => static::resolveLatestConversationMessage($record)?->created_at)
-                            ->dateTime('d.m.Y H:i:s'),
                     ])
                     ->columns(4)
                     ->collapsible()
@@ -896,29 +835,7 @@ class ContactResource extends Resource
      */
     protected static function buildConversationHistoryViewData(Collection $messages): array
     {
-        return $messages
-            ->map(function (Message $message): array {
-                $messageAt = $message->received_at ?? $message->created_at;
-
-                return [
-                    'id' => $message->id,
-                    'direction' => $message->direction,
-                    'kind' => $message->message_kind ?? 'unknown',
-                    'dialog_id' => $message->dialog_id,
-                    'has_dialog' => $message->dialog_id !== null,
-                    'channel_label' => static::resolveConversationChannelLabel($message),
-                    'sender_label' => static::resolveConversationSenderLabel($message),
-                    'sender_type' => $message->sent_by_type,
-                    'display_text' => static::resolveConversationDisplayText($message),
-                    'time_label' => $messageAt?->format('H:i') ?? '—',
-                    'timestamp_label' => $messageAt?->format('H:i d.m.Y') ?? '—',
-                    'date_key' => $messageAt?->format('Y-m-d') ?? 'unknown-date',
-                    'date_label' => static::formatConversationDateLabel($messageAt),
-                    'is_inbound' => $message->direction === Message::DIRECTION_INBOUND,
-                    'is_outbound' => $message->direction === Message::DIRECTION_OUTBOUND,
-                ];
-            })
-            ->all();
+        return app(BuildConversationFeedViewDataAction::class)->handle($messages);
     }
 
     protected static function resolveConversationChannelLabel(Message $message): string
@@ -1204,6 +1121,7 @@ class ContactResource extends Resource
      * @return array{
      *     dialogs: list<array{
      *         id:int,
+     *         url:string,
      *         channel_label:string,
      *         route_status_label:string,
      *         route_status_tone:string,
@@ -1212,63 +1130,17 @@ class ContactResource extends Resource
      *         external_chat_id_label:string,
      *         last_message_label:string,
      *         last_inbound_label:string,
-     *         last_outbound_label:string
+     *         last_outbound_label:string,
+     *         preview_text:string,
+     *         preview_sender_label:?string,
+     *         preview_sender_tone:?string
      *     }>
      * }
      */
     protected static function buildDialogsViewData(Contact $record): array
     {
-        $dialogs = $record->relationLoaded('dialogs')
-            ? $record->dialogs
-                ->loadMissing(['channel', 'currentContactIdentity'])
-                ->sort(function (Dialog $left, Dialog $right): int {
-                    $leftTimestamp = $left->last_message_at?->getTimestamp();
-                    $rightTimestamp = $right->last_message_at?->getTimestamp();
-
-                    if ($leftTimestamp === null && $rightTimestamp !== null) {
-                        return 1;
-                    }
-
-                    if ($leftTimestamp !== null && $rightTimestamp === null) {
-                        return -1;
-                    }
-
-                    $comparison = ($rightTimestamp ?? 0) <=> ($leftTimestamp ?? 0);
-
-                    if ($comparison !== 0) {
-                        return $comparison;
-                    }
-
-                    return $right->id <=> $left->id;
-                })
-                ->values()
-            : $record->dialogs()
-                ->with(['channel', 'currentContactIdentity'])
-                ->orderByRaw('case when last_message_at is null then 1 else 0 end')
-                ->orderByDesc('last_message_at')
-                ->orderByDesc('id')
-                ->get();
-
         return [
-            'dialogs' => $dialogs
-                ->map(function (Dialog $dialog): array {
-                    $routeStatus = static::resolveDialogRouteStatus($dialog);
-
-                    return [
-                        'id' => $dialog->id,
-                        'channel_label' => static::formatChannelLabel($dialog->channel, 'Неизвестный канал'),
-                        'route_status_label' => $routeStatus['label'],
-                        'route_status_tone' => $routeStatus['tone'],
-                        'phone_label' => static::formatDialogPhoneLabel($dialog),
-                        'route_identity_label' => static::formatDialogRouteIdentityLabel($dialog),
-                        'external_chat_id_label' => $dialog->external_chat_id ?: 'Не задан',
-                        'last_message_label' => static::formatDialogTimestamp($dialog->last_message_at),
-                        'last_inbound_label' => static::formatDialogTimestamp($dialog->last_inbound_at),
-                        'last_outbound_label' => static::formatDialogTimestamp($dialog->last_outbound_at),
-                    ];
-                })
-                ->values()
-                ->all(),
+            'dialogs' => app(LoadContactDialogsOverviewAction::class)->handle($record)->all(),
         ];
     }
 
