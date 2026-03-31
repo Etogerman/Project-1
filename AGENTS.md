@@ -40,7 +40,10 @@ Abrikosoff Connector — операторская платформа для ра
 - phone capture flow для Telegram и MAX
 - AI profile collector после получения телефона
   - active collector имеет приоритет над обычным auto-reply
-  - flow: `first_name -> residence_city -> [country] -> age_range -> completion`
+  - flow: `first_name -> residence_city -> [country] -> [russian_region_confirm] -> age_range -> completion`
+  - для российских ambiguous-city кейсов используется deterministic Russian shortcut:
+    сначала пытаемся определить `region` или exact candidate set,
+    и только потом задаём fallback-вопрос про страну
   - max 2 попытки на поле, затем мягкий skip на следующий безопасный шаг
 - просмотр контактов и истории в админке
 - чатовый view истории в карточке контакта
@@ -101,10 +104,14 @@ Abrikosoff Connector — операторская платформа для ра
 - **Contact** — внешний человек; может иметь `assigned_user_id` (FK → users)
   и флаг `is_auto_reply_enabled`
   - профильные поля: `first_name`, `last_name`, `birth_date`,
-    `age_years`, `age_range`, `country`, `city`
+    `age_years`, `age_range`, `country`, `city`,
+    `region`, `region_status`, `region_source`
   - collector state: `data_collection_status`,
     `data_collection_current_field`, `data_collection_started_at`,
-    `data_collection_completed_at`, `data_collection_attempts_count`
+    `data_collection_completed_at`, `data_collection_attempts_count`,
+    `pending_region_candidates`
+  - `region` — канонический российский business-region для фильтров,
+    а не обязательно официальный административный субъект
   - вычисляемые поля: `display_name`, `effective_age_years`
 - **ContactIdentity** — связь Contact ↔ Channel через external_user_id;
   unique constraint на `[channel_id, external_user_id]`
@@ -133,7 +140,10 @@ Abrikosoff Connector — операторская платформа для ра
 
 - `config/bots.php` — webhook и платформенные настройки,
   `phone_capture_confirmation_text`, collector questions/messages,
-  Gemini settings (`api_key`, `model`, `max_output_tokens`, `thinking_budget`)
+  Gemini settings (`api_key`, `model`, `max_output_tokens`, `thinking_budget`),
+  allowed Russian business regions и тексты `russian_region_confirm`
+- `config/russian_region_cities.php` — deterministic source of truth
+  для `российский город -> exact candidate regions`
 - Токены ботов хранятся в `Channel.credentials` (encrypted:array), а не в .env
 - Webhook-секреты генерируются и хранятся в том же поле credentials
 
@@ -151,6 +161,8 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Services/DataCollection/ExtractResidenceCityAction.php` — city-first extraction города проживания и страны
 - `app/Services/DataCollection/ExtractCountryAction.php` — extraction страны
 - `app/Services/DataCollection/ExtractCityAction.php` — country-aware extraction города
+- `app/Services/DataCollection/ResolveRussianRegionCandidatesLookupAction.php` — deterministic lookup exact candidate regions для российских городов
+- `app/Services/DataCollection/ResolveRussianRegionAction.php` — Russian region resolution поверх lookup и AI fallback
 - `app/Services/DataCollection/ResolveNextDataCollectionFieldAction.php` — определение следующего collector field
 - `app/Services/DataCollection/ResumeContactDataCollectionAction.php` — ручное возобновление анкеты
 - `app/Jobs/ProcessAutoReplyJob.php` — queued auto-reply
@@ -162,6 +174,7 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Services/Contacts/AddContactPhoneAction.php` — нормализация и сохранение телефона
 - `app/Services/Contacts/UpdateContactPhoneAction.php` — редактирование телефона
 - `app/Services/Contacts/DeleteContactPhoneAction.php` — удаление телефона
+- `app/Services/Contacts/SyncContactRussianRegionAction.php` — синхронизация `region` и `pending_region_candidates` после изменения `city/country`
 - `app/Services/Contacts/UpdateContactProfileAction.php` — обновление профильных полей контакта
 - `app/Services/Contacts/DeleteContactAction.php` — удаление контакта и связанных сущностей
 - `app/Services/Contacts/ClaimContactAction.php` — взятие контакта в работу
@@ -224,7 +237,7 @@ Abrikosoff Connector — операторская платформа для ра
 - Interactions API для Gemini
 - Phone-country inference для location
 - Geocoder service
-- `location_confirm` / ambiguous-city confirmation flow
+- generic `location_confirm` / non-Russian ambiguous-city engine
 - Код интеграции с Битрикс24
 
 ## Рабочий стиль для агентов
