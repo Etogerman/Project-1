@@ -188,6 +188,7 @@ class ViewDialog extends ViewRecord
      *     canClaim:bool,
      *     autoReplyEnabled:bool,
      *     replyTextModel:string,
+     *     replyErrorModel:string,
      *     submitMethod:string
      * }
      */
@@ -201,6 +202,7 @@ class ViewDialog extends ViewRecord
             'canClaim' => $this->canCurrentUserClaimDialog(),
             'autoReplyEnabled' => $replyOwner?->isAutoReplyEnabled() ?? false,
             'replyTextModel' => 'dialogReplyText',
+            'replyErrorModel' => 'dialogReplyText',
             'submitMethod' => 'sendDialogReply',
         ];
     }

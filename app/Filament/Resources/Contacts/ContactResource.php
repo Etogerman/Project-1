@@ -15,7 +15,6 @@ use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
-use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -36,7 +35,6 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
 use JsonException;
 use UnitEnum;
@@ -401,7 +399,6 @@ class ContactResource extends Resource
                     ->modalWidth(Width::SevenExtraLarge)
                     ->mountUsing(function (Action $action, ?Schema $schema, ManageContacts $livewire): void {
                         $schema?->fill();
-                        $livewire->inlineReplyText = '';
                         $livewire->showAssignContactDialog = false;
                         $livewire->selectedAssigneeId = '';
                         $livewire->showEditPhoneDialog = false;
@@ -794,121 +791,6 @@ class ContactResource extends Resource
             ->value('phone_raw');
     }
 
-    protected static function renderConversationHistory(Contact $record): HtmlString
-    {
-        $messages = $record->messages()
-            ->with(['channel', 'replyTo', 'dialog.channel', 'sentByUser'])
-            ->orderByRaw('coalesce(received_at, created_at) desc')
-            ->orderByDesc('id')
-            ->limit(30)
-            ->get();
-
-        if ($messages->isEmpty()) {
-            return new HtmlString(view('filament.contacts.partials.conversation-chat', [
-                'messages' => [],
-            ])->render());
-        }
-
-        $sortedMessages = $messages
-            ->sort(function (Message $left, Message $right): int {
-                $leftAt = $left->received_at ?? $left->created_at;
-                $rightAt = $right->received_at ?? $right->created_at;
-
-                $comparison = ($leftAt?->getTimestamp() ?? 0) <=> ($rightAt?->getTimestamp() ?? 0);
-
-                if ($comparison !== 0) {
-                    return $comparison;
-                }
-
-                return $left->id <=> $right->id;
-            })
-            ->values();
-
-        return new HtmlString(view('filament.contacts.partials.conversation-chat', [
-            'messages' => static::buildConversationHistoryViewData($sortedMessages),
-        ])->render());
-    }
-
-    /**
-     * @param  Collection<int, Message>  $messages
-     * @return list<array<string, mixed>>
-     */
-    protected static function buildConversationHistoryViewData(Collection $messages): array
-    {
-        return app(BuildConversationFeedViewDataAction::class)->handle($messages);
-    }
-
-    protected static function resolveConversationChannelLabel(Message $message): string
-    {
-        return static::formatChannelLabel($message->channel ?? $message->dialog?->channel, 'Неизвестный канал');
-    }
-
-    protected static function resolveConversationSenderLabel(Message $message): ?string
-    {
-        if ($message->direction !== Message::DIRECTION_OUTBOUND) {
-            return null;
-        }
-
-        return match ($message->sent_by_type) {
-            Message::SENT_BY_TYPE_OPERATOR => filled($message->sentByUser?->name)
-                ? 'Оператор: '.$message->sentByUser->name
-                : 'Оператор',
-            Message::SENT_BY_TYPE_AUTO_REPLY => 'Автоответчик',
-            Message::SENT_BY_TYPE_COLLECTOR => 'Анкета',
-            Message::SENT_BY_TYPE_SYSTEM => 'Система',
-            default => static::resolveLegacyConversationSenderLabel($message),
-        };
-    }
-
-    protected static function resolveLegacyConversationSenderLabel(Message $message): string
-    {
-        return match ($message->message_kind) {
-            Message::KIND_OUTBOUND_MANUAL_REPLY => 'Оператор',
-            Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответчик',
-            Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
-            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
-            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Анкета',
-            default => 'Система',
-        };
-    }
-
-    protected static function resolveConversationDisplayText(Message $message): string
-    {
-        if (filled($message->text)) {
-            return (string) $message->text;
-        }
-
-        return match ($message->message_kind) {
-            Message::KIND_INBOUND_CONTACT_SHARE => 'Поделился номером телефона',
-            Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Спасибо, номер получили.',
-            Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
-            Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ответ оператора',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
-            default => 'Системное сообщение',
-        };
-    }
-
-    protected static function formatConversationDateLabel(?Carbon $messageAt): string
-    {
-        if (! $messageAt instanceof Carbon) {
-            return '—';
-        }
-
-        $today = now()->startOfDay();
-        $messageDate = $messageAt->copy()->startOfDay();
-
-        if ($messageDate->equalTo($today)) {
-            return 'Сегодня';
-        }
-
-        if ($messageDate->equalTo($today->copy()->subDay())) {
-            return 'Вчера';
-        }
-
-        return $messageAt->format('d.m.Y');
-    }
-
     protected static function formatChannelLabel(?Channel $channel, string $fallback = '—'): string
     {
         if ($channel === null) {
@@ -1229,17 +1111,6 @@ class ContactResource extends Resource
         };
     }
 
-    protected static function buildInlineReplyComposerViewData(Contact $record): array
-    {
-        return [
-            'canReply' => static::canCurrentUserReplyToContact($record),
-            'blockedReason' => static::getInlineReplyBlockedReason($record),
-            'canClaim' => static::canCurrentUserClaimContact($record),
-            'assignedUserLabel' => static::formatAssignedUserLabel($record),
-            'autoReplyEnabled' => $record->isAutoReplyEnabled(),
-        ];
-    }
-
     /**
      * @return array<int, string>
      */
@@ -1271,24 +1142,6 @@ class ContactResource extends Resource
             : 'Свободен';
     }
 
-    protected static function formatOwnershipStatus(Contact $record): string
-    {
-        return match (static::getContactOwnershipState($record)) {
-            'mine' => 'Мой',
-            'other' => 'Назначен другому',
-            default => 'Свободен',
-        };
-    }
-
-    protected static function getOwnershipStatusColor(Contact $record): string
-    {
-        return match (static::getContactOwnershipState($record)) {
-            'mine' => 'success',
-            'other' => 'gray',
-            default => 'warning',
-        };
-    }
-
     protected static function getOwnershipHint(Contact $record): ?string
     {
         return match (static::getContactOwnershipState($record)) {
@@ -1298,21 +1151,6 @@ class ContactResource extends Resource
                 : 'Контакт уже назначен другому сотруднику.',
             default => 'Контакт пока свободен. Можно выбрать ответственного или оставить контакт свободным.',
         };
-    }
-
-    protected static function canCurrentUserClaimContact(Contact $record): bool
-    {
-        return static::getContactOwnershipState($record) === 'unassigned';
-    }
-
-    protected static function canCurrentUserReleaseContact(Contact $record): bool
-    {
-        return static::getContactOwnershipState($record) === 'mine';
-    }
-
-    protected static function canCurrentUserReplyToContact(Contact $record): bool
-    {
-        return in_array(static::getContactOwnershipState($record), ['mine', 'unassigned'], true);
     }
 
     protected static function canDeleteContactFromUi(Contact $record): bool
@@ -1394,16 +1232,6 @@ class ContactResource extends Resource
         return $record->mergedChildren()->count();
     }
 
-    protected static function getInlineReplyBlockedReason(Contact $record): ?string
-    {
-        return match (static::getContactOwnershipState($record)) {
-            'other' => filled($record->assignedUser?->name)
-                ? 'Контакт уже назначен сотруднику '.$record->assignedUser->name.'.'
-                : 'Контакт уже назначен другому сотруднику.',
-            default => null,
-        };
-    }
-
     protected static function getContactOwnershipState(Contact $record): string
     {
         $record->loadMissing('assignedUser');
@@ -1419,24 +1247,5 @@ class ContactResource extends Resource
         }
 
         return 'other';
-    }
-
-    protected static function formatConversationReplyLink(?Message $message): ?string
-    {
-        if ($message === null || $message->direction !== Message::DIRECTION_OUTBOUND) {
-            return null;
-        }
-
-        $replyTo = $message->replyTo;
-
-        if ($replyTo === null) {
-            return 'Ответ без связи';
-        }
-
-        if (filled($replyTo->provider_event_key)) {
-            return 'Ответ на event key: '.$replyTo->provider_event_key;
-        }
-
-        return 'Ответ на входящее #'.$replyTo->id;
     }
 }

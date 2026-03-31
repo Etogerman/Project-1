@@ -3,8 +3,9 @@
     style="margin-top: 1rem; border: 1px solid #d1d5db; border-radius: 18px; background: #fff7cc; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); padding: 1.25rem;"
 >
     @php
-        $replyTextModel = $replyTextModel ?? 'inlineReplyText';
-        $submitMethod = $submitMethod ?? 'sendInlineReply';
+        $replyTextModel = $replyTextModel ?? 'dialogReplyText';
+        $replyErrorModel = $replyErrorModel ?? $replyTextModel;
+        $submitMethod = $submitMethod ?? 'sendDialogReply';
     @endphp
 
     <div style="margin-bottom: 0.875rem;">
@@ -36,7 +37,7 @@
             style="display: block; box-sizing: border-box; width: 100%; min-width: 100%; min-height: 3.5rem; resize: vertical; border: 1px solid #9ca3af; border-radius: 14px; background: #fffbe6; color: #111827; padding: 0.75rem 0.85rem; font-size: 1rem; line-height: 1.45; box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06); opacity: {{ $canReply ? '1' : '0.75' }};"
         ></textarea>
 
-        @error('inlineReplyText')
+        @error($replyErrorModel)
             <p style="margin: 0.5rem 0 0; font-size: 0.75rem; color: #dc2626;">{{ $message }}</p>
         @enderror
     </div>

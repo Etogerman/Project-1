@@ -159,6 +159,6 @@
             @include('filament.contacts.partials.conversation-chat', ['messages' => $conversationMessages])
         </section>
 
-        @include('filament.contacts.partials.inline-reply-composer', $replyComposer)
+        @include('filament.dialogs.partials.reply-composer', $replyComposer)
     </div>
 </x-filament-panels::page>

@@ -5,7 +5,6 @@ namespace App\Filament\Resources\Contacts\Pages;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Models\Contact;
 use App\Models\User;
-use App\Services\Bots\SendManualContactReplyAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
@@ -30,7 +29,6 @@ class ManageContacts extends ManageRecords
 {
     protected static string $resource = ContactResource::class;
 
-    public string $inlineReplyText = '';
     public bool $showAssignContactDialog = false;
     public string $selectedAssigneeId = '';
     public bool $showEditPhoneDialog = false;
@@ -140,59 +138,6 @@ class ManageContacts extends ManageRecords
             Notification::make()
                 ->danger()
                 ->title('Не удалось снять контакт с работы')
-                ->body($throwable->getMessage())
-                ->send();
-        }
-    }
-
-    public function sendInlineReply(): void
-    {
-        $validated = $this->validate([
-            'inlineReplyText' => ['required', 'string', 'max:2000'],
-        ]);
-
-        $text = trim((string) ($validated['inlineReplyText'] ?? ''));
-
-        if ($text === '') {
-            throw ValidationException::withMessages([
-                'inlineReplyText' => 'Текст ответа обязателен.',
-            ]);
-        }
-
-        $record = $this->getMountedTableActionRecord();
-
-        if (! $record instanceof Contact) {
-            Notification::make()
-                ->danger()
-                ->title('Не удалось отправить ответ')
-                ->body('Не удалось определить текущий контакт.')
-                ->send();
-
-            return;
-        }
-
-        try {
-            $employee = $this->resolveCurrentEmployee();
-
-            app(SendManualContactReplyAction::class)->handle(
-                $record,
-                $employee,
-                $text,
-            );
-
-            $this->replaceMountedTableActionWithEffectiveContact($record);
-
-            $this->inlineReplyText = '';
-
-            Notification::make()
-                ->success()
-                ->title('Ответ отправлен')
-                ->body('Сообщение отправлено и сохранено в истории контакта.')
-                ->send();
-        } catch (Throwable $throwable) {
-            Notification::make()
-                ->danger()
-                ->title('Не удалось отправить ответ')
                 ->body($throwable->getMessage())
                 ->send();
         }
@@ -572,51 +517,6 @@ class ManageContacts extends ManageRecords
                 ->body($throwable->getMessage())
                 ->send();
         }
-    }
-
-    public function canClaimContact(?Contact $contact = null): bool
-    {
-        return $this->getContactOwnershipState($contact) === 'unassigned';
-    }
-
-    public function canReleaseContact(?Contact $contact = null): bool
-    {
-        return $this->getContactOwnershipState($contact) === 'mine';
-    }
-
-    public function canSendInlineReply(?Contact $contact = null): bool
-    {
-        return in_array($this->getContactOwnershipState($contact), ['mine', 'unassigned'], true);
-    }
-
-    public function getInlineReplyBlockedReason(?Contact $contact = null): ?string
-    {
-        return match ($this->getContactOwnershipState($contact)) {
-            'other' => 'Контакт уже назначен другому сотруднику. Ручной ответ недоступен.',
-            default => null,
-        };
-    }
-
-    public function getContactOwnershipState(?Contact $contact = null): string
-    {
-        if (! $contact instanceof Contact) {
-            return 'unknown';
-        }
-
-        $contact->loadMissing('assignedUser');
-
-        if (! $contact->isAssigned()) {
-            return 'unassigned';
-        }
-
-        /** @var User|null $employee */
-        $employee = auth()->user();
-
-        if ($employee instanceof User && $contact->isAssignedTo($employee)) {
-            return 'mine';
-        }
-
-        return 'other';
     }
 
     protected function resolveCurrentEmployee(): User
