@@ -425,6 +425,170 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         ]);
     }
 
+    public function test_job_shortcuts_to_resolved_russian_region_after_low_confidence_residence_city(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Московская область',
+        ]);
+        config()->set('russian_region_cities.cities', [
+            'москва' => [
+                'city' => 'Москва',
+                'aliases' => [],
+                'regions' => ['Московская область'],
+            ],
+        ]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Москва',
+                'country' => null,
+                'country_confidence' => 'low',
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9955],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Москва',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            'first_name' => 'Герман',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Москва', $contact->city);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame(Contact::REGION_STATUS_RESOLVED, $contact->region_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+        $this->assertDatabaseMissing('messages', [
+            'contact_id' => $contact->id,
+            'text' => 'Подскажите, пожалуйста, страну, где вы живёте. Для города «Москва» это нужно уточнить.',
+        ]);
+    }
+
+    public function test_job_shortcuts_to_russian_region_confirm_after_low_confidence_residence_city(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Свердловская область',
+            'Ставропольский край',
+        ]);
+        config()->set('bots.data_collection.russian_region_confirm.question', 'Уточните ваш регион:');
+        config()->set('russian_region_cities.cities', [
+            'михайловск' => [
+                'city' => 'Михайловск',
+                'aliases' => [],
+                'regions' => ['Свердловская область', 'Ставропольский край'],
+            ],
+        ]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Михайловск',
+                'country' => null,
+                'country_confidence' => 'low',
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9955],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Михайловск',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            'first_name' => 'Герман',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Михайловск', $contact->city);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame(Contact::REGION_STATUS_CLARIFICATION_PENDING, $contact->region_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM, $contact->data_collection_current_field);
+        $this->assertSame(['Свердловская область', 'Ставропольский край'], $contact->pending_region_candidates);
+        $this->assertDatabaseMissing('messages', [
+            'contact_id' => $contact->id,
+            'text' => 'Подскажите, пожалуйста, страну, где вы живёте. Для города «Михайловск» это нужно уточнить.',
+        ]);
+    }
+
+    public function test_job_marks_russian_city_as_ambiguous_without_asking_country_on_low_confidence(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Волгоградская область',
+            'Приморский край',
+            'Воронежская область',
+            'Тульская область',
+            'Калужская область',
+        ]);
+        config()->set('russian_region_cities.cities', [
+            'александровка' => [
+                'city' => 'Александровка',
+                'aliases' => [],
+                'regions' => [
+                    'Волгоградская область',
+                    'Приморский край',
+                    'Воронежская область',
+                    'Тульская область',
+                    'Калужская область',
+                ],
+            ],
+        ]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Александровка',
+                'country' => null,
+                'country_confidence' => 'low',
+            ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9955],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Александровка',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            'first_name' => 'Герман',
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Александровка', $contact->city);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertNull($contact->region);
+        $this->assertSame(Contact::REGION_STATUS_AMBIGUOUS, $contact->region_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+        $this->assertDatabaseMissing('messages', [
+            'contact_id' => $contact->id,
+            'text' => 'Подскажите, пожалуйста, страну, где вы живёте. Для города «Александровка» это нужно уточнить.',
+        ]);
+    }
+
     public function test_job_keeps_residence_city_and_asks_country_when_country_confidence_is_malformed(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');

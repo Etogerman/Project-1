@@ -10,6 +10,7 @@ use App\Services\DataCollection\ExtractCityAction;
 use App\Services\DataCollection\ExtractCountryAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\DataCollection\ExtractResidenceCityAction;
+use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
 use App\Services\Contacts\SyncContactRussianRegionAction;
@@ -63,6 +64,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ExtractResidenceCityAction $extractResidenceCityAction,
         ExtractCountryAction $extractCountryAction,
         ExtractCityAction $extractCityAction,
+        ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
         SyncContactRussianRegionAction $syncContactRussianRegionAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
@@ -163,6 +165,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
                 extractResidenceCityAction: $extractResidenceCityAction,
+                resolveRussianRegionCandidatesLookupAction: $resolveRussianRegionCandidatesLookupAction,
                 syncContactRussianRegionAction: $syncContactRussianRegionAction,
             ),
             Contact::DATA_COLLECTION_FIELD_COUNTRY => $this->handleCountryReply(
@@ -302,6 +305,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ExtractResidenceCityAction $extractResidenceCityAction,
+        ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
         SyncContactRussianRegionAction $syncContactRussianRegionAction,
     ): void {
         try {
@@ -358,12 +362,12 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             $attributes['country'] = $country;
         }
 
-        $contact->forceFill($attributes)->save();
-        $syncContactRussianRegionAction->handle($contact, true);
-
-        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY);
-
         if ($countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH && filled($country)) {
+            $contact->forceFill($attributes)->save();
+            $syncContactRussianRegionAction->handle($contact, true);
+
+            $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY);
+
             $this->moveToAgeRangeStep(
                 message: $message,
                 channel: $channel,
@@ -376,6 +380,26 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
             return;
         }
+
+        $contact->forceFill($attributes)->save();
+
+        $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY);
+
+        if ($this->applyResidenceCityRussianShortcut($contact, $city, $resolveRussianRegionCandidatesLookupAction)) {
+            $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
+        $syncContactRussianRegionAction->handle($contact, true);
 
         $this->moveToCountryStep(
             message: $message,
@@ -1518,6 +1542,91 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
 
         return str_replace('{city}', $city, $template);
+    }
+
+    protected function applyResidenceCityRussianShortcut(
+        Contact $contact,
+        string $city,
+        ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
+    ): bool {
+        $candidateRegions = $this->normalizeRussianShortcutCandidates(
+            $resolveRussianRegionCandidatesLookupAction->handle($city)['candidate_regions'] ?? null,
+        );
+
+        if ($candidateRegions === []) {
+            return false;
+        }
+
+        $payload = [
+            'country' => 'Россия',
+        ];
+
+        if (count($candidateRegions) === 1) {
+            $contact->forceFill(array_merge($payload, [
+                'region' => $candidateRegions[0],
+                'region_status' => Contact::REGION_STATUS_RESOLVED,
+                'region_source' => Contact::REGION_SOURCE_AI,
+                'pending_region_candidates' => null,
+            ]))->save();
+
+            return true;
+        }
+
+        if (count($candidateRegions) <= 4) {
+            $contact->forceFill(array_merge($payload, [
+                'region' => null,
+                'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
+                'region_source' => null,
+                'pending_region_candidates' => $candidateRegions,
+            ]))->save();
+
+            return true;
+        }
+
+        $contact->forceFill(array_merge($payload, [
+            'region' => null,
+            'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
+            'region_source' => null,
+            'pending_region_candidates' => null,
+        ]))->save();
+
+        return true;
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function normalizeRussianShortcutCandidates(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        $allowedRegions = array_keys(Contact::russianRegionOptions());
+
+        if ($allowedRegions === []) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($value as $candidate) {
+            if (! is_string($candidate)) {
+                return [];
+            }
+
+            $trimmed = trim($candidate);
+
+            if ($trimmed === '' || ! in_array($trimmed, $allowedRegions, true)) {
+                return [];
+            }
+
+            if (! in_array($trimmed, $normalized, true)) {
+                $normalized[] = $trimmed;
+            }
+        }
+
+        return $normalized;
     }
 
     protected function nullableString(mixed $value): ?string
