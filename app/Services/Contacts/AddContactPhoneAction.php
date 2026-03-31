@@ -5,13 +5,25 @@ namespace App\Services\Contacts;
 use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
 use Illuminate\Database\QueryException;
+use RuntimeException;
 
 class AddContactPhoneAction
 {
+    public function __construct(
+        private readonly NormalizePhoneNumberAction $normalizePhoneNumberAction,
+        private readonly ResolveRootContactAction $resolveRootContactAction,
+    ) {}
+
     public function handle(Contact $contact, string $phoneRaw, string $source): ContactPhoneNumber
     {
+        $contact = $this->resolveRootContactAction->handle($contact);
+
         $phoneRaw = trim($phoneRaw);
-        $phoneNormalized = static::normalizePhone($phoneRaw);
+        $phoneNormalized = $this->normalizePhoneNumberAction->handle($phoneRaw);
+
+        if ($phoneNormalized === '') {
+            throw new RuntimeException('Укажите корректный номер телефона.');
+        }
 
         $existing = $contact->phoneNumbers()
             ->where('phone_normalized', $phoneNormalized)
@@ -41,16 +53,7 @@ class AddContactPhoneAction
 
     public static function normalizePhone(string $phoneRaw): string
     {
-        $trimmed = trim($phoneRaw);
-
-        if ($trimmed === '') {
-            return '';
-        }
-
-        $hasPlusPrefix = str_starts_with($trimmed, '+');
-        $digits = preg_replace('/[^\d]/u', '', $trimmed) ?? '';
-
-        return $hasPlusPrefix ? '+'.$digits : $digits;
+        return app(NormalizePhoneNumberAction::class)->handle($phoneRaw);
     }
 
     public static function maskPhone(string $phoneNormalized): string

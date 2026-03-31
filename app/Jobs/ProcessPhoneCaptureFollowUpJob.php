@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Data\Bots\StoredInboundMessageResult;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
@@ -29,7 +30,10 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
 
     public int $tries = 3;
 
-    public function __construct(public int $inboundMessageId) {}
+    public function __construct(
+        public int $inboundMessageId,
+        public string $phoneCaptureStatus = StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW,
+    ) {}
 
     /**
      * @return list<int>
@@ -78,6 +82,8 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             return;
         }
 
+        $contact = $message->contact;
+
         if ($this->confirmationAlreadyExists($message)) {
             $channelActivityLogger->info(
                 $channel,
@@ -86,7 +92,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                 $this->baseContext($message, $channel),
             );
         } else {
-            $confirmationText = (string) config('bots.phone_capture_confirmation_text');
+            $confirmationText = $this->resolvePhoneCaptureReplyText($contact, $resolveNextDataCollectionFieldAction);
 
             try {
                 $deliveryResult = match ($channel->platform) {
@@ -109,12 +115,25 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                 $storePhoneCaptureConfirmationAction->handle($channel, $message, $deliveryResult);
                 $channel->markReplySent();
 
-                $channelActivityLogger->info(
-                    $channel,
-                    'contact.phone_capture_confirmed',
-                    'Подтверждение после получения номера отправлено.',
-                    $this->baseContext($message, $channel),
-                );
+                if ($this->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
+                    $channelActivityLogger->info(
+                        $channel,
+                        'contact.phone_capture_recognition_sent',
+                        'После склейки контакта отправлено сообщение распознавания.',
+                        $this->baseContext($message, $channel) + [
+                            'phone_capture_status' => $this->phoneCaptureStatus,
+                        ],
+                    );
+                } else {
+                    $channelActivityLogger->info(
+                        $channel,
+                        'contact.phone_capture_confirmed',
+                        'Подтверждение после получения номера отправлено.',
+                        $this->baseContext($message, $channel) + [
+                            'phone_capture_status' => $this->phoneCaptureStatus,
+                        ],
+                    );
+                }
             } catch (Throwable $throwable) {
                 $channel->markError($throwable);
 
@@ -136,6 +155,12 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
 
                 throw $throwable;
             }
+        }
+
+        if ($this->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
+            $this->maybeContinueDataCollectionAfterMerge($message, $channel, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
+
+            return;
         }
 
         $this->maybeStartDataCollection($message, $channel, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
@@ -203,5 +228,112 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         );
 
         ProcessDataCollectionQuestionJob::dispatch($message->id);
+    }
+
+    protected function maybeContinueDataCollectionAfterMerge(
+        Message $message,
+        Channel $channel,
+        ChannelActivityLogger $channelActivityLogger,
+        ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
+    ): void {
+        if (! (bool) config('bots.data_collection.enabled', true)) {
+            return;
+        }
+
+        $contact = $message->contact;
+
+        if (! $contact instanceof Contact) {
+            return;
+        }
+
+        if ($contact->isInDataCollection()) {
+            if ($this->questionAlreadyExists($message)) {
+                return;
+            }
+
+            $channelActivityLogger->info(
+                $channel,
+                'contact.data_collection_continued_after_merge',
+                'После склейки контакт продолжил сбор профиля в текущем канале.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $message->id,
+                    'current_field' => $contact->data_collection_current_field,
+                ],
+            );
+
+            ProcessDataCollectionQuestionJob::dispatch($message->id);
+
+            return;
+        }
+
+        $nextField = $resolveNextDataCollectionFieldAction->handle($contact);
+
+        if ($nextField === null) {
+            return;
+        }
+
+        if ($this->questionAlreadyExists($message)) {
+            return;
+        }
+
+        $contact->startDataCollection($nextField);
+
+        $channelActivityLogger->info(
+            $channel,
+            'contact.data_collection_continued_after_merge',
+            'После склейки контакт продолжил сбор профиля в текущем канале.',
+            [
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'message_id' => $message->id,
+                'current_field' => $nextField,
+            ],
+        );
+
+        ProcessDataCollectionQuestionJob::dispatch($message->id);
+    }
+
+    protected function questionAlreadyExists(Message $message): bool
+    {
+        return $message->replies()
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->exists();
+    }
+
+    protected function resolvePhoneCaptureReplyText(
+        ?Contact $contact,
+        ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
+    ): string {
+        if ($this->phoneCaptureStatus !== StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT || ! $contact instanceof Contact) {
+            return (string) config('bots.phone_capture_confirmation_text');
+        }
+
+        $hasIncompleteProfile = $contact->isInDataCollection()
+            || $resolveNextDataCollectionFieldAction->handle($contact) !== null;
+
+        return $this->renderRecognitionText(
+            $hasIncompleteProfile
+                ? 'bots.phone_capture_recognition_continue_text'
+                : 'bots.phone_capture_recognition_full_profile_text',
+            $hasIncompleteProfile
+                ? 'Спасибо! Мы вас узнали. У нас осталось несколько вопросов.'
+                : 'Спасибо! Мы вас узнали.',
+            $contact,
+        );
+    }
+
+    protected function renderRecognitionText(string $configKey, string $fallbackWithoutName, Contact $contact): string
+    {
+        $firstName = is_string($contact->first_name) ? trim($contact->first_name) : null;
+
+        if (! filled($firstName)) {
+            return $fallbackWithoutName;
+        }
+
+        $template = (string) config($configKey, $fallbackWithoutName);
+
+        return str_replace('{name}', $firstName, $template);
     }
 }

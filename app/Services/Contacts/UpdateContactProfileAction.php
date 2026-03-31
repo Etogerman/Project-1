@@ -10,6 +10,7 @@ class UpdateContactProfileAction
 {
     public function __construct(
         private readonly SyncContactRussianRegionAction $syncContactRussianRegionAction,
+        private readonly ResolveRootContactAction $resolveRootContactAction,
     ) {}
 
     /**
@@ -17,6 +18,8 @@ class UpdateContactProfileAction
      */
     public function handle(Contact $contact, array $attributes): Contact
     {
+        $contact = $this->resolveRootContactAction->handle($contact);
+
         $firstName = $this->normalizeNullableString($attributes['first_name'] ?? null);
         $lastName = $this->normalizeNullableString($attributes['last_name'] ?? null);
         $gender = $this->normalizeGender($attributes['gender'] ?? null);

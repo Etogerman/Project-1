@@ -9,11 +9,17 @@ use InvalidArgumentException;
 
 class ReleaseContactAssignmentAction
 {
+    public function __construct(
+        private readonly ResolveRootContactAction $resolveRootContactAction,
+    ) {}
+
     public function handle(Contact $contact, User $actor): Contact
     {
         if (! $actor->is_active || ! $actor->is_admin) {
             throw new AuthorizationException();
         }
+
+        $contact = $this->resolveRootContactAction->handle($contact);
 
         $updated = Contact::query()
             ->whereKey($contact->id)

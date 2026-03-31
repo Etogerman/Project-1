@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Contacts;
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactDuplicateReview;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\User;
@@ -61,7 +62,12 @@ class ContactResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()
+        return static::getTableRecordQuery();
+    }
+
+    public static function getTableRecordQuery(bool $excludeMerged = true): Builder
+    {
+        $query = parent::getEloquentQuery()
             ->addSelect([
                 'primary_phone_raw' => static::buildPrimaryPhoneSubquery('phone_raw'),
                 'primary_phone_normalized' => static::buildPrimaryPhoneSubquery('phone_normalized'),
@@ -72,12 +78,23 @@ class ContactResource extends Resource
                 'primaryIdentity.channel',
                 'latestMessage.channel',
             ])
+            ->withCount([
+                'duplicateReviews as open_duplicate_reviews_count' => fn (Builder $query): Builder => $query
+                    ->where('status', ContactDuplicateReview::STATUS_OPEN),
+                'mergedChildren',
+            ])
             ->withCount('messages')
             ->withMax(['messages as latest_message_id' => fn (Builder $query): Builder => $query], 'id')
             ->withMax(['messages as latest_inbound_user_message_id' => fn (Builder $query): Builder => $query
                 ->where('message_kind', Message::KIND_INBOUND_USER)], 'id')
             ->withMax(['messages as latest_outbound_manual_reply_message_id' => fn (Builder $query): Builder => $query
                 ->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)], 'id');
+
+        if ($excludeMerged) {
+            $query->whereNull('contacts.merged_into_contact_id');
+        }
+
+        return $query;
     }
 
     public static function infolist(Schema $schema): Schema
@@ -107,6 +124,17 @@ class ContactResource extends Resource
                             ->placeholder('—'),
                     ])
                     ->columns(5)
+                    ->columnSpanFull(),
+                Section::make('Дедупликация')
+                    ->schema([
+                        ViewEntry::make('contact_dedup_status')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.contact-dedup-status')
+                            ->viewData(fn (Contact $record): array => static::buildDedupStatusViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->visible(fn (?Contact $record): bool => $record instanceof Contact && static::shouldShowDedupStatusSection($record))
+                    ->columns(1)
                     ->columnSpanFull(),
                 Section::make('Профиль')
                     ->schema([
@@ -311,6 +339,12 @@ class ContactResource extends Resource
                     ->badge()
                     ->color(fn (Contact $record): string => static::getInboxStatusColor($record))
                     ->toggleable(),
+                TextColumn::make('dedup_status')
+                    ->label('Проверка дубля')
+                    ->state(fn (Contact $record): string => static::formatDedupStatus($record))
+                    ->badge()
+                    ->color(fn (Contact $record): string => static::getDedupStatusColor($record))
+                    ->toggleable(),
                 TextColumn::make('assignedUser.name')
                     ->label('Ответственный')
                     ->toggleable()
@@ -388,6 +422,9 @@ class ContactResource extends Resource
                 Filter::make('unassigned_contacts')
                     ->label('Свободные')
                     ->query(fn (Builder $query): Builder => $query->whereNull('assigned_user_id')),
+                Filter::make('duplicate_review_pending')
+                    ->label('Нужна проверка дубля')
+                    ->query(fn (Builder $query): Builder => $query->where('duplicate_review_status', Contact::DUPLICATE_REVIEW_STATUS_PENDING)),
                 Filter::make('has_phone')
                     ->label('Есть телефон')
                     ->query(fn (Builder $query): Builder => $query->whereHas('phoneNumbers')),
@@ -435,6 +472,7 @@ class ContactResource extends Resource
                     ->label('Удалить')
                     ->icon(null)
                     ->button()
+                    ->visible(fn (Contact $record): bool => static::canDeleteContactFromUi($record))
                     ->authorize(fn (): bool => (bool) (auth()->user()?->is_active && auth()->user()?->is_admin))
                     ->modalHeading('Удалить клиента?')
                     ->modalDescription('Контакт будет удалён вместе с телефонами, сообщениями и идентичностями.')
@@ -673,6 +711,104 @@ class ContactResource extends Resource
             'city' => $record->city ?: '—',
             'ageRange' => Contact::formatAgeRange($record->age_range),
         ];
+    }
+
+    /**
+     * @return array{
+     *     isMerged: bool,
+     *     dedupStatusLabel: string,
+     *     dedupStatusTone: string,
+     *     openReviewsCount: int,
+     *     openReviews: array<int, array{
+     *         typeLabel: string,
+     *         phoneLabel: string,
+     *         candidateRootsLabel: string,
+     *         createdAtLabel: string
+     *     }>,
+     *     mergedChildrenCount: int,
+     *     mergedChildren: array<int, array{
+     *         id: int,
+     *         mergedAtLabel: string,
+     *         triggerPhone: string,
+     *         reasonLabel: string
+     *     }>,
+     *     rootContactLabel: string,
+     *     mergedAtLabel: string,
+     *     mergeReasonLabel: string,
+     *     mergeTriggerPhone: string
+     * }
+     */
+    protected static function buildDedupStatusViewData(Contact $record): array
+    {
+        $record->loadMissing('mergedInto');
+        $openReviewsCount = static::resolveOpenDuplicateReviewsCount($record);
+        $mergedChildrenCount = static::resolveMergedChildrenCount($record);
+
+        $openReviews = $record->duplicateReviews()
+            ->where('status', ContactDuplicateReview::STATUS_OPEN)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get();
+
+        $mergedChildren = $record->mergedChildren()
+            ->orderByDesc('merged_at')
+            ->orderByDesc('id')
+            ->limit(5)
+            ->get();
+
+        $dedupStatusLabel = $record->isMerged()
+            ? 'Архивный дубль'
+            : ($record->duplicate_review_status === Contact::DUPLICATE_REVIEW_STATUS_PENDING
+                ? 'Нужна проверка'
+                : ($mergedChildrenCount > 0 ? 'Есть история склейки' : '—'));
+
+        $dedupStatusTone = $record->duplicate_review_status === Contact::DUPLICATE_REVIEW_STATUS_PENDING
+            ? 'warning'
+            : ($record->isMerged() || ($mergedChildrenCount > 0) ? 'info' : 'gray');
+
+        return [
+            'isMerged' => $record->isMerged(),
+            'dedupStatusLabel' => $dedupStatusLabel,
+            'dedupStatusTone' => $dedupStatusTone,
+            'openReviewsCount' => $openReviewsCount,
+            'openReviews' => $openReviews
+                ->map(fn (ContactDuplicateReview $review): array => [
+                    'typeLabel' => static::formatDuplicateReviewType($review->review_type),
+                    'phoneLabel' => $review->phone_normalized ?: '—',
+                    'candidateRootsLabel' => static::formatCandidateRootIds($review->candidate_root_contact_ids),
+                    'createdAtLabel' => $review->created_at?->format('d.m.Y H:i') ?? '—',
+                ])
+                ->all(),
+            'mergedChildrenCount' => $mergedChildrenCount,
+            'mergedChildren' => $mergedChildren
+                ->map(fn (Contact $mergedChild): array => [
+                    'id' => $mergedChild->id,
+                    'mergedAtLabel' => $mergedChild->merged_at?->format('d.m.Y H:i') ?? '—',
+                    'triggerPhone' => $mergedChild->merge_trigger_phone ?: '—',
+                    'reasonLabel' => static::formatMergeReason($mergedChild->merge_reason),
+                ])
+                ->all(),
+            'rootContactLabel' => $record->mergedInto !== null
+                ? sprintf('#%d %s', $record->mergedInto->id, $record->mergedInto->display_name)
+                : '—',
+            'mergedAtLabel' => $record->merged_at?->format('d.m.Y H:i') ?? '—',
+            'mergeReasonLabel' => static::formatMergeReason($record->merge_reason),
+            'mergeTriggerPhone' => $record->merge_trigger_phone ?: '—',
+        ];
+    }
+
+    protected static function shouldShowDedupStatusSection(Contact $record): bool
+    {
+        if ($record->isMerged()) {
+            return true;
+        }
+
+        if ($record->duplicate_review_status === Contact::DUPLICATE_REVIEW_STATUS_PENDING) {
+            return true;
+        }
+
+        return static::resolveOpenDuplicateReviewsCount($record) > 0
+            || static::resolveMergedChildrenCount($record) > 0;
     }
 
     protected static function canResumeDataCollection(Contact $record): bool
@@ -915,6 +1051,54 @@ class ContactResource extends Resource
         return $channel->name ?: $platformLabel;
     }
 
+    protected static function formatDedupStatus(Contact $record): string
+    {
+        return $record->duplicate_review_status === Contact::DUPLICATE_REVIEW_STATUS_PENDING
+            ? 'Нужна проверка'
+            : '—';
+    }
+
+    protected static function getDedupStatusColor(Contact $record): string
+    {
+        return $record->duplicate_review_status === Contact::DUPLICATE_REVIEW_STATUS_PENDING
+            ? 'warning'
+            : 'gray';
+    }
+
+    /**
+     * @param  array<int, int>|null  $candidateRootIds
+     */
+    protected static function formatCandidateRootIds(?array $candidateRootIds): string
+    {
+        if (blank($candidateRootIds)) {
+            return '—';
+        }
+
+        return collect($candidateRootIds)
+            ->map(fn (mixed $id): string => '#'.(string) $id)
+            ->implode(', ');
+    }
+
+    protected static function formatDuplicateReviewType(?string $reviewType): string
+    {
+        return match ($reviewType) {
+            ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE => 'Телефон найден у другого root-контакта',
+            ContactDuplicateReview::TYPE_PHONE_MULTIPLE_ROOTS => 'Телефон найден у нескольких root-контактов',
+            ContactDuplicateReview::TYPE_MERGE_CONFLICT => 'Не удалось безопасно склеить контакт',
+            ContactDuplicateReview::TYPE_BROKEN_MERGE_CHAIN => 'Повреждена цепочка склейки',
+            default => 'Требуется проверка дубля',
+        };
+    }
+
+    protected static function formatMergeReason(?string $mergeReason): string
+    {
+        return match ($mergeReason) {
+            'phone_exact_match' => 'Совпадение телефона',
+            null, '' => '—',
+            default => $mergeReason,
+        };
+    }
+
     protected static function buildOwnershipControlsViewData(Contact $record): array
     {
         $record->loadMissing('assignedUser');
@@ -925,6 +1109,8 @@ class ContactResource extends Resource
             'ownershipHint' => static::getOwnershipHint($record),
             'autoReplyEnabled' => $record->isAutoReplyEnabled(),
             'autoReplyStatusLabel' => $record->isAutoReplyEnabled() ? 'Включены' : 'Отключены',
+            'canDeleteContact' => static::canDeleteContactFromUi($record),
+            'deleteBlockedReason' => static::getDeleteBlockedReason($record),
         ];
     }
 
@@ -1042,6 +1228,48 @@ class ContactResource extends Resource
     protected static function canCurrentUserReplyToContact(Contact $record): bool
     {
         return in_array(static::getContactOwnershipState($record), ['mine', 'unassigned'], true);
+    }
+
+    protected static function canDeleteContactFromUi(Contact $record): bool
+    {
+        return static::getDeleteBlockedReason($record) === null;
+    }
+
+    protected static function getDeleteBlockedReason(Contact $record): ?string
+    {
+        if ($record->isMerged()) {
+            return 'Архивный дубль не удаляется из операторского интерфейса.';
+        }
+
+        if (static::resolveMergedChildrenCount($record) > 0) {
+            return 'Нельзя удалить контакт, у которого есть склеенные дубли.';
+        }
+
+        return null;
+    }
+
+    protected static function resolveOpenDuplicateReviewsCount(Contact $record): int
+    {
+        $count = $record->getAttribute('open_duplicate_reviews_count');
+
+        if ($count !== null) {
+            return (int) $count;
+        }
+
+        return $record->duplicateReviews()
+            ->where('status', ContactDuplicateReview::STATUS_OPEN)
+            ->count();
+    }
+
+    protected static function resolveMergedChildrenCount(Contact $record): int
+    {
+        $count = $record->getAttribute('merged_children_count');
+
+        if ($count !== null) {
+            return (int) $count;
+        }
+
+        return $record->mergedChildren()->count();
     }
 
     protected static function getInlineReplyBlockedReason(Contact $record): ?string

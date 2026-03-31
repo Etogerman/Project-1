@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
+use App\Data\Bots\StoredInboundMessageResult;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -512,6 +513,169 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         ]);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->fresh()->data_collection_current_field);
+    }
+
+    public function test_job_sends_recognition_text_after_merge_when_profile_is_full(): void
+    {
+        config()->set('bots.phone_capture_recognition_full_profile_text', 'Спасибо! Мы вас узнали, {name}.');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9920,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'age_range' => '30_39',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '205',
+            'external_username' => 'telegram_merge_full',
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '305',
+            'external_message_id' => 'merge-full',
+            'provider_event_key' => 'merge-full',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id, StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT);
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '305'
+            && $request['text'] === 'Спасибо! Мы вас узнали, Герман.'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
+
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+            'reply_to_message_id' => $message->id,
+            'external_message_id' => '9920',
+            'text' => 'Спасибо! Мы вас узнали, Герман.',
+        ]);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_continued_after_merge',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_recognition_sent',
+        ]);
+    }
+
+    public function test_job_continues_data_collection_in_current_chat_after_merge(): void
+    {
+        config()->set('bots.phone_capture_recognition_continue_text', 'Спасибо! Мы вас узнали, {name}. У нас осталось несколько вопросов.');
+        config()->set('bots.data_collection.age_range.telegram_question', 'Укажите ваш возраст:');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9921,
+                    ],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9922,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'age_range' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_started_at' => now()->subDay(),
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '206',
+            'external_username' => 'telegram_merge_continue',
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '306',
+            'external_message_id' => 'merge-continue',
+            'provider_event_key' => 'merge-continue',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id, StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '306'
+            && $request['text'] === 'Спасибо! Мы вас узнали, Герман. У нас осталось несколько вопросов.'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '306'
+            && $request['text'] === 'Укажите ваш возраст:');
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->fresh()->data_collection_current_field);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_recognition_sent',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_continued_after_merge',
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'external_message_id' => '9922',
+            'text' => 'Укажите ваш возраст:',
+        ]);
     }
 
     /**

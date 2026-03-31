@@ -3,6 +3,8 @@
 namespace App\Jobs;
 
 use App\Models\Contact;
+use App\Services\Contacts\BrokenContactMergeChainException;
+use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SyncContactDistanceToMoscowAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -35,11 +37,14 @@ class CalculateDistanceToMoscowJob implements ShouldQueue
         return [10, 30, 60];
     }
 
-    public function handle(SyncContactDistanceToMoscowAction $syncContactDistanceToMoscowAction): void
+    public function handle(
+        SyncContactDistanceToMoscowAction $syncContactDistanceToMoscowAction,
+        ResolveRootContactAction $resolveRootContactAction,
+    ): void
     {
-        $contact = Contact::query()->find($this->contactId);
-
-        if (! $contact instanceof Contact) {
+        try {
+            $contact = $resolveRootContactAction->handle($this->contactId);
+        } catch (BrokenContactMergeChainException) {
             return;
         }
 

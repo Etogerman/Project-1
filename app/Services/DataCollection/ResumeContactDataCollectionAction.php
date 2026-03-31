@@ -5,16 +5,20 @@ namespace App\Services\DataCollection;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Services\Contacts\ResolveRootContactAction;
 use RuntimeException;
 
 class ResumeContactDataCollectionAction
 {
     public function __construct(
         protected ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
+        protected ResolveRootContactAction $resolveRootContactAction,
     ) {}
 
     public function handle(Contact $contact): ?string
     {
+        $contact = $this->resolveRootContactAction->handle($contact);
+
         if ($contact->data_collection_status === Contact::DATA_COLLECTION_STATUS_ACTIVE) {
             throw new RuntimeException('Анкета уже находится в процессе.');
         }

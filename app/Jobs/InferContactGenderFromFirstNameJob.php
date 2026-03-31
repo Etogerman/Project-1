@@ -3,7 +3,9 @@
 namespace App\Jobs;
 
 use App\Models\Contact;
+use App\Services\Contacts\BrokenContactMergeChainException;
 use App\Services\DataCollection\InferGenderByFirstNameAction;
+use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -45,11 +47,14 @@ class InferContactGenderFromFirstNameJob implements ShouldQueue
         ];
     }
 
-    public function handle(InferGenderByFirstNameAction $inferGenderByFirstNameAction): void
+    public function handle(
+        InferGenderByFirstNameAction $inferGenderByFirstNameAction,
+        ResolveRootContactAction $resolveRootContactAction,
+    ): void
     {
-        $contact = Contact::query()->find($this->contactId);
-
-        if (! $contact instanceof Contact) {
+        try {
+            $contact = $resolveRootContactAction->handle($this->contactId);
+        } catch (BrokenContactMergeChainException) {
             return;
         }
 

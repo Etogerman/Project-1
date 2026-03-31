@@ -6,10 +6,16 @@ use App\Data\Bots\IncomingBotMessage;
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\BrokenContactMergeChainException;
+use App\Services\Contacts\ContactMergeException;
+use App\Services\Contacts\CreateContactDuplicateReviewAction;
+use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
+use App\Services\Contacts\MergeContactsAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
@@ -17,6 +23,9 @@ class StoreInboundMessageAction
 {
     public function __construct(
         protected AddContactPhoneAction $addContactPhoneAction,
+        protected FindDuplicateContactRootsByPhoneAction $findDuplicateContactRootsByPhoneAction,
+        protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
+        protected MergeContactsAction $mergeContactsAction,
         protected ChannelActivityLogger $channelActivityLogger,
     ) {}
 
@@ -83,10 +92,15 @@ class StoreInboundMessageAction
 
                 if ($existingMessage !== null) {
                     $existingMessage->loadMissing(['contact', 'contactIdentity']);
+                    $phoneCaptureStatus = $this->captureSharedPhoneIfNeeded($channel, $contact, $existingMessage, $message);
+
+                    if ($phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
+                        $existingMessage->refresh();
+                    }
 
                     return new StoredInboundMessageResult(
                         message: $existingMessage,
-                        phoneCaptureStatus: $this->captureSharedPhoneIfNeeded($channel, $contact, $existingMessage, $message),
+                        phoneCaptureStatus: $phoneCaptureStatus,
                     );
                 }
             }
@@ -106,9 +120,15 @@ class StoreInboundMessageAction
                     'received_at' => $message->receivedAt,
                 ]);
 
+                $phoneCaptureStatus = $this->captureSharedPhoneIfNeeded($channel, $contact, $storedMessage, $message);
+
+                if ($phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
+                    $storedMessage->refresh();
+                }
+
                 return new StoredInboundMessageResult(
                     message: $storedMessage,
-                    phoneCaptureStatus: $this->captureSharedPhoneIfNeeded($channel, $contact, $storedMessage, $message),
+                    phoneCaptureStatus: $phoneCaptureStatus,
                 );
             } catch (QueryException $exception) {
                 if (! filled($message->providerEventKey) || ! $this->wasUniqueConstraintViolation($exception)) {
@@ -117,10 +137,15 @@ class StoreInboundMessageAction
 
                 $existingMessage = $this->findExistingInboundMessage($channel, $message->providerEventKey) ?? throw $exception;
                 $existingMessage->loadMissing(['contact', 'contactIdentity']);
+                $phoneCaptureStatus = $this->captureSharedPhoneIfNeeded($channel, $contact, $existingMessage, $message);
+
+                if ($phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
+                    $existingMessage->refresh();
+                }
 
                 return new StoredInboundMessageResult(
                     message: $existingMessage,
-                    phoneCaptureStatus: $this->captureSharedPhoneIfNeeded($channel, $contact, $existingMessage, $message),
+                    phoneCaptureStatus: $phoneCaptureStatus,
                 );
             }
         });
@@ -206,25 +231,157 @@ class StoreInboundMessageAction
                 : ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
         );
 
-        if (! $phoneNumber->wasRecentlyCreated) {
-            return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_DUPLICATE;
+        if ($phoneNumber->wasRecentlyCreated) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'contact.phone_captured',
+                'Номер телефона сохранён у контакта.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $storedMessage->id,
+                    'source' => $phoneNumber->source,
+                    'phone_last4' => mb_substr($phoneNumber->phone_normalized, -4),
+                    'phone_masked' => AddContactPhoneAction::maskPhone($phoneNumber->phone_normalized),
+                ],
+            );
         }
 
-        $this->channelActivityLogger->info(
-            $channel,
-            'contact.phone_captured',
-            'Номер телефона сохранён у контакта.',
-            [
-                'contact_id' => $contact->id,
-                'channel_id' => $channel->id,
-                'message_id' => $storedMessage->id,
-                'source' => $phoneNumber->source,
-                'phone_last4' => mb_substr($phoneNumber->phone_normalized, -4),
-                'phone_masked' => AddContactPhoneAction::maskPhone($phoneNumber->phone_normalized),
-            ],
+        $this->acquirePhoneCaptureLock($phoneNumber->phone_normalized);
+
+        $duplicateRoots = $this->findDuplicateContactRootsByPhoneAction->handle(
+            $phoneNumber->phone_normalized,
+            $contact,
         );
 
-        return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED;
+        if ($duplicateRoots->hasMultipleOtherRoots) {
+            $this->createPhoneDuplicateReview(
+                contact: $contact,
+                phoneNormalized: $phoneNumber->phone_normalized,
+                matchedRootContactIds: $duplicateRoots->matchedRootContactIds,
+                triggerMessage: $storedMessage,
+                reason: 'Phone matched multiple other root contacts during phone capture.',
+            );
+
+            $this->channelActivityLogger->info(
+                $channel,
+                'contact.phone_review_pending_multiple_roots',
+                'Найдено несколько root-контактов с тем же номером телефона. Автосклейка не выполнена.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $storedMessage->id,
+                    'phone_normalized' => $phoneNumber->phone_normalized,
+                    'matched_root_contact_ids' => $duplicateRoots->matchedRootContactIds,
+                    'matched_root_count' => $duplicateRoots->matchedRootCount,
+                ],
+            );
+
+            return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_REVIEW_PENDING;
+        }
+
+        if ($duplicateRoots->hasSingleOtherRoot) {
+            try {
+                $mergeResult = $this->mergeContactsAction->handle(
+                    left: $contact,
+                    right: $duplicateRoots->matchedRootContactIds[0],
+                    mergeReason: 'phone_exact_match',
+                    triggerPhone: $phoneNumber->phone_normalized,
+                    triggerMessage: $storedMessage,
+                );
+
+                $storedMessage->refresh();
+
+                $this->channelActivityLogger->info(
+                    $channel,
+                    'contact.phone_merged_to_existing_root',
+                    'Контакты автоматически объединены по точному совпадению телефона.',
+                    [
+                        'contact_id' => $storedMessage->contact_id,
+                        'channel_id' => $channel->id,
+                        'message_id' => $storedMessage->id,
+                        'phone_normalized' => $phoneNumber->phone_normalized,
+                        'matched_root_contact_ids' => $duplicateRoots->matchedRootContactIds,
+                        'matched_root_count' => $duplicateRoots->matchedRootCount,
+                        'primary_contact_id' => $mergeResult->primaryContactId,
+                        'secondary_contact_id' => $mergeResult->secondaryContactId,
+                        'merge_log_id' => $mergeResult->mergeLogId,
+                    ],
+                );
+
+                return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT;
+            } catch (ContactMergeException|BrokenContactMergeChainException|QueryException $exception) {
+                $this->createPhoneDuplicateReview(
+                    contact: $contact,
+                    phoneNormalized: $phoneNumber->phone_normalized,
+                    matchedRootContactIds: $duplicateRoots->matchedRootContactIds,
+                    triggerMessage: $storedMessage,
+                    reason: 'Phone matched one other root contact but merge failed during phone capture.',
+                );
+
+                $this->channelActivityLogger->warning(
+                    $channel,
+                    'contact.phone_merge_failed_review_pending',
+                    'Автосклейка по номеру не выполнена. Контакт отправлен на ручную проверку.',
+                    [
+                        'contact_id' => $contact->id,
+                        'channel_id' => $channel->id,
+                        'message_id' => $storedMessage->id,
+                        'phone_normalized' => $phoneNumber->phone_normalized,
+                        'matched_root_contact_ids' => $duplicateRoots->matchedRootContactIds,
+                        'matched_root_count' => $duplicateRoots->matchedRootCount,
+                        'error' => $exception->getMessage(),
+                    ],
+                );
+
+                return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_REVIEW_PENDING;
+            }
+        }
+
+        if (! $phoneNumber->wasRecentlyCreated) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'contact.phone_duplicate_same_root_detected',
+                'Номер уже существует у текущего root-контакта.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $storedMessage->id,
+                    'phone_normalized' => $phoneNumber->phone_normalized,
+                    'matched_root_contact_ids' => [],
+                    'matched_root_count' => 0,
+                ],
+            );
+
+            return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_DUPLICATE_SAME_ROOT;
+        }
+
+        return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW;
+    }
+
+    private function acquirePhoneCaptureLock(string $phoneNormalized): void
+    {
+        DB::selectOne('SELECT pg_advisory_xact_lock(hashtext(?))', [$phoneNormalized]);
+    }
+
+    /**
+     * @param  list<int>  $matchedRootContactIds
+     */
+    private function createPhoneDuplicateReview(
+        Contact $contact,
+        string $phoneNormalized,
+        array $matchedRootContactIds,
+        Message $triggerMessage,
+        string $reason,
+    ): void {
+        $this->createContactDuplicateReviewAction->handle(
+            contact: $contact,
+            phoneNormalized: $phoneNormalized,
+            reviewType: ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE,
+            candidateRootContactIds: $matchedRootContactIds,
+            triggerMessage: $triggerMessage,
+            reason: $reason,
+        );
     }
 
     /**

@@ -2,11 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bots\StoredInboundMessageResult;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
@@ -233,7 +235,8 @@ class BotWebhookAutoReplyTest extends TestCase
         $storedMessage = $this->inboundMessages()->firstOrFail();
 
         Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
-            return $job->inboundMessageId === $storedMessage->id;
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW;
         });
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
         Http::assertNothingSent();
@@ -287,7 +290,8 @@ class BotWebhookAutoReplyTest extends TestCase
         $storedMessage = $this->inboundMessages()->firstOrFail();
 
         Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
-            return $job->inboundMessageId === $storedMessage->id;
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW;
         });
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
         Http::assertNothingSent();
@@ -349,7 +353,8 @@ class BotWebhookAutoReplyTest extends TestCase
         $storedMessage = $this->inboundMessages()->firstOrFail();
 
         Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
-            return $job->inboundMessageId === $storedMessage->id;
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW;
         });
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
         Http::assertNothingSent();
@@ -358,7 +363,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('contact_phone_numbers', [
             'contact_id' => $storedMessage->contact_id,
             'phone_raw' => '79263527111',
-            'phone_normalized' => '79263527111',
+            'phone_normalized' => '+79263527111',
             'source' => ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
         ]);
         $this->assertDatabaseHas('channel_activity_logs', [
@@ -408,6 +413,125 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'event' => 'max.contact_share_unknown_format',
+        ]);
+    }
+
+    public function test_telegram_contact_share_webhook_merges_into_existing_root_and_queues_merged_follow_up(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $existingRoot = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'age_range' => '30_39',
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $existingRoot->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        $payload = $this->telegramPayload(messageId: 190, text: null);
+        $payload['message']['contact'] = [
+            'phone_number' => '+7 999 123 45 67',
+            'user_id' => 200,
+        ];
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT;
+        });
+
+        $this->assertSame($existingRoot->id, $storedMessage->contact_id);
+        $this->assertDatabaseCount('contact_merge_logs', 1);
+        $this->assertDatabaseCount('contact_duplicate_reviews', 0);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_merged_to_existing_root',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_confirmation_queued',
+        ]);
+    }
+
+    public function test_telegram_contact_share_webhook_marks_review_pending_when_phone_matches_multiple_roots(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        foreach ([1, 2] as $index) {
+            $contact = Contact::factory()->create([
+                'first_name' => 'Контакт '.$index,
+            ]);
+            ContactPhoneNumber::factory()->create([
+                'contact_id' => $contact->id,
+                'phone_raw' => '+7 999 123 45 67',
+                'phone_normalized' => '+79991234567',
+                'is_primary' => true,
+            ]);
+        }
+
+        $payload = $this->telegramPayload(messageId: 191, text: null);
+        $payload['message']['contact'] = [
+            'phone_number' => '+7 999 123 45 67',
+            'user_id' => 200,
+        ];
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_REVIEW_PENDING;
+        });
+
+        $this->assertDatabaseCount('contact_merge_logs', 0);
+        $this->assertDatabaseHas('contact_duplicate_reviews', [
+            'contact_id' => $storedMessage->contact_id,
+            'phone_normalized' => '+79991234567',
+            'review_type' => ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE,
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_review_pending_multiple_roots',
         ]);
     }
 

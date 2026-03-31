@@ -216,4 +216,24 @@ class CalculateDistanceToMoscowJobTest extends TestCase
         $this->assertSame(Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED, $contact->distance_to_moscow_status);
         Http::assertNothingSent();
     }
+
+    public function test_job_resolves_merged_contact_to_root(): void
+    {
+        $root = Contact::factory()->create([
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+        $merged = Contact::factory()->create([
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        CalculateDistanceToMoscowJob::dispatchSync($merged->id);
+
+        $this->assertSame(0, $root->fresh()->distance_to_moscow_km);
+        $this->assertSame(Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED, $root->fresh()->distance_to_moscow_status);
+        $this->assertNull($merged->fresh()->distance_to_moscow_km);
+    }
 }

@@ -55,19 +55,30 @@
                 </button>
             @endif
 
-            <button
-                data-role="contact-open-delete-dialog"
-                type="button"
-                wire:click="openDeleteContactDialog"
-                wire:loading.attr="disabled"
-                wire:target="openDeleteContactDialog,deleteMountedContact"
-                style="display: inline-flex; align-items: center; justify-content: center; min-width: 10rem; border: 1px solid #dc2626; border-radius: 10px; background: #ffffff; color: #b91c1c; font-size: 0.875rem; font-weight: 700; padding: 0.72rem 1rem; cursor: pointer;"
-            >
-                <span wire:loading.remove wire:target="openDeleteContactDialog,deleteMountedContact">Удалить клиента</span>
-                <span wire:loading wire:target="openDeleteContactDialog,deleteMountedContact">Удаляем...</span>
-            </button>
+            @if ($canDeleteContact)
+                <button
+                    data-role="contact-open-delete-dialog"
+                    type="button"
+                    wire:click="openDeleteContactDialog"
+                    wire:loading.attr="disabled"
+                    wire:target="openDeleteContactDialog,deleteMountedContact"
+                    style="display: inline-flex; align-items: center; justify-content: center; min-width: 10rem; border: 1px solid #dc2626; border-radius: 10px; background: #ffffff; color: #b91c1c; font-size: 0.875rem; font-weight: 700; padding: 0.72rem 1rem; cursor: pointer;"
+                >
+                    <span wire:loading.remove wire:target="openDeleteContactDialog,deleteMountedContact">Удалить клиента</span>
+                    <span wire:loading wire:target="openDeleteContactDialog,deleteMountedContact">Удаляем...</span>
+                </button>
+            @endif
         </div>
     </div>
+
+    @if (filled($deleteBlockedReason))
+        <p
+            data-role="contact-delete-blocked-reason"
+            style="margin: 0.85rem 0 0; font-size: 0.875rem; color: #991b1b;"
+        >
+            {{ $deleteBlockedReason }}
+        </p>
+    @endif
 
     @if ($this->showAssignContactDialog)
         <div

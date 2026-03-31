@@ -7,10 +7,16 @@ use RuntimeException;
 
 class UpdateContactPhoneAction
 {
+    public function __construct(
+        private readonly NormalizePhoneNumberAction $normalizePhoneNumberAction,
+    ) {}
+
     public function handle(ContactPhoneNumber $phoneNumber, string $phoneRaw): ContactPhoneNumber
     {
+        $this->guardAgainstMergedContactPhone($phoneNumber);
+
         $phoneRaw = trim($phoneRaw);
-        $phoneNormalized = AddContactPhoneAction::normalizePhone($phoneRaw);
+        $phoneNormalized = $this->normalizePhoneNumberAction->handle($phoneRaw);
 
         if ($phoneNormalized === '') {
             throw new RuntimeException('Укажите корректный номер телефона.');
@@ -32,5 +38,14 @@ class UpdateContactPhoneAction
         ])->save();
 
         return $phoneNumber->fresh();
+    }
+
+    protected function guardAgainstMergedContactPhone(ContactPhoneNumber $phoneNumber): void
+    {
+        $contact = $phoneNumber->contact()->first();
+
+        if ($contact?->isMerged()) {
+            throw new RuntimeException('Номер относится к архивному дублю. Измените номер у основного контакта.');
+        }
     }
 }

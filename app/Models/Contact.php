@@ -13,6 +13,12 @@ class Contact extends Model
 {
     use HasFactory;
 
+    public const DUPLICATE_REVIEW_STATUS_NONE = 'none';
+
+    public const DUPLICATE_REVIEW_STATUS_PENDING = 'pending';
+
+    public const DUPLICATE_REVIEW_STATUS_RESOLVED = 'resolved';
+
     public const DATA_COLLECTION_STATUS_ACTIVE = 'active';
 
     public const DATA_COLLECTION_STATUS_COMPLETED = 'completed';
@@ -82,6 +88,11 @@ class Contact extends Model
         'data_collection_attempts_count',
         'is_auto_reply_enabled',
         'assigned_user_id',
+        'merged_into_contact_id',
+        'merged_at',
+        'merge_reason',
+        'merge_trigger_phone',
+        'duplicate_review_status',
     ];
 
     /**
@@ -96,6 +107,7 @@ class Contact extends Model
         'data_collection_attempts_count' => 'integer',
         'pending_region_candidates' => 'array',
         'is_auto_reply_enabled' => 'boolean',
+        'merged_at' => 'datetime',
     ];
 
     /**
@@ -223,6 +235,16 @@ class Contact extends Model
         return $this->belongsTo(User::class, 'assigned_user_id');
     }
 
+    public function mergedInto(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'merged_into_contact_id');
+    }
+
+    public function mergedChildren(): HasMany
+    {
+        return $this->hasMany(self::class, 'merged_into_contact_id');
+    }
+
     public function identities(): HasMany
     {
         return $this->hasMany(ContactIdentity::class);
@@ -250,6 +272,21 @@ class Contact extends Model
             ->orderBy('id');
     }
 
+    public function duplicateReviews(): HasMany
+    {
+        return $this->hasMany(ContactDuplicateReview::class);
+    }
+
+    public function mergeLogsAsPrimary(): HasMany
+    {
+        return $this->hasMany(ContactMergeLog::class, 'primary_contact_id');
+    }
+
+    public function mergeLogAsSecondary(): HasOne
+    {
+        return $this->hasOne(ContactMergeLog::class, 'secondary_contact_id');
+    }
+
     public function isAssigned(): bool
     {
         return filled($this->assigned_user_id);
@@ -263,6 +300,16 @@ class Contact extends Model
     public function isAssignedTo(User $user): bool
     {
         return (int) $this->assigned_user_id === $user->id;
+    }
+
+    public function isMerged(): bool
+    {
+        return filled($this->merged_into_contact_id);
+    }
+
+    public function isRoot(): bool
+    {
+        return ! $this->isMerged();
     }
 
     public function isInDataCollection(): bool

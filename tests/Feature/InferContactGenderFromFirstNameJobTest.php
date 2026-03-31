@@ -80,6 +80,33 @@ class InferContactGenderFromFirstNameJobTest extends TestCase
         $this->assertNull($contact->fresh()->gender);
     }
 
+    public function test_job_resolves_merged_contact_to_root(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'gender' => 'male',
+            ])),
+        ]);
+
+        $root = Contact::factory()->create([
+            'first_name' => 'Николай',
+            'gender' => null,
+        ]);
+        $merged = Contact::factory()->create([
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+            'first_name' => 'Николай',
+            'gender' => null,
+        ]);
+
+        InferContactGenderFromFirstNameJob::dispatchSync($merged->id, 'Николай');
+
+        $this->assertSame('male', $root->fresh()->gender);
+        $this->assertNull($merged->fresh()->gender);
+    }
+
     /**
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>

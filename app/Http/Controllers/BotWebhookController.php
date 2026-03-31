@@ -143,7 +143,7 @@ class BotWebhookController extends Controller
                     ]);
                 }
 
-                ProcessPhoneCaptureFollowUpJob::dispatch($storedMessage->id)->afterCommit();
+                ProcessPhoneCaptureFollowUpJob::dispatch($storedMessage->id, $storedResult->phoneCaptureStatus)->afterCommit();
 
                 $channelActivityLogger->info(
                     $channel,

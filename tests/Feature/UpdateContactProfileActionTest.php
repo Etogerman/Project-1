@@ -56,4 +56,39 @@ class UpdateContactProfileActionTest extends TestCase
         });
         Http::assertNothingSent();
     }
+
+    public function test_action_updates_root_when_merged_contact_is_passed(): void
+    {
+        Queue::fake([CalculateDistanceToMoscowJob::class]);
+        Http::fake();
+
+        $root = Contact::factory()->create([
+            'first_name' => null,
+            'country' => null,
+            'city' => null,
+        ]);
+        $merged = Contact::factory()->create([
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+            'first_name' => 'Старое имя',
+        ]);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($merged, [
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'region' => 'Московская область',
+        ]);
+
+        $this->assertSame($root->id, $updated->id);
+        $this->assertSame('Герман', $root->fresh()->first_name);
+        $this->assertSame('Россия', $root->fresh()->country);
+        $this->assertSame('Москва', $root->fresh()->city);
+        $this->assertSame('Московская область', $root->fresh()->region);
+        $this->assertSame('Старое имя', $merged->fresh()->first_name);
+
+        Queue::assertPushed(CalculateDistanceToMoscowJob::class, function (CalculateDistanceToMoscowJob $job) use ($root): bool {
+            return $job->contactId === $root->id;
+        });
+    }
 }

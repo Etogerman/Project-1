@@ -8,6 +8,7 @@ use App\Models\Contact;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\ClaimContactAction;
+use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +20,7 @@ class SendManualContactReplyAction
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
         protected ClaimContactAction $claimContactAction,
+        protected ResolveRootContactAction $resolveRootContactAction,
         protected StoreManualOutboundMessageAction $storeManualOutboundMessageAction,
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
@@ -30,7 +32,7 @@ class SendManualContactReplyAction
             throw new AuthorizationException();
         }
 
-        $contact = Contact::query()->findOrFail($contact->id);
+        $contact = $this->resolveRootContactAction->handle($contact);
 
         $text = trim($text);
 

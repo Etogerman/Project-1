@@ -10,6 +10,7 @@ use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
+use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SetContactAutoReplyEnabledAction;
 use App\Services\Contacts\SetContactAssigneeAction;
 use App\Services\Contacts\UpdateContactProfileAction;
@@ -18,6 +19,7 @@ use App\Services\DataCollection\ResumeContactDataCollectionAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRecords;
+use Illuminate\Database\Eloquent\Model;
 use RuntimeException;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -57,6 +59,15 @@ class ManageContacts extends ManageRecords
         return [];
     }
 
+    protected function resolveTableRecord(?string $key): Model | array | null
+    {
+        if ($key === null) {
+            return null;
+        }
+
+        return ContactResource::getTableRecordQuery(excludeMerged: false)->find($key);
+    }
+
     public function claimMountedContact(): void
     {
         $record = $this->getMountedTableActionRecord();
@@ -74,9 +85,9 @@ class ManageContacts extends ManageRecords
         try {
             $employee = $this->resolveCurrentEmployee();
 
-            app(ClaimContactAction::class)->handle($record, $employee);
+            $contact = app(ClaimContactAction::class)->handle($record, $employee);
 
-            $this->replaceMountedTableAction('view', (string) $record->id);
+            $this->remountViewForContact($contact);
 
             Notification::make()
                 ->success()
@@ -109,9 +120,9 @@ class ManageContacts extends ManageRecords
         try {
             $employee = $this->resolveCurrentEmployee();
 
-            app(ReleaseContactAssignmentAction::class)->handle($record, $employee);
+            $contact = app(ReleaseContactAssignmentAction::class)->handle($record, $employee);
 
-            $this->replaceMountedTableAction('view', (string) $record->id);
+            $this->remountViewForContact($contact);
 
             Notification::make()
                 ->success()
@@ -161,6 +172,8 @@ class ManageContacts extends ManageRecords
                 $employee,
                 $text,
             );
+
+            $this->replaceMountedTableActionWithEffectiveContact($record);
 
             $this->inlineReplyText = '';
 
@@ -224,11 +237,11 @@ class ManageContacts extends ManageRecords
                 ? (int) $this->selectedAssigneeId
                 : null;
 
-            app(SetContactAssigneeAction::class)->handle($record, $employee, $assigneeId);
+            $contact = app(SetContactAssigneeAction::class)->handle($record, $employee, $assigneeId);
 
             $this->showAssignContactDialog = false;
             $this->selectedAssigneeId = '';
-            $this->replaceMountedTableAction('view', (string) $record->id);
+            $this->remountViewForContact($contact);
 
             Notification::make()
                 ->success()
@@ -313,7 +326,7 @@ class ManageContacts extends ManageRecords
                 throw new RuntimeException('Не удалось определить текущий контакт.');
             }
 
-            app(UpdateContactProfileAction::class)->handle($record, [
+            $contact = app(UpdateContactProfileAction::class)->handle($record, [
                 'first_name' => $validated['editingFirstName'] ?? null,
                 'last_name' => $validated['editingLastName'] ?? null,
                 'gender' => $validated['editingGender'] ?? null,
@@ -326,7 +339,7 @@ class ManageContacts extends ManageRecords
             ]);
 
             $this->resetProfileEditingState();
-            $this->replaceMountedTableAction('view', (string) $record->id);
+            $this->remountViewForContact($contact);
 
             Notification::make()
                 ->success()
@@ -368,7 +381,7 @@ class ManageContacts extends ManageRecords
             );
 
             $this->resetPhoneEditingState();
-            $this->replaceMountedTableAction('view', (string) $record->id);
+            $this->replaceMountedTableActionWithEffectiveContact($record);
 
             Notification::make()
                 ->success()
@@ -475,7 +488,7 @@ class ManageContacts extends ManageRecords
             app(DeleteContactPhoneAction::class)->handle($phoneNumber);
 
             $this->resetPhoneDeletingState();
-            $this->replaceMountedTableAction('view', (string) $record->id);
+            $this->replaceMountedTableActionWithEffectiveContact($record);
 
             Notification::make()
                 ->success()
@@ -528,7 +541,7 @@ class ManageContacts extends ManageRecords
                 return;
             }
 
-            $this->replaceMountedTableAction('view', (string) $record->id);
+            $this->replaceMountedTableActionWithEffectiveContact($record);
 
             Notification::make()
                 ->success()
@@ -616,9 +629,9 @@ class ManageContacts extends ManageRecords
         }
 
         try {
-            app(SetContactAutoReplyEnabledAction::class)->handle($record, $isEnabled);
+            $contact = app(SetContactAutoReplyEnabledAction::class)->handle($record, $isEnabled);
 
-            $this->replaceMountedTableAction('view', (string) $record->id);
+            $this->remountViewForContact($contact);
 
             Notification::make()
                 ->success()
@@ -666,6 +679,21 @@ class ManageContacts extends ManageRecords
         }
 
         return $phoneNumber;
+    }
+
+    protected function replaceMountedTableActionWithEffectiveContact(Contact $contact): void
+    {
+        $effectiveContact = app(ResolveRootContactAction::class)->handle($contact);
+
+        $this->remountViewForContact($effectiveContact);
+    }
+
+    protected function remountViewForContact(Contact $contact): void
+    {
+        $effectiveContact = app(ResolveRootContactAction::class)->handle($contact);
+
+        $this->unmountTableAction(false);
+        $this->mountTableAction('view', (string) $effectiveContact->id);
     }
 
     protected function resetPhoneEditingState(): void

@@ -26,6 +26,14 @@ class ChannelActivityLogger
     /**
      * @param  array<string, mixed>  $context
      */
+    public function warning(Channel $channel, string $event, string $message, array $context = []): void
+    {
+        $this->write($channel, 'warning', $event, $message, $context);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     */
     protected function write(Channel $channel, string $level, string $event, string $message, array $context = []): void
     {
         ChannelActivityLog::query()->create([

@@ -8,6 +8,7 @@ use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
+use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
@@ -83,10 +84,12 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->assertTableColumnVisible('id')
             ->assertTableColumnVisible('inbox_status')
+            ->assertTableColumnVisible('dedup_status')
             ->assertCanSeeTableRecords([$contact])
             ->assertTableFilterExists('requires_manual_reply')
             ->assertTableFilterExists('assigned_to_me')
             ->assertTableFilterExists('unassigned_contacts')
+            ->assertTableFilterExists('duplicate_review_pending')
             ->assertTableActionExists('view', null, $contact)
             ->assertTableActionExists('delete', null, $contact)
             ->assertTableActionDoesNotExist('edit', null, $contact)
@@ -103,6 +106,27 @@ class FilamentContactsResourceTest extends TestCase
         $this->actingAs($user)
             ->get('/admin/contacts')
             ->assertForbidden();
+    }
+
+    public function test_contacts_table_hides_merged_contacts_from_default_listing(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Основной контакт',
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertCanSeeTableRecords([$root])
+            ->assertCanNotSeeTableRecords([$merged]);
     }
 
     public function test_admin_can_view_contact_details_in_modal(): void
@@ -165,6 +189,71 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('Identities list')
             ->assertMountedActionModalDontSee('Recent messages')
             ->assertMountedActionModalSee('Нужна помощь по заказу');
+    }
+
+    public function test_contacts_table_shows_pending_duplicate_review_badge_and_filter(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $pendingContact = Contact::factory()->create([
+            'name' => 'Требует проверки',
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+        ]);
+        $cleanContact = Contact::factory()->create([
+            'name' => 'Чистый контакт',
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_NONE,
+        ]);
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $pendingContact->id,
+            'phone_normalized' => '+79991234567',
+            'review_type' => ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE,
+            'candidate_root_contact_ids' => [777],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertSee('Нужна проверка')
+            ->assertCanSeeTableRecords([$pendingContact, $cleanContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->filterTable('duplicate_review_pending')
+            ->assertCanSeeTableRecords([$pendingContact])
+            ->assertCanNotSeeTableRecords([$cleanContact]);
+    }
+
+    public function test_contact_modal_shows_duplicate_review_summary_for_root_contact(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт с review',
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+        ]);
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_normalized' => '+79991234567',
+            'review_type' => ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE,
+            'candidate_root_contact_ids' => [12, 18],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Дедупликация')
+            ->assertMountedActionModalSee('Нужна проверка')
+            ->assertMountedActionModalSee('Открытые проверки: 1')
+            ->assertMountedActionModalSee('Телефон найден у другого root-контакта')
+            ->assertMountedActionModalSee('+79991234567')
+            ->assertMountedActionModalSee('#12, #18');
     }
 
     public function test_contact_infolist_uses_compact_section_order_and_collapsed_technical_sections(): void
@@ -494,6 +583,75 @@ class FilamentContactsResourceTest extends TestCase
         });
     }
 
+    public function test_admin_can_resume_data_collection_from_merged_contact_and_modal_switches_to_root(): void
+    {
+        Queue::fake();
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Основной контакт',
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_current_field' => null,
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $root->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $root->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-root-resume',
+        ]);
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $root->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'resume-root-message',
+            'external_chat_id' => 'chat-root-resume',
+            'external_message_id' => 'msg-root-resume',
+            'text' => 'Продолжим',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $merged)
+            ->call('resumeMountedContactDataCollection')
+            ->assertSet('mountedActions.0.context.recordKey', (string) $root->id)
+            ->assertMountedActionModalSee('Герман')
+            ->assertMountedActionModalSee('В процессе')
+            ->assertMountedActionModalSee('Город');
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $root->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_CITY, $root->fresh()->data_collection_current_field);
+        $this->assertNull($merged->fresh()->data_collection_current_field);
+
+        Queue::assertPushed(ProcessDataCollectionQuestionJob::class, function (ProcessDataCollectionQuestionJob $job) use ($inboundMessage): bool {
+            return $job->sourceMessageId === $inboundMessage->id
+                && $job->forceSend === true;
+        });
+    }
+
     public function test_contact_display_name_prefers_operator_profile_names(): void
     {
         $contact = Contact::factory()->create([
@@ -577,6 +735,37 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertNotNull($contact->birth_date);
         $this->assertNull($contact->age_years);
         $this->assertSame('Герман Абрикосов', $contact->display_name);
+    }
+
+    public function test_admin_can_edit_root_profile_from_merged_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Основной контакт',
+            'first_name' => null,
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+            'first_name' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $merged)
+            ->call('openEditProfileDialog')
+            ->set('editingFirstName', 'Герман')
+            ->call('saveMountedContactProfile')
+            ->assertHasNoErrors()
+            ->assertSet('mountedActions.0.context.recordKey', (string) $root->id)
+            ->assertMountedActionModalSee('Герман');
+
+        $this->assertSame('Герман', $root->fresh()->first_name);
+        $this->assertNull($merged->fresh()->first_name);
     }
 
     public function test_contact_modal_displays_distance_to_moscow_fields(): void
@@ -685,6 +874,34 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
+    public function test_contact_modal_shows_merge_history_and_blocks_delete_for_root_with_merged_children(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Основной контакт',
+        ]);
+        Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+            'merge_reason' => 'phone_exact_match',
+            'merge_trigger_phone' => '+79991234567',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $root)
+            ->assertMountedActionModalSee('Дедупликация')
+            ->assertMountedActionModalSee('Склеено дублей')
+            ->assertMountedActionModalSee('Последние склейки')
+            ->assertMountedActionModalSee('Совпадение телефона')
+            ->assertMountedActionModalSee('+79991234567')
+            ->assertMountedActionModalSee('Нельзя удалить контакт, у которого есть склеенные дубли.');
+    }
+
     public function test_contact_modal_displays_saved_phone_numbers(): void
     {
         $admin = User::factory()->create([
@@ -758,6 +975,25 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertDatabaseMissing('contact_identities', [
             'id' => $identity->id,
         ]);
+    }
+
+    public function test_contacts_table_hides_delete_action_for_root_with_merged_children(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Контакт с историей склейки',
+        ]);
+        Contact::factory()->create([
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableActionHidden('delete', $root);
     }
 
     public function test_admin_can_edit_saved_phone_number_from_contact_modal(): void
@@ -1585,6 +1821,77 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Исходящее')
             ->assertMountedActionModalSee('Ручной ответ')
             ->assertMountedActionModalSee('Ответ');
+    }
+
+    public function test_inline_reply_from_merged_contact_modal_uses_root_route_and_switches_modal_to_root(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 99123,
+                ],
+            ]),
+        ]);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Основной контакт',
+            'assigned_user_id' => null,
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $root->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-root-manual',
+        ]);
+        $inboundMessage = Message::query()->create([
+            'contact_id' => $root->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-update-root-manual',
+            'external_chat_id' => 'chat-root-manual',
+            'external_message_id' => 'msg-root-manual',
+            'text' => 'Входящее сообщение от root',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $merged)
+            ->set('inlineReplyText', 'Ответ через merged modal')
+            ->call('sendInlineReply')
+            ->assertNotified()
+            ->assertSet('inlineReplyText', '')
+            ->assertSet('mountedActions.0.context.recordKey', (string) $root->id);
+
+        $root->refresh();
+
+        $this->assertSame($admin->id, $root->assigned_user_id);
+
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $root->id,
+            'contact_identity_id' => $identity->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'reply_to_message_id' => $inboundMessage->id,
+            'text' => 'Ответ через merged modal',
+        ]);
     }
 
     public function test_inline_reply_composer_sends_max_message_and_creates_outbound_message(): void

@@ -20,6 +20,7 @@ class ContactFactory extends Factory
         return [
             'name' => fake()->optional()->name(),
             'is_auto_reply_enabled' => true,
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_NONE,
         ];
     }
 }

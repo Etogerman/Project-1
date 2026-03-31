@@ -203,6 +203,16 @@ return [
         'Спасибо, номер получили.'
     ),
 
+    'phone_capture_recognition_full_profile_text' => env(
+        'BOT_PHONE_CAPTURE_RECOGNITION_FULL_PROFILE_TEXT',
+        'Спасибо! Мы вас узнали, {name}.'
+    ),
+
+    'phone_capture_recognition_continue_text' => env(
+        'BOT_PHONE_CAPTURE_RECOGNITION_CONTINUE_TEXT',
+        'Спасибо! Мы вас узнали, {name}. У нас осталось несколько вопросов.'
+    ),
+
     'webhook_secret_length' => 40,
 
     'telegram' => [
