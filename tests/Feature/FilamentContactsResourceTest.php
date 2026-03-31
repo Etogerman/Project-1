@@ -833,6 +833,9 @@ class FilamentContactsResourceTest extends TestCase
             'platform' => $channel->platform,
             'external_user_id' => 'telegram-delete-1',
         ]);
+        $dialog = Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+        ]);
         $phoneNumber = ContactPhoneNumber::factory()->create([
             'contact_id' => $contact->id,
             'phone_raw' => '+7 999 123 45 67',
@@ -858,13 +861,21 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Удалить клиента')
             ->call('openDeleteContactDialog')
             ->assertMountedActionModalSee('Контакт')
-            ->assertMountedActionModalSee('будет удалён вместе с телефонами, сообщениями и идентичностями.')
+            ->assertMountedActionModalSee('будет удалён вместе с диалогами, сообщениями, телефонами и идентичностями.')
+            ->assertMountedActionModalSee('Контактов')
+            ->assertMountedActionModalSee('Диалогов')
+            ->assertMountedActionModalSee('Сообщений')
+            ->assertMountedActionModalSee('Телефонов')
+            ->assertMountedActionModalSee('Идентификаторов')
             ->call('deleteMountedContact')
             ->assertTableActionNotMounted('view')
             ->assertCanNotSeeTableRecords([$contact]);
 
         $this->assertDatabaseMissing('contacts', [
             'id' => $contact->id,
+        ]);
+        $this->assertDatabaseMissing('dialogs', [
+            'id' => $dialog->id,
         ]);
         $this->assertDatabaseMissing('contact_identities', [
             'id' => $identity->id,
@@ -877,7 +888,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
-    public function test_contact_modal_shows_merge_history_and_blocks_delete_for_root_with_merged_children(): void
+    public function test_contact_modal_shows_aggregate_delete_copy_for_root_with_merged_children(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -886,12 +897,55 @@ class FilamentContactsResourceTest extends TestCase
         $root = Contact::factory()->create([
             'name' => 'Основной контакт',
         ]);
-        Contact::factory()->create([
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $rootIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $root->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'delete-root-preview',
+        ]);
+        $merged = Contact::factory()->create([
             'name' => 'Архивный дубль',
             'merged_into_contact_id' => $root->id,
             'merged_at' => now(),
             'merge_reason' => 'phone_exact_match',
             'merge_trigger_phone' => '+79991234567',
+        ]);
+        $mergedIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $merged->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'delete-merged-preview',
+        ]);
+        Dialog::factory()->create([
+            'current_contact_identity_id' => $rootIdentity->id,
+        ]);
+        Dialog::factory()->create([
+            'current_contact_identity_id' => $mergedIdentity->id,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $root->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $merged->id,
+            'phone_raw' => '+7 999 555 55 55',
+            'phone_normalized' => '+79995555555',
+            'is_primary' => true,
+        ]);
+        Message::factory()->create([
+            'contact_id' => $root->id,
+            'contact_identity_id' => $rootIdentity->id,
+            'channel_id' => $channel->id,
+        ]);
+        Message::factory()->create([
+            'contact_id' => $merged->id,
+            'contact_identity_id' => $mergedIdentity->id,
+            'channel_id' => $channel->id,
         ]);
 
         Livewire::actingAs($admin)
@@ -902,7 +956,40 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Последние склейки')
             ->assertMountedActionModalSee('Совпадение телефона')
             ->assertMountedActionModalSee('+79991234567')
-            ->assertMountedActionModalSee('Нельзя удалить контакт, у которого есть склеенные дубли.');
+            ->assertMountedActionModalSee('Удалить клиента')
+            ->call('openDeleteContactDialog')
+            ->assertMountedActionModalSee('Удалить клиента целиком?')
+            ->assertMountedActionModalSee('Будет удалён весь клиент')
+            ->assertMountedActionModalSee('склеенные дубли')
+            ->assertMountedActionModalSee('Контактов')
+            ->assertMountedActionModalSee('Диалогов')
+            ->assertMountedActionModalSee('Сообщений')
+            ->assertMountedActionModalSee('Телефонов')
+            ->assertMountedActionModalSee('Идентификаторов');
+    }
+
+    public function test_contact_modal_delete_preview_from_merged_secondary_uses_root_aggregate(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Главный клиент',
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $merged)
+            ->call('openDeleteContactDialog')
+            ->assertMountedActionModalSee('Удалить клиента целиком?')
+            ->assertMountedActionModalSee('Главный клиент')
+            ->assertMountedActionModalSee('Контактов');
     }
 
     public function test_contact_modal_displays_saved_phone_numbers(): void
@@ -980,7 +1067,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
-    public function test_contacts_table_hides_delete_action_for_root_with_merged_children(): void
+    public function test_admin_can_delete_root_aggregate_from_table_actions_column(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -989,14 +1076,20 @@ class FilamentContactsResourceTest extends TestCase
         $root = Contact::factory()->create([
             'name' => 'Контакт с историей склейки',
         ]);
-        Contact::factory()->create([
+        $merged = Contact::factory()->create([
             'merged_into_contact_id' => $root->id,
             'merged_at' => now(),
         ]);
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->assertTableActionHidden('delete', $root);
+            ->assertTableActionExists('delete', null, $root)
+            ->callTableAction('delete', $root)
+            ->assertHasNoTableActionErrors()
+            ->assertCanNotSeeTableRecords([$root]);
+
+        $this->assertModelMissing($root);
+        $this->assertModelMissing($merged);
     }
 
     public function test_admin_can_edit_saved_phone_number_from_contact_modal(): void

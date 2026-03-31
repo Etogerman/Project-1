@@ -10,6 +10,7 @@ use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
+use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SetContactAutoReplyEnabledAction;
 use App\Services\Contacts\SetContactAssigneeAction;
@@ -50,6 +51,12 @@ class ManageContacts extends ManageRecords
     public string $deletingPhoneLabel = '';
     public bool $showDeleteContactDialog = false;
     public string $deletingContactLabel = '';
+    public bool $deletingContactHasMergeHistory = false;
+
+    /**
+     * @var array<int, array{label:string,value:int}>
+     */
+    public array $deletingContactCounts = [];
 
     /**
      * @return array<Action>
@@ -437,7 +444,17 @@ class ManageContacts extends ManageRecords
             return;
         }
 
-        $this->deletingContactLabel = $record->display_name;
+        $preview = app(ResolveContactDeletePreviewAction::class)->handle($record);
+
+        $this->deletingContactLabel = $preview->rootContact->display_name;
+        $this->deletingContactHasMergeHistory = $preview->hasMergeHistory;
+        $this->deletingContactCounts = [
+            ['label' => 'Контактов', 'value' => $preview->contactsCount],
+            ['label' => 'Диалогов', 'value' => $preview->dialogsCount],
+            ['label' => 'Сообщений', 'value' => $preview->messagesCount],
+            ['label' => 'Телефонов', 'value' => $preview->phonesCount],
+            ['label' => 'Идентификаторов', 'value' => $preview->identitiesCount],
+        ];
         $this->showDeleteContactDialog = true;
     }
 
@@ -740,5 +757,7 @@ class ManageContacts extends ManageRecords
     {
         $this->showDeleteContactDialog = false;
         $this->deletingContactLabel = '';
+        $this->deletingContactHasMergeHistory = false;
+        $this->deletingContactCounts = [];
     }
 }

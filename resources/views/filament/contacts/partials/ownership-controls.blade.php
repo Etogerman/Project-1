@@ -161,10 +161,9 @@
             >
                 <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem;">
                     <div>
-                        <h3 style="margin: 0 0 0.35rem; font-size: 1rem; font-weight: 700; color: #111827;">Удалить клиента</h3>
-                        <p style="margin: 0; font-size: 0.875rem; color: #4b5563;">
-                            Контакт <strong>{{ $this->deletingContactLabel }}</strong> будет удалён вместе с телефонами, сообщениями и идентичностями.
-                        </p>
+                        <h3 style="margin: 0 0 0.35rem; font-size: 1rem; font-weight: 700; color: #111827;">
+                            {{ $this->deletingContactHasMergeHistory ? 'Удалить клиента целиком?' : 'Удалить клиента?' }}
+                        </h3>
                     </div>
 
                     <button
@@ -175,6 +174,12 @@
                         Закрыть
                     </button>
                 </div>
+
+                @include('filament.contacts.partials.delete-contact-preview', [
+                    'contactLabel' => $this->deletingContactLabel,
+                    'hasMergeHistory' => $this->deletingContactHasMergeHistory,
+                    'counts' => $this->deletingContactCounts,
+                ])
 
                 <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
                     <button

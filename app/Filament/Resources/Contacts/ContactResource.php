@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Contacts;
 
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
+use App\Data\Contacts\ResolvedContactDeletePreviewResult;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
@@ -12,6 +13,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\DeleteContactAction;
+use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -27,6 +29,7 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Table;
+use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
@@ -484,9 +487,12 @@ class ContactResource extends Resource
                     ->icon(null)
                     ->button()
                     ->visible(fn (Contact $record): bool => static::canDeleteContactFromUi($record))
-                    ->authorize(fn (): bool => (bool) (auth()->user()?->is_active && auth()->user()?->is_admin))
-                    ->modalHeading('Удалить клиента?')
-                    ->modalDescription('Контакт будет удалён вместе с телефонами, сообщениями и идентичностями.')
+                    ->authorize(fn (): bool => static::canCurrentUserDeleteContact())
+                    ->modalHeading(fn (Contact $record): string => static::resolveDeleteContactModalHeading($record))
+                    ->modalContent(fn (Contact $record): ViewContract => view(
+                        'filament.contacts.partials.delete-contact-preview',
+                        static::buildDeleteContactPreviewViewData($record),
+                    ))
                     ->successNotificationTitle('Клиент удалён')
                     ->using(function (Contact $record): bool {
                         app(DeleteContactAction::class)->handle($record);
@@ -1439,20 +1445,57 @@ class ContactResource extends Resource
 
     protected static function canDeleteContactFromUi(Contact $record): bool
     {
-        return static::getDeleteBlockedReason($record) === null;
+        return static::canCurrentUserDeleteContact()
+            && static::getDeleteBlockedReason($record) === null;
     }
 
     protected static function getDeleteBlockedReason(Contact $record): ?string
     {
-        if ($record->isMerged()) {
-            return 'Архивный дубль не удаляется из операторского интерфейса.';
-        }
+        return static::canCurrentUserDeleteContact()
+            ? null
+            : 'Удаление доступно только активному администратору.';
+    }
 
-        if (static::resolveMergedChildrenCount($record) > 0) {
-            return 'Нельзя удалить контакт, у которого есть склеенные дубли.';
-        }
+    protected static function canCurrentUserDeleteContact(): bool
+    {
+        return (bool) (auth()->user()?->is_active && auth()->user()?->is_admin);
+    }
 
-        return null;
+    protected static function resolveDeleteContactPreview(Contact $record): ResolvedContactDeletePreviewResult
+    {
+        return app(ResolveContactDeletePreviewAction::class)->handle($record);
+    }
+
+    protected static function buildDeleteContactPreviewViewData(Contact $record): array
+    {
+        $preview = static::resolveDeleteContactPreview($record);
+
+        return [
+            'contactLabel' => $preview->rootContact->display_name,
+            'hasMergeHistory' => $preview->hasMergeHistory,
+            'counts' => static::formatDeleteContactPreviewCounts($preview),
+        ];
+    }
+
+    protected static function resolveDeleteContactModalHeading(Contact $record): string
+    {
+        return static::resolveDeleteContactPreview($record)->hasMergeHistory
+            ? 'Удалить клиента целиком?'
+            : 'Удалить клиента?';
+    }
+
+    /**
+     * @return array<int, array{label:string,value:int}>
+     */
+    protected static function formatDeleteContactPreviewCounts(ResolvedContactDeletePreviewResult $preview): array
+    {
+        return [
+            ['label' => 'Контактов', 'value' => $preview->contactsCount],
+            ['label' => 'Диалогов', 'value' => $preview->dialogsCount],
+            ['label' => 'Сообщений', 'value' => $preview->messagesCount],
+            ['label' => 'Телефонов', 'value' => $preview->phonesCount],
+            ['label' => 'Идентификаторов', 'value' => $preview->identitiesCount],
+        ];
     }
 
     protected static function resolveOpenDuplicateReviewsCount(Contact $record): int
