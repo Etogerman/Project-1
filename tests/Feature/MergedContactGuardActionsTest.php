@@ -9,6 +9,7 @@ use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\User;
 use App\Services\Contacts\BrokenContactMergeChainException;
 use App\Services\Contacts\CleanupExternalDuplicateReviewsForDeletedAggregateAction;
 use App\Services\Contacts\DeleteContactAction;
@@ -98,6 +99,56 @@ class MergedContactGuardActionsTest extends TestCase
         $this->assertModelMissing($review);
     }
 
+    public function test_aggregate_delete_logs_success_for_standalone_contact(): void
+    {
+        Log::spy();
+
+        $admin = User::factory()->create([
+            'name' => 'Delete Admin',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Standalone contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+        ]);
+        Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+            'contact_id' => $contact->id,
+            'channel_id' => $identity->channel_id,
+        ]);
+        Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $identity->channel_id,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+        ]);
+
+        $this->actingAs($admin);
+
+        app(DeleteContactAction::class)->handle($contact);
+
+        Log::shouldHaveReceived('info')
+            ->once()
+            ->with('contact.aggregate_delete_succeeded', Mockery::on(function (array $context) use ($admin, $contact): bool {
+                return $context['actor_user_id'] === $admin->id
+                    && $context['actor_user_name'] === 'Delete Admin'
+                    && $context['input_contact_id'] === $contact->id
+                    && $context['root_contact_id'] === $contact->id
+                    && $context['contacts_count'] === 1
+                    && $context['dialogs_count'] === 1
+                    && $context['messages_count'] === 1
+                    && $context['phones_count'] === 1
+                    && $context['identities_count'] === 1
+                    && $context['had_merge_history'] === false
+                    && is_string($context['deleted_at']);
+            }));
+    }
+
     public function test_root_aggregate_delete_removes_all_descendants(): void
     {
         $root = Contact::factory()->create();
@@ -123,6 +174,45 @@ class MergedContactGuardActionsTest extends TestCase
         $this->assertModelMissing($root);
         $this->assertModelMissing($secondary);
         $this->assertModelMissing($tertiary);
+    }
+
+    public function test_aggregate_delete_logs_success_for_merged_aggregate(): void
+    {
+        Log::spy();
+
+        $admin = User::factory()->create([
+            'name' => 'Merge Delete Admin',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Root contact',
+        ]);
+        $secondary = Contact::factory()->create([
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+        ContactMergeLog::factory()->create([
+            'primary_contact_id' => $root->id,
+            'secondary_contact_id' => $secondary->id,
+        ]);
+
+        $this->actingAs($admin);
+
+        app(DeleteContactAction::class)->handle($root);
+
+        Log::shouldHaveReceived('info')
+            ->once()
+            ->with('contact.aggregate_delete_succeeded', Mockery::on(function (array $context) use ($admin, $root, $secondary): bool {
+                return $context['actor_user_id'] === $admin->id
+                    && $context['actor_user_name'] === 'Merge Delete Admin'
+                    && $context['input_contact_id'] === $root->id
+                    && $context['root_contact_id'] === $root->id
+                    && $context['aggregate_contact_ids'] === [$root->id, $secondary->id]
+                    && $context['contacts_count'] === 2
+                    && $context['had_merge_history'] === true
+                    && is_string($context['deleted_at']);
+            }));
     }
 
     public function test_delete_called_on_secondary_resolves_root_and_removes_aggregate(): void
@@ -224,6 +314,14 @@ class MergedContactGuardActionsTest extends TestCase
                 fn (array $context): bool => $context['contact_id'] === $contact->id
                     && str_contains($context['error'], 'missing merged parent')
             ));
+        Log::shouldReceive('error')
+            ->once()
+            ->with('contact.aggregate_delete_failed', Mockery::on(
+                fn (array $context): bool => $context['input_contact_id'] === $contact->id
+                    && $context['error_class'] === BrokenContactMergeChainException::class
+                    && str_contains($context['error_message'], 'missing merged parent')
+                    && is_string($context['failed_at'])
+            ));
 
         $this->mock(ResolveContactAggregateAction::class, function (MockInterface $mock) use ($contact): void {
             $mock->shouldReceive('handle')
@@ -238,6 +336,62 @@ class MergedContactGuardActionsTest extends TestCase
             app(DeleteContactAction::class)->handle($contact);
         } finally {
             $this->assertModelExists($contact);
+        }
+    }
+
+    public function test_aggregate_delete_logs_failure_for_runtime_exception(): void
+    {
+        Log::spy();
+
+        $admin = User::factory()->create([
+            'name' => 'Runtime Delete Admin',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Runtime root',
+        ]);
+        $secondary = Contact::factory()->create([
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+        ContactMergeLog::factory()->create([
+            'primary_contact_id' => $root->id,
+            'secondary_contact_id' => $secondary->id,
+        ]);
+
+        $this->actingAs($admin);
+
+        $dispatcher = Contact::getEventDispatcher();
+
+        Contact::deleting(function (Contact $contact) use ($root): void {
+            if ($contact->is($root)) {
+                throw new RuntimeException('Forced delete failure.');
+            }
+        });
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Forced delete failure.');
+
+        try {
+            app(DeleteContactAction::class)->handle($root);
+        } finally {
+            Contact::setEventDispatcher($dispatcher);
+
+            Log::shouldNotHaveReceived('info', ['contact.aggregate_delete_succeeded', Mockery::any()]);
+            Log::shouldHaveReceived('error')
+                ->once()
+                ->with('contact.aggregate_delete_failed', Mockery::on(function (array $context) use ($admin, $root, $secondary): bool {
+                    return $context['actor_user_id'] === $admin->id
+                        && $context['actor_user_name'] === 'Runtime Delete Admin'
+                        && $context['input_contact_id'] === $root->id
+                        && $context['root_contact_id'] === $root->id
+                        && $context['aggregate_contact_ids'] === [$root->id, $secondary->id]
+                        && $context['contacts_count'] === 2
+                        && $context['error_class'] === RuntimeException::class
+                        && $context['error_message'] === 'Forced delete failure.'
+                        && is_string($context['failed_at']);
+                }));
         }
     }
 
