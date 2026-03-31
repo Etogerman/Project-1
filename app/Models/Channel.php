@@ -284,6 +284,11 @@ class Channel extends Model
         return $this->hasMany(Message::class);
     }
 
+    public function dialogs(): HasMany
+    {
+        return $this->hasMany(Dialog::class);
+    }
+
     public function autoReplyRules(): HasMany
     {
         return $this->hasMany(AutoReplyRule::class);

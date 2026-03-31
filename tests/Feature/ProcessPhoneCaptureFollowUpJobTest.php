@@ -7,6 +7,7 @@ use App\Data\Bots\StoredInboundMessageResult;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -63,11 +64,25 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
 
         $message->refresh();
         $channel->refresh();
+        $confirmationMessage = Message::query()
+            ->where('reply_to_message_id', $message->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION)
+            ->firstOrFail();
+        $questionMessage = Message::query()
+            ->where('reply_to_message_id', $message->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->firstOrFail();
 
         $this->assertNotNull($message->auto_reply_sent_at);
         $this->assertNotNull($channel->last_reply_sent_at);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $message->contact->fresh()->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $message->contact->fresh()->data_collection_current_field);
+        $this->assertNotNull($confirmationMessage->dialog_id);
+        $this->assertSame($confirmationMessage->dialog_id, $questionMessage->dialog_id);
+        $this->assertSame(Message::SENT_BY_TYPE_COLLECTOR, $confirmationMessage->sent_by_type);
+        $this->assertSame(Message::SENT_BY_SYSTEM_CODE_PHONE_CAPTURE_CONFIRMATION, $confirmationMessage->sent_by_system_code);
+        $this->assertSame(Message::SENT_BY_TYPE_COLLECTOR, $questionMessage->sent_by_type);
+        $this->assertSame(Message::SENT_BY_SYSTEM_CODE_DATA_COLLECTION_QUESTION, $questionMessage->sent_by_system_code);
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
@@ -87,6 +102,10 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'event' => 'contact.phone_capture_confirmed',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.dialog_route_fallback_used',
         ]);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
@@ -152,6 +171,153 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
             'external_message_id' => 'max-question-1',
             'text' => 'Как вас зовут?',
         ]);
+    }
+
+    public function test_job_sends_max_phone_capture_confirmation_via_user_route_without_chat_id(): void
+    {
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::sequence()
+                ->push([
+                    'message' => [
+                        'message_id' => 'max-confirm-user-route',
+                    ],
+                ])
+                ->push([
+                    'message' => [
+                        'message_id' => 'max-question-user-route',
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+
+        $message = $this->createContactShareInboundMessage($channel, [
+            'external_chat_id' => '',
+            'external_message_id' => 'max-phone-share-user-route',
+            'provider_event_key' => 'max-phone-share-user-route',
+        ], [
+            'external_user_id' => '228532008',
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+            && str_contains($request->url(), 'user_id=228532008')
+            && $request['text'] === 'Спасибо, номер получили.');
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+            && str_contains($request->url(), 'user_id=228532008')
+            && $request['text'] === 'Как вас зовут?');
+
+        $confirmationMessage = Message::query()
+            ->where('message_kind', Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION)
+            ->where('reply_to_message_id', $message->id)
+            ->firstOrFail();
+        $questionMessage = Message::query()
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->where('reply_to_message_id', $message->id)
+            ->firstOrFail();
+
+        $this->assertSame('', $confirmationMessage->external_chat_id);
+        $this->assertSame('', $questionMessage->external_chat_id);
+    }
+
+    public function test_job_uses_max_user_route_when_dialog_has_cleared_stale_chat_id(): void
+    {
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::sequence()
+                ->push([
+                    'message' => [
+                        'message_id' => 'max-confirm-fresh-user-route',
+                    ],
+                ])
+                ->push([
+                    'message' => [
+                        'message_id' => 'max-question-fresh-user-route',
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $legacyIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'legacy-user',
+        ]);
+        $currentIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $currentIdentity->id,
+            'external_chat_id' => null,
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $legacyIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '700',
+            'external_message_id' => 'max-phone-share-stale-chat',
+            'provider_event_key' => 'max-phone-share-stale-chat',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now()->subMinutes(5),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+            && str_contains($request->url(), 'user_id=228532008')
+            && ! str_contains($request->url(), 'chat_id=')
+            && $request['text'] === 'Спасибо, номер получили.');
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+            && str_contains($request->url(), 'user_id=228532008')
+            && ! str_contains($request->url(), 'chat_id=')
+            && $request['text'] === 'Как вас зовут?');
+
+        $confirmationMessage = Message::query()
+            ->where('message_kind', Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION)
+            ->where('reply_to_message_id', $message->id)
+            ->firstOrFail();
+        $questionMessage = Message::query()
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->where('reply_to_message_id', $message->id)
+            ->firstOrFail();
+
+        $this->assertSame($dialog->id, $confirmationMessage->dialog_id);
+        $this->assertSame($currentIdentity->id, $confirmationMessage->contact_identity_id);
+        $this->assertSame('', $confirmationMessage->external_chat_id);
+        $this->assertSame($dialog->id, $questionMessage->dialog_id);
+        $this->assertSame($currentIdentity->id, $questionMessage->contact_identity_id);
+        $this->assertSame('', $questionMessage->external_chat_id);
     }
 
     public function test_repeated_job_execution_for_same_contact_share_creates_one_confirmation(): void
@@ -232,6 +398,97 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
 
         Http::assertNothingSent();
         $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_job_uses_current_dialog_route_source_for_confirmation_and_next_question(): void
+    {
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9930,
+                    ],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9931,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create();
+        $legacyIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'legacy-user',
+        ]);
+        $currentIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'current-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $currentIdentity->id,
+            'external_chat_id' => '399',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $legacyIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '300',
+            'external_message_id' => 'route-source-stale',
+            'provider_event_key' => 'route-source-stale',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now()->subMinutes(5),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '399'
+            && $request['text'] === 'Спасибо, номер получили.');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '399'
+            && $request['text'] === 'Как вас зовут?');
+
+        $confirmationMessage = Message::query()
+            ->where('reply_to_message_id', $message->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION)
+            ->firstOrFail();
+        $questionMessage = Message::query()
+            ->where('reply_to_message_id', $message->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->firstOrFail();
+
+        $this->assertSame($dialog->id, $confirmationMessage->dialog_id);
+        $this->assertSame($currentIdentity->id, $confirmationMessage->contact_identity_id);
+        $this->assertSame('399', $confirmationMessage->external_chat_id);
+        $this->assertSame($dialog->id, $questionMessage->dialog_id);
+        $this->assertSame($currentIdentity->id, $questionMessage->contact_identity_id);
+        $this->assertSame('399', $questionMessage->external_chat_id);
     }
 
     public function test_job_starts_data_collection_from_residence_city_when_first_name_is_already_filled(): void
@@ -635,7 +892,23 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
             'external_user_id' => '206',
             'external_username' => 'telegram_merge_continue',
         ]);
+        $routeIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '207',
+            'external_username' => 'telegram_merge_current',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $routeIdentity->id,
+            'external_chat_id' => '406',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
         $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
@@ -653,11 +926,11 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
 
         Http::assertSentCount(2);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && $request['chat_id'] === '306'
+            && $request['chat_id'] === '406'
             && $request['text'] === 'Спасибо! Мы вас узнали, Герман. У нас осталось несколько вопросов.'
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && $request['chat_id'] === '306'
+            && $request['chat_id'] === '406'
             && $request['text'] === 'Укажите ваш возраст:');
 
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
@@ -674,6 +947,9 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
             'external_message_id' => '9922',
+            'dialog_id' => $dialog->id,
+            'contact_identity_id' => $routeIdentity->id,
+            'external_chat_id' => '406',
             'text' => 'Укажите ваш возраст:',
         ]);
     }

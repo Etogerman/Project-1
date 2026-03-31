@@ -49,6 +49,27 @@
                         text-align: left;
                     "
                 >
+                    <div
+                        data-role="conversation-meta"
+                        style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.35rem;"
+                    >
+                        <span
+                            data-role="conversation-channel"
+                            style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: {{ $message['is_outbound'] ? '#d1fae5' : '#e5e7eb' }}; color: {{ $message['is_outbound'] ? '#065f46' : '#4b5563' }}; padding: 0.2rem 0.55rem; font-size: 0.68rem; font-weight: 700;"
+                        >
+                            {{ $message['channel_label'] }}
+                        </span>
+
+                        @if (filled($message['sender_label']))
+                            <span
+                                data-role="conversation-sender"
+                                style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #dbeafe; color: #1d4ed8; padding: 0.2rem 0.55rem; font-size: 0.68rem; font-weight: 700;"
+                            >
+                                {{ $message['sender_label'] }}
+                            </span>
+                        @endif
+                    </div>
+
                     <div style="white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.4; color: #111827; text-align: left;">{{ $message['display_text'] }}</div>
 
                     <div style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-top: 0.2rem;"><time style="font-size: 0.68rem; line-height: 1; color: #6b7280; font-style: italic;">{{ $message['timestamp_label'] }}</time></div>

@@ -11,6 +11,7 @@ use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\StorePhoneCaptureConfirmationAction;
 use App\Services\Bots\TelegramBotApiService;
+use App\Services\Dialogs\ResolveDialogRouteSourceAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -59,9 +60,10 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         StorePhoneCaptureConfirmationAction $storePhoneCaptureConfirmationAction,
         ChannelActivityLogger $channelActivityLogger,
         ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
+        ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
     ): void {
         $message = Message::query()
-            ->with(['channel', 'contact', 'contactIdentity'])
+            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.contact', 'dialog.currentContactIdentity'])
             ->find($this->inboundMessageId);
 
         if (! $message instanceof Message) {
@@ -76,43 +78,72 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             return;
         }
 
-        $channel = $message->channel;
+        $sourceChannel = $message->channel;
 
-        if (! $channel instanceof Channel || ! $channel->is_active) {
+        if (! $sourceChannel instanceof Channel || ! $sourceChannel->is_active) {
             return;
         }
 
-        $contact = $message->contact;
+        $routeDialog = $resolveDialogRouteSourceAction->forMessage($message);
+        $fallbackUsed = false;
+
+        if (! $routeDialog) {
+            $routeDialog = $resolveDialogRouteSourceAction->fallbackFromLegacyMessage($message);
+            $fallbackUsed = $routeDialog !== null;
+        }
+
+        $channel = $routeDialog?->channel ?? $sourceChannel;
+        $contact = $routeDialog?->contact ?? $message->contact;
 
         if ($this->confirmationAlreadyExists($message)) {
             $channelActivityLogger->info(
                 $channel,
                 'contact.phone_capture_confirmation_skipped',
                 'Подтверждение после получения номера уже существует.',
-                $this->baseContext($message, $channel),
+                $this->baseContext($message, $channel, $routeDialog?->id),
             );
         } else {
+            if (! $routeDialog) {
+                $channelActivityLogger->error(
+                    $channel,
+                    'contact.phone_capture_confirmation_route_missing',
+                    'Не найден route context диалога для подтверждения после получения номера.',
+                    $this->baseContext($message, $channel, null),
+                );
+
+                return;
+            }
+
+            if ($fallbackUsed) {
+                $channelActivityLogger->warning(
+                    $channel,
+                    'contact.dialog_route_fallback_used',
+                    'Для подтверждения после получения номера использован fallback route source через сообщение.',
+                    $this->baseContext($message, $channel, $routeDialog->id),
+                );
+            }
+
             $confirmationText = $this->resolvePhoneCaptureReplyText($contact, $resolveNextDataCollectionFieldAction);
 
             try {
                 $deliveryResult = match ($channel->platform) {
                     Channel::PLATFORM_TELEGRAM => $telegramBotApiService->sendTextMessage(
                         $channel,
-                        $message->external_chat_id,
-                        $message->contactIdentity?->external_user_id,
+                        $routeDialog->external_chat_id,
+                        $routeDialog->currentContactIdentity?->external_user_id,
                         $confirmationText,
                         ['remove_keyboard' => true],
                     ),
                     Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
                         $channel,
-                        $message->external_chat_id,
-                        $message->contactIdentity?->external_user_id,
+                        $routeDialog->external_chat_id,
+                        $routeDialog->currentContactIdentity?->external_user_id,
                         $confirmationText,
                     ),
                     default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
                 };
 
-                $storePhoneCaptureConfirmationAction->handle($channel, $message, $deliveryResult);
+                $storePhoneCaptureConfirmationAction->handle($routeDialog, $message, $deliveryResult);
                 $channel->markReplySent();
 
                 if ($this->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
@@ -121,6 +152,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                         'contact.phone_capture_recognition_sent',
                         'После склейки контакта отправлено сообщение распознавания.',
                         $this->baseContext($message, $channel) + [
+                            'dialog_id' => $routeDialog->id,
                             'phone_capture_status' => $this->phoneCaptureStatus,
                         ],
                     );
@@ -130,6 +162,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                         'contact.phone_capture_confirmed',
                         'Подтверждение после получения номера отправлено.',
                         $this->baseContext($message, $channel) + [
+                            'dialog_id' => $routeDialog->id,
                             'phone_capture_status' => $this->phoneCaptureStatus,
                         ],
                     );
@@ -141,7 +174,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                     $channel,
                     'contact.phone_capture_confirmation_failed',
                     'Не удалось отправить подтверждение после получения номера.',
-                    $this->baseContext($message, $channel) + [
+                    $this->baseContext($message, $channel, $routeDialog->id) + [
                         'error' => $throwable->getMessage(),
                     ],
                 );
@@ -150,6 +183,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                     'channel_id' => $channel->id,
                     'platform' => $channel->platform,
                     'message_id' => $message->id,
+                    'dialog_id' => $routeDialog->id,
                     'error' => $throwable->getMessage(),
                 ]);
 
@@ -158,12 +192,12 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         }
 
         if ($this->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
-            $this->maybeContinueDataCollectionAfterMerge($message, $channel, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
+            $this->maybeContinueDataCollectionAfterMerge($message, $channel, $contact, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
 
             return;
         }
 
-        $this->maybeStartDataCollection($message, $channel, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
+        $this->maybeStartDataCollection($message, $channel, $contact, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
     }
 
     protected function confirmationAlreadyExists(Message $message): bool
@@ -176,28 +210,28 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
     /**
      * @return array<string, mixed>
      */
-    protected function baseContext(Message $message, Channel $channel): array
+    protected function baseContext(Message $message, Channel $channel, ?int $dialogId = null): array
     {
-        return [
+        return array_filter([
             'contact_id' => $message->contact_id,
             'channel_id' => $channel->id,
+            'dialog_id' => $dialogId,
             'message_id' => $message->id,
             'platform' => $channel->platform,
             'button_type' => 'request_phone',
-        ];
+        ], static fn (mixed $value): bool => $value !== null);
     }
 
     protected function maybeStartDataCollection(
         Message $message,
         Channel $channel,
+        ?Contact $contact,
         ChannelActivityLogger $channelActivityLogger,
         ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
         }
-
-        $contact = $message->contact;
 
         if (! $contact instanceof Contact) {
             return;
@@ -233,14 +267,13 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
     protected function maybeContinueDataCollectionAfterMerge(
         Message $message,
         Channel $channel,
+        ?Contact $contact,
         ChannelActivityLogger $channelActivityLogger,
         ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
         }
-
-        $contact = $message->contact;
 
         if (! $contact instanceof Contact) {
             return;

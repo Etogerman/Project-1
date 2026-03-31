@@ -36,4 +36,9 @@ class ContactIdentity extends Model
     {
         return $this->hasMany(Message::class);
     }
+
+    public function currentDialogs(): HasMany
+    {
+        return $this->hasMany(Dialog::class, 'current_contact_identity_id');
+    }
 }

@@ -10,6 +10,7 @@ use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
+use App\Services\Dialogs\ConsolidateDialogsForRootContactAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Geo\ResolveRussianLocalityGeocodeQueryAction;
 use Carbon\CarbonInterface;
@@ -22,6 +23,7 @@ class MergeContactsAction
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly SelectPrimaryContactForMergeAction $selectPrimaryContactForMergeAction,
         private readonly ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
+        private readonly ConsolidateDialogsForRootContactAction $consolidateDialogsForRootContactAction,
         private readonly ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
         private readonly ResolveRussianLocalityGeocodeQueryAction $resolveRussianLocalityGeocodeQueryAction,
     ) {}
@@ -112,6 +114,13 @@ class MergeContactsAction
             ];
 
             [$fieldsCopied, $fieldsConflicted] = $this->mergeContactFields($lockedPrimary, $lockedSecondary);
+
+            $this->consolidateDialogsForRootContactAction->handle(
+                $lockedPrimary,
+                [$lockedPrimary->id, $lockedSecondary->id],
+                true,
+                false,
+            );
 
             $messagesMovedCount = Message::query()
                 ->where('contact_id', $lockedSecondary->id)

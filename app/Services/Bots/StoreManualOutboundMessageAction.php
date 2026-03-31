@@ -3,25 +3,55 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\AutoReplyDeliveryResult;
+use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\User;
+use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 
 class StoreManualOutboundMessageAction
 {
-    public function handle(Message $routeSourceMessage, AutoReplyDeliveryResult $deliveryResult, ?Message $replyToMessage = null): Message
+    public function __construct(
+        private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
+    ) {}
+
+    public function handle(
+        Dialog $routeDialog,
+        User $employee,
+        AutoReplyDeliveryResult $deliveryResult,
+        ?Message $replyToMessage = null,
+    ): Message
     {
-        return Message::query()->create([
-            'contact_id' => $routeSourceMessage->contact_id,
-            'contact_identity_id' => $routeSourceMessage->contact_identity_id,
-            'channel_id' => $routeSourceMessage->channel_id,
+        $routeDialog->loadMissing(['contact', 'channel', 'currentContactIdentity']);
+        $storedExternalChatId = $this->resolveStoredExternalChatId($routeDialog);
+
+        $outboundMessage = Message::query()->create([
+            'contact_id' => $routeDialog->contact_id,
+            'contact_identity_id' => $routeDialog->current_contact_identity_id,
+            'channel_id' => $routeDialog->channel_id,
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'reply_to_message_id' => $replyToMessage?->id,
             'provider_event_key' => null,
-            'external_chat_id' => $routeSourceMessage->external_chat_id,
+            'external_chat_id' => $storedExternalChatId,
             'external_message_id' => $deliveryResult->externalMessageId,
             'text' => $deliveryResult->text,
             'raw_payload' => $deliveryResult->rawPayload,
             'received_at' => now(),
         ]);
+
+        return $this->syncMessageDialogMetadataAction->handle(
+            $outboundMessage,
+            $routeDialog->contact ?? $routeDialog->contact()->firstOrFail(),
+            $routeDialog->channel ?? $routeDialog->channel()->firstOrFail(),
+            $routeDialog->currentContactIdentity,
+            $storedExternalChatId,
+            Message::SENT_BY_TYPE_OPERATOR,
+            $employee->id,
+        );
+    }
+
+    private function resolveStoredExternalChatId(Dialog $routeDialog): string
+    {
+        return (string) ($routeDialog->external_chat_id ?? '');
     }
 }

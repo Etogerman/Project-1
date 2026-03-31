@@ -11,6 +11,7 @@ use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
 use Filament\Facades\Filament;
@@ -174,6 +175,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Работа с контактом')
             ->assertMountedActionModalSee('Анкета')
             ->assertMountedActionModalSee('Телефоны')
+            ->assertMountedActionModalSee('Диалоги')
             ->assertMountedActionModalSee('История сообщений')
             ->assertMountedActionModalSee('Подробности')
             ->assertMountedActionModalSee('Последнее сообщение')
@@ -269,6 +271,7 @@ class FilamentContactsResourceTest extends TestCase
             'Анкета',
             'Работа с контактом',
             'Телефоны',
+            'Диалоги',
             'История сообщений',
             'Подробности',
             'Последнее сообщение',
@@ -1356,6 +1359,8 @@ class FilamentContactsResourceTest extends TestCase
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_AUTO_REPLY,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
             'reply_to_message_id' => $inboundMessage->id,
             'external_chat_id' => 'chat-950',
             'external_message_id' => 'out-950',
@@ -1378,6 +1383,10 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('data-kind="outbound_auto_reply"', $historyHtml);
         $this->assertStringContainsString('Входящее сообщение от пользователя', $historyHtml);
         $this->assertStringContainsString('Исходящий автоответ', $historyHtml);
+        $this->assertStringContainsString('data-role="conversation-channel"', $historyHtml);
+        $this->assertStringContainsString('Telegram Support', $historyHtml);
+        $this->assertStringContainsString('data-role="conversation-sender"', $historyHtml);
+        $this->assertStringContainsString('Автоответчик', $historyHtml);
         $this->assertStringContainsString(now()->format('H:i d.m.Y'), $historyHtml);
         $this->assertStringContainsString('Сегодня', $historyHtml);
         $this->assertStringContainsString('justify-content: flex-start', $historyHtml);
@@ -1385,7 +1394,6 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringNotContainsString('Event key: telegram-update-950', $historyHtml);
         $this->assertStringNotContainsString('Статус: Ответ отправлен', $historyHtml);
         $this->assertStringNotContainsString('Ответ на event key: telegram-update-950', $historyHtml);
-        $this->assertStringNotContainsString('Telegram Support (Telegram)', $historyHtml);
         $this->assertLessThan(
             strpos($historyHtml, 'Исходящий автоответ'),
             strpos($historyHtml, 'Входящее сообщение от пользователя'),
@@ -1426,6 +1434,7 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertStringContainsString('Историческое исходящее', $historyHtml);
         $this->assertStringContainsString('data-kind="unknown"', $historyHtml);
+        $this->assertStringContainsString('Система', $historyHtml);
     }
 
     public function test_contact_history_renderer_uses_display_text_for_contact_share_messages_without_text(): void
@@ -1476,6 +1485,130 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('data-role="conversation-thread"', $historyHtml);
         $this->assertStringContainsString('data-role="conversation-empty"', $historyHtml);
         $this->assertStringContainsString('Сообщений ещё не было.', $historyHtml);
+    }
+
+    public function test_contact_history_renderer_shows_operator_sender_label_for_manual_replies(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Ольга Оператор',
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-manual-1',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_user_id' => $employee->id,
+            'external_chat_id' => 'chat-manual-1',
+            'external_message_id' => 'manual-out-1',
+            'text' => 'Пишу вам вручную',
+            'raw_payload' => ['provider' => 'manual'],
+            'received_at' => now(),
+        ]);
+
+        $historyRenderer = new ReflectionMethod(ContactResource::class, 'renderConversationHistory');
+        $historyRenderer->setAccessible(true);
+
+        $historyHtml = $historyRenderer->invoke(null, $contact)->toHtml();
+
+        $this->assertStringContainsString('Оператор: Ольга Оператор', $historyHtml);
+        $this->assertStringContainsString('Telegram Support', $historyHtml);
+    }
+
+    public function test_contact_dialogs_renderer_shows_dialog_cards_sorted_by_latest_activity(): void
+    {
+        $contact = Contact::factory()->create();
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Sales',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $telegramIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'platform' => $telegramChannel->platform,
+            'external_user_id' => 'telegram-dialog-1',
+            'external_username' => 'telegram_customer',
+        ]);
+        $maxIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'platform' => $maxChannel->platform,
+            'external_user_id' => '',
+        ]);
+
+        Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'current_contact_identity_id' => $telegramIdentity->id,
+            'external_chat_id' => 'tg-chat-1',
+            'confirmed_phone_raw' => '+7 999 111-11-11',
+            'last_message_at' => now(),
+            'last_inbound_at' => now()->subMinute(),
+            'last_outbound_at' => now()->subSeconds(10),
+        ]);
+        Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'current_contact_identity_id' => $maxIdentity->id,
+            'external_chat_id' => null,
+            'confirmed_phone_raw' => null,
+            'confirmed_phone_normalized' => null,
+            'last_message_at' => now()->subHour(),
+            'last_inbound_at' => now()->subHours(2),
+            'last_outbound_at' => null,
+        ]);
+
+        $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
+        $dialogsBuilder->setAccessible(true);
+
+        $dialogsHtml = view('filament.contacts.partials.contact-dialogs', $dialogsBuilder->invoke(null, $contact))->render();
+
+        $this->assertStringContainsString('data-role="contact-dialogs"', $dialogsHtml);
+        $this->assertStringContainsString('data-role="contact-dialog"', $dialogsHtml);
+        $this->assertStringContainsString('Telegram Support', $dialogsHtml);
+        $this->assertStringContainsString('MAX Sales', $dialogsHtml);
+        $this->assertStringContainsString('Маршрут готов', $dialogsHtml);
+        $this->assertStringContainsString('Нет route source', $dialogsHtml);
+        $this->assertStringContainsString('+7 999 111-11-11', $dialogsHtml);
+        $this->assertStringContainsString('Телефон в этом канале не подтвержден', $dialogsHtml);
+        $this->assertStringContainsString('ID: telegram-dialog-1', $dialogsHtml);
+        $this->assertLessThan(
+            strpos($dialogsHtml, 'MAX Sales'),
+            strpos($dialogsHtml, 'Telegram Support'),
+        );
+    }
+
+    public function test_contact_dialogs_renderer_shows_empty_state_when_contact_has_no_dialogs(): void
+    {
+        $contact = Contact::factory()->create();
+
+        $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
+        $dialogsBuilder->setAccessible(true);
+
+        $dialogsHtml = view('filament.contacts.partials.contact-dialogs', $dialogsBuilder->invoke(null, $contact))->render();
+
+        $this->assertStringContainsString('data-role="contact-dialogs"', $dialogsHtml);
+        $this->assertStringContainsString('data-role="contact-dialogs-empty"', $dialogsHtml);
+        $this->assertStringContainsString('Диалоги ещё не появились.', $dialogsHtml);
     }
 
     public function test_contacts_table_marks_contact_as_requires_reply_when_auto_reply_is_latest_message(): void

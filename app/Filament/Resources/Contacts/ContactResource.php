@@ -6,6 +6,7 @@ use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
+use App\Models\Dialog;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\User;
@@ -172,6 +173,16 @@ class ContactResource extends Resource
                             ->hiddenLabel()
                             ->view('filament.contacts.partials.phone-numbers')
                             ->viewData(fn (Contact $record): array => static::buildPhoneNumbersViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
+                Section::make('Диалоги')
+                    ->schema([
+                        ViewEntry::make('dialogs')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.contact-dialogs')
+                            ->viewData(fn (Contact $record): array => static::buildDialogsViewData($record))
                             ->columnSpanFull(),
                     ])
                     ->columns(1)
@@ -841,7 +852,7 @@ class ContactResource extends Resource
     protected static function renderConversationHistory(Contact $record): HtmlString
     {
         $messages = $record->messages()
-            ->with(['channel', 'replyTo'])
+            ->with(['channel', 'replyTo', 'dialog.channel', 'sentByUser'])
             ->orderByRaw('coalesce(received_at, created_at) desc')
             ->orderByDesc('id')
             ->limit(30)
@@ -887,6 +898,11 @@ class ContactResource extends Resource
                     'id' => $message->id,
                     'direction' => $message->direction,
                     'kind' => $message->message_kind ?? 'unknown',
+                    'dialog_id' => $message->dialog_id,
+                    'has_dialog' => $message->dialog_id !== null,
+                    'channel_label' => static::resolveConversationChannelLabel($message),
+                    'sender_label' => static::resolveConversationSenderLabel($message),
+                    'sender_type' => $message->sent_by_type,
                     'display_text' => static::resolveConversationDisplayText($message),
                     'time_label' => $messageAt?->format('H:i') ?? '—',
                     'timestamp_label' => $messageAt?->format('H:i d.m.Y') ?? '—',
@@ -897,6 +913,40 @@ class ContactResource extends Resource
                 ];
             })
             ->all();
+    }
+
+    protected static function resolveConversationChannelLabel(Message $message): string
+    {
+        return static::formatChannelLabel($message->channel ?? $message->dialog?->channel, 'Неизвестный канал');
+    }
+
+    protected static function resolveConversationSenderLabel(Message $message): ?string
+    {
+        if ($message->direction !== Message::DIRECTION_OUTBOUND) {
+            return null;
+        }
+
+        return match ($message->sent_by_type) {
+            Message::SENT_BY_TYPE_OPERATOR => filled($message->sentByUser?->name)
+                ? 'Оператор: '.$message->sentByUser->name
+                : 'Оператор',
+            Message::SENT_BY_TYPE_AUTO_REPLY => 'Автоответчик',
+            Message::SENT_BY_TYPE_COLLECTOR => 'Анкета',
+            Message::SENT_BY_TYPE_SYSTEM => 'Система',
+            default => static::resolveLegacyConversationSenderLabel($message),
+        };
+    }
+
+    protected static function resolveLegacyConversationSenderLabel(Message $message): string
+    {
+        return match ($message->message_kind) {
+            Message::KIND_OUTBOUND_MANUAL_REPLY => 'Оператор',
+            Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответчик',
+            Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Анкета',
+            default => 'Система',
+        };
     }
 
     protected static function resolveConversationDisplayText(Message $message): string
@@ -934,6 +984,23 @@ class ContactResource extends Resource
         }
 
         return $messageAt->format('d.m.Y');
+    }
+
+    protected static function formatChannelLabel(?Channel $channel, string $fallback = '—'): string
+    {
+        if ($channel === null) {
+            return $fallback;
+        }
+
+        $platformLabel = filled($channel->platform)
+            ? (Channel::platformOptions()[$channel->platform] ?? $channel->platform)
+            : null;
+
+        if (filled($channel->name) && filled($platformLabel)) {
+            return sprintf('%s (%s)', $channel->name, $platformLabel);
+        }
+
+        return $channel->name ?: $platformLabel ?: $fallback;
     }
 
     protected static function formatMessageDirection(?string $direction): string
@@ -1040,15 +1107,7 @@ class ContactResource extends Resource
             return null;
         }
 
-        $platformLabel = filled($channel->platform)
-            ? (Channel::platformOptions()[$channel->platform] ?? $channel->platform)
-            : null;
-
-        if (filled($channel->name) && filled($platformLabel)) {
-            return sprintf('%s (%s)', $channel->name, $platformLabel);
-        }
-
-        return $channel->name ?: $platformLabel;
+        return static::formatChannelLabel($channel);
     }
 
     protected static function formatDedupStatus(Contact $record): string
@@ -1133,6 +1192,154 @@ class ContactResource extends Resource
                 ])
                 ->all(),
         ];
+    }
+
+    /**
+     * @return array{
+     *     dialogs: list<array{
+     *         id:int,
+     *         channel_label:string,
+     *         route_status_label:string,
+     *         route_status_tone:string,
+     *         phone_label:string,
+     *         route_identity_label:string,
+     *         external_chat_id_label:string,
+     *         last_message_label:string,
+     *         last_inbound_label:string,
+     *         last_outbound_label:string
+     *     }>
+     * }
+     */
+    protected static function buildDialogsViewData(Contact $record): array
+    {
+        $dialogs = $record->relationLoaded('dialogs')
+            ? $record->dialogs
+                ->loadMissing(['channel', 'currentContactIdentity'])
+                ->sort(function (Dialog $left, Dialog $right): int {
+                    $leftTimestamp = $left->last_message_at?->getTimestamp();
+                    $rightTimestamp = $right->last_message_at?->getTimestamp();
+
+                    if ($leftTimestamp === null && $rightTimestamp !== null) {
+                        return 1;
+                    }
+
+                    if ($leftTimestamp !== null && $rightTimestamp === null) {
+                        return -1;
+                    }
+
+                    $comparison = ($rightTimestamp ?? 0) <=> ($leftTimestamp ?? 0);
+
+                    if ($comparison !== 0) {
+                        return $comparison;
+                    }
+
+                    return $right->id <=> $left->id;
+                })
+                ->values()
+            : $record->dialogs()
+                ->with(['channel', 'currentContactIdentity'])
+                ->orderByRaw('case when last_message_at is null then 1 else 0 end')
+                ->orderByDesc('last_message_at')
+                ->orderByDesc('id')
+                ->get();
+
+        return [
+            'dialogs' => $dialogs
+                ->map(function (Dialog $dialog): array {
+                    $routeStatus = static::resolveDialogRouteStatus($dialog);
+
+                    return [
+                        'id' => $dialog->id,
+                        'channel_label' => static::formatChannelLabel($dialog->channel, 'Неизвестный канал'),
+                        'route_status_label' => $routeStatus['label'],
+                        'route_status_tone' => $routeStatus['tone'],
+                        'phone_label' => static::formatDialogPhoneLabel($dialog),
+                        'route_identity_label' => static::formatDialogRouteIdentityLabel($dialog),
+                        'external_chat_id_label' => $dialog->external_chat_id ?: 'Не задан',
+                        'last_message_label' => static::formatDialogTimestamp($dialog->last_message_at),
+                        'last_inbound_label' => static::formatDialogTimestamp($dialog->last_inbound_at),
+                        'last_outbound_label' => static::formatDialogTimestamp($dialog->last_outbound_at),
+                    ];
+                })
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /**
+     * @return array{label:string,tone:string}
+     */
+    protected static function resolveDialogRouteStatus(Dialog $dialog): array
+    {
+        $channel = $dialog->channel;
+
+        if ($channel === null) {
+            return ['label' => 'Канал не найден', 'tone' => 'gray'];
+        }
+
+        if (! $channel->is_active) {
+            return ['label' => 'Канал неактивен', 'tone' => 'gray'];
+        }
+
+        if ($channel->connection_type !== Channel::CONNECTION_TYPE_BOT) {
+            return ['label' => 'Не bot-канал', 'tone' => 'gray'];
+        }
+
+        if (! filled($channel->getToken())) {
+            return ['label' => 'Нет токена', 'tone' => 'warning'];
+        }
+
+        return match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => filled($dialog->external_chat_id)
+                ? ['label' => 'Маршрут готов', 'tone' => 'success']
+                : ['label' => 'Нет chat id', 'tone' => 'warning'],
+            Channel::PLATFORM_MAX => filled($dialog->external_chat_id) || filled($dialog->currentContactIdentity?->external_user_id)
+                ? ['label' => 'Маршрут готов', 'tone' => 'success']
+                : ['label' => 'Нет route source', 'tone' => 'warning'],
+            default => ['label' => 'Платформа не поддерживается', 'tone' => 'gray'],
+        };
+    }
+
+    protected static function formatDialogPhoneLabel(Dialog $dialog): string
+    {
+        if (filled($dialog->confirmed_phone_raw)) {
+            return (string) $dialog->confirmed_phone_raw;
+        }
+
+        if (filled($dialog->confirmed_phone_normalized)) {
+            return (string) $dialog->confirmed_phone_normalized;
+        }
+
+        return 'Телефон в этом канале не подтвержден';
+    }
+
+    protected static function formatDialogRouteIdentityLabel(Dialog $dialog): string
+    {
+        $identity = $dialog->currentContactIdentity;
+        $parts = [];
+
+        if (filled($identity?->external_user_id)) {
+            $parts[] = 'ID: '.$identity->external_user_id;
+        }
+
+        if (filled($identity?->external_username)) {
+            $parts[] = '@'.ltrim((string) $identity->external_username, '@');
+        }
+
+        if ($parts !== []) {
+            return implode(' · ', $parts);
+        }
+
+        if ($dialog->current_contact_identity_id !== null) {
+            return 'Identity #'.$dialog->current_contact_identity_id;
+        }
+
+        return 'Не задан';
+    }
+
+    protected static function formatDialogTimestamp(?Carbon $timestamp): string
+    {
+        return $timestamp?->format('d.m.Y H:i') ?? '—';
     }
 
     protected static function formatPhoneSource(?string $source): string

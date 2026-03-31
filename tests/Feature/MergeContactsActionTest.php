@@ -8,6 +8,7 @@ use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\MergeContactsAction;
@@ -61,23 +62,57 @@ class MergeContactsActionTest extends TestCase
             'external_user_id' => 'secondary-user',
         ]);
 
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+            'external_chat_id' => 'chat-primary',
+            'confirmed_phone_raw' => '+7 999 111 22 33',
+            'confirmed_phone_normalized' => '+79991112233',
+            'phone_confirmed_at' => now()->subDay(),
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'last_message_at' => now()->subHours(3),
+            'last_inbound_at' => now()->subHours(3),
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'chat-secondary',
+            'confirmed_phone_raw' => '+7 999 555 44 33',
+            'confirmed_phone_normalized' => '+79995554433',
+            'phone_confirmed_at' => now()->subHour(),
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'last_message_at' => now()->subHour(),
+            'last_inbound_at' => now()->subHour(),
+        ]);
+
         Message::factory()->create([
+            'dialog_id' => $primaryDialog->id,
             'contact_identity_id' => $primaryIdentity->id,
             'contact_id' => $primary->id,
             'channel_id' => $channel->id,
             'text' => 'Primary history',
+            'external_chat_id' => 'chat-primary',
+            'received_at' => now()->subHours(3),
         ]);
-        Message::factory()->create([
+        $primaryMessageWithoutDialog = Message::factory()->create([
+            'dialog_id' => null,
             'contact_identity_id' => $primaryIdentity->id,
             'contact_id' => $primary->id,
             'channel_id' => $channel->id,
             'text' => 'Primary second history',
+            'external_chat_id' => 'chat-primary',
+            'received_at' => now()->subHours(2),
         ]);
         $triggerMessage = Message::factory()->create([
+            'dialog_id' => $secondaryDialog->id,
             'contact_identity_id' => $secondaryIdentity->id,
             'contact_id' => $secondary->id,
             'channel_id' => $channel->id,
             'text' => 'Secondary history',
+            'external_chat_id' => 'chat-secondary',
+            'received_at' => now()->subHour(),
         ]);
 
         $primaryPhone = ContactPhoneNumber::factory()->create([
@@ -170,9 +205,26 @@ class MergeContactsActionTest extends TestCase
         $this->assertSame($triggerPhone->phone_normalized, $secondary->merge_trigger_phone);
         $this->assertSame(Contact::DUPLICATE_REVIEW_STATUS_PENDING, $secondary->duplicate_review_status);
 
+        $primaryDialog->refresh();
+        $primaryMessageWithoutDialog->refresh();
         $this->assertSame($primary->id, $triggerMessage->contact_id);
+        $this->assertSame($primaryDialog->id, $triggerMessage->dialog_id);
+        $this->assertSame($primaryDialog->id, $primaryMessageWithoutDialog->dialog_id);
         $this->assertSame($secondaryIdentity->id, $triggerMessage->contact_identity_id);
         $this->assertSame($primary->id, $secondaryIdentity->contact_id);
+        $this->assertDatabaseMissing('dialogs', [
+            'id' => $secondaryDialog->id,
+        ]);
+        $this->assertDatabaseCount('dialogs', 1);
+        $this->assertSame($primary->id, $primaryDialog->contact_id);
+        $this->assertSame($secondaryIdentity->id, $primaryDialog->current_contact_identity_id);
+        $this->assertSame('chat-secondary', $primaryDialog->external_chat_id);
+        $this->assertSame('+7 999 555 44 33', $primaryDialog->confirmed_phone_raw);
+        $this->assertSame('+79995554433', $primaryDialog->confirmed_phone_normalized);
+        $this->assertSame(
+            $secondaryDialog->phone_confirmed_at?->format('Y-m-d H:i:s'),
+            $primaryDialog->phone_confirmed_at?->format('Y-m-d H:i:s'),
+        );
 
         $this->assertSame($primary->id, $triggerPhone->contact_id);
         $this->assertFalse($triggerPhone->is_primary);
@@ -244,7 +296,24 @@ class MergeContactsActionTest extends TestCase
             'platform' => $channel->platform,
             'external_user_id' => 'secondary-user',
         ]);
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => ContactIdentity::factory()->create([
+                'contact_id' => $primary->id,
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'external_user_id' => 'primary-user',
+            ])->id,
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'rollback-chat',
+        ]);
         $secondaryMessage = Message::factory()->create([
+            'dialog_id' => $secondaryDialog->id,
             'contact_identity_id' => $secondaryIdentity->id,
             'contact_id' => $secondary->id,
             'channel_id' => $channel->id,
@@ -274,6 +343,8 @@ class MergeContactsActionTest extends TestCase
             $secondaryIdentity->refresh();
             $secondaryMessage->refresh();
             $secondaryPhone->refresh();
+            $primaryDialog->refresh();
+            $secondaryDialog->refresh();
 
             $this->assertNull($secondary->merged_into_contact_id);
             $this->assertNull($secondary->merged_at);
@@ -281,8 +352,163 @@ class MergeContactsActionTest extends TestCase
             $this->assertNull($secondary->merge_trigger_phone);
             $this->assertSame($secondary->id, $secondaryIdentity->contact_id);
             $this->assertSame($secondary->id, $secondaryMessage->contact_id);
+            $this->assertSame($secondaryDialog->id, $secondaryMessage->dialog_id);
+            $this->assertSame($primary->id, $primaryDialog->contact_id);
+            $this->assertSame($secondary->id, $secondaryDialog->contact_id);
             $this->assertSame($secondary->id, $secondaryPhone->contact_id);
             $this->assertSame('Alice', $primary->first_name);
         }
+    }
+
+    public function test_it_reassigns_secondary_only_dialog_in_different_channel_to_primary(): void
+    {
+        $primaryChannel = Channel::factory()->create();
+        $secondaryChannel = Channel::factory()->create();
+
+        $primary = Contact::factory()->create([
+            'first_name' => 'Primary',
+        ]);
+        $secondary = Contact::factory()->create();
+
+        $primaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $primaryChannel->id,
+            'platform' => $primaryChannel->platform,
+            'external_user_id' => 'primary-user',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $secondaryChannel->id,
+            'platform' => $secondaryChannel->platform,
+            'external_user_id' => 'secondary-user',
+        ]);
+
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $primaryChannel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $secondaryChannel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'secondary-channel-chat',
+        ]);
+
+        $secondaryMessage = Message::factory()->create([
+            'dialog_id' => $secondaryDialog->id,
+            'contact_id' => $secondary->id,
+            'contact_identity_id' => $secondaryIdentity->id,
+            'channel_id' => $secondaryChannel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'secondary-channel-chat',
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $primaryDialog->id,
+            'contact_id' => $primary->id,
+            'contact_identity_id' => $primaryIdentity->id,
+            'channel_id' => $primaryChannel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+        ]);
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $primary->refresh();
+        $secondary->refresh();
+        $secondaryDialog->refresh();
+        $secondaryMessage->refresh();
+
+        $this->assertSame($primary->id, $secondary->merged_into_contact_id);
+        $this->assertSame($primary->id, $secondaryDialog->contact_id);
+        $this->assertSame($primary->id, $secondaryMessage->contact_id);
+        $this->assertSame($secondaryDialog->id, $secondaryMessage->dialog_id);
+        $this->assertSame(2, Dialog::query()->where('contact_id', $primary->id)->count());
+        $this->assertDatabaseHas('dialogs', [
+            'id' => $primaryDialog->id,
+            'contact_id' => $primary->id,
+        ]);
+        $this->assertDatabaseHas('dialogs', [
+            'id' => $secondaryDialog->id,
+            'contact_id' => $primary->id,
+            'channel_id' => $secondaryChannel->id,
+        ]);
+        $this->assertSame(0, Dialog::query()->where('contact_id', $secondary->id)->count());
+    }
+
+    public function test_it_clears_stale_max_chat_id_when_freshest_merged_route_source_is_user_based(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $primary = Contact::factory()->create([
+            'first_name' => 'Primary',
+        ]);
+        $secondary = Contact::factory()->create();
+
+        $primaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'primary-user',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'fresh-user',
+        ]);
+
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+            'external_chat_id' => 'stale-primary-chat',
+            'last_message_at' => now()->subDay(),
+            'last_inbound_at' => now()->subDay(),
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'stale-secondary-chat',
+            'last_message_at' => now()->subHour(),
+            'last_inbound_at' => now()->subHour(),
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $primaryDialog->id,
+            'contact_id' => $primary->id,
+            'contact_identity_id' => $primaryIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'old-chat',
+            'received_at' => now()->subDay(),
+        ]);
+        $secondaryMessage = Message::factory()->create([
+            'dialog_id' => $secondaryDialog->id,
+            'contact_id' => $secondary->id,
+            'contact_identity_id' => $secondaryIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => '',
+            'received_at' => now()->subMinutes(5),
+        ]);
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $primary->refresh();
+        $secondary->refresh();
+        $primaryDialog->refresh();
+        $secondaryMessage->refresh();
+
+        $this->assertSame($primary->id, $secondary->merged_into_contact_id);
+        $this->assertDatabaseMissing('dialogs', [
+            'id' => $secondaryDialog->id,
+        ]);
+        $this->assertSame($primary->id, $secondaryMessage->contact_id);
+        $this->assertSame($primaryDialog->id, $secondaryMessage->dialog_id);
+        $this->assertSame($secondaryIdentity->id, $primaryDialog->current_contact_identity_id);
+        $this->assertNull($primaryDialog->external_chat_id);
     }
 }

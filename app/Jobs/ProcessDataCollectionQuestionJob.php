@@ -9,6 +9,7 @@ use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
+use App\Services\Dialogs\ResolveDialogRouteSourceAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -57,21 +58,31 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
         }
 
         $message = Message::query()
-            ->with(['channel', 'contact', 'contactIdentity'])
+            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.contact', 'dialog.currentContactIdentity'])
             ->find($this->sourceMessageId);
 
         if (! $message instanceof Message) {
             return;
         }
 
-        $channel = $message->channel;
-        $contact = $message->contact;
+        $sourceChannel = $message->channel;
+        $routeDialog = $resolveDialogRouteSourceAction->forMessage($message);
+        $fallbackUsed = false;
+
+        if (! $routeDialog) {
+            $routeDialog = $resolveDialogRouteSourceAction->fallbackFromLegacyMessage($message);
+            $fallbackUsed = $routeDialog !== null;
+        }
+
+        $channel = $routeDialog?->channel ?? $sourceChannel;
+        $contact = $routeDialog?->contact ?? $message->contact;
 
         if (! $channel instanceof Channel || ! $channel->is_active || ! $contact instanceof Contact) {
             return;
@@ -103,19 +114,50 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
+        if (! $routeDialog) {
+            $channelActivityLogger->error(
+                $channel,
+                'contact.data_collection_question_route_missing',
+                'Не найден route context диалога для отправки вопроса сбора профиля.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $message->id,
+                    'current_field' => $contact->data_collection_current_field,
+                ],
+            );
+
+            return;
+        }
+
+        if ($fallbackUsed) {
+            $channelActivityLogger->warning(
+                $channel,
+                'contact.dialog_route_fallback_used',
+                'Для отправки вопроса сбора профиля использован fallback route source через сообщение.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $message->id,
+                    'dialog_id' => $routeDialog->id,
+                    'current_field' => $contact->data_collection_current_field,
+                ],
+            );
+        }
+
         try {
             $deliveryResult = match ($channel->platform) {
                 Channel::PLATFORM_TELEGRAM => $telegramBotApiService->sendTextMessage(
                     $channel,
-                    $message->external_chat_id,
-                    $message->contactIdentity?->external_user_id,
+                    $routeDialog->external_chat_id,
+                    $routeDialog->currentContactIdentity?->external_user_id,
                     $questionText,
                     $this->resolveTelegramReplyMarkup($contact),
                 ),
                 Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
                     $channel,
-                    $message->external_chat_id,
-                    $message->contactIdentity?->external_user_id,
+                    $routeDialog->external_chat_id,
+                    $routeDialog->currentContactIdentity?->external_user_id,
                     $questionText,
                     $this->resolveMaxAttachments($contact),
                 ),
@@ -126,6 +168,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 $message,
                 $deliveryResult,
                 Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+                $routeDialog,
             );
 
             $channel->markReplySent();
@@ -138,6 +181,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                     'contact_id' => $contact->id,
                     'channel_id' => $channel->id,
                     'message_id' => $message->id,
+                    'dialog_id' => $routeDialog->id,
                     'current_field' => $contact->data_collection_current_field,
                 ],
             );
@@ -152,6 +196,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                     'contact_id' => $contact->id,
                     'channel_id' => $channel->id,
                     'message_id' => $message->id,
+                    'dialog_id' => $routeDialog->id,
                     'current_field' => $contact->data_collection_current_field,
                     'error' => $throwable->getMessage(),
                 ],
@@ -161,6 +206,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 'contact_id' => $contact->id,
                 'channel_id' => $channel->id,
                 'message_id' => $message->id,
+                'dialog_id' => $routeDialog->id,
                 'error' => $throwable->getMessage(),
             ]);
 

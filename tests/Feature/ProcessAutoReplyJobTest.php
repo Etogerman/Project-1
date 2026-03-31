@@ -64,11 +64,18 @@ class ProcessAutoReplyJobTest extends TestCase
 
         $message->refresh();
         $channel->refresh();
+        $outboundMessage = Message::query()
+            ->where('reply_to_message_id', $message->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_AUTO_REPLY)
+            ->firstOrFail();
 
         $this->assertNotNull($message->auto_reply_sent_at);
         $this->assertNotNull($channel->last_reply_sent_at);
         $this->assertNull($channel->last_error_at);
         $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
+        $this->assertNotNull($outboundMessage->dialog_id);
+        $this->assertSame(Message::SENT_BY_TYPE_AUTO_REPLY, $outboundMessage->sent_by_type);
+        $this->assertSame(Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE, $outboundMessage->sent_by_system_code);
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,

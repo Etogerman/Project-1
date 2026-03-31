@@ -265,6 +265,11 @@ class Contact extends Model
         return $this->hasMany(Message::class);
     }
 
+    public function dialogs(): HasMany
+    {
+        return $this->hasMany(Dialog::class);
+    }
+
     public function phoneNumbers(): HasMany
     {
         return $this->hasMany(ContactPhoneNumber::class)

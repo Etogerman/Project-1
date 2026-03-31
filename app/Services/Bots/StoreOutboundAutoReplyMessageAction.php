@@ -5,10 +5,15 @@ namespace App\Services\Bots;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Support\Facades\DB;
 
 class StoreOutboundAutoReplyMessageAction
 {
+    public function __construct(
+        private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
+    ) {}
+
     public function handle(Channel $channel, Message $inboundMessage, AutoReplyDeliveryResult $deliveryResult): Message
     {
         return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult): Message {
@@ -16,7 +21,7 @@ class StoreOutboundAutoReplyMessageAction
                 'auto_reply_sent_at' => now(),
             ])->save();
 
-            return Message::query()->create([
+            $outboundMessage = Message::query()->create([
                 'contact_id' => $inboundMessage->contact_id,
                 'contact_identity_id' => $inboundMessage->contact_identity_id,
                 'channel_id' => $channel->id,
@@ -30,6 +35,17 @@ class StoreOutboundAutoReplyMessageAction
                 'raw_payload' => $deliveryResult->rawPayload,
                 'received_at' => now(),
             ]);
+
+            return $this->syncMessageDialogMetadataAction->handle(
+                $outboundMessage,
+                $inboundMessage->contact()->firstOrFail(),
+                $channel,
+                $inboundMessage->contactIdentity,
+                $inboundMessage->external_chat_id,
+                Message::SENT_BY_TYPE_AUTO_REPLY,
+                null,
+                Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
+            );
         });
     }
 }

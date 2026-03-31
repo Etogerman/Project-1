@@ -1897,10 +1897,17 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         ProcessDataCollectionResponseJob::dispatchSync($message->id);
 
         $contact = $message->contact()->firstOrFail()->fresh();
+        $completionMessage = Message::query()
+            ->where('reply_to_message_id', $message->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION)
+            ->firstOrFail();
 
         $this->assertSame('24_29', $contact->age_range);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
         $this->assertNull($contact->data_collection_current_field);
+        $this->assertNotNull($completionMessage->dialog_id);
+        $this->assertSame(Message::SENT_BY_TYPE_COLLECTOR, $completionMessage->sent_by_type);
+        $this->assertSame(Message::SENT_BY_SYSTEM_CODE_DATA_COLLECTION_COMPLETION, $completionMessage->sent_by_system_code);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
         $this->assertDatabaseHas('messages', [

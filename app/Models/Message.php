@@ -29,15 +29,39 @@ class Message extends Model
 
     public const KIND_OUTBOUND_DATA_COLLECTION_COMPLETION = 'outbound_data_collection_completion';
 
+    public const SENT_BY_TYPE_CONTACT = 'contact';
+
+    public const SENT_BY_TYPE_OPERATOR = 'operator';
+
+    public const SENT_BY_TYPE_AUTO_REPLY = 'auto_reply';
+
+    public const SENT_BY_TYPE_COLLECTOR = 'collector';
+
+    public const SENT_BY_TYPE_SYSTEM = 'system';
+
+    public const SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE = 'auto_reply_rule';
+
+    public const SENT_BY_SYSTEM_CODE_PHONE_CAPTURE_CONFIRMATION = 'phone_capture_confirmation';
+
+    public const SENT_BY_SYSTEM_CODE_DATA_COLLECTION_QUESTION = 'data_collection_question';
+
+    public const SENT_BY_SYSTEM_CODE_DATA_COLLECTION_COMPLETION = 'data_collection_completion';
+
+    public const SENT_BY_SYSTEM_CODE_LEGACY_UNKNOWN_KIND = 'legacy_unknown_kind';
+
     /**
      * @var list<string>
      */
     protected $fillable = [
+        'dialog_id',
         'contact_id',
         'contact_identity_id',
         'channel_id',
         'direction',
         'message_kind',
+        'sent_by_type',
+        'sent_by_user_id',
+        'sent_by_system_code',
         'reply_to_message_id',
         'provider_event_key',
         'external_chat_id',
@@ -67,9 +91,19 @@ class Message extends Model
         return $this->belongsTo(Contact::class);
     }
 
+    public function dialog(): BelongsTo
+    {
+        return $this->belongsTo(Dialog::class);
+    }
+
     public function contactIdentity(): BelongsTo
     {
         return $this->belongsTo(ContactIdentity::class);
+    }
+
+    public function sentByUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'sent_by_user_id');
     }
 
     public function channel(): BelongsTo

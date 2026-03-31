@@ -20,6 +20,7 @@ class MessageFactory extends Factory
     public function definition(): array
     {
         return [
+            'dialog_id' => null,
             'contact_identity_id' => ContactIdentity::factory(),
             'contact_id' => function (array $attributes): int {
                 $identity = ContactIdentity::query()->find($attributes['contact_identity_id']);
@@ -41,6 +42,9 @@ class MessageFactory extends Factory
             },
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => null,
+            'sent_by_user_id' => null,
+            'sent_by_system_code' => null,
             'reply_to_message_id' => null,
             'provider_event_key' => null,
             'external_chat_id' => (string) fake()->numerify('########'),

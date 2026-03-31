@@ -16,6 +16,8 @@ use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
 use App\Services\Contacts\MergeContactsAction;
+use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
+use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
@@ -27,6 +29,8 @@ class StoreInboundMessageAction
         protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
         protected MergeContactsAction $mergeContactsAction,
         protected ChannelActivityLogger $channelActivityLogger,
+        protected SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
+        protected SyncDialogConfirmedPhoneAction $syncDialogConfirmedPhoneAction,
     ) {}
 
     public function handle(Channel $channel, IncomingBotMessage $message): StoredInboundMessageResult
@@ -95,8 +99,11 @@ class StoreInboundMessageAction
                     $phoneCaptureStatus = $this->captureSharedPhoneIfNeeded($channel, $contact, $existingMessage, $message);
 
                     if ($phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
-                        $existingMessage->refresh();
+                        $existingMessage->refresh()->load(['contact', 'contactIdentity']);
                     }
+
+                    $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
+                    $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
 
                     return new StoredInboundMessageResult(
                         message: $existingMessage,
@@ -123,8 +130,11 @@ class StoreInboundMessageAction
                 $phoneCaptureStatus = $this->captureSharedPhoneIfNeeded($channel, $contact, $storedMessage, $message);
 
                 if ($phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
-                    $storedMessage->refresh();
+                    $storedMessage->refresh()->load(['contact', 'contactIdentity']);
                 }
+
+                $this->syncStoredInboundMessageMetadata($channel, $contact, $storedMessage, $message);
+                $this->syncDialogConfirmedPhoneIfNeeded($storedMessage, $message, $phoneCaptureStatus);
 
                 return new StoredInboundMessageResult(
                     message: $storedMessage,
@@ -140,8 +150,11 @@ class StoreInboundMessageAction
                 $phoneCaptureStatus = $this->captureSharedPhoneIfNeeded($channel, $contact, $existingMessage, $message);
 
                 if ($phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
-                    $existingMessage->refresh();
+                    $existingMessage->refresh()->load(['contact', 'contactIdentity']);
                 }
+
+                $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
+                $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
 
                 return new StoredInboundMessageResult(
                     message: $existingMessage,
@@ -170,6 +183,59 @@ class StoreInboundMessageAction
         return $message->inboundKind === IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
             ? Message::KIND_INBOUND_CONTACT_SHARE
             : Message::KIND_INBOUND_USER;
+    }
+
+    protected function syncStoredInboundMessageMetadata(
+        Channel $channel,
+        ?Contact $fallbackContact,
+        Message $storedMessage,
+        IncomingBotMessage $message,
+    ): void {
+        $contact = $storedMessage->contact ?? $fallbackContact;
+
+        if (! $contact instanceof Contact) {
+            return;
+        }
+
+        $this->syncMessageDialogMetadataAction->handle(
+            $storedMessage,
+            $contact,
+            $channel,
+            $storedMessage->contactIdentity,
+            $storedMessage->external_chat_id ?? $message->externalChatId,
+            Message::SENT_BY_TYPE_CONTACT,
+        );
+    }
+
+    protected function syncDialogConfirmedPhoneIfNeeded(
+        Message $storedMessage,
+        IncomingBotMessage $message,
+        string $phoneCaptureStatus,
+    ): void {
+        if (! in_array($phoneCaptureStatus, [
+            StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW,
+            StoredInboundMessageResult::PHONE_CAPTURE_STATUS_DUPLICATE_SAME_ROOT,
+            StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT,
+            StoredInboundMessageResult::PHONE_CAPTURE_STATUS_REVIEW_PENDING,
+        ], true)) {
+            return;
+        }
+
+        if (! filled($message->sharedPhoneNumber)) {
+            return;
+        }
+
+        $phoneNormalized = AddContactPhoneAction::normalizePhone($message->sharedPhoneNumber);
+
+        if ($phoneNormalized === '') {
+            return;
+        }
+
+        $this->syncDialogConfirmedPhoneAction->handle(
+            $storedMessage,
+            $message->sharedPhoneNumber,
+            $phoneNormalized,
+        );
     }
 
     protected function captureSharedPhoneIfNeeded(
