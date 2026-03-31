@@ -7,6 +7,7 @@ use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
@@ -374,6 +375,228 @@ class BotWebhookAutoReplyTest extends TestCase
             'channel_id' => $channel->id,
             'event' => 'contact.phone_capture_confirmation_queued',
         ]);
+    }
+
+    public function test_late_max_contact_share_logs_delayed_received_and_phone_capture_arrived_late(): void
+    {
+        Queue::fake();
+        Http::fake();
+        config()->set('bots.max.delayed_webhook_threshold_seconds', 60);
+
+        Carbon::setTestNow(Carbon::parse('2026-03-31 19:06:46+03:00'));
+
+        try {
+            $channel = Channel::factory()->create([
+                'platform' => Channel::PLATFORM_MAX,
+                'credentials' => [
+                    'token' => 'max-token',
+                    'webhook_secret' => 'max-secret',
+                ],
+            ]);
+
+            $payload = $this->maxPayload(
+                messageId: 'max-contact-late-90',
+                text: null,
+                timestamp: '2026-03-31T18:40:58+03:00',
+            );
+            $payload['message']['body'] = [
+                'mid' => 'max-contact-late-90',
+                'contact' => [
+                    'phone' => '+7 999 123 45 67',
+                    'user_id' => 500,
+                ],
+            ];
+
+            $response = $this->withHeaders([
+                'X-Max-Bot-Api-Secret' => 'max-secret',
+            ])->postJson("/webhooks/max/{$channel->id}", $payload);
+
+            $response->assertOk()->assertExactJson([
+                'ok' => true,
+            ]);
+
+            $storedMessage = $this->inboundMessages()
+                ->where('external_message_id', 'max-contact-late-90')
+                ->firstOrFail();
+
+            Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
+                return $job->inboundMessageId === $storedMessage->id
+                    && $job->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW;
+            });
+
+            $delayedLog = ChannelActivityLog::query()
+                ->where('channel_id', $channel->id)
+                ->where('event', 'webhook.delayed_received')
+                ->latest('id')
+                ->firstOrFail();
+
+            $latePhoneCaptureLog = ChannelActivityLog::query()
+                ->where('channel_id', $channel->id)
+                ->where('event', 'contact.phone_capture_arrived_late')
+                ->latest('id')
+                ->firstOrFail();
+
+            $this->assertGreaterThan(60, (int) data_get($delayedLog->context, 'delivery_lag_seconds'));
+            $this->assertSame('max-contact-late-90', data_get($delayedLog->context, 'external_message_id'));
+            $this->assertSame(
+                StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW,
+                data_get($latePhoneCaptureLog->context, 'phone_capture_status'),
+            );
+            $this->assertGreaterThan(60, (int) data_get($latePhoneCaptureLog->context, 'delivery_lag_seconds'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_late_max_contact_share_logs_out_of_order_when_newer_inbound_exists(): void
+    {
+        Queue::fake();
+        Http::fake();
+        config()->set('bots.max.delayed_webhook_threshold_seconds', 60);
+
+        Carbon::setTestNow(Carbon::parse('2026-03-31 19:06:46+03:00'));
+
+        try {
+            $channel = Channel::factory()->create([
+                'platform' => Channel::PLATFORM_MAX,
+                'credentials' => [
+                    'token' => 'max-token',
+                    'webhook_secret' => 'max-secret',
+                ],
+            ]);
+
+            $newerPayload = $this->maxPayload(
+                messageId: 'max-user-newer-91',
+                text: 'что?',
+                timestamp: '2026-03-31T19:05:30+03:00',
+            );
+
+            $this->withHeaders([
+                'X-Max-Bot-Api-Secret' => 'max-secret',
+            ])->postJson("/webhooks/max/{$channel->id}", $newerPayload)->assertOk();
+
+            $newerInbound = $this->inboundMessages()
+                ->where('external_message_id', 'max-user-newer-91')
+                ->firstOrFail();
+
+            $latePayload = $this->maxPayload(
+                messageId: 'max-contact-late-order-92',
+                text: null,
+                timestamp: '2026-03-31T18:40:58+03:00',
+            );
+            $latePayload['message']['body'] = [
+                'mid' => 'max-contact-late-order-92',
+                'contact' => [
+                    'phone' => '+7 999 123 45 67',
+                    'user_id' => 500,
+                ],
+            ];
+
+            $this->withHeaders([
+                'X-Max-Bot-Api-Secret' => 'max-secret',
+            ])->postJson("/webhooks/max/{$channel->id}", $latePayload)->assertOk();
+
+            $lateInbound = $this->inboundMessages()
+                ->where('external_message_id', 'max-contact-late-order-92')
+                ->firstOrFail();
+
+            $outOfOrderLog = ChannelActivityLog::query()
+                ->where('channel_id', $channel->id)
+                ->where('event', 'webhook.out_of_order_received')
+                ->latest('id')
+                ->firstOrFail();
+
+            $this->assertSame($lateInbound->id, (int) data_get($outOfOrderLog->context, 'message_id'));
+            $this->assertSame($newerInbound->id, (int) data_get($outOfOrderLog->context, 'newer_inbound_message_id'));
+            $this->assertGreaterThan(0, (int) data_get($outOfOrderLog->context, 'seconds_behind_latest_inbound'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_late_max_contact_share_still_merges_into_existing_root_and_queues_follow_up(): void
+    {
+        Queue::fake();
+        Http::fake();
+        config()->set('bots.max.delayed_webhook_threshold_seconds', 60);
+
+        Carbon::setTestNow(Carbon::parse('2026-03-31 19:06:46+03:00'));
+
+        try {
+            $channel = Channel::factory()->create([
+                'platform' => Channel::PLATFORM_MAX,
+                'credentials' => [
+                    'token' => 'max-token',
+                    'webhook_secret' => 'max-secret',
+                ],
+            ]);
+
+            $existingRoot = Contact::factory()->create([
+                'first_name' => 'Герман',
+                'country' => 'Россия',
+                'city' => 'Москва',
+                'age_range' => '30_39',
+            ]);
+            ContactPhoneNumber::factory()->create([
+                'contact_id' => $existingRoot->id,
+                'phone_raw' => '+7 999 123 45 67',
+                'phone_normalized' => '+79991234567',
+                'is_primary' => true,
+            ]);
+
+            $payload = $this->maxPayload(
+                userId: 228532008,
+                messageId: 'max-contact-late-merge-93',
+                text: null,
+                username: 'max_user_merge',
+                timestamp: '2026-03-31T18:40:58+03:00',
+            );
+            $payload['message']['body'] = [
+                'mid' => 'max-contact-late-merge-93',
+                'attachments' => [[
+                    'type' => 'contact',
+                    'payload' => [
+                        'max_info' => [
+                            'user_id' => 228532008,
+                        ],
+                        'vcf_info' => "BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=cell:79991234567\r\nFN:Герман Абрикосов\r\nEND:VCARD",
+                    ],
+                ]],
+            ];
+
+            $response = $this->withHeaders([
+                'X-Max-Bot-Api-Secret' => 'max-secret',
+            ])->postJson("/webhooks/max/{$channel->id}", $payload);
+
+            $response->assertOk()->assertExactJson([
+                'ok' => true,
+            ]);
+
+            $storedMessage = $this->inboundMessages()
+                ->where('external_message_id', 'max-contact-late-merge-93')
+                ->firstOrFail();
+
+            Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
+                return $job->inboundMessageId === $storedMessage->id
+                    && $job->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT;
+            });
+
+            $this->assertSame($existingRoot->id, $storedMessage->contact_id);
+            $this->assertDatabaseHas('channel_activity_logs', [
+                'channel_id' => $channel->id,
+                'event' => 'webhook.delayed_received',
+            ]);
+            $this->assertDatabaseHas('channel_activity_logs', [
+                'channel_id' => $channel->id,
+                'event' => 'contact.phone_capture_arrived_late',
+            ]);
+            $this->assertDatabaseHas('channel_activity_logs', [
+                'channel_id' => $channel->id,
+                'event' => 'contact.phone_merged_to_existing_root',
+            ]);
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_max_contact_share_with_unknown_format_logs_skip_event_and_does_not_queue_follow_up(): void

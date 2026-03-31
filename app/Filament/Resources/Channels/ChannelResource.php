@@ -605,6 +605,22 @@ class ChannelResource extends Resource
                 );
             }
 
+            $deliveryLagSeconds = data_get($log->context, 'delivery_lag_seconds');
+            if ($log->event === 'webhook.delayed_received' && is_numeric($deliveryLagSeconds) && (int) $deliveryLagSeconds > 0) {
+                $badges[] = static::renderFeedBadge(
+                    sprintf('Лаг: %d сек', (int) $deliveryLagSeconds),
+                    static::getDelayedActivityBadgeClasses(),
+                );
+            }
+
+            $secondsBehindLatestInbound = data_get($log->context, 'seconds_behind_latest_inbound');
+            if ($log->event === 'webhook.out_of_order_received' && is_numeric($secondsBehindLatestInbound) && (int) $secondsBehindLatestInbound > 0) {
+                $badges[] = static::renderFeedBadge(
+                    sprintf('Отставание: %d сек', (int) $secondsBehindLatestInbound),
+                    static::getOutOfOrderActivityBadgeClasses(),
+                );
+            }
+
             $badgeMarkup = implode('', $badges);
 
             return sprintf(
@@ -637,11 +653,14 @@ class ChannelResource extends Resource
             'contact.phone_capture_confirmed' => 'Подтверждение номера отправлено',
             'contact.phone_capture_confirmation_failed' => 'Подтверждение номера не отправлено',
             'contact.phone_capture_confirmation_skipped' => 'Подтверждение номера пропущено',
+            'contact.phone_capture_arrived_late' => 'Поздний phone share обработан',
             'max.contact_share_unknown_format' => 'Номер телефона не распознан',
             'contact.reply_sent' => 'Ручной ответ',
             'contact.reply_failed' => 'Ошибка ручного ответа',
             'webhook.duplicate_ignored' => 'Дубликат проигнорирован',
             'webhook.duplicate_retry_reply' => 'Дубликат → retry ответа',
+            'webhook.delayed_received' => 'Webhook пришёл с задержкой',
+            'webhook.out_of_order_received' => 'Webhook пришёл не по порядку',
             'bot.metadata_synced' => 'Sync metadata',
             'bot.metadata_sync_failed' => 'Ошибка metadata',
             'webhook.registration_started' => 'Регистрация webhook',
@@ -790,6 +809,16 @@ class ChannelResource extends Resource
     protected static function getDedupeActivityBadgeClasses(): string
     {
         return 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200';
+    }
+
+    protected static function getDelayedActivityBadgeClasses(): string
+    {
+        return 'inline-flex items-center rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-xs text-orange-800 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-200';
+    }
+
+    protected static function getOutOfOrderActivityBadgeClasses(): string
+    {
+        return 'inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200';
     }
 
     protected static function formatOutboundReplyLink(Message $message): string

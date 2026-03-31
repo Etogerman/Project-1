@@ -520,6 +520,91 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('data-dedupe-event="true"', $recentActivityHtml);
     }
 
+    public function test_recent_activity_renderer_formats_delayed_webhook_event_and_shows_lag_badge(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'info',
+            'event' => 'webhook.delayed_received',
+            'message' => 'Webhook из MAX получен с заметной задержкой.',
+            'context' => [
+                'provider_event_key' => 'max-event-901',
+                'delivery_lag_seconds' => 1547,
+            ],
+            'created_at' => Carbon::create(2026, 3, 31, 19, 6, 46),
+        ]);
+
+        $recentActivityRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentActivityLogs');
+        $recentActivityRenderer->setAccessible(true);
+
+        $recentActivityHtml = $recentActivityRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Webhook пришёл с задержкой', $recentActivityHtml);
+        $this->assertStringContainsString('Event key: max-event-901', $recentActivityHtml);
+        $this->assertStringContainsString('Лаг: 1547 сек', $recentActivityHtml);
+        $this->assertStringContainsString('Webhook из MAX получен с заметной задержкой.', $recentActivityHtml);
+    }
+
+    public function test_recent_activity_renderer_formats_out_of_order_webhook_event_and_shows_offset_badge(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'info',
+            'event' => 'webhook.out_of_order_received',
+            'message' => 'Webhook из MAX получен не по порядку относительно уже сохранённых входящих сообщений.',
+            'context' => [
+                'provider_event_key' => 'max-event-902',
+                'seconds_behind_latest_inbound' => 900,
+            ],
+            'created_at' => Carbon::create(2026, 3, 31, 19, 6, 47),
+        ]);
+
+        $recentActivityRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentActivityLogs');
+        $recentActivityRenderer->setAccessible(true);
+
+        $recentActivityHtml = $recentActivityRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Webhook пришёл не по порядку', $recentActivityHtml);
+        $this->assertStringContainsString('Event key: max-event-902', $recentActivityHtml);
+        $this->assertStringContainsString('Отставание: 900 сек', $recentActivityHtml);
+        $this->assertStringContainsString('Webhook из MAX получен не по порядку относительно уже сохранённых входящих сообщений.', $recentActivityHtml);
+    }
+
+    public function test_recent_activity_renderer_formats_late_phone_capture_event(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'info',
+            'event' => 'contact.phone_capture_arrived_late',
+            'message' => 'Поздний phone share из MAX успешно дошёл до обработки.',
+            'context' => [
+                'provider_event_key' => 'max-event-903',
+            ],
+            'created_at' => Carbon::create(2026, 3, 31, 19, 6, 48),
+        ]);
+
+        $recentActivityRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentActivityLogs');
+        $recentActivityRenderer->setAccessible(true);
+
+        $recentActivityHtml = $recentActivityRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Поздний phone share обработан', $recentActivityHtml);
+        $this->assertStringContainsString('Event key: max-event-903', $recentActivityHtml);
+        $this->assertStringContainsString('Поздний phone share из MAX успешно дошёл до обработки.', $recentActivityHtml);
+    }
+
     public function test_recent_messages_renderer_shows_outbound_reply_link(): void
     {
         $channel = Channel::factory()->create([

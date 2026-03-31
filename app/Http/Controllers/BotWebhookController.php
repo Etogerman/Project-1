@@ -15,6 +15,7 @@ use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Carbon;
 
 class BotWebhookController extends Controller
 {
@@ -112,6 +113,27 @@ class BotWebhookController extends Controller
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
         if ($message !== null) {
+            $webhookProcessedAt = now();
+            $deliveryLagSeconds = $this->resolveWebhookDeliveryLagSeconds($channel, $message->receivedAt, $webhookProcessedAt);
+
+            if ($deliveryLagSeconds !== null) {
+                $channelActivityLogger->info(
+                    $channel,
+                    'webhook.delayed_received',
+                    'Webhook из MAX получен с заметной задержкой.',
+                    [
+                        'platform' => $channel->platform,
+                        'provider_event_key' => $message->providerEventKey,
+                        'external_message_id' => $message->externalMessageId,
+                        'external_user_id' => $message->externalUserId,
+                        'external_chat_id' => $message->externalChatId,
+                        'message_received_at' => $message->receivedAt->toIso8601String(),
+                        'webhook_processed_at' => $webhookProcessedAt->toIso8601String(),
+                        'delivery_lag_seconds' => $deliveryLagSeconds,
+                    ],
+                );
+            }
+
             $storedResult = $storeInboundMessageAction->handle($channel, $message);
             $storedMessage = $storedResult->message;
             $duplicateContext = [
@@ -120,6 +142,10 @@ class BotWebhookController extends Controller
                 'message_id' => $storedMessage->id,
                 'external_message_id' => $storedMessage->external_message_id,
             ];
+
+            if ($storedMessage->wasRecentlyCreated) {
+                $this->logOutOfOrderInboundIfNeeded($channel, $storedMessage, $channelActivityLogger);
+            }
 
             if ($storedMessage->hasSuccessfulAutoReply()) {
                 if (! $storedMessage->wasRecentlyCreated) {
@@ -137,6 +163,27 @@ class BotWebhookController extends Controller
             }
 
             if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
+                if (
+                    $deliveryLagSeconds !== null
+                    && $storedMessage->wasRecentlyCreated
+                    && $storedResult->shouldQueuePhoneCaptureFollowUp()
+                ) {
+                    $channelActivityLogger->info(
+                        $channel,
+                        'contact.phone_capture_arrived_late',
+                        'Поздний phone share из MAX успешно дошёл до обработки.',
+                        [
+                            'platform' => $channel->platform,
+                            'contact_id' => $storedMessage->contact_id,
+                            'message_id' => $storedMessage->id,
+                            'provider_event_key' => $storedMessage->provider_event_key,
+                            'external_message_id' => $storedMessage->external_message_id,
+                            'phone_capture_status' => $storedResult->phoneCaptureStatus,
+                            'delivery_lag_seconds' => $deliveryLagSeconds,
+                        ],
+                    );
+                }
+
                 if (! $storedResult->shouldQueuePhoneCaptureFollowUp()) {
                     return response()->json([
                         'ok' => true,
@@ -219,6 +266,68 @@ class BotWebhookController extends Controller
         return response()->json([
             'ok' => true,
         ]);
+    }
+
+    protected function resolveWebhookDeliveryLagSeconds(Channel $channel, Carbon $messageReceivedAt, Carbon $webhookProcessedAt): ?int
+    {
+        if ($channel->platform !== Channel::PLATFORM_MAX) {
+            return null;
+        }
+
+        $lagSeconds = max(0, $webhookProcessedAt->getTimestamp() - $messageReceivedAt->getTimestamp());
+        $thresholdSeconds = (int) config('bots.max.delayed_webhook_threshold_seconds', 60);
+
+        return $lagSeconds > $thresholdSeconds ? $lagSeconds : null;
+    }
+
+    protected function logOutOfOrderInboundIfNeeded(
+        Channel $channel,
+        Message $storedMessage,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        if (
+            $channel->platform !== Channel::PLATFORM_MAX
+            || $storedMessage->direction !== Message::DIRECTION_INBOUND
+            || $storedMessage->received_at === null
+            || $storedMessage->contact_id === null
+        ) {
+            return;
+        }
+
+        $newerInbound = Message::query()
+            ->where('channel_id', $storedMessage->channel_id)
+            ->where('contact_id', $storedMessage->contact_id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->whereKeyNot($storedMessage->id)
+            ->whereNotNull('received_at')
+            ->where('received_at', '>', $storedMessage->received_at)
+            ->orderByDesc('received_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $newerInbound instanceof Message || $newerInbound->received_at === null) {
+            return;
+        }
+
+        $channelActivityLogger->info(
+            $channel,
+            'webhook.out_of_order_received',
+            'Webhook из MAX получен не по порядку относительно уже сохранённых входящих сообщений.',
+            [
+                'platform' => $channel->platform,
+                'contact_id' => $storedMessage->contact_id,
+                'message_id' => $storedMessage->id,
+                'provider_event_key' => $storedMessage->provider_event_key,
+                'external_message_id' => $storedMessage->external_message_id,
+                'received_at' => $storedMessage->received_at->toIso8601String(),
+                'newer_inbound_message_id' => $newerInbound->id,
+                'newer_inbound_received_at' => $newerInbound->received_at->toIso8601String(),
+                'seconds_behind_latest_inbound' => max(
+                    0,
+                    $newerInbound->received_at->getTimestamp() - $storedMessage->received_at->getTimestamp(),
+                ),
+            ],
+        );
     }
 
     /**
