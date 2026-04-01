@@ -108,9 +108,9 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
                 && ($payload['LINE'] ?? null) === 'line-telegram'
-                && ($payload['DATA'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
-                && ($payload['DATA'][0]['im']['message_id'] ?? null) === 'bitrix-im-101'
-                && ($payload['DATA'][0]['message']['id'][0] ?? null) === '7001';
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === 'bitrix-im-101'
+                && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === '7001';
         });
     }
 
@@ -235,8 +235,66 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
             parse_str($request->body(), $payload);
 
-            return ($payload['DATA'][0]['message']['id'][0] ?? null) === $existingMessage->external_message_id;
+            return ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === $existingMessage->external_message_id;
         });
+    }
+
+    public function test_failed_delivery_ack_marks_event_failed_after_message_is_stored(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 7002,
+                ],
+            ]),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'error' => 'ERROR_ARGUMENT',
+                'error_description' => "Argument 'MESSAGES' is null or empty",
+            ], 200),
+        ]);
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-ack-fail',
+                        'message_id' => 'bitrix-im-ack-fail',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Сообщение с падающим ack',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_FAILED, $event->processing_status);
+        $this->assertSame("Argument 'MESSAGES' is null or empty", $event->failure_reason);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_FAILED, $dialog->bitrix24_live_status);
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES,
+            'provider_event_key' => 'bitrix24-openlines:bitrix-im-ack-fail',
+            'external_message_id' => '7002',
+            'text' => 'Сообщение с падающим ack',
+        ]);
     }
 
     public function test_invalid_chat_anchor_marks_openlines_event_as_failed(): void
