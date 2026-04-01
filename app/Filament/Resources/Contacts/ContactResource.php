@@ -564,24 +564,16 @@ class ContactResource extends Resource
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
         $chronology = static::messageChronology();
-        $latestInboundUserMessageIdSql = $chronology->latestMessageIdSql(
-            'contact_id',
-            'contacts.id',
+        $latestInboundUserMessageIdSql = $chronology->latestContactMessageIdSql(
             Message::KIND_INBOUND_USER,
         );
-        $latestInboundUserMessageSortAtSql = $chronology->latestMessageSortAtSql(
-            'contact_id',
-            'contacts.id',
+        $latestInboundUserMessageSortAtSql = $chronology->latestContactMessageSortAtSql(
             Message::KIND_INBOUND_USER,
         );
-        $latestOutboundManualReplyMessageIdSql = $chronology->latestMessageIdSql(
-            'contact_id',
-            'contacts.id',
+        $latestOutboundManualReplyMessageIdSql = $chronology->latestContactMessageIdSql(
             Message::KIND_OUTBOUND_MANUAL_REPLY,
         );
-        $latestOutboundManualReplyMessageSortAtSql = $chronology->latestMessageSortAtSql(
-            'contact_id',
-            'contacts.id',
+        $latestOutboundManualReplyMessageSortAtSql = $chronology->latestContactMessageSortAtSql(
             Message::KIND_OUTBOUND_MANUAL_REPLY,
         );
 

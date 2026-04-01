@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\CalculateDistanceToMoscowJob;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
+use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -1877,6 +1878,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     {
         config()->set('bots.data_collection.completion_message', 'Спасибо, данные сохранили.');
 
+        Queue::fake([SyncContactToBitrix24Job::class]);
+
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
@@ -1916,6 +1919,9 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'reply_to_message_id' => $message->id,
             'text' => 'Спасибо, данные сохранили.',
         ]);
+        Queue::assertPushed(SyncContactToBitrix24Job::class, function (SyncContactToBitrix24Job $job) use ($contact): bool {
+            return $job->contactId === $contact->id;
+        });
     }
 
     public function test_job_saves_age_range_from_label_and_completes(): void

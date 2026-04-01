@@ -6,12 +6,14 @@ use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 
 class StoreManualOutboundMessageAction
 {
     public function __construct(
         private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
+        private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
     ) {}
 
     public function handle(
@@ -39,7 +41,7 @@ class StoreManualOutboundMessageAction
             'received_at' => now(),
         ]);
 
-        return $this->syncMessageDialogMetadataAction->handle(
+        $outboundMessage = $this->syncMessageDialogMetadataAction->handle(
             $outboundMessage,
             $routeDialog->contact ?? $routeDialog->contact()->firstOrFail(),
             $routeDialog->channel ?? $routeDialog->channel()->firstOrFail(),
@@ -48,6 +50,10 @@ class StoreManualOutboundMessageAction
             Message::SENT_BY_TYPE_OPERATOR,
             $employee->id,
         );
+
+        $this->queueBitrix24LiveMessageExportAction->handle($outboundMessage);
+
+        return $outboundMessage;
     }
 
     private function resolveStoredExternalChatId(Dialog $routeDialog): string

@@ -15,6 +15,14 @@ class Dialog extends Model
 
     public const PHONE_CONFIRMED_VIA_PHONE_CAPTURE = 'phone_capture';
 
+    public const BITRIX24_LIVE_STATUS_NOT_LINKED = 'not_linked';
+
+    public const BITRIX24_LIVE_STATUS_ACTIVE = 'active';
+
+    public const BITRIX24_LIVE_STATUS_FAILED = 'failed';
+
+    public const BITRIX24_LIVE_STATUS_CLOSED = 'closed';
+
     /**
      * @var list<string>
      */
@@ -23,6 +31,10 @@ class Dialog extends Model
         'channel_id',
         'current_contact_identity_id',
         'external_chat_id',
+        'bitrix24_live_chat_id',
+        'bitrix24_live_status',
+        'bitrix24_live_last_exported_at',
+        'bitrix24_live_last_imported_at',
         'confirmed_phone_raw',
         'confirmed_phone_normalized',
         'phone_confirmed_at',
@@ -36,11 +48,18 @@ class Dialog extends Model
      * @var array<string, string>
      */
     protected $casts = [
+        'bitrix24_live_last_exported_at' => 'datetime',
+        'bitrix24_live_last_imported_at' => 'datetime',
         'phone_confirmed_at' => 'datetime',
         'last_message_at' => 'datetime',
         'last_inbound_at' => 'datetime',
         'last_outbound_at' => 'datetime',
     ];
+
+    public function isBitrix24LiveActive(): bool
+    {
+        return $this->bitrix24_live_status === self::BITRIX24_LIVE_STATUS_ACTIVE;
+    }
 
     public function contact(): BelongsTo
     {

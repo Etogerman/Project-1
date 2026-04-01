@@ -61,6 +61,34 @@ class Contact extends Model
 
     public const DISTANCE_TO_MOSCOW_STATUS_FAILED = 'failed';
 
+    public const BITRIX24_SYNC_STATUS_NOT_SYNCED = 'not_synced';
+
+    public const BITRIX24_SYNC_STATUS_PENDING = 'pending';
+
+    public const BITRIX24_SYNC_STATUS_SYNCED = 'synced';
+
+    public const BITRIX24_SYNC_STATUS_FAILED = 'failed';
+
+    public const BITRIX24_SYNC_STATUS_PENDING_REVIEW = 'pending_review';
+
+    public const BITRIX24_DEAL_SYNC_STATUS_NOT_SYNCED = 'not_synced';
+
+    public const BITRIX24_DEAL_SYNC_STATUS_PENDING = 'pending';
+
+    public const BITRIX24_DEAL_SYNC_STATUS_SYNCED = 'synced';
+
+    public const BITRIX24_DEAL_SYNC_STATUS_FAILED = 'failed';
+
+    public const BITRIX24_DEAL_SYNC_STATUS_PENDING_REVIEW = 'pending_review';
+
+    public const BITRIX24_HISTORY_SYNC_STATUS_NOT_SYNCED = 'not_synced';
+
+    public const BITRIX24_HISTORY_SYNC_STATUS_PENDING = 'pending';
+
+    public const BITRIX24_HISTORY_SYNC_STATUS_SYNCED = 'synced';
+
+    public const BITRIX24_HISTORY_SYNC_STATUS_FAILED = 'failed';
+
     /**
      * @var list<string>
      */
@@ -93,6 +121,20 @@ class Contact extends Model
         'merge_reason',
         'merge_trigger_phone',
         'duplicate_review_status',
+        'bitrix24_contact_id',
+        'bitrix24_sync_status',
+        'bitrix24_last_synced_at',
+        'bitrix24_linked_at',
+        'bitrix24_sync_pending',
+        'bitrix24_sync_fingerprint',
+        'bitrix24_deal_id',
+        'bitrix24_deal_sync_status',
+        'bitrix24_deal_last_synced_at',
+        'bitrix24_deal_linked_at',
+        'bitrix24_deal_sync_pending',
+        'bitrix24_history_sync_status',
+        'bitrix24_history_last_synced_at',
+        'bitrix24_history_sync_pending',
     ];
 
     /**
@@ -108,6 +150,14 @@ class Contact extends Model
         'pending_region_candidates' => 'array',
         'is_auto_reply_enabled' => 'boolean',
         'merged_at' => 'datetime',
+        'bitrix24_last_synced_at' => 'datetime',
+        'bitrix24_linked_at' => 'datetime',
+        'bitrix24_sync_pending' => 'boolean',
+        'bitrix24_deal_last_synced_at' => 'datetime',
+        'bitrix24_deal_linked_at' => 'datetime',
+        'bitrix24_deal_sync_pending' => 'boolean',
+        'bitrix24_history_last_synced_at' => 'datetime',
+        'bitrix24_history_sync_pending' => 'boolean',
     ];
 
     /**
@@ -255,11 +305,6 @@ class Contact extends Model
         return $this->hasOne(ContactIdentity::class)->oldestOfMany();
     }
 
-    public function latestMessage(): HasOne
-    {
-        return $this->hasOne(Message::class)->latestOfMany('id');
-    }
-
     public function latestConversationMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'latest_message_id');
@@ -331,6 +376,31 @@ class Contact extends Model
     {
         return $this->data_collection_status === self::DATA_COLLECTION_STATUS_ACTIVE
             && filled($this->data_collection_current_field);
+    }
+
+    public function isBitrix24Linked(): bool
+    {
+        return filled($this->bitrix24_contact_id);
+    }
+
+    public function isBitrix24SyncPending(): bool
+    {
+        return (bool) $this->bitrix24_sync_pending;
+    }
+
+    public function isBitrix24DealLinked(): bool
+    {
+        return filled($this->bitrix24_deal_id);
+    }
+
+    public function isBitrix24DealSyncPending(): bool
+    {
+        return (bool) $this->bitrix24_deal_sync_pending;
+    }
+
+    public function isBitrix24HistorySyncPending(): bool
+    {
+        return (bool) $this->bitrix24_history_sync_pending;
     }
 
     public function startDataCollection(string $field): void

@@ -16,6 +16,7 @@ use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
 use App\Services\Contacts\MergeContactsAction;
+use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Database\QueryException;
@@ -29,6 +30,7 @@ class StoreInboundMessageAction
         protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
         protected MergeContactsAction $mergeContactsAction,
         protected ChannelActivityLogger $channelActivityLogger,
+        protected QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
         protected SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
         protected SyncDialogConfirmedPhoneAction $syncDialogConfirmedPhoneAction,
     ) {}
@@ -104,6 +106,7 @@ class StoreInboundMessageAction
 
                     $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
                     $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
+                    $this->queueBitrix24LiveMessageExportAction->handle($existingMessage);
 
                     return new StoredInboundMessageResult(
                         message: $existingMessage,
@@ -135,6 +138,7 @@ class StoreInboundMessageAction
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $storedMessage, $message);
                 $this->syncDialogConfirmedPhoneIfNeeded($storedMessage, $message, $phoneCaptureStatus);
+                $this->queueBitrix24LiveMessageExportAction->handle($storedMessage);
 
                 return new StoredInboundMessageResult(
                     message: $storedMessage,
@@ -155,6 +159,7 @@ class StoreInboundMessageAction
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
                 $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
+                $this->queueBitrix24LiveMessageExportAction->handle($existingMessage);
 
                 return new StoredInboundMessageResult(
                     message: $existingMessage,

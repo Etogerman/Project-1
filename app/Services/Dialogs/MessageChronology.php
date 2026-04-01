@@ -71,35 +71,32 @@ class MessageChronology
         return $this->applyLatestOrder($query)->limit(1);
     }
 
-    public function latestMessageIdSql(
-        string $foreignColumn,
-        string $parentReference,
+    public function latestDialogMessageIdSql(
         ?string $messageKind = null,
         ?string $direction = null,
     ): string {
-        $conditions = $this->buildSqlConditions($foreignColumn, $parentReference, $messageKind, $direction);
-
-        return sprintf(
-            '(select id from messages where %s order by %s desc, messages.id desc limit 1)',
-            implode(' and ', $conditions),
-            $this->sqlSortAt('messages'),
-        );
+        return $this->buildLatestMessageIdSql('dialog_id', 'dialogs.id', $messageKind, $direction);
     }
 
-    public function latestMessageSortAtSql(
-        string $foreignColumn,
-        string $parentReference,
+    public function latestDialogMessageSortAtSql(
         ?string $messageKind = null,
         ?string $direction = null,
     ): string {
-        $conditions = $this->buildSqlConditions($foreignColumn, $parentReference, $messageKind, $direction);
+        return $this->buildLatestMessageSortAtSql('dialog_id', 'dialogs.id', $messageKind, $direction);
+    }
 
-        return sprintf(
-            '(select %s from messages where %s order by %s desc, messages.id desc limit 1)',
-            $this->sqlSortAt('messages'),
-            implode(' and ', $conditions),
-            $this->sqlSortAt('messages'),
-        );
+    public function latestContactMessageIdSql(
+        ?string $messageKind = null,
+        ?string $direction = null,
+    ): string {
+        return $this->buildLatestMessageIdSql('contact_id', 'contacts.id', $messageKind, $direction);
+    }
+
+    public function latestContactMessageSortAtSql(
+        ?string $messageKind = null,
+        ?string $direction = null,
+    ): string {
+        return $this->buildLatestMessageSortAtSql('contact_id', 'contacts.id', $messageKind, $direction);
     }
 
     public function compareSortTuple(mixed $leftSortAt, mixed $leftId, mixed $rightSortAt, mixed $rightId): int
@@ -183,5 +180,36 @@ class MessageChronology
         }
 
         return $conditions;
+    }
+
+    private function buildLatestMessageIdSql(
+        string $foreignColumn,
+        string $parentReference,
+        ?string $messageKind,
+        ?string $direction,
+    ): string {
+        $conditions = $this->buildSqlConditions($foreignColumn, $parentReference, $messageKind, $direction);
+
+        return sprintf(
+            '(select id from messages where %s order by %s desc, messages.id desc limit 1)',
+            implode(' and ', $conditions),
+            $this->sqlSortAt('messages'),
+        );
+    }
+
+    private function buildLatestMessageSortAtSql(
+        string $foreignColumn,
+        string $parentReference,
+        ?string $messageKind,
+        ?string $direction,
+    ): string {
+        $conditions = $this->buildSqlConditions($foreignColumn, $parentReference, $messageKind, $direction);
+
+        return sprintf(
+            '(select %s from messages where %s order by %s desc, messages.id desc limit 1)',
+            $this->sqlSortAt('messages'),
+            implode(' and ', $conditions),
+            $this->sqlSortAt('messages'),
+        );
     }
 }

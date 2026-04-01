@@ -3,12 +3,14 @@
 namespace App\Services\Contacts;
 
 use App\Models\ContactPhoneNumber;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use RuntimeException;
 
 class UpdateContactPhoneAction
 {
     public function __construct(
         private readonly NormalizePhoneNumberAction $normalizePhoneNumberAction,
+        private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ) {}
 
     public function handle(ContactPhoneNumber $phoneNumber, string $phoneRaw): ContactPhoneNumber
@@ -36,6 +38,12 @@ class UpdateContactPhoneAction
             'phone_raw' => $phoneRaw,
             'phone_normalized' => $phoneNormalized,
         ])->save();
+
+        $contact = $phoneNumber->contact()->first();
+
+        if ($contact !== null) {
+            $this->queueBitrix24ContactSyncAction->handle($contact);
+        }
 
         return $phoneNumber->fresh();
     }
