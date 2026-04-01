@@ -1536,6 +1536,49 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('Диалоги ещё не появились.', $dialogsHtml);
     }
 
+    public function test_contact_dialogs_renderer_shows_missing_token_route_status(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram No Token',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tokenless-contact',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tokenless-chat',
+        ]);
+
+        Message::query()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'tokenless-chat',
+            'text' => 'Диалог без токена',
+            'raw_payload' => ['provider' => 'telegram'],
+            'received_at' => now(),
+        ]);
+
+        $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
+        $dialogsBuilder->setAccessible(true);
+
+        $dialogsHtml = view('filament.contacts.partials.contact-dialogs', $dialogsBuilder->invoke(null, $contact))->render();
+
+        $this->assertStringContainsString('Telegram No Token', $dialogsHtml);
+        $this->assertStringContainsString('Нет токена', $dialogsHtml);
+    }
+
     public function test_contact_dialogs_overview_uses_batched_preview_query_without_contact_history_query(): void
     {
         $contact = Contact::factory()->create();

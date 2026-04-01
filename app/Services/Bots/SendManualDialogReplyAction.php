@@ -10,6 +10,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -21,6 +22,7 @@ class SendManualDialogReplyAction
         protected ChannelActivityLogger $channelActivityLogger,
         protected ClaimContactAction $claimContactAction,
         protected ResolveRootContactAction $resolveRootContactAction,
+        protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
         protected StoreManualOutboundMessageAction $storeManualOutboundMessageAction,
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
@@ -129,35 +131,7 @@ class SendManualDialogReplyAction
 
     public function getBlockedReason(Dialog $dialog): ?string
     {
-        $dialog->loadMissing(['channel', 'currentContactIdentity']);
-
-        $channel = $dialog->channel;
-
-        if (! $channel instanceof Channel) {
-            return 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.';
-        }
-
-        if (! $channel->is_active) {
-            return 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.';
-        }
-
-        if ($channel->connection_type !== Channel::CONNECTION_TYPE_BOT) {
-            return 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.';
-        }
-
-        if (! filled($channel->getToken())) {
-            return 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.';
-        }
-
-        return match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => filled($dialog->external_chat_id)
-                ? null
-                : 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.',
-            Channel::PLATFORM_MAX => filled($dialog->external_chat_id) || filled($dialog->currentContactIdentity?->external_user_id)
-                ? null
-                : 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.',
-            default => 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.',
-        };
+        return $this->resolveDialogRouteStatusAction->handle($dialog)->blockedReason;
     }
 
     protected function resolveReplyToMessage(Dialog $dialog): ?Message

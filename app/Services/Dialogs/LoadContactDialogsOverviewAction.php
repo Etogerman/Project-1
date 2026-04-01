@@ -12,6 +12,7 @@ class LoadContactDialogsOverviewAction
 {
     public function __construct(
         protected BuildConversationFeedViewDataAction $buildConversationFeedViewDataAction,
+        protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
     ) {}
 
     /**
@@ -64,8 +65,8 @@ class LoadContactDialogsOverviewAction
                     'id' => $dialog->id,
                     'url' => DialogResource::getUrl('view', ['record' => $dialog]),
                     'channel_label' => $this->formatChannelLabel($dialog),
-                    'route_status_label' => $routeStatus['label'],
-                    'route_status_tone' => $routeStatus['tone'],
+                    'route_status_label' => $routeStatus->label,
+                    'route_status_tone' => $routeStatus->tone,
                     'phone_label' => $this->formatDialogPhoneLabel($dialog),
                     'route_identity_label' => $this->formatDialogRouteIdentityLabel($dialog),
                     'external_chat_id_label' => $dialog->external_chat_id ?: 'Не задан',
@@ -167,38 +168,9 @@ class LoadContactDialogsOverviewAction
         };
     }
 
-    /**
-     * @return array{label:string,tone:string}
-     */
-    protected function resolveDialogRouteStatus(Dialog $dialog): array
+    protected function resolveDialogRouteStatus(Dialog $dialog): \App\Data\Dialogs\DialogRouteStatusData
     {
-        $channel = $dialog->channel;
-
-        if ($channel === null) {
-            return ['label' => 'Канал не найден', 'tone' => 'gray'];
-        }
-
-        if (! $channel->is_active) {
-            return ['label' => 'Канал неактивен', 'tone' => 'gray'];
-        }
-
-        if ($channel->connection_type !== $channel::CONNECTION_TYPE_BOT) {
-            return ['label' => 'Не bot-канал', 'tone' => 'gray'];
-        }
-
-        if (! filled($channel->getToken())) {
-            return ['label' => 'Нет токена', 'tone' => 'warning'];
-        }
-
-        return match ($channel->platform) {
-            $channel::PLATFORM_TELEGRAM => filled($dialog->external_chat_id)
-                ? ['label' => 'Маршрут готов', 'tone' => 'success']
-                : ['label' => 'Нет chat id', 'tone' => 'warning'],
-            $channel::PLATFORM_MAX => filled($dialog->external_chat_id) || filled($dialog->currentContactIdentity?->external_user_id)
-                ? ['label' => 'Маршрут готов', 'tone' => 'success']
-                : ['label' => 'Нет route source', 'tone' => 'warning'],
-            default => ['label' => 'Платформа не поддерживается', 'tone' => 'gray'],
-        };
+        return $this->resolveDialogRouteStatusAction->handle($dialog);
     }
 
     protected function formatChannelLabel(Dialog $dialog): string

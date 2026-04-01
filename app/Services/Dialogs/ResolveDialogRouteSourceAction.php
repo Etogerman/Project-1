@@ -15,6 +15,7 @@ class ResolveDialogRouteSourceAction
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
+        private readonly CanSendThroughDialogAction $canSendThroughDialogAction,
     ) {}
 
     public function forContact(Contact $contact): ?Dialog
@@ -89,19 +90,7 @@ class ResolveDialogRouteSourceAction
 
     public function canBeUsedAsRouteSource(Dialog $dialog): bool
     {
-        $dialog->loadMissing(['channel', 'currentContactIdentity']);
-
-        $channel = $dialog->channel;
-
-        if (! $channel instanceof Channel || ! $channel->is_active || $channel->connection_type !== Channel::CONNECTION_TYPE_BOT || ! filled($channel->getToken())) {
-            return false;
-        }
-
-        return match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => filled($dialog->external_chat_id),
-            Channel::PLATFORM_MAX => filled($dialog->external_chat_id) || filled($dialog->currentContactIdentity?->external_user_id),
-            default => false,
-        };
+        return $this->canSendThroughDialogAction->handle($dialog);
     }
 
     public function legacyMessageCanBeUsedAsRouteSource(Message $message): bool
@@ -110,7 +99,7 @@ class ResolveDialogRouteSourceAction
 
         $channel = $message->channel;
 
-        if (! $channel instanceof Channel || ! $channel->is_active || $channel->connection_type !== Channel::CONNECTION_TYPE_BOT || ! filled($channel->getToken())) {
+        if (! $channel instanceof Channel || ! $channel->is_active || $channel->connection_type !== Channel::CONNECTION_TYPE_BOT || ! $channel->hasBotTokenConfigured()) {
             return false;
         }
 
