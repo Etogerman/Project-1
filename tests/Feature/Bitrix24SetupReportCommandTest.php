@@ -96,6 +96,8 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->expectsOutputToContain('Bitrix24 portal domain')
             ->doesntExpectOutputToContain('client-secret')
             ->expectsOutputToContain('*** redacted ***')
+            ->expectsOutputToContain('session_finish_event_names')
+            ->expectsOutputToContain('["OnSessionFinish"]')
             ->expectsOutputToContain('Bitrix24 setup is ready for the integration foundation stage.')
             ->assertSuccessful();
     }

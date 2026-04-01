@@ -138,15 +138,15 @@ class BuildBitrix24SetupReportAction
         ];
 
         foreach ((array) ($config['sources'] ?? []) as $key => $value) {
-            $frozenValues[] = $this->frozenValue('sources', $key, (string) $value);
+            $frozenValues[] = $this->frozenValue('sources', $key, $this->stringifyFrozenValue($value));
         }
 
         foreach ((array) ($config['openlines'] ?? []) as $key => $value) {
-            $frozenValues[] = $this->frozenValue('openlines', $key, (string) $value);
+            $frozenValues[] = $this->frozenValue('openlines', $key, $this->stringifyFrozenValue($value));
         }
 
         foreach ((array) ($config['fields'] ?? []) as $key => $value) {
-            $frozenValues[] = $this->frozenValue('fields', $key, (string) $value);
+            $frozenValues[] = $this->frozenValue('fields', $key, $this->stringifyFrozenValue($value));
         }
 
         return $frozenValues;
@@ -289,6 +289,25 @@ class BuildBitrix24SetupReportAction
             'label' => $label,
             'value' => $value === '' ? '—' : $value,
         ];
+    }
+
+    private function stringifyFrozenValue(mixed $value): string
+    {
+        if (is_array($value)) {
+            $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+            return is_string($encoded) ? $encoded : '[unserializable array]';
+        }
+
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if ($value === null) {
+            return '';
+        }
+
+        return (string) $value;
     }
 
     /**
