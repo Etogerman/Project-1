@@ -396,7 +396,7 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertMountedActionModalSee('Пользователь');
     }
 
-    public function test_channel_modal_prefers_latest_saved_message_over_received_at_order(): void
+    public function test_channel_modal_prefers_message_chronology_over_saved_id_order(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -453,8 +453,7 @@ class FilamentChannelsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->mountTableAction('view', $channel)
-            ->assertMountedActionModalSee('mid.0000000003e3748c019d30476b8e52e7')
-            ->assertMountedActionModalSee('тест5');
+            ->assertMountedActionModalSee('старт');
 
         $latestMessageResolver = new ReflectionMethod(ChannelResource::class, 'resolveLatestSavedMessage');
         $latestMessageResolver->setAccessible(true);
@@ -462,16 +461,16 @@ class FilamentChannelsResourceTest extends TestCase
         /** @var Message $latestMessage */
         $latestMessage = $latestMessageResolver->invoke(null, $channel);
 
-        $this->assertSame('тест5', $latestMessage->text);
+        $this->assertSame('старт', $latestMessage->text);
 
         $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
         $recentMessagesRenderer->setAccessible(true);
 
         $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
 
-        $latestPosition = strpos($recentMessagesHtml, 'тест5');
+        $latestPosition = strpos($recentMessagesHtml, 'старт');
         $middlePosition = strpos($recentMessagesHtml, 'тест3');
-        $oldestPosition = strpos($recentMessagesHtml, 'старт');
+        $oldestPosition = strpos($recentMessagesHtml, 'тест5');
 
         $this->assertIsInt($latestPosition);
         $this->assertIsInt($middlePosition);

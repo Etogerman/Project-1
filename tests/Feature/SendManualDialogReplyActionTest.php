@@ -112,6 +112,133 @@ class SendManualDialogReplyActionTest extends TestCase
             && $request['text'] === 'Отвечаю в точный диалог');
     }
 
+    public function test_send_manual_dialog_reply_uses_message_chronology_for_reply_target(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 99111,
+                ],
+            ]),
+        ]);
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createTelegramDialog(assignedUserId: $employee->id, externalChatId: 'chat-chronology');
+        $contact = $dialog->contact;
+        $identity = $dialog->currentContactIdentity;
+        $channel = $dialog->channel;
+
+        $receivedAtTarget = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-chronology',
+            'external_message_id' => 'telegram-inbound-received',
+            'received_at' => now()->subHour(),
+            'created_at' => now()->subHours(2),
+        ]);
+
+        $createdAtTarget = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-chronology',
+            'external_message_id' => 'telegram-inbound-created',
+            'received_at' => null,
+            'created_at' => now()->subSeconds(10),
+        ]);
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Хронологический ответ',
+        );
+
+        $this->assertNotSame($receivedAtTarget->id, $outboundMessage->reply_to_message_id);
+        $this->assertSame($createdAtTarget->id, $outboundMessage->reply_to_message_id);
+    }
+
+    public function test_send_manual_dialog_reply_uses_created_at_fallback_for_reply_to_when_received_at_is_null(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 99112,
+                ],
+            ]),
+        ]);
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $employee->id,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => ['token' => 'telegram-fallback-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'fallback-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'chat-fallback',
+        ]);
+
+        $olderInbound = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-fallback',
+            'external_message_id' => 'telegram-inbound-older',
+            'received_at' => now()->subMinute(),
+            'created_at' => now()->subMinutes(2),
+        ]);
+
+        $fallbackReplyTarget = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-fallback',
+            'external_message_id' => 'telegram-inbound-fallback',
+            'received_at' => null,
+            'created_at' => now()->subSeconds(5),
+        ]);
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Проверка reply-to fallback',
+        );
+
+        $this->assertSame($fallbackReplyTarget->id, $outboundMessage->reply_to_message_id);
+        $this->assertNotSame($olderInbound->id, $outboundMessage->reply_to_message_id);
+    }
+
     public function test_send_manual_dialog_reply_auto_claims_unassigned_contact(): void
     {
         Http::fake([

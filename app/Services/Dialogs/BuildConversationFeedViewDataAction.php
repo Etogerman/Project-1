@@ -9,6 +9,10 @@ use Illuminate\Support\Collection;
 
 class BuildConversationFeedViewDataAction
 {
+    public function __construct(
+        private readonly MessageChronology $messageChronology,
+    ) {}
+
     /**
      * @param  Collection<int, Message>  $messages
      * @return list<array<string, mixed>>
@@ -42,7 +46,7 @@ class BuildConversationFeedViewDataAction
 
     public function resolveMessageSortAt(Message $message): ?Carbon
     {
-        return $message->received_at ?? $message->created_at;
+        return $this->messageChronology->resolveSortAt($message);
     }
 
     protected function resolveConversationChannelLabel(Message $message): string

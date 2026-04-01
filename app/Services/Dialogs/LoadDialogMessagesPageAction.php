@@ -12,6 +12,7 @@ class LoadDialogMessagesPageAction
 {
     public function __construct(
         protected BuildConversationFeedViewDataAction $buildConversationFeedViewDataAction,
+        protected MessageChronology $messageChronology,
     ) {}
 
     /**
@@ -32,34 +33,29 @@ class LoadDialogMessagesPageAction
 
             $query->where(function (Builder $builder) use ($cursorSortAt, $cursorMessageId): void {
                 $builder
-                    ->whereRaw('coalesce(received_at, created_at) < ?', [$cursorSortAt->toDateTimeString()])
+                    ->whereRaw($this->messageChronology->sqlSortAt('messages').' < ?', [$cursorSortAt->toDateTimeString()])
                     ->orWhere(function (Builder $nested) use ($cursorSortAt, $cursorMessageId): void {
                         $nested
-                            ->whereRaw('coalesce(received_at, created_at) = ?', [$cursorSortAt->toDateTimeString()])
+                            ->whereRaw($this->messageChronology->sqlSortAt('messages').' = ?', [$cursorSortAt->toDateTimeString()])
                             ->where('id', '<', $cursorMessageId);
                     });
             });
         }
 
         $messages = $query
-            ->orderByRaw('coalesce(received_at, created_at) desc')
-            ->orderByDesc('id')
+            ->tap(fn (Builder $builder): Builder => $this->messageChronology->applyLatestOrder($builder))
             ->limit($limit + 1)
             ->get();
 
         $hasMoreOlderMessages = $messages->count() > $limit;
         $loadedMessages = $messages->take($limit)
             ->sort(function (Message $left, Message $right): int {
-                $leftAt = $this->buildConversationFeedViewDataAction->resolveMessageSortAt($left);
-                $rightAt = $this->buildConversationFeedViewDataAction->resolveMessageSortAt($right);
-
-                $comparison = ($leftAt?->getTimestamp() ?? 0) <=> ($rightAt?->getTimestamp() ?? 0);
-
-                if ($comparison !== 0) {
-                    return $comparison;
-                }
-
-                return $left->id <=> $right->id;
+                return $this->messageChronology->compareSortTuple(
+                    $this->buildConversationFeedViewDataAction->resolveMessageSortAt($left),
+                    $left->id,
+                    $this->buildConversationFeedViewDataAction->resolveMessageSortAt($right),
+                    $right->id,
+                );
             })
             ->values();
 

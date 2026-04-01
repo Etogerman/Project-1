@@ -16,7 +16,9 @@ use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
+use App\Services\Dialogs\MessageChronology;
 use BackedEnum;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\ViewAction;
@@ -76,23 +78,36 @@ class ContactResource extends Resource
                 'primary_phone_raw' => static::buildPrimaryPhoneSubquery('phone_raw'),
                 'primary_phone_normalized' => static::buildPrimaryPhoneSubquery('phone_normalized'),
                 'phone_count' => static::buildPhoneCountSubquery(),
+                'latest_message_id' => static::buildLatestMessageIdSubquery(),
+                'latest_message_sort_at' => static::buildLatestMessageSortAtSubquery(),
+                'latest_inbound_message_id' => static::buildLatestMessageIdSubquery(
+                    fn (Builder $query): Builder => $query->where('direction', Message::DIRECTION_INBOUND),
+                ),
+                'latest_inbound_user_message_id' => static::buildLatestMessageIdSubquery(
+                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
+                ),
+                'latest_inbound_user_message_sort_at' => static::buildLatestMessageSortAtSubquery(
+                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
+                ),
+                'latest_outbound_manual_reply_message_id' => static::buildLatestMessageIdSubquery(
+                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+                ),
+                'latest_outbound_manual_reply_message_sort_at' => static::buildLatestMessageSortAtSubquery(
+                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+                ),
             ])
             ->with([
                 'assignedUser',
                 'primaryIdentity.channel',
-                'latestMessage.channel',
+                'latestConversationMessage.channel',
+                'latestInboundMessage.channel',
             ])
             ->withCount([
                 'duplicateReviews as open_duplicate_reviews_count' => fn (Builder $query): Builder => $query
                     ->where('status', ContactDuplicateReview::STATUS_OPEN),
                 'mergedChildren',
             ])
-            ->withCount('messages')
-            ->withMax(['messages as latest_message_id' => fn (Builder $query): Builder => $query], 'id')
-            ->withMax(['messages as latest_inbound_user_message_id' => fn (Builder $query): Builder => $query
-                ->where('message_kind', Message::KIND_INBOUND_USER)], 'id')
-            ->withMax(['messages as latest_outbound_manual_reply_message_id' => fn (Builder $query): Builder => $query
-                ->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)], 'id');
+            ->withCount('messages');
 
         if ($excludeMerged) {
             $query->whereNull('contacts.merged_into_contact_id');
@@ -352,9 +367,10 @@ class ContactResource extends Resource
                     ->label('Активность')
                     ->toggleable()
                     ->placeholder('—')
-                    ->state(fn (Contact $record) => static::resolveLatestConversationMessage($record)?->received_at)
+                    ->state(fn (Contact $record) => static::resolveLatestConversationMessageSortAt($record))
                     ->dateTime('d.m.Y H:i')
                     ->sortable(query: fn (Builder $query, string $direction): Builder => $query
+                        ->orderBy('latest_message_sort_at', $direction)
                         ->orderBy('latest_message_id', $direction)
                         ->orderBy('contacts.id', $direction)),
                 TextColumn::make('created_at')
@@ -386,7 +402,7 @@ class ContactResource extends Resource
             ->columnManager()
             ->deferColumnManager(false)
             ->reorderableColumns()
-            ->defaultSort('latest_message_id', 'desc')
+            ->defaultSort('latest_message_sort_at', 'desc')
             ->emptyStateHeading('Контактов ещё нет')
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')
             ->recordActionsColumnLabel('Кнопки')
@@ -460,29 +476,62 @@ class ContactResource extends Resource
 
     protected static function resolveLatestInboundMessage(Contact $record): ?Message
     {
+        if ($record->relationLoaded('latestInboundMessage')) {
+            return $record->latestInboundMessage;
+        }
+
+        $latestInboundMessageId = $record->getAttribute('latest_inbound_message_id');
+
+        if (filled($latestInboundMessageId)) {
+            return Message::query()
+                ->with('channel')
+                ->find($latestInboundMessageId);
+        }
+
         return $record->messages()
             ->with('channel')
             ->where('direction', Message::DIRECTION_INBOUND)
-            ->orderByDesc('id')
+            ->tap(fn (Builder $query): Builder => static::messageChronology()->applyLatestOrder($query))
             ->first();
     }
 
     protected static function resolveLatestConversationMessage(Contact $record): ?Message
     {
-        if ($record->relationLoaded('latestMessage')) {
-            return $record->latestMessage;
+        if ($record->relationLoaded('latestConversationMessage')) {
+            return $record->latestConversationMessage;
+        }
+
+        $latestMessageId = $record->getAttribute('latest_message_id');
+
+        if (filled($latestMessageId)) {
+            return Message::query()
+                ->with(['channel', 'replyTo'])
+                ->find($latestMessageId);
         }
 
         return $record->messages()
             ->with(['channel', 'replyTo'])
-            ->orderByDesc('id')
+            ->tap(fn (Builder $query): Builder => static::messageChronology()->applyLatestOrder($query))
             ->first();
+    }
+
+    protected static function resolveLatestConversationMessageSortAt(Contact $record): mixed
+    {
+        $latestMessage = static::resolveLatestConversationMessage($record);
+
+        if ($latestMessage instanceof Message) {
+            return static::messageChronology()->resolveSortAt($latestMessage);
+        }
+
+        return $record->getAttribute('latest_message_sort_at');
     }
 
     protected static function contactRequiresManualReply(Contact $record): bool
     {
         $latestInboundUserMessageId = $record->getAttribute('latest_inbound_user_message_id');
+        $latestInboundUserMessageSortAt = $record->getAttribute('latest_inbound_user_message_sort_at');
         $latestOutboundManualReplyMessageId = $record->getAttribute('latest_outbound_manual_reply_message_id');
+        $latestOutboundManualReplyMessageSortAt = $record->getAttribute('latest_outbound_manual_reply_message_sort_at');
 
         if (! filled($latestInboundUserMessageId)) {
             return false;
@@ -492,7 +541,12 @@ class ContactResource extends Resource
             return true;
         }
 
-        return (int) $latestInboundUserMessageId > (int) $latestOutboundManualReplyMessageId;
+        return static::messageChronology()->isAfter(
+            $latestInboundUserMessageSortAt,
+            $latestInboundUserMessageId,
+            $latestOutboundManualReplyMessageSortAt,
+            $latestOutboundManualReplyMessageId,
+        );
     }
 
     protected static function formatInboxStatus(Contact $record): string
@@ -509,26 +563,46 @@ class ContactResource extends Resource
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
+        $chronology = static::messageChronology();
+        $latestInboundUserMessageIdSql = $chronology->latestMessageIdSql(
+            'contact_id',
+            'contacts.id',
+            Message::KIND_INBOUND_USER,
+        );
+        $latestInboundUserMessageSortAtSql = $chronology->latestMessageSortAtSql(
+            'contact_id',
+            'contacts.id',
+            Message::KIND_INBOUND_USER,
+        );
+        $latestOutboundManualReplyMessageIdSql = $chronology->latestMessageIdSql(
+            'contact_id',
+            'contacts.id',
+            Message::KIND_OUTBOUND_MANUAL_REPLY,
+        );
+        $latestOutboundManualReplyMessageSortAtSql = $chronology->latestMessageSortAtSql(
+            'contact_id',
+            'contacts.id',
+            Message::KIND_OUTBOUND_MANUAL_REPLY,
+        );
+
         return $query
-            ->whereExists(function (QueryBuilder $subquery): void {
-                $subquery
-                    ->selectRaw('1')
-                    ->from('messages')
-                    ->whereColumn('messages.contact_id', 'contacts.id')
-                    ->where('messages.message_kind', Message::KIND_INBOUND_USER);
-            })
-            ->where(function (Builder $query): Builder {
+            ->whereRaw($latestInboundUserMessageIdSql.' is not null')
+            ->where(function (Builder $query) use (
+                $latestInboundUserMessageIdSql,
+                $latestInboundUserMessageSortAtSql,
+                $latestOutboundManualReplyMessageIdSql,
+                $latestOutboundManualReplyMessageSortAtSql,
+            ): Builder {
                 return $query
-                    ->whereNotExists(function (QueryBuilder $subquery): void {
-                        $subquery
-                            ->selectRaw('1')
-                            ->from('messages')
-                            ->whereColumn('messages.contact_id', 'contacts.id')
-                            ->where('messages.message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY);
-                    })
+                    ->whereRaw($latestOutboundManualReplyMessageIdSql.' is null')
                     ->orWhereRaw(
-                        '(select max(id) from messages where messages.contact_id = contacts.id and messages.message_kind = ?) > (select max(id) from messages where messages.contact_id = contacts.id and messages.message_kind = ?)',
-                        [Message::KIND_INBOUND_USER, Message::KIND_OUTBOUND_MANUAL_REPLY],
+                        sprintf(
+                            '(%1$s > %2$s) or ((%1$s = %2$s) and (%3$s > %4$s))',
+                            $latestInboundUserMessageSortAtSql,
+                            $latestOutboundManualReplyMessageSortAtSql,
+                            $latestInboundUserMessageIdSql,
+                            $latestOutboundManualReplyMessageIdSql,
+                        ),
                     );
             });
     }
@@ -579,6 +653,29 @@ class ContactResource extends Resource
         return ContactPhoneNumber::query()
             ->selectRaw('count(*)')
             ->whereColumn('contact_id', 'contacts.id');
+    }
+
+    protected static function buildLatestMessageIdSubquery(?Closure $scope = null): Builder
+    {
+        return static::messageChronology()->latestMessageIdSubquery(
+            'contact_id',
+            'contacts.id',
+            $scope,
+        );
+    }
+
+    protected static function buildLatestMessageSortAtSubquery(?Closure $scope = null): Builder
+    {
+        return static::messageChronology()->latestMessageSortAtSubquery(
+            'contact_id',
+            'contacts.id',
+            $scope,
+        );
+    }
+
+    protected static function messageChronology(): MessageChronology
+    {
+        return app(MessageChronology::class);
     }
 
     /**

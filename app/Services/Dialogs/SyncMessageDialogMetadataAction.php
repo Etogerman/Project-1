@@ -13,6 +13,7 @@ class SyncMessageDialogMetadataAction
 {
     public function __construct(
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
+        private readonly MessageChronology $messageChronology,
     ) {}
 
     public function handle(
@@ -27,11 +28,12 @@ class SyncMessageDialogMetadataAction
     ): Message {
         $dialog = $this->resolveOrCreateDialogAction->handle($contact, $channel);
         $dialog = $this->lockDialog($dialog);
+        $messageSortAt = $this->messageChronology->resolveSortAt($message);
 
         $this->touchDialog(
             $dialog,
             $message->direction,
-            $message->received_at,
+            $messageSortAt,
             $contactIdentity,
             $externalChatId,
         );

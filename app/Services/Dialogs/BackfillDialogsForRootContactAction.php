@@ -7,6 +7,7 @@ use App\Models\Channel;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
+use Closure;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -15,6 +16,7 @@ class BackfillDialogsForRootContactAction
     public function __construct(
         private readonly InferHistoricalMessageSenderAction $inferHistoricalMessageSenderAction,
         private readonly ResolveDialogRoutePayloadAction $resolveDialogRoutePayloadAction,
+        private readonly MessageChronology $messageChronology,
     ) {}
 
     /**
@@ -45,8 +47,7 @@ class BackfillDialogsForRootContactAction
             ->with('contactIdentity')
             ->whereIn('contact_id', $memberContactIds)
             ->orderBy('channel_id')
-            ->orderByDesc('received_at')
-            ->orderByDesc('id')
+            ->tap(fn ($query) => $this->messageChronology->applyLatestOrder($query))
             ->get();
 
         $identities = ContactIdentity::query()
@@ -169,13 +170,15 @@ class BackfillDialogsForRootContactAction
             );
         }
 
-        $computedLastMessageAt = $channelMessages->max('received_at');
-        $computedLastInboundAt = $channelMessages
-            ->where('direction', Message::DIRECTION_INBOUND)
-            ->max('received_at');
-        $computedLastOutboundAt = $channelMessages
-            ->where('direction', Message::DIRECTION_OUTBOUND)
-            ->max('received_at');
+        $computedLastMessageAt = $this->resolveLatestMessageSortAt($channelMessages);
+        $computedLastInboundAt = $this->resolveLatestMessageSortAt(
+            $channelMessages,
+            fn (Message $message): bool => $message->direction === Message::DIRECTION_INBOUND,
+        );
+        $computedLastOutboundAt = $this->resolveLatestMessageSortAt(
+            $channelMessages,
+            fn (Message $message): bool => $message->direction === Message::DIRECTION_OUTBOUND,
+        );
 
         $dialog = Dialog::query()->firstOrNew([
             'contact_id' => $rootContact->id,
@@ -318,6 +321,27 @@ class BackfillDialogsForRootContactAction
         $computedTimestamp = strtotime((string) $computedValue);
 
         return $computedTimestamp > $currentTimestamp ? $computedValue : $currentValue;
+    }
+
+    /**
+     * @param  Collection<int, Message>  $messages
+     */
+    private function resolveLatestMessageSortAt(Collection $messages, ?Closure $filter = null): mixed
+    {
+        $message = $messages
+            ->when(
+                $filter instanceof Closure,
+                fn (Collection $messages): Collection => $messages->filter($filter),
+            )
+            ->sortByDesc(fn (Message $message): string => $this->messageChronology->timestampAndIdSortKey(
+                $this->messageChronology->resolveSortAt($message),
+                $message->id,
+            ))
+            ->first();
+
+        return $message instanceof Message
+            ? $this->messageChronology->resolveSortAt($message)
+            : null;
     }
 
     /**

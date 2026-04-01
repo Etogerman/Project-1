@@ -260,6 +260,16 @@ class Contact extends Model
         return $this->hasOne(Message::class)->latestOfMany('id');
     }
 
+    public function latestConversationMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'latest_message_id');
+    }
+
+    public function latestInboundMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'latest_inbound_message_id');
+    }
+
     public function messages(): HasMany
     {
         return $this->hasMany(Message::class);
