@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Dialogs;
 
+use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
@@ -9,6 +10,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
+use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
@@ -109,9 +111,9 @@ class DialogResource extends Resource
                     ->toggleable(),
                 TextColumn::make('route_status')
                     ->label('Маршрут')
-                    ->state(fn (Dialog $record): string => static::resolveDialogRouteStatus($record)['label'])
+                    ->state(fn (Dialog $record): string => static::resolveDialogRouteStatus($record)->label)
                     ->badge()
-                    ->color(fn (Dialog $record): string => static::resolveDialogRouteStatus($record)['tone'])
+                    ->color(fn (Dialog $record): string => static::resolveDialogRouteStatus($record)->tone)
                     ->toggleable(),
                 TextColumn::make('preview_sender_label')
                     ->label('Кто')
@@ -168,10 +170,10 @@ class DialogResource extends Resource
                         ->all()),
                 Filter::make('route_ready')
                     ->label('Маршрут готов')
-                    ->query(fn (Builder $query): Builder => static::applyRouteReadyFilter($query)),
+                    ->query(fn (Builder $query): Builder => $query->whereRouteReady()),
                 Filter::make('route_problem')
                     ->label('Проблема маршрута')
-                    ->query(fn (Builder $query): Builder => static::applyRouteProblemFilter($query)),
+                    ->query(fn (Builder $query): Builder => $query->whereRouteProblem()),
             ])
             ->defaultSort('last_message_at', 'desc')
             ->recordUrl(fn (Dialog $record): string => static::getUrl('view', ['record' => $record]))
@@ -396,98 +398,9 @@ class DialogResource extends Resource
         });
     }
 
-    protected static function applyRouteReadyFilter(Builder $query): Builder
+    protected static function resolveDialogRouteStatus(Dialog $dialog): DialogRouteStatusData
     {
-        return $query
-            ->whereHas('channel', fn (Builder $query): Builder => $query
-                ->where('is_active', true)
-                ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
-                ->whereNotNull('credentials'))
-            ->where(function (Builder $query): void {
-                $query
-                    ->where(function (Builder $telegramQuery): void {
-                        $telegramQuery
-                            ->whereHas('channel', fn (Builder $query): Builder => $query->where('platform', Channel::PLATFORM_TELEGRAM))
-                            ->whereNotNull('external_chat_id');
-                    })
-                    ->orWhere(function (Builder $maxQuery): void {
-                        $maxQuery
-                            ->whereHas('channel', fn (Builder $query): Builder => $query->where('platform', Channel::PLATFORM_MAX))
-                            ->where(function (Builder $routeQuery): void {
-                                $routeQuery
-                                    ->whereNotNull('external_chat_id')
-                                    ->orWhereHas('currentContactIdentity', fn (Builder $query): Builder => $query->whereNotNull('external_user_id'));
-                            });
-                    });
-            });
-    }
-
-    protected static function applyRouteProblemFilter(Builder $query): Builder
-    {
-        return $query->where(function (Builder $query): void {
-            $query
-                ->whereDoesntHave('channel')
-                ->orWhereHas('channel', function (Builder $query): void {
-                    $query
-                        ->where('is_active', false)
-                        ->orWhere('connection_type', '!=', Channel::CONNECTION_TYPE_BOT)
-                        ->orWhereNull('credentials')
-                        ->orWhereNotIn('platform', [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX]);
-                })
-                ->orWhere(function (Builder $telegramQuery): void {
-                    $telegramQuery
-                        ->whereHas('channel', fn (Builder $query): Builder => $query
-                            ->where('platform', Channel::PLATFORM_TELEGRAM)
-                            ->where('is_active', true)
-                            ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
-                            ->whereNotNull('credentials'))
-                        ->whereNull('external_chat_id');
-                })
-                ->orWhere(function (Builder $maxQuery): void {
-                    $maxQuery
-                        ->whereHas('channel', fn (Builder $query): Builder => $query
-                            ->where('platform', Channel::PLATFORM_MAX)
-                            ->where('is_active', true)
-                            ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
-                            ->whereNotNull('credentials'))
-                        ->whereNull('external_chat_id')
-                        ->whereDoesntHave('currentContactIdentity', fn (Builder $query): Builder => $query->whereNotNull('external_user_id'));
-                });
-        });
-    }
-
-    /**
-     * @return array{label:string,tone:string}
-     */
-    protected static function resolveDialogRouteStatus(Dialog $dialog): array
-    {
-        $channel = $dialog->channel;
-
-        if ($channel === null) {
-            return ['label' => 'Канал не найден', 'tone' => 'gray'];
-        }
-
-        if (! $channel->is_active) {
-            return ['label' => 'Канал неактивен', 'tone' => 'gray'];
-        }
-
-        if ($channel->connection_type !== Channel::CONNECTION_TYPE_BOT) {
-            return ['label' => 'Не bot-канал', 'tone' => 'gray'];
-        }
-
-        if (! filled($channel->getToken())) {
-            return ['label' => 'Нет токена', 'tone' => 'warning'];
-        }
-
-        return match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => filled($dialog->external_chat_id)
-                ? ['label' => 'Маршрут готов', 'tone' => 'success']
-                : ['label' => 'Нет chat id', 'tone' => 'warning'],
-            Channel::PLATFORM_MAX => filled($dialog->external_chat_id) || filled($dialog->currentContactIdentity?->external_user_id)
-                ? ['label' => 'Маршрут готов', 'tone' => 'success']
-                : ['label' => 'Нет route source', 'tone' => 'warning'],
-            default => ['label' => 'Платформа не поддерживается', 'tone' => 'gray'],
-        };
+        return app(ResolveDialogRouteStatusAction::class)->handle($dialog);
     }
 
     protected static function formatChannelLabel(Dialog $dialog): string

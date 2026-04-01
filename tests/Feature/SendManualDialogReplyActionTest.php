@@ -245,6 +245,29 @@ class SendManualDialogReplyActionTest extends TestCase
         );
     }
 
+    public function test_send_manual_dialog_reply_fails_when_exact_dialog_is_missing_token(): void
+    {
+        Http::fake();
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createTelegramDialog(assignedUserId: $employee->id, externalChatId: 'chat-no-token');
+        $dialog->channel->update([
+            'credentials' => [],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('У этого диалога сейчас нет рабочего маршрута для отправки ответа.');
+
+        app(SendManualDialogReplyAction::class)->handle(
+            $dialog->fresh(['channel', 'currentContactIdentity', 'contact.assignedUser']),
+            $employee,
+            'Нет токена',
+        );
+    }
+
     protected function createTelegramDialog(?int $assignedUserId, ?string $externalChatId): Dialog
     {
         $contact = Contact::factory()->create([

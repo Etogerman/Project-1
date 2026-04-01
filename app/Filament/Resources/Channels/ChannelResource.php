@@ -398,7 +398,7 @@ class ChannelResource extends Resource
                     ->color('gray')
                     ->iconButton()
                     ->tooltip('Обновить данные бота')
-                    ->visible(fn (Channel $record): bool => $record->connection_type === Channel::CONNECTION_TYPE_BOT && filled($record->getToken()))
+                    ->visible(fn (Channel $record): bool => $record->connection_type === Channel::CONNECTION_TYPE_BOT && $record->hasBotTokenConfigured())
                     ->action(function (Channel $record): void {
                         try {
                             app(SyncChannelBotMetadataAction::class)->handle($record);

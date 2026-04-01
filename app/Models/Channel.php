@@ -36,6 +36,7 @@ class Channel extends Model
         'platform',
         'connection_type',
         'credentials',
+        'bot_token_present',
         'bot_external_id',
         'bot_username',
         'bot_name',
@@ -53,11 +54,19 @@ class Channel extends Model
      */
     protected $casts = [
         'is_active' => 'boolean',
+        'bot_token_present' => 'boolean',
         'credentials' => 'encrypted:array',
         'last_webhook_received_at' => 'datetime',
         'last_reply_sent_at' => 'datetime',
         'last_error_at' => 'datetime',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(function (Channel $channel): void {
+            $channel->syncTokenPresenceFromCredentials();
+        });
+    }
 
     /**
      * @return array<string, string>
@@ -109,6 +118,11 @@ class Channel extends Model
         return filled($token) ? (string) $token : null;
     }
 
+    public function hasBotTokenConfigured(): bool
+    {
+        return (bool) $this->bot_token_present;
+    }
+
     public function getWebhookSecret(): ?string
     {
         $secret = data_get($this->credentials, self::CREDENTIAL_WEBHOOK_SECRET);
@@ -149,6 +163,14 @@ class Channel extends Model
         Arr::set($credentials, $key, $value);
 
         $this->credentials = $credentials;
+        $this->syncTokenPresenceFromCredentials();
+
+        return $this;
+    }
+
+    public function syncTokenPresenceFromCredentials(): static
+    {
+        $this->bot_token_present = filled(data_get($this->credentials, self::CREDENTIAL_TOKEN));
 
         return $this;
     }

@@ -12,6 +12,16 @@
 - [Dialog Workspace](docs/dialog-workspace.md) — текущая модель `Contact overview / Dialog workspace`
 - [AGENTS.md](AGENTS.md) — runtime reference для разработки и агентских изменений
 
+## Testing
+
+- Полный suite: `php artisan test`
+- CI-friendly shard suites:
+  - `composer test:feature:ui`
+  - `composer test:feature:bots`
+  - `composer test:feature:collector`
+  - `composer test:feature:domain`
+- Агрегирующий provider-agnostic прогон для CI: `composer test:ci`
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:

@@ -352,8 +352,15 @@ class FilamentDialogsResourceTest extends TestCase
         $routeProblemDialog = $this->createInboxDialog([
             'channelName' => 'Telegram Broken',
             'platform' => Channel::PLATFORM_TELEGRAM,
-            'externalChatId' => null,
+            'externalChatId' => '',
             'contactName' => 'Telegram broken',
+        ]);
+        $tokenlessDialog = $this->createInboxDialog([
+            'channelName' => 'Telegram No Token',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'externalChatId' => 'tg-no-token-chat',
+            'contactName' => 'Telegram no token',
+            'hasToken' => false,
         ]);
 
         Livewire::actingAs($admin)
@@ -361,14 +368,15 @@ class FilamentDialogsResourceTest extends TestCase
             ->removeTableFilter('requires_manual_reply')
             ->filterTable('route_ready')
             ->assertCanSeeTableRecords([$readyDialog])
-            ->assertCanNotSeeTableRecords([$routeProblemDialog]);
+            ->assertCanNotSeeTableRecords([$routeProblemDialog, $tokenlessDialog]);
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
             ->removeTableFilter('requires_manual_reply')
             ->filterTable('route_problem')
-            ->assertCanSeeTableRecords([$routeProblemDialog])
-            ->assertCanNotSeeTableRecords([$readyDialog]);
+            ->assertCanSeeTableRecords([$routeProblemDialog, $tokenlessDialog])
+            ->assertCanNotSeeTableRecords([$readyDialog])
+            ->assertSee('Нет токена');
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
@@ -403,6 +411,37 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Автоответ системы')
             ->assertSee('Автоответчик')
             ->assertSee(DialogResource::getUrl('view', ['record' => $dialog]), escape: false);
+    }
+
+    public function test_dialog_view_route_status_matches_inbox_route_badge_for_same_dialog(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $readyDialog = $this->createInboxDialog([
+            'channelName' => 'Telegram Ready View',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'externalChatId' => 'tg-ready-view',
+            'contactName' => 'Telegram ready view',
+        ]);
+        $problemDialog = $this->createInboxDialog([
+            'channelName' => 'Telegram No Token View',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'externalChatId' => 'tg-no-token-view',
+            'contactName' => 'Telegram no token view',
+            'hasToken' => false,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $readyDialog]))
+            ->assertOk()
+            ->assertSee('Маршрут готов');
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $problemDialog]))
+            ->assertOk()
+            ->assertSee('Нет токена');
     }
 
     public function test_dialogs_inbox_searches_contact_identity_chat_and_phone(): void
@@ -888,16 +927,18 @@ class FilamentDialogsResourceTest extends TestCase
      *     platform?:string,
      *     externalUserId?:string,
      *     externalUsername?:?string,
-     *     externalChatId?:?string
+     *     externalChatId?:?string,
+     *     hasToken?:bool
      * }  $attributes
      */
     protected function createInboxDialog(array $attributes = []): Dialog
     {
         $platform = $attributes['platform'] ?? Channel::PLATFORM_MAX;
+        $hasToken = $attributes['hasToken'] ?? true;
         $channel = Channel::factory()->create([
             'name' => $attributes['channelName'] ?? ($platform === Channel::PLATFORM_TELEGRAM ? 'Telegram Support' : 'MAX Support'),
             'platform' => $platform,
-            'credentials' => ['token' => $platform.'-token'],
+            'credentials' => $hasToken ? ['token' => $platform.'-token'] : [],
             'is_active' => true,
         ]);
         $contact = Contact::factory()->create([

@@ -191,6 +191,32 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame('old_bot', $channel->bot_username);
     }
 
+    public function test_sync_bot_metadata_action_uses_channel_token_presence_predicate(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-visible-token'],
+            'bot_token_present' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionVisible('syncBotMetadata', $channel);
+
+        DB::table('channels')
+            ->where('id', $channel->id)
+            ->update(['bot_token_present' => false]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionHidden('syncBotMetadata', $channel->fresh());
+    }
+
     public function test_admin_can_update_channel_token_on_edit_without_losing_webhook_secret(): void
     {
         $admin = User::factory()->create([
