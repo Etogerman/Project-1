@@ -18,6 +18,10 @@ return [
         ],
     ],
 
+    'oauth' => [
+        'server_url' => env('BITRIX24_AUTH_SERVER_URL'),
+    ],
+
     'callbacks' => [
         'install_url' => env('BITRIX24_INSTALL_CALLBACK_URL'),
         'events_url' => env('BITRIX24_EVENTS_CALLBACK_URL'),
@@ -26,6 +30,7 @@ return [
 
     'features' => [
         'contacts_sync_enabled' => (bool) env('BITRIX24_CONTACTS_SYNC_ENABLED', false),
+        'deals_sync_enabled' => (bool) env('BITRIX24_DEALS_SYNC_ENABLED', false),
         'openlines_enabled' => (bool) env('BITRIX24_OPENLINES_ENABLED', false),
         'timeline_history_import_enabled' => (bool) env('BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED', false),
         'reverse_sync_enabled' => (bool) env('BITRIX24_REVERSE_SYNC_ENABLED', false),
@@ -47,6 +52,15 @@ return [
         'max_line_id' => env('BITRIX24_MAX_LINE_ID'),
         'telegram_connector_code' => env('BITRIX24_TELEGRAM_CONNECTOR_CODE'),
         'max_connector_code' => env('BITRIX24_MAX_CONNECTOR_CODE'),
+        'session_finish_event_names' => [
+            'OnSessionFinish',
+        ],
+    ],
+
+    'http' => [
+        'timeout_seconds' => (int) env('BITRIX24_HTTP_TIMEOUT_SECONDS', 15),
+        'connect_timeout_seconds' => (int) env('BITRIX24_HTTP_CONNECT_TIMEOUT_SECONDS', 5),
+        'retry_sleep_milliseconds' => (int) env('BITRIX24_HTTP_RETRY_SLEEP_MILLISECONDS', 200),
     ],
 
     'fields' => [

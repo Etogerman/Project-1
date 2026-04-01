@@ -4,6 +4,7 @@ namespace App\Services\Contacts;
 
 use App\Jobs\CalculateDistanceToMoscowJob;
 use App\Models\Contact;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use Illuminate\Support\Carbon;
 
 class UpdateContactProfileAction
@@ -11,6 +12,7 @@ class UpdateContactProfileAction
     public function __construct(
         private readonly SyncContactRussianRegionAction $syncContactRussianRegionAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ) {}
 
     /**
@@ -58,6 +60,8 @@ class UpdateContactProfileAction
                 $this->dispatchDistanceToMoscowCalculation($contact);
             }
 
+            $this->queueBitrix24ContactSyncAction->handle($contact);
+
             return $contact->fresh();
         }
 
@@ -73,6 +77,8 @@ class UpdateContactProfileAction
                 $this->dispatchDistanceToMoscowCalculation($contact);
             }
 
+            $this->queueBitrix24ContactSyncAction->handle($contact);
+
             return $contact->fresh();
         }
 
@@ -85,6 +91,8 @@ class UpdateContactProfileAction
         if ($locationChanged) {
             $this->dispatchDistanceToMoscowCalculation($contact);
         }
+
+        $this->queueBitrix24ContactSyncAction->handle($contact);
 
         return $contact->fresh();
     }

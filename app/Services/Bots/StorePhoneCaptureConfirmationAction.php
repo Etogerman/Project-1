@@ -5,6 +5,7 @@ namespace App\Services\Bots;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Support\Facades\DB;
 
@@ -12,6 +13,7 @@ class StorePhoneCaptureConfirmationAction
 {
     public function __construct(
         private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
+        private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
     ) {}
 
     public function handle(Dialog $routeDialog, Message $inboundMessage, AutoReplyDeliveryResult $deliveryResult): Message
@@ -39,7 +41,7 @@ class StorePhoneCaptureConfirmationAction
                 'received_at' => now(),
             ]);
 
-            return $this->syncMessageDialogMetadataAction->handle(
+            $outboundMessage = $this->syncMessageDialogMetadataAction->handle(
                 $outboundMessage,
                 $routeDialog->contact ?? $routeDialog->contact()->firstOrFail(),
                 $routeDialog->channel ?? $routeDialog->channel()->firstOrFail(),
@@ -49,6 +51,10 @@ class StorePhoneCaptureConfirmationAction
                 null,
                 Message::SENT_BY_SYSTEM_CODE_PHONE_CAPTURE_CONFIRMATION,
             );
+
+            $this->queueBitrix24LiveMessageExportAction->handle($outboundMessage);
+
+            return $outboundMessage;
         });
     }
 

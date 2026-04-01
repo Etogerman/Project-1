@@ -13,6 +13,7 @@ use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Contacts\SyncContactRussianRegionAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
@@ -70,6 +71,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ExtractCityAction $extractCityAction,
         ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
         SyncContactRussianRegionAction $syncContactRussianRegionAction,
+        QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
@@ -206,6 +208,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 maxBotApiService: $maxBotApiService,
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
+                queueBitrix24ContactSyncAction: $queueBitrix24ContactSyncAction,
             ),
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->handleAgeRangeReply(
                 message: $message,
@@ -216,6 +219,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 maxBotApiService: $maxBotApiService,
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
+                queueBitrix24ContactSyncAction: $queueBitrix24ContactSyncAction,
             ),
             default => null,
         };
@@ -629,6 +633,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ): void {
         $resolution = $this->resolveRussianRegionConfirmInput($contact, $replyText);
 
@@ -699,6 +704,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ): void {
         $ageRange = $this->resolveAgeRangeValue($replyText);
 
@@ -731,6 +737,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             maxBotApiService: $maxBotApiService,
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
+            queueBitrix24ContactSyncAction: $queueBitrix24ContactSyncAction,
         );
     }
 
@@ -1340,6 +1347,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ): void {
         $this->sendReply(
             message: $message,
@@ -1356,6 +1364,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
 
         $contact->completeDataCollection();
+        $queueBitrix24ContactSyncAction->handle($contact);
 
         $channelActivityLogger->info(
             $channel,
@@ -1378,6 +1387,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ): void {
         $this->sendReply(
             message: $message,
@@ -1394,6 +1404,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
 
         $contact->completeDataCollection();
+        $queueBitrix24ContactSyncAction->handle($contact);
 
         $channelActivityLogger->info(
             $channel,
