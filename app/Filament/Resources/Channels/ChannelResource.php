@@ -8,6 +8,7 @@ use App\Models\ChannelActivityLog;
 use App\Models\Message;
 use App\Services\Bots\RegisterChannelWebhookAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
+use App\Services\Dialogs\MessageChronology;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -512,7 +513,7 @@ class ChannelResource extends Resource
         return $record->messages()
             ->with('contactIdentity')
             ->where('direction', Message::DIRECTION_INBOUND)
-            ->orderByDesc('id')
+            ->tap(fn ($query) => static::messageChronology()->applyLatestOrder($query))
             ->first();
     }
 
@@ -520,7 +521,7 @@ class ChannelResource extends Resource
     {
         $messages = $record->messages()
             ->with(['contactIdentity', 'replyTo'])
-            ->orderByDesc('id')
+            ->tap(fn ($query) => static::messageChronology()->applyLatestOrder($query))
             ->limit(15)
             ->get();
 
@@ -698,6 +699,11 @@ class ChannelResource extends Resource
         }
 
         return static::getMessageReplyStatusColor($message);
+    }
+
+    protected static function messageChronology(): MessageChronology
+    {
+        return app(MessageChronology::class);
     }
 
     protected static function formatMessageDirection(?string $direction): string

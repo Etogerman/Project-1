@@ -12,6 +12,7 @@ class LoadContactDialogsOverviewAction
 {
     public function __construct(
         protected BuildConversationFeedViewDataAction $buildConversationFeedViewDataAction,
+        protected MessageChronology $messageChronology,
         protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
     ) {}
 
@@ -127,7 +128,7 @@ class LoadContactDialogsOverviewAction
             ->whereIn('dialog_id', $dialogIds->all())
             ->with(['channel', 'dialog.channel', 'sentByUser'])
             ->orderBy('dialog_id')
-            ->orderByRaw('coalesce(received_at, created_at) desc')
+            ->orderByRaw($this->messageChronology->sqlSortAt('messages').' desc')
             ->orderByDesc('id')
             ->get();
     }

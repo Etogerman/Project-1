@@ -71,6 +71,43 @@ class BackfillDialogsCommandTest extends TestCase
             ->count());
     }
 
+    public function test_apply_uses_created_at_fallback_for_dialog_chronology_and_route_source(): void
+    {
+        $identity = ContactIdentity::factory()->create();
+
+        Message::factory()->create([
+            'contact_id' => $identity->contact_id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $identity->channel_id,
+            'external_chat_id' => 'chat-old',
+            'received_at' => now()->subHour(),
+            'created_at' => now()->subHours(2),
+        ]);
+
+        $fallbackChronologyMessage = Message::factory()->create([
+            'contact_id' => $identity->contact_id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $identity->channel_id,
+            'external_chat_id' => 'chat-created',
+            'received_at' => null,
+            'created_at' => now()->subMinute(),
+        ]);
+
+        Artisan::call('dialogs:backfill', ['--apply' => true]);
+
+        $dialog = Dialog::query()->where('contact_id', $identity->contact_id)->where('channel_id', $identity->channel_id)->firstOrFail();
+
+        $this->assertSame('chat-created', $dialog->external_chat_id);
+        $this->assertSame(
+            $fallbackChronologyMessage->created_at?->format('Y-m-d H:i:s'),
+            $dialog->last_message_at?->format('Y-m-d H:i:s'),
+        );
+        $this->assertSame(
+            $fallbackChronologyMessage->created_at?->format('Y-m-d H:i:s'),
+            $dialog->last_inbound_at?->format('Y-m-d H:i:s'),
+        );
+    }
+
     public function test_apply_creates_separate_dialogs_for_different_channels(): void
     {
         $contact = Contact::factory()->create();

@@ -1834,7 +1834,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$closedContact]);
     }
 
-    public function test_contacts_table_sorts_by_latest_saved_message_desc(): void
+    public function test_contacts_table_sorts_by_message_chronology_desc(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1894,7 +1894,7 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->assertCanSeeTableRecords([$newerContact, $olderContact], inOrder: true);
+            ->assertCanSeeTableRecords([$olderContact, $newerContact], inOrder: true);
     }
 
     public function test_contact_modal_can_assign_current_employee_via_responsible_dialog(): void
@@ -2096,7 +2096,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('outbound-provider-response');
     }
 
-    public function test_contact_modal_prefers_latest_saved_message_over_received_at_order(): void
+    public function test_contact_modal_prefers_message_chronology_over_saved_id_order(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -2148,12 +2148,12 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->assertMountedActionModalSee('mid.0000000003e3748c019d30476b8e52e7')
-            ->assertMountedActionModalSee('new-payload')
-            ->assertMountedActionModalDontSee('old-payload');
+            ->assertMountedActionModalDontSee('mid.0000000003e3748c019d30476b8e52e7')
+            ->assertMountedActionModalSee('old-payload')
+            ->assertMountedActionModalDontSee('new-payload');
     }
 
-    public function test_contacts_table_uses_latest_saved_message_for_last_message_column(): void
+    public function test_contacts_table_uses_message_chronology_for_last_message_column(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -2173,10 +2173,10 @@ class FilamentContactsResourceTest extends TestCase
             'external_user_id' => '228532008',
         ]);
 
-        $oldReceivedAt = now()->addYears(20)->startOfMinute();
-        $latestSavedReceivedAt = now()->subMinute()->startOfMinute();
+        $fallbackCreatedAt = now()->startOfMinute();
+        $olderReceivedAt = now()->subDay()->startOfMinute();
 
-        Message::query()->create([
+        Message::factory()->create([
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
@@ -2185,10 +2185,11 @@ class FilamentContactsResourceTest extends TestCase
             'external_message_id' => null,
             'text' => 'проверка',
             'raw_payload' => ['message' => 'old-payload'],
-            'received_at' => $oldReceivedAt,
+            'received_at' => null,
+            'created_at' => $fallbackCreatedAt,
         ]);
 
-        Message::query()->create([
+        Message::factory()->create([
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
@@ -2197,14 +2198,15 @@ class FilamentContactsResourceTest extends TestCase
             'external_message_id' => 'msg-latest',
             'text' => 'тест7',
             'raw_payload' => ['message' => 'latest-payload'],
-            'received_at' => $latestSavedReceivedAt,
+            'received_at' => $olderReceivedAt,
+            'created_at' => now()->subDays(2),
         ]);
 
         $this->actingAs($admin)
             ->get('/admin/contacts')
             ->assertOk()
-            ->assertSee($latestSavedReceivedAt->format('d.m.Y H:i'))
-            ->assertDontSee($oldReceivedAt->format('d.m.Y H:i'));
+            ->assertSee($fallbackCreatedAt->format('d.m.Y H:i'))
+            ->assertDontSee($olderReceivedAt->format('d.m.Y H:i'));
     }
 
     public function test_contacts_table_supports_column_manager_and_toggleable_columns(): void

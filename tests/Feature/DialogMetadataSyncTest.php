@@ -190,6 +190,106 @@ class DialogMetadataSyncTest extends TestCase
         $this->assertSame('2026-03-31 12:30:00', $dialog->last_inbound_at?->format('Y-m-d H:i:s'));
     }
 
+    public function test_inbound_sync_uses_created_at_when_received_at_is_missing(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'created-at-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'last_message_at' => Carbon::parse('2026-03-31 12:00:00'),
+            'last_inbound_at' => Carbon::parse('2026-03-31 12:00:00'),
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => null,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'created-chat',
+            'received_at' => null,
+            'created_at' => Carbon::parse('2026-03-31 12:35:00'),
+            'sent_by_type' => null,
+        ]);
+
+        DB::transaction(function () use ($message, $contact, $channel, $identity): void {
+            app(SyncMessageDialogMetadataAction::class)->handle(
+                $message,
+                $contact,
+                $channel,
+                $identity,
+                'created-chat',
+                Message::SENT_BY_TYPE_CONTACT,
+            );
+        });
+
+        $dialog->refresh();
+
+        $this->assertSame('2026-03-31 12:35:00', $dialog->last_inbound_at?->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-03-31 12:35:00', $dialog->last_message_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($identity->id, $dialog->current_contact_identity_id);
+        $this->assertSame('created-chat', $dialog->external_chat_id);
+    }
+
+    public function test_outbound_sync_uses_created_at_when_received_at_is_missing(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'operator-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'last_message_at' => Carbon::parse('2026-03-31 12:20:00'),
+            'last_outbound_at' => Carbon::parse('2026-03-31 12:20:00'),
+        ]);
+        $employee = User::factory()->create();
+        $message = Message::factory()->create([
+            'dialog_id' => null,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'external_chat_id' => '500',
+            'received_at' => null,
+            'created_at' => Carbon::parse('2026-03-31 12:25:00'),
+            'sent_by_type' => null,
+        ]);
+
+        DB::transaction(function () use ($message, $contact, $channel, $identity, $employee): void {
+            app(SyncMessageDialogMetadataAction::class)->handle(
+                $message,
+                $contact,
+                $channel,
+                $identity,
+                '500',
+                Message::SENT_BY_TYPE_OPERATOR,
+                $employee->id,
+            );
+        });
+
+        $dialog->refresh();
+
+        $this->assertSame('2026-03-31 12:25:00', $dialog->last_outbound_at?->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-03-31 12:25:00', $dialog->last_message_at?->format('Y-m-d H:i:s'));
+    }
+
     public function test_older_phone_capture_does_not_downgrade_confirmed_phone(): void
     {
         $channel = Channel::factory()->create([

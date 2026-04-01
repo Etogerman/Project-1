@@ -10,6 +10,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +23,7 @@ class SendManualDialogReplyAction
         protected ChannelActivityLogger $channelActivityLogger,
         protected ClaimContactAction $claimContactAction,
         protected ResolveRootContactAction $resolveRootContactAction,
+        protected MessageChronology $messageChronology,
         protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
         protected StoreManualOutboundMessageAction $storeManualOutboundMessageAction,
         protected TelegramBotApiService $telegramBotApiService,
@@ -139,8 +141,7 @@ class SendManualDialogReplyAction
         return Message::query()
             ->where('dialog_id', $dialog->id)
             ->where('direction', Message::DIRECTION_INBOUND)
-            ->orderByDesc('received_at')
-            ->orderByDesc('id')
+            ->tap(fn (\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder => $this->messageChronology->applyLatestOrder($query))
             ->first();
     }
 

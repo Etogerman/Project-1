@@ -15,6 +15,7 @@ class ConsolidateDialogsForRootContactAction
     public function __construct(
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly ResolveDialogRoutePayloadAction $resolveDialogRoutePayloadAction,
+        private readonly MessageChronology $messageChronology,
     ) {}
 
     /**
@@ -277,7 +278,10 @@ class ConsolidateDialogsForRootContactAction
         $message = $messages
             ->where('direction', Message::DIRECTION_INBOUND)
             ->filter(fn (Message $message): bool => $this->messageCanProvideRouteSource($message, $channel))
-            ->sortByDesc(fn (Message $message): string => $this->timestampAndIdSortKey($message->received_at, $message->id))
+            ->sortByDesc(fn (Message $message): string => $this->messageChronology->timestampAndIdSortKey(
+                $this->messageChronology->resolveSortAt($message),
+                $message->id,
+            ))
             ->first();
 
         return $message;
@@ -342,11 +346,14 @@ class ConsolidateDialogsForRootContactAction
     {
         /** @var ?Message $message */
         $message = $messages
-            ->sortByDesc(fn (Message $message): string => $this->timestampAndIdSortKey($message->received_at, $message->id))
+            ->sortByDesc(fn (Message $message): string => $this->messageChronology->timestampAndIdSortKey(
+                $this->messageChronology->resolveSortAt($message),
+                $message->id,
+            ))
             ->first();
 
         if ($message instanceof Message) {
-            return $message->received_at;
+            return $this->messageChronology->resolveSortAt($message);
         }
 
         return $this->maxDialogTimestamp($dialogs, 'last_message_at');
@@ -361,11 +368,14 @@ class ConsolidateDialogsForRootContactAction
         /** @var ?Message $message */
         $message = $messages
             ->where('direction', Message::DIRECTION_INBOUND)
-            ->sortByDesc(fn (Message $message): string => $this->timestampAndIdSortKey($message->received_at, $message->id))
+            ->sortByDesc(fn (Message $message): string => $this->messageChronology->timestampAndIdSortKey(
+                $this->messageChronology->resolveSortAt($message),
+                $message->id,
+            ))
             ->first();
 
         if ($message instanceof Message) {
-            return $message->received_at;
+            return $this->messageChronology->resolveSortAt($message);
         }
 
         return $this->maxDialogTimestamp($dialogs, 'last_inbound_at');
@@ -380,11 +390,14 @@ class ConsolidateDialogsForRootContactAction
         /** @var ?Message $message */
         $message = $messages
             ->where('direction', Message::DIRECTION_OUTBOUND)
-            ->sortByDesc(fn (Message $message): string => $this->timestampAndIdSortKey($message->received_at, $message->id))
+            ->sortByDesc(fn (Message $message): string => $this->messageChronology->timestampAndIdSortKey(
+                $this->messageChronology->resolveSortAt($message),
+                $message->id,
+            ))
             ->first();
 
         if ($message instanceof Message) {
-            return $message->received_at;
+            return $this->messageChronology->resolveSortAt($message);
         }
 
         return $this->maxDialogTimestamp($dialogs, 'last_outbound_at');
@@ -398,7 +411,7 @@ class ConsolidateDialogsForRootContactAction
         /** @var ?Dialog $dialog */
         $dialog = $dialogs
             ->filter(fn (Dialog $dialog): bool => $dialog->getAttribute($field) !== null)
-            ->sortByDesc(fn (Dialog $dialog): string => $this->timestampAndIdSortKey($dialog->getAttribute($field), $dialog->id))
+            ->sortByDesc(fn (Dialog $dialog): string => $this->messageChronology->timestampAndIdSortKey($dialog->getAttribute($field), $dialog->id))
             ->first();
 
         return $dialog?->getAttribute($field);
@@ -423,24 +436,10 @@ class ConsolidateDialogsForRootContactAction
         return false;
     }
 
-    private function timestampSortKey(mixed $value): string
-    {
-        if ($value instanceof DateTimeInterface) {
-            return $value->format('Y-m-d H:i:s');
-        }
-
-        return is_string($value) ? $value : '';
-    }
-
-    private function timestampAndIdSortKey(mixed $value, int $id): string
-    {
-        return $this->timestampSortKey($value).'|'.str_pad((string) $id, 10, '0', STR_PAD_LEFT);
-    }
-
     private function dialogRouteSortKey(Dialog $dialog): string
     {
-        return $this->timestampSortKey($dialog->last_inbound_at)
-            .'|'.$this->timestampSortKey($dialog->last_message_at)
+        return $this->messageChronology->timestampSortKey($dialog->last_inbound_at)
+            .'|'.$this->messageChronology->timestampSortKey($dialog->last_message_at)
             .'|'.str_pad((string) $dialog->id, 10, '0', STR_PAD_LEFT);
     }
 
