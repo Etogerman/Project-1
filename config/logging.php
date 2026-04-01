@@ -73,6 +73,22 @@ return [
             'replace_placeholders' => true,
         ],
 
+        'bitrix24_probe' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/bitrix24-probe.log'),
+            'level' => env('LOG_LEVEL', 'debug'),
+            'days' => env('LOG_DAILY_DAYS', 14),
+            'replace_placeholders' => true,
+        ],
+
+        'bitrix24_callbacks' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/bitrix24-callbacks.log'),
+            'level' => env('LOG_LEVEL', 'debug'),
+            'days' => env('LOG_DAILY_DAYS', 14),
+            'replace_placeholders' => true,
+        ],
+
         'slack' => [
             'driver' => 'slack',
             'url' => env('LOG_SLACK_WEBHOOK_URL'),
