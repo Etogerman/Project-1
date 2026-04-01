@@ -10,9 +10,12 @@ use App\Models\Bitrix24MessageExport;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
+use App\Services\Bitrix24\BuildBitrix24OpenLinesMessagePayloadAction;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Bitrix24\Bitrix24ApiException;
@@ -230,7 +233,16 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     public function test_live_export_action_marks_message_as_exported_and_updates_dialog_live_state(): void
     {
         $this->makeActiveConnection();
-        $dialog = $this->createLiveReadyDialog();
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'first_name' => 'Герман',
+            'last_name' => 'Германов',
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $dialog->contact_id,
+            'phone_raw' => '+7 926 352-71-11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
         $message = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
@@ -269,9 +281,41 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
                 && ($payload['LINE'] ?? null) === 'line-telegram'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['user']['name'] ?? null) === 'Герман Германов'
+                && ($payload['MESSAGES'][0]['user']['last_name'] ?? null) === 'Германов'
+                && ($payload['MESSAGES'][0]['user']['phone'] ?? null) === '+79263527111'
                 && ($payload['MESSAGES'][0]['message']['id'] ?? null) === 'abrikosoff-message:'.$message->id
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Привет в Open Lines';
         });
+    }
+
+    public function test_live_payload_omits_optional_crm_binding_fields_without_phone_and_last_name(): void
+    {
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'name' => 'Live Contact',
+            'first_name' => null,
+            'last_name' => null,
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Минимальный live payload',
+            'received_at' => Carbon::parse('2026-04-01 13:45:00', 'Europe/Moscow'),
+        ]);
+
+        $payload = app(BuildBitrix24OpenLinesMessagePayloadAction::class)->handle(
+            $message,
+            new Bitrix24OpenLinesRouteData(
+                platform: Channel::PLATFORM_TELEGRAM,
+                connectorCode: 'abrikosoff_telegram',
+                lineId: 'line-telegram',
+            ),
+        );
+
+        $this->assertSame('Live Contact', $payload['MESSAGES'][0]['user']['name'] ?? null);
+        $this->assertArrayNotHasKey('last_name', $payload['MESSAGES'][0]['user']);
+        $this->assertArrayNotHasKey('phone', $payload['MESSAGES'][0]['user']);
     }
 
     public function test_inbound_contact_share_is_exported_as_synthetic_text(): void
