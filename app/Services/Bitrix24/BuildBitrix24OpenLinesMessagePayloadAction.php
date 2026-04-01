@@ -12,6 +12,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly CollectBitrix24ContactPhonesAction $collectBitrix24ContactPhonesAction,
         private readonly ResolveBitrix24LiveChatKeyAction $resolveBitrix24LiveChatKeyAction,
         private readonly MessageChronology $messageChronology,
     ) {}
@@ -37,6 +38,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $chatKey = $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
         $userId = $this->resolveUserId($channel, $identity?->external_user_id, $rootContact->id);
         $userName = $rootContact->display_name;
+        $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 
         return [
             'CONNECTOR' => $route->connectorCode,
@@ -49,7 +51,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
                 'user' => [
                     'id' => $userId,
                     'name' => $userName,
-                ],
+                ] + $this->resolveOptionalUserPayload($rootContact->last_name, $phones[0] ?? null),
                 'message' => [
                     'id' => 'abrikosoff-message:'.$message->id,
                     'date' => $timestamp->timestamp,
@@ -75,5 +77,27 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         }
 
         return 'contact:'.$rootContactId;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function resolveOptionalUserPayload(?string $lastName, ?string $phone): array
+    {
+        return array_filter([
+            'last_name' => $this->nullableString($lastName),
+            'phone' => $this->nullableString($phone),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '');
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed === '' ? null : $trimmed;
     }
 }
