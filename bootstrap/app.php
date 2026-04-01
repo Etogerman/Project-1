@@ -14,6 +14,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->validateCsrfTokens(except: [
             'webhooks/telegram/*',
             'webhooks/max/*',
+            'callbacks/bitrix24/install',
+            'callbacks/bitrix24/events',
+            'callbacks/bitrix24/openlines',
+            'callbacks/bitrix24/probe',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
