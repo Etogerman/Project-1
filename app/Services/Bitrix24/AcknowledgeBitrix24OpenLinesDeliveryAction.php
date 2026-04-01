@@ -28,7 +28,7 @@ class AcknowledgeBitrix24OpenLinesDeliveryAction
         $response = $this->bitrix24ApiClient->call('imconnector.send.status.delivery', [
             'CONNECTOR' => $connectorCode,
             'LINE' => $lineId,
-            'DATA' => [[
+            'MESSAGES' => [[
                 'im' => $bitrixMessage->im,
                 'chat' => [
                     'id' => $bitrixMessage->chatId,
