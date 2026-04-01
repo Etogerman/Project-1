@@ -1,0 +1,522 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Data\Bots\AutoReplyDeliveryResult;
+use App\Data\Bots\IncomingBotMessage;
+use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
+use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24MessageExport;
+use App\Models\Channel;
+use App\Models\Contact;
+use App\Models\ContactIdentity;
+use App\Models\Dialog;
+use App\Models\Message;
+use App\Models\User;
+use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
+use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
+use App\Services\Bitrix24\Bitrix24ApiException;
+use App\Services\Bots\SendManualDialogReplyAction;
+use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
+use App\Services\Bots\StoreInboundMessageAction;
+use App\Services\Bots\StoreOutboundAutoReplyMessageAction;
+use App\Services\Bots\StorePhoneCaptureConfirmationAction;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
+use Tests\TestCase;
+
+class Bitrix24OpenLinesLiveExportTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('app.timezone', 'Europe/Moscow');
+        config()->set('bitrix24.application.client_id', 'local.app');
+        config()->set('bitrix24.application.client_secret', 'local.secret');
+        config()->set('bitrix24.features.openlines_enabled', true);
+        config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
+        config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
+        config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
+        config()->set('bitrix24.openlines.max_line_id', 'line-max');
+        config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
+    }
+
+    public function test_dialogs_table_has_bitrix24_live_fields_with_expected_defaults(): void
+    {
+        $this->assertTrue(Schema::hasColumns('dialogs', [
+            'bitrix24_live_chat_id',
+            'bitrix24_live_status',
+            'bitrix24_live_last_exported_at',
+            'bitrix24_live_last_imported_at',
+        ]));
+
+        $dialog = Dialog::factory()->create();
+        $dialog->refresh();
+
+        $this->assertNull($dialog->bitrix24_live_chat_id);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED, $dialog->bitrix24_live_status);
+        $this->assertNull($dialog->bitrix24_live_last_exported_at);
+        $this->assertNull($dialog->bitrix24_live_last_imported_at);
+        $this->assertFalse($dialog->isBitrix24LiveActive());
+    }
+
+    public function test_store_inbound_message_queues_live_export_job_for_ready_bitrix_contact(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog();
+        $channel = $dialog->channel()->firstOrFail();
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: (string) $dialog->external_chat_id,
+                externalUserId: (string) $dialog->currentContactIdentity()->firstOrFail()->external_user_id,
+                providerEventKey: 'tg-live-101',
+                externalMessageId: 'ext-101',
+                externalUsername: 'live_user',
+                contactName: 'Live Contact',
+                text: 'Привет из Telegram',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет из Telegram']],
+                receivedAt: Carbon::parse('2026-04-01 12:00:00', 'Europe/Moscow'),
+            ),
+        );
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($storedResult): bool {
+            return $job->messageId === $storedResult->message->id;
+        });
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $storedResult->message->id,
+            'contact_id' => $dialog->contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+        ]);
+    }
+
+    public function test_outbound_store_actions_queue_live_export_jobs(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog();
+        $contact = $dialog->contact()->firstOrFail();
+        $channel = $dialog->channel()->firstOrFail();
+        $identity = $dialog->currentContactIdentity()->firstOrFail();
+        $inboundMessage = $this->makeMessage($dialog, [
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Входящее сообщение',
+        ]);
+
+        $autoReply = app(StoreOutboundAutoReplyMessageAction::class)->handle(
+            $channel,
+            $inboundMessage,
+            new AutoReplyDeliveryResult(
+                text: 'Автоответ',
+                externalMessageId: 'auto-1',
+                rawPayload: ['ok' => true],
+            ),
+        );
+
+        $phoneCapture = app(StorePhoneCaptureConfirmationAction::class)->handle(
+            $dialog,
+            $inboundMessage,
+            new AutoReplyDeliveryResult(
+                text: 'Подтверждение телефона',
+                externalMessageId: 'phone-1',
+                rawPayload: ['ok' => true],
+            ),
+        );
+
+        $collector = app(StoreDataCollectionOutboundMessageAction::class)->handle(
+            $inboundMessage,
+            new AutoReplyDeliveryResult(
+                text: 'Следующий вопрос анкеты',
+                externalMessageId: 'collector-1',
+                rawPayload: ['ok' => true],
+            ),
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            $dialog,
+        );
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, 3);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $autoReply->id);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $phoneCapture->id);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $collector->id);
+    }
+
+    public function test_send_manual_dialog_reply_queues_live_export_job(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9001,
+                ],
+            ]),
+        ]);
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createLiveReadyDialog(channelAttributes: [
+            'credentials' => ['token' => 'telegram-live-token'],
+        ], contactAttributes: [
+            'assigned_user_id' => $employee->id,
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+        $channel = $dialog->channel()->firstOrFail();
+        $identity = $dialog->currentContactIdentity()->firstOrFail();
+
+        $this->makeMessage($dialog, [
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Нужно ответить',
+        ]);
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Ручной live-ответ',
+        );
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($outboundMessage): bool {
+            return $job->messageId === $outboundMessage->id;
+        });
+    }
+
+    public function test_feature_flag_off_disables_live_export_queueing(): void
+    {
+        Queue::fake();
+
+        config()->set('bitrix24.features.openlines_enabled', false);
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Сообщение без bridge',
+        ]);
+
+        $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
+
+        $this->assertFalse($result->queued);
+        $this->assertFalse($result->ready);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+    }
+
+    public function test_live_export_action_marks_message_as_exported_and_updates_dialog_live_state(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Привет в Open Lines',
+            'received_at' => Carbon::parse('2026-04-01 13:30:00', 'Europe/Moscow'),
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame('abrikosoff-dialog:'.$dialog->id, $dialog->bitrix24_live_chat_id);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertNotNull($dialog->bitrix24_live_last_exported_at);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+        ]);
+
+        Http::assertSent(function (Request $request) use ($dialog, $message): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
+                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['message']['id'] ?? null) === 'abrikosoff-message:'.$message->id
+                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Привет в Open Lines';
+        });
+    }
+
+    public function test_inbound_contact_share_is_exported_as_synthetic_text(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => null,
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24ApiException was not thrown.');
+        } catch (Bitrix24ApiException) {
+            // Expected route failure.
+        }
+
+        Http::assertSent(function (Request $request): bool {
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Клиент поделился номером телефона';
+        });
+    }
+
+    public function test_missing_openlines_route_config_marks_export_failed_without_sending_request(): void
+    {
+        $this->makeActiveConnection();
+        config()->set('bitrix24.openlines.telegram_connector_code', '');
+
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Маршрут не настроен',
+        ]);
+
+        Http::fake();
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_FAILED, $dialog->bitrix24_live_status);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+        ]);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_already_live_exported_message_is_not_resent(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Уже экспортировано',
+        ]);
+
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'exported_at' => now()->subMinute(),
+        ]);
+
+        Http::fake();
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_closed_dialog_recovers_to_active_after_successful_live_export(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(dialogAttributes: [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_CLOSED,
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Повторно открываем live bridge',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertSame('abrikosoff-dialog:'.$dialog->id, $dialog->bitrix24_live_chat_id);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_dialog_reopened',
+            'entity_type' => 'dialog',
+            'entity_id' => (string) $dialog->id,
+            'status' => 'success',
+        ]);
+    }
+
+    public function test_failed_dialog_recovers_to_active_after_successful_live_export(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(dialogAttributes: [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_FAILED,
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Восстановление после failed',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_dialog_reopened',
+            'entity_type' => 'dialog',
+            'entity_id' => (string) $dialog->id,
+            'status' => 'success',
+        ]);
+    }
+
+    public function test_message_from_bitrix24_openlines_is_not_queued_for_reexport(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES,
+            'text' => 'Эхо от Bitrix',
+        ]);
+
+        $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
+
+        $this->assertFalse($result->queued);
+        $this->assertFalse($result->ready);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        $this->assertDatabaseMissing('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+        ]);
+    }
+
+    private function createLiveReadyDialog(
+        string $platform = Channel::PLATFORM_TELEGRAM,
+        array $contactAttributes = [],
+        array $channelAttributes = [],
+        array $dialogAttributes = [],
+    ): Dialog {
+        $contact = Contact::factory()->create(array_merge([
+            'name' => 'Live Contact',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'bitrix24_contact_id' => 'B24-CONTACT-100',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_sync_pending' => false,
+        ], $contactAttributes));
+        $channel = Channel::factory()->create(array_merge([
+            'platform' => $platform,
+        ], $channelAttributes));
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $platform,
+            'external_user_id' => $platform.'-user-100',
+            'external_username' => $platform.'_user_100',
+        ]);
+
+        return Dialog::factory()->create(array_merge([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => $platform.'-chat-100',
+        ], $dialogAttributes));
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    private function makeMessage(Dialog $dialog, array $attributes = []): Message
+    {
+        $dialog->loadMissing(['contact', 'channel', 'currentContactIdentity']);
+
+        return Message::factory()->create(array_merge([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => (string) fake()->numerify('######'),
+            'received_at' => now(),
+        ], $attributes));
+    }
+
+    private function makeActiveConnection(): Bitrix24Connection
+    {
+        return Bitrix24Connection::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'application_name' => 'Abrikosoff Connector',
+            'client_id' => 'local.app',
+            'member_id' => 'member-1',
+            'application_token' => 'app-token',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+            'access_token_encrypted' => 'secret-access-token',
+            'refresh_token_encrypted' => 'secret-refresh-token',
+            'access_token_expires_at' => now()->addHour(),
+            'scope' => ['imconnector', 'imopenlines'],
+            'client_endpoint' => 'https://client-endpoint.example/rest/',
+            'server_endpoint' => 'https://server-endpoint.example/rest/',
+            'install_payload' => [],
+            'installed_at' => now(),
+        ]);
+    }
+}

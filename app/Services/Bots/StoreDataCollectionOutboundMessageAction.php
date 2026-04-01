@@ -5,6 +5,7 @@ namespace App\Services\Bots;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Support\Facades\DB;
 
@@ -12,6 +13,7 @@ class StoreDataCollectionOutboundMessageAction
 {
     public function __construct(
         private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
+        private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
     ) {}
 
     public function handle(
@@ -45,7 +47,7 @@ class StoreDataCollectionOutboundMessageAction
                 'received_at' => now(),
             ]);
 
-            return $this->syncMessageDialogMetadataAction->handle(
+            $outboundMessage = $this->syncMessageDialogMetadataAction->handle(
                 $outboundMessage,
                 $routeDialog?->contact ?? $inboundMessage->contact()->firstOrFail(),
                 $routeDialog?->channel ?? $inboundMessage->channel()->firstOrFail(),
@@ -55,6 +57,10 @@ class StoreDataCollectionOutboundMessageAction
                 null,
                 $this->resolveCollectorSystemCode($messageKind),
             );
+
+            $this->queueBitrix24LiveMessageExportAction->handle($outboundMessage);
+
+            return $outboundMessage;
         });
     }
 

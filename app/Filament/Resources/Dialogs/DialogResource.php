@@ -353,24 +353,16 @@ class DialogResource extends Resource
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
         $chronology = static::messageChronology();
-        $latestInboundUserMessageIdSql = $chronology->latestMessageIdSql(
-            'dialog_id',
-            'dialogs.id',
+        $latestInboundUserMessageIdSql = $chronology->latestDialogMessageIdSql(
             Message::KIND_INBOUND_USER,
         );
-        $latestInboundUserMessageSortAtSql = $chronology->latestMessageSortAtSql(
-            'dialog_id',
-            'dialogs.id',
+        $latestInboundUserMessageSortAtSql = $chronology->latestDialogMessageSortAtSql(
             Message::KIND_INBOUND_USER,
         );
-        $latestOutboundManualReplyMessageIdSql = $chronology->latestMessageIdSql(
-            'dialog_id',
-            'dialogs.id',
+        $latestOutboundManualReplyMessageIdSql = $chronology->latestDialogMessageIdSql(
             Message::KIND_OUTBOUND_MANUAL_REPLY,
         );
-        $latestOutboundManualReplyMessageSortAtSql = $chronology->latestMessageSortAtSql(
-            'dialog_id',
-            'dialogs.id',
+        $latestOutboundManualReplyMessageSortAtSql = $chronology->latestDialogMessageSortAtSql(
             Message::KIND_OUTBOUND_MANUAL_REPLY,
         );
 

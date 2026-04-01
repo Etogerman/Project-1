@@ -3,14 +3,20 @@
 namespace App\Services\Contacts;
 
 use App\Models\ContactPhoneNumber;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 class DeleteContactPhoneAction
 {
+    public function __construct(
+        private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+    ) {}
+
     public function handle(ContactPhoneNumber $phoneNumber): void
     {
         $this->guardAgainstMergedContactPhone($phoneNumber);
+        $contact = $phoneNumber->contact()->first();
 
         DB::transaction(function () use ($phoneNumber): void {
             $contactId = $phoneNumber->contact_id;
@@ -39,6 +45,10 @@ class DeleteContactPhoneAction
                 'is_primary' => true,
             ])->save();
         });
+
+        if ($contact !== null) {
+            $this->queueBitrix24ContactSyncAction->handle($contact);
+        }
     }
 
     protected function guardAgainstMergedContactPhone(ContactPhoneNumber $phoneNumber): void

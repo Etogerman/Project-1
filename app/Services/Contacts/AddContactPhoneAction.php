@@ -4,6 +4,7 @@ namespace App\Services\Contacts;
 
 use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use Illuminate\Database\QueryException;
 use RuntimeException;
 
@@ -12,6 +13,7 @@ class AddContactPhoneAction
     public function __construct(
         private readonly NormalizePhoneNumberAction $normalizePhoneNumberAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ) {}
 
     public function handle(Contact $contact, string $phoneRaw, string $source): ContactPhoneNumber
@@ -34,12 +36,16 @@ class AddContactPhoneAction
         }
 
         try {
-            return $contact->phoneNumbers()->create([
+            $phoneNumber = $contact->phoneNumbers()->create([
                 'phone_raw' => $phoneRaw,
                 'phone_normalized' => $phoneNormalized,
                 'source' => $source,
                 'is_primary' => ! $contact->phoneNumbers()->exists(),
             ]);
+
+            $this->queueBitrix24ContactSyncAction->handle($contact);
+
+            return $phoneNumber;
         } catch (QueryException $exception) {
             if (($exception->errorInfo[0] ?? null) !== '23505') {
                 throw $exception;

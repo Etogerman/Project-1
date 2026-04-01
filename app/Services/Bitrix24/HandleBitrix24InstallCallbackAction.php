@@ -1,0 +1,196 @@
+<?php
+
+namespace App\Services\Bitrix24;
+
+use App\Data\Bitrix24\Bitrix24CallbackHandlingResultData;
+use App\Data\Bitrix24\Bitrix24InstallPayloadData;
+use App\Data\Bitrix24\Bitrix24WebhookEventData;
+use App\Jobs\ProcessBitrix24InstallCallbackJob;
+use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24SyncLog;
+use App\Models\Bitrix24WebhookEvent;
+use Illuminate\Http\Request;
+
+class HandleBitrix24InstallCallbackAction
+{
+    public function __construct(
+        private readonly NormalizeBitrix24WebhookPayloadAction $normalizeWebhookPayload,
+        private readonly BuildBitrix24AuthContextAction $buildAuthContext,
+        private readonly BuildBitrix24WebhookFingerprintAction $buildFingerprint,
+        private readonly StoreBitrix24WebhookEventAction $storeWebhookEvent,
+        private readonly UpsertBitrix24ConnectionFromInstallAction $upsertConnection,
+        private readonly LogBitrix24CallbackOutcomeAction $logCallbackOutcome,
+    ) {}
+
+    public function handle(Request $request): Bitrix24CallbackHandlingResultData
+    {
+        $normalized = $this->normalizeWebhookPayload->handle($request);
+        $authContext = $this->buildAuthContext->handle($request->all());
+        $fingerprint = $this->buildFingerprint->handle($normalized['payload']);
+        $installPayload = $this->buildInstallPayloadData($request->all(), $normalized['payload'], $authContext);
+
+        [$status, $reason] = $this->determineInstallOutcome($normalized['looks_like_bitrix'], $installPayload);
+
+        $connection = null;
+
+        if ($status === Bitrix24WebhookEvent::STATUS_PENDING) {
+            $connection = $this->upsertConnection->handle($installPayload);
+        } else {
+            $connection = $this->findRelatedConnection($authContext);
+
+            if ($connection) {
+                $connection->forceFill([
+                    'last_error_at' => now(),
+                    'last_error_message' => $reason,
+                ])->save();
+            }
+        }
+
+        $storeResult = $this->storeWebhookEvent->handle(
+            eventData: new Bitrix24WebhookEventData(
+                callbackType: Bitrix24WebhookEvent::TYPE_INSTALL,
+                eventName: $normalized['event_name'],
+                authContext: $authContext,
+                payload: $normalized['payload'],
+                headers: $normalized['headers'],
+                query: $normalized['query'],
+                payloadHash: $fingerprint,
+            ),
+            processingStatus: $status,
+            failureReason: $reason,
+            connection: $connection,
+        );
+
+        $event = $storeResult['event'];
+        $duplicate = $storeResult['duplicate'];
+
+        $logStatus = match (true) {
+            $duplicate => Bitrix24SyncLog::STATUS_SKIPPED,
+            $status === Bitrix24WebhookEvent::STATUS_FAILED => Bitrix24SyncLog::STATUS_FAILED,
+            $status === Bitrix24WebhookEvent::STATUS_IGNORED => Bitrix24SyncLog::STATUS_SKIPPED,
+            default => Bitrix24SyncLog::STATUS_SUCCESS,
+        };
+
+        $operation = match (true) {
+            $duplicate => 'install_callback_duplicate',
+            $status === Bitrix24WebhookEvent::STATUS_FAILED => 'install_callback_validation_failed',
+            $status === Bitrix24WebhookEvent::STATUS_IGNORED => 'install_callback_ignored',
+            default => 'install_callback_stored',
+        };
+
+        $this->logCallbackOutcome->handle(
+            callbackType: Bitrix24WebhookEvent::TYPE_INSTALL,
+            status: $logStatus,
+            operation: $operation,
+            payload: $normalized['payload'],
+            eventName: $normalized['event_name'],
+            fingerprint: $fingerprint,
+            errorMessage: $reason,
+            connection: $connection,
+        );
+
+        $dispatched = false;
+
+        if (! $duplicate && $status === Bitrix24WebhookEvent::STATUS_PENDING) {
+            ProcessBitrix24InstallCallbackJob::dispatch($event->id);
+            $dispatched = true;
+        }
+
+        return new Bitrix24CallbackHandlingResultData(
+            callbackType: Bitrix24WebhookEvent::TYPE_INSTALL,
+            processingStatus: $status,
+            stored: true,
+            duplicate: $duplicate,
+            dispatched: $dispatched,
+            event: $event,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $rawPayload
+     * @param  array<string, mixed>  $sanitizedPayload
+     */
+    private function buildInstallPayloadData(
+        array $rawPayload,
+        array $sanitizedPayload,
+        \App\Data\Bitrix24\Bitrix24AuthContextData $authContext,
+    ): Bitrix24InstallPayloadData {
+        $auth = $rawPayload['auth'] ?? [];
+
+        if (! is_array($auth)) {
+            $auth = [];
+        }
+
+        $scope = $auth['scope'] ?? $rawPayload['scope'] ?? [];
+
+        if (! is_array($scope)) {
+            $scope = [];
+        }
+
+        $scope = array_values(array_filter($scope, fn (mixed $value): bool => is_scalar($value) && trim((string) $value) !== ''));
+
+        return new Bitrix24InstallPayloadData(
+            portalDomain: $authContext->portalDomain,
+            applicationToken: $authContext->applicationToken,
+            memberId: $authContext->memberId,
+            clientEndpoint: $authContext->clientEndpoint,
+            serverEndpoint: $authContext->serverEndpoint,
+            accessToken: $this->nullableString($auth['access_token'] ?? null),
+            refreshToken: $this->nullableString($auth['refresh_token'] ?? null),
+            expiresAt: $this->nullableString($auth['expires'] ?? $auth['expires_at'] ?? null),
+            scope: $scope,
+            rawPayload: $sanitizedPayload,
+        );
+    }
+
+    /**
+     * @return array{0: string, 1: ?string}
+     */
+    private function determineInstallOutcome(bool $looksLikeBitrix, Bitrix24InstallPayloadData $payload): array
+    {
+        if (! $looksLikeBitrix) {
+            return [Bitrix24WebhookEvent::STATUS_IGNORED, 'Payload does not look like a Bitrix24 install callback.'];
+        }
+
+        foreach ([
+            'memberId' => $payload->memberId,
+            'applicationToken' => $payload->applicationToken,
+            'clientEndpoint' => $payload->clientEndpoint,
+            'serverEndpoint' => $payload->serverEndpoint,
+            'accessToken' => $payload->accessToken,
+            'refreshToken' => $payload->refreshToken,
+        ] as $field => $value) {
+            if (! filled($value)) {
+                return [Bitrix24WebhookEvent::STATUS_FAILED, sprintf('Missing required install field `%s`.', $field)];
+            }
+        }
+
+        return [Bitrix24WebhookEvent::STATUS_PENDING, null];
+    }
+
+    private function findRelatedConnection(\App\Data\Bitrix24\Bitrix24AuthContextData $authContext): ?Bitrix24Connection
+    {
+        $query = Bitrix24Connection::query();
+
+        if (filled($authContext->memberId)) {
+            $query->where('member_id', $authContext->memberId);
+        } elseif (filled($authContext->portalDomain)) {
+            $query->where('portal_domain', $authContext->portalDomain);
+        } else {
+            return null;
+        }
+
+        return $query->first();
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed === '' ? null : $trimmed;
+    }
+}
