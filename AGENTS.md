@@ -171,7 +171,10 @@ Abrikosoff Connector — операторская платформа для ра
 - `config/bots.php` — webhook и платформенные настройки,
   `phone_capture_confirmation_text`, collector questions/messages,
   Gemini settings (`api_key`, `model`, `max_output_tokens`, `thinking_budget`),
-  allowed Russian business regions и тексты `russian_region_confirm`
+  allowed Russian business regions, тексты `russian_region_confirm`
+  и rate-limit настройки публичных bot webhook endpoints
+- `config/bitrix24.php` — callback URLs, Bitrix24 интеграционные настройки
+  и rate-limit настройки публичных callback endpoints
 - `config/russian_region_cities.php` — deterministic source of truth
   для `российский город -> exact candidate regions` и
   geocode hints для `distance_to_moscow`
@@ -185,6 +188,7 @@ Abrikosoff Connector — операторская платформа для ра
 ## Ключевые файлы для входа в проект
 
 - `app/Http/Controllers/BotWebhookController.php` — точка входа webhook
+  c post-secret throttling для публичных bot webhook requests
 - `app/Models/Contact.php` — профильные поля, collector state, `display_name`, `effective_age_years`
 - `app/Services/Bots/StoreInboundMessageAction.php` — сохранение входящего сообщения
 - `app/Data/Bots/StoredInboundMessageResult.php` — result object с `phoneCaptureStatus`
