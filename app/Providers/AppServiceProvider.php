@@ -3,11 +3,13 @@
 namespace App\Providers;
 
 use App\Models\AutoReplyRule;
+use App\Models\Bitrix24Connection;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\User;
 use App\Policies\AutoReplyRulePolicy;
+use App\Policies\Bitrix24ConnectionPolicy;
 use App\Policies\ChannelPolicy;
 use App\Policies\ContactPolicy;
 use App\Policies\DialogPolicy;
@@ -38,6 +40,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Dialog::class, DialogPolicy::class);
         Gate::policy(User::class, UserPolicy::class);
         Gate::policy(AutoReplyRule::class, AutoReplyRulePolicy::class);
+        Gate::policy(Bitrix24Connection::class, Bitrix24ConnectionPolicy::class);
 
         RateLimiter::for('bitrix24-install', function (Request $request): Limit {
             return Limit::perMinute(max(1, (int) config('bitrix24.rate_limits.install.max_per_minute', 30)))

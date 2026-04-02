@@ -589,7 +589,7 @@ class ChannelResource extends Resource
             $badges = [
                 static::renderFeedBadge(sprintf('Время: %s', $log->created_at?->format('d.m.Y H:i:s') ?? '—')),
                 static::renderFeedBadge(
-                    sprintf('Уровень: %s', $log->level === 'error' ? 'Ошибка' : 'Info'),
+                    sprintf('Уровень: %s', static::formatActivityLevel((string) $log->level)),
                     static::getActivityLevelBadgeClasses((string) $log->level),
                 ),
                 static::renderFeedBadge(
@@ -622,6 +622,10 @@ class ChannelResource extends Resource
                 );
             }
 
+            if ($log->event === 'webhook.rate_limited') {
+                static::appendRateLimitedActivityBadges($badges, $log);
+            }
+
             $badgeMarkup = implode('', $badges);
 
             return sprintf(
@@ -640,6 +644,7 @@ class ChannelResource extends Resource
     {
         return match ($event) {
             'webhook.received' => 'Webhook',
+            'webhook.rate_limited' => 'Webhook ограничен по частоте',
             'bot.reply_queued' => 'Ответ в очереди',
             'bot.reply_rule_matched' => 'Правило автоответа',
             'bot.reply_rule_skipped_contact_condition' => 'Правило не прошло условие',
@@ -668,6 +673,15 @@ class ChannelResource extends Resource
             'webhook.registration_completed' => 'Webhook готов',
             'webhook.registration_failed' => 'Ошибка webhook',
             default => $event,
+        };
+    }
+
+    protected static function formatActivityLevel(string $level): string
+    {
+        return match ($level) {
+            'error' => 'Ошибка',
+            'warning' => 'Предупреждение',
+            default => 'Info',
         };
     }
 
@@ -801,7 +815,46 @@ class ChannelResource extends Resource
             return 'inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200';
         }
 
+        if ($level === 'warning') {
+            return 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200';
+        }
+
         return 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200';
+    }
+
+    protected static function appendRateLimitedActivityBadges(array &$badges, ChannelActivityLog $log): void
+    {
+        $retryAfterSeconds = data_get($log->context, 'retry_after_seconds');
+        if (is_numeric($retryAfterSeconds) && (int) $retryAfterSeconds > 0) {
+            $badges[] = static::renderFeedBadge(
+                sprintf('Retry after: %d сек', (int) $retryAfterSeconds),
+                static::getWarningActivityDetailBadgeClasses(),
+            );
+        }
+
+        $maxPerMinute = data_get($log->context, 'max_per_minute');
+        if (is_numeric($maxPerMinute) && (int) $maxPerMinute > 0) {
+            $badges[] = static::renderFeedBadge(
+                sprintf('Лимит: %d/мин', (int) $maxPerMinute),
+                static::getWarningActivityDetailBadgeClasses(),
+            );
+        }
+
+        $route = data_get($log->context, 'route');
+        if (filled($route)) {
+            $badges[] = static::renderFeedBadge(
+                sprintf('Route: %s', $route),
+                static::getWarningActivityDetailBadgeClasses(),
+            );
+        }
+
+        $requestIp = data_get($log->context, 'request_ip');
+        if (filled($requestIp)) {
+            $badges[] = static::renderFeedBadge(
+                sprintf('IP: %s', $requestIp),
+                static::getWarningActivityDetailBadgeClasses(),
+            );
+        }
     }
 
     protected static function isDedupeActivityEvent(string $event): bool
@@ -825,6 +878,11 @@ class ChannelResource extends Resource
     protected static function getOutOfOrderActivityBadgeClasses(): string
     {
         return 'inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200';
+    }
+
+    protected static function getWarningActivityDetailBadgeClasses(): string
+    {
+        return 'inline-flex items-center rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-xs text-orange-800 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-200';
     }
 
     protected static function formatOutboundReplyLink(Message $message): string

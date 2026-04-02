@@ -717,4 +717,37 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('Исторический outbound', $recentMessagesHtml);
         $this->assertStringContainsString('Тип: Не определен', $recentMessagesHtml);
     }
+
+    public function test_recent_activity_renderer_shows_human_readable_rate_limit_warning_details(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'warning',
+            'event' => 'webhook.rate_limited',
+            'message' => 'Входящий webhook временно ограничен по частоте запросов.',
+            'context' => [
+                'retry_after_seconds' => 59,
+                'max_per_minute' => 1,
+                'route' => 'webhooks.telegram.handle',
+                'request_ip' => '127.0.0.1',
+            ],
+            'created_at' => Carbon::create(2026, 4, 2, 12, 0, 0),
+        ]);
+
+        $recentActivityRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentActivityLogs');
+        $recentActivityRenderer->setAccessible(true);
+
+        $recentActivityHtml = $recentActivityRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Событие: Webhook ограничен по частоте', $recentActivityHtml);
+        $this->assertStringContainsString('Уровень: Предупреждение', $recentActivityHtml);
+        $this->assertStringContainsString('Retry after: 59 сек', $recentActivityHtml);
+        $this->assertStringContainsString('Лимит: 1/мин', $recentActivityHtml);
+        $this->assertStringContainsString('Route: webhooks.telegram.handle', $recentActivityHtml);
+        $this->assertStringContainsString('IP: 127.0.0.1', $recentActivityHtml);
+    }
 }
