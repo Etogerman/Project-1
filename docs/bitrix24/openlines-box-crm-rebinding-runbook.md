@@ -6,9 +6,9 @@
 в коробочном Bitrix24.
 
 Слой `crm_rebinding` не меняет Laravel transport.
-Он делает только:
+Он обеспечивает подтверждённый happy-path:
 
-- inspection `imopenlines` session lifecycle
+- existing-contact rebinding для Open Lines Telegram / MAX
 - phone-based lookup existing CRM contact
 - safe diagnostics для happy-path и ambiguous-path
 
@@ -20,13 +20,25 @@
 'crm_rebinding' => [
     'enabled' => true,
     'log_payload' => false,
+    'log_file' => '',
 ],
 ```
+
+Рабочие line ids:
+
+- Telegram: `32`
+- MAX: `31`
 
 Рекомендуемый дефолт:
 
 - `enabled = true` только на тестовой или контролируемой линии
 - `log_payload = false` всегда, кроме короткого debug-сеанса
+- `log_file = ''`, если устраивает дефолтный fallback-файл пакета
+
+Если на web-runtime коробки не определён глобальный `LOG_FILENAME`,
+package пишет логи в:
+
+- `local/php_interface/include/abrikosoff_openlines/runtime.log`
 
 ## Что считается нормой
 
@@ -35,11 +47,13 @@
 Ожидаемые события в логе:
 
 - `crm_rebind_attempted`
-- `crm_rebind_contact_found`
+- `crm_rebind_succeeded`
 
-Если attach/reconcile на стороне коробки ещё не реализован полностью,
-`crm_rebind_contact_found` всё равно полезен: он доказывает,
-что existing CRM contact по телефону найден box-side слоем.
+В UI Bitrix ожидается:
+
+- новая Open Lines сессия появляется у existing CRM contact
+- ответ оператора уходит обратно в Telegram / MAX
+- лишний лид в happy-path не создаётся
 
 ### Unknown-contact path
 
@@ -80,9 +94,12 @@ Package не должен делать auto-attach к случайному ко�
 ```
 
 2. Очищен ли кеш Bitrix после изменения package/config.
-3. Привязан ли правильный connector к правильной линии.
-4. Есть ли у существующего CRM contact телефон, по которому должен находиться матч.
-5. Нет ли нескольких контактов с одним и тем же телефоном.
+3. Смотреть ли правильный лог:
+   - `LOG_FILENAME`, если он реально используется для web-runtime
+   - или `local/php_interface/include/abrikosoff_openlines/runtime.log`
+4. Привязан ли правильный connector к правильной линии.
+5. Есть ли у существующего CRM contact телефон, по которому должен находиться матч.
+6. Нет ли нескольких контактов с одним и тем же телефоном.
 
 ## Debug-режим
 
@@ -92,6 +109,7 @@ Package не должен делать auto-attach к случайному ко�
 'crm_rebinding' => [
     'enabled' => true,
     'log_payload' => true,
+    'log_file' => '',
 ]
 ```
 
@@ -108,7 +126,10 @@ Package не должен делать auto-attach к случайному ко�
 
 После тестового прогона проверить и привести в порядок:
 
-- тестовые line names `Demo` заменить на финальные:
+- line ids соответствуют рабочей конфигурации:
+  - Telegram `32`
+  - MAX `31`
+- тестовые line names `Demo` при необходимости заменить на финальные:
   - `ABR Телеграм бот {имя бота}`
   - `ABR MAX бот {имя бота}`
 - удалить или заархивировать тестовые лиды/сущности,
@@ -121,8 +142,8 @@ Package не должен делать auto-attach к случайному ко�
 Текущий box-side `crm_rebinding` слой:
 
 - безопасно ищет existing contact по телефону
+- подтверждённо работает в existing-contact happy-path для Telegram и MAX
 - логирует phone-based candidates с маскировкой
 - не выполняет unsafe auto-attach при ambiguous match
 
-Этот слой сам по себе не гарантирует production-ready CRM attach,
-если коробка Bitrix требует отдельный internal API path для session rebinding.
+Unknown-contact и ambiguous-match сценарии остаются отдельным safety-check.

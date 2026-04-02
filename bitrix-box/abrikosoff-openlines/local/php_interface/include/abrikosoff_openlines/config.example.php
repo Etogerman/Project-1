@@ -20,7 +20,7 @@ return [
         'abrikosoff_telegram' => [
             'name' => 'Abrikosoff Telegram',
             'component' => 'abrikosoff:imconnector.telegram',
-            'line_id' => '30',
+            'line_id' => '32',
             'line_name' => 'ABR Телеграм бот <bot-name>',
             'color' => '#27A7E7',
             'label' => 'TG',
@@ -38,5 +38,6 @@ return [
     'crm_rebinding' => [
         'enabled' => false,
         'log_payload' => false,
+        'log_file' => '',
     ],
 ];

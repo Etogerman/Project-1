@@ -63,8 +63,14 @@ Abrikosoff Connector — операторская платформа для ра
 - удаление контакта из карточки
 
 Стратегическое направление:
-- Битрикс24 — следующий продуктовый этап, отдельно от текущего runtime.
-  Любая интеграция требует отдельного ТЗ.
+- Битрикс24 Open Lines happy-path уже подтверждён через отдельный
+  box-side пакет в коробке.
+  Зафиксированная рабочая конфигурация:
+  - Telegram line id `32`
+  - MAX line id `31`
+  - existing-contact rebinding happy-path работает для Telegram и MAX
+- Любое новое расширение Bitrix24 вне подтверждённого happy-path
+  требует отдельного ТЗ.
 - Возможно подключение дополнительных мессенджеров.
 
 ## Стек
@@ -283,7 +289,7 @@ Abrikosoff Connector — операторская платформа для ра
 - Routing API / Distance Matrix для точного расстояния по дорогам
 - Distance buckets / qualification categories
 - generic `location_confirm` / non-Russian ambiguous-city engine
-- Код интеграции с Битрикс24
+- Новый код интеграции с Битрикс24 вне подтверждённого Open Lines happy-path
 
 ## Рабочий стиль для агентов
 
