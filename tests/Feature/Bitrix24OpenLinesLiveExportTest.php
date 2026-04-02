@@ -6,6 +6,7 @@ use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\IncomingBotMessage;
 use App\Jobs\DedupeBitrix24ContactPhonesJob;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
+use App\Jobs\LogBitrix24RawContactPhoneSnapshotJob;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Channel;
@@ -19,6 +20,7 @@ use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Services\Bitrix24\BuildBitrix24OpenLinesMessagePayloadAction;
 use App\Services\Bitrix24\DedupeBitrix24ContactPhonesAction;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
+use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bots\SendManualDialogReplyAction;
@@ -32,6 +34,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
+use Mockery;
 use Tests\TestCase;
 
 class Bitrix24OpenLinesLiveExportTest extends TestCase
@@ -50,6 +53,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
         config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
         config()->set('bitrix24.openlines.max_line_id', 'line-max');
+        config()->set('bitrix24.duplicate_phone_diagnostic.enabled', false);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
     }
 
@@ -318,6 +322,84 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertSame('Live Contact', $payload['MESSAGES'][0]['user']['name'] ?? null);
         $this->assertArrayNotHasKey('last_name', $payload['MESSAGES'][0]['user']);
         $this->assertArrayNotHasKey('phone', $payload['MESSAGES'][0]['user']);
+    }
+
+    public function test_first_live_attach_logs_immediate_snapshot_and_queues_delayed_raw_snapshot_when_diagnostic_is_enabled(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Диагностический attach',
+        ]);
+
+        $dialog->forceFill([
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+        ])->save();
+
+        config()->set('bitrix24.duplicate_phone_diagnostic.enabled', true);
+        config()->set('bitrix24.duplicate_phone_diagnostic.delay_seconds', 60);
+
+        $diagnosticSpy = Mockery::spy(LogBitrix24RawContactPhoneSnapshotAction::class);
+        $this->app->instance(LogBitrix24RawContactPhoneSnapshotAction::class, $diagnosticSpy);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $diagnosticSpy->shouldHaveReceived('handle')
+            ->once()
+            ->withArgs(static fn (Contact $loggedContact, string $stage, ?Dialog $loggedDialog, ?Message $loggedMessage): bool => $loggedContact->id === $dialog->contact_id
+                && $stage === 'after_live_export'
+                && $loggedDialog?->id === $dialog->id
+                && $loggedMessage?->id === $message->id);
+
+        Queue::assertPushed(LogBitrix24RawContactPhoneSnapshotJob::class, function (LogBitrix24RawContactPhoneSnapshotJob $job) use ($dialog, $message): bool {
+            return $job->contactId === $dialog->contact_id
+                && $job->stage === 'delayed_post_attach'
+                && $job->dialogId === $dialog->id
+                && $job->messageId === $message->id;
+        });
+    }
+
+    public function test_regular_active_dialog_message_does_not_log_or_queue_duplicate_phone_snapshots(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog([
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_ACTIVE,
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Обычное сообщение в active диалоге',
+        ]);
+
+        config()->set('bitrix24.duplicate_phone_diagnostic.enabled', true);
+
+        $diagnosticSpy = Mockery::spy(LogBitrix24RawContactPhoneSnapshotAction::class);
+        $this->app->instance(LogBitrix24RawContactPhoneSnapshotAction::class, $diagnosticSpy);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $diagnosticSpy->shouldNotHaveReceived('handle');
+        Queue::assertNotPushed(LogBitrix24RawContactPhoneSnapshotJob::class);
     }
 
     public function test_inbound_contact_share_is_exported_as_synthetic_text(): void
