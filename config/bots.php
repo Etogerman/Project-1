@@ -235,6 +235,15 @@ return [
 
     'webhook_secret_length' => 40,
 
+    'rate_limit' => [
+        'telegram' => [
+            'max_per_minute' => (int) env('BOT_TELEGRAM_WEBHOOK_MAX_PER_MINUTE', 300),
+        ],
+        'max' => [
+            'max_per_minute' => (int) env('BOT_MAX_WEBHOOK_MAX_PER_MINUTE', 300),
+        ],
+    ],
+
     'telegram' => [
         'webhook_secret_header' => 'X-Telegram-Bot-Api-Secret-Token',
         'allowed_updates' => [

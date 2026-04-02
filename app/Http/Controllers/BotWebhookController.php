@@ -8,6 +8,7 @@ use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\ContactIdentity;
+use App\Services\Bots\BotWebhookRateLimiter;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\StoreInboundMessageAction;
@@ -25,6 +26,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        BotWebhookRateLimiter $botWebhookRateLimiter,
         TelegramBotApiService $telegramBotApiService,
     ): JsonResponse {
         return $this->handle(
@@ -34,6 +36,7 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
+            botWebhookRateLimiter: $botWebhookRateLimiter,
             telegramBotApiService: $telegramBotApiService,
         );
     }
@@ -44,6 +47,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        BotWebhookRateLimiter $botWebhookRateLimiter,
     ): JsonResponse {
         return $this->handle(
             request: $request,
@@ -52,6 +56,7 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
+            botWebhookRateLimiter: $botWebhookRateLimiter,
         );
     }
 
@@ -62,6 +67,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
+        BotWebhookRateLimiter $botWebhookRateLimiter,
         ?TelegramBotApiService $telegramBotApiService = null,
     ): JsonResponse {
         abort_unless(
@@ -79,6 +85,31 @@ class BotWebhookController extends Controller
             filled($expectedSecret) && filled($providedSecret) && hash_equals($expectedSecret, $providedSecret),
             403,
         );
+
+        $retryAfterSeconds = $botWebhookRateLimiter->check($request, $channel);
+
+        if ($retryAfterSeconds !== null) {
+            $channelActivityLogger->warning(
+                $channel,
+                'webhook.rate_limited',
+                'Входящий webhook временно ограничен по частоте запросов.',
+                [
+                    'platform' => $channel->platform,
+                    'channel_id' => $channel->id,
+                    'request_ip' => $request->ip(),
+                    'route' => $request->route()?->getName() ?? $request->path(),
+                    'retry_after_seconds' => $retryAfterSeconds,
+                    'max_per_minute' => $botWebhookRateLimiter->resolveMaxPerMinute($channel),
+                ],
+            );
+
+            return response()
+                ->json([
+                    'ok' => false,
+                    'error' => 'rate_limited',
+                ], 429)
+                ->header('Retry-After', (string) $retryAfterSeconds);
+        }
 
         $payload = $request->json()->all();
 
