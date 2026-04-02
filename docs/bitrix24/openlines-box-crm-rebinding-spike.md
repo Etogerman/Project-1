@@ -2,7 +2,8 @@
 
 ## Статус
 
-Discovery завершён на уровне, достаточном для следующего implementation step.
+Discovery завершён.
+Выбранный box-side path позже был доведён до рабочего happy-path.
 
 Текущее состояние по production smoke-check:
 
@@ -13,7 +14,16 @@ Discovery завершён на уровне, достаточном для сл
 - `Bitrix -> messenger -> local history -> ack` работает
 - documented payload hints (`user.phone`, `user.last_name`) уже отправляются
 - новый лид в последнем тестовом сценарии не создался
-- но новая Open Lines сессия всё равно не привязалась к existing CRM contact
+- на момент spike новая Open Lines сессия ещё не привязывалась к existing CRM contact
+
+Финальный подтверждённый outcome после implementation phase:
+
+- Telegram happy-path работает end-to-end
+- MAX happy-path работает end-to-end
+- existing CRM contact reuse подтверждён
+- рабочие line ids:
+  - Telegram `32`
+  - MAX `31`
 
 ## Подтверждённые факты
 
@@ -209,7 +219,7 @@ Current state after `6.4.3b.2` показывает:
 
 Этого достаточно, чтобы считать `Box Rebinding Feasibility Spike` завершённым и переходить к минимальной box-side implementation phase.
 
-## Рекомендованный следующий шаг
+## Исторический следующий шаг
 
 Следующий implementation step:
 
@@ -221,3 +231,4 @@ Current state after `6.4.3b.2` показывает:
 - minimal happy-path rebinding prototype
 - smoke-check на existing contact reuse
 
+Этот шаг был реализован и подтверждён production-like smoke-check.
