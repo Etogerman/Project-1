@@ -63,6 +63,18 @@ return [
         'retry_sleep_milliseconds' => (int) env('BITRIX24_HTTP_RETRY_SLEEP_MILLISECONDS', 200),
     ],
 
+    'rate_limits' => [
+        'install' => [
+            'max_per_minute' => (int) env('BITRIX24_INSTALL_CALLBACK_MAX_PER_MINUTE', 30),
+        ],
+        'events' => [
+            'max_per_minute' => (int) env('BITRIX24_EVENTS_CALLBACK_MAX_PER_MINUTE', 300),
+        ],
+        'openlines' => [
+            'max_per_minute' => (int) env('BITRIX24_OPENLINES_CALLBACK_MAX_PER_MINUTE', 300),
+        ],
+    ],
+
     'fields' => [
         'name_source' => env('BITRIX24_FIELD_NAME_SOURCE', 'UF_CRM_64D7457E4DC07'),
         'age_exact' => env('BITRIX24_FIELD_AGE_EXACT', 'UF_CRM_1606901533'),
