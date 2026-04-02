@@ -150,43 +150,38 @@ final class Runtime
 
         if ($context['explicit_contact_id'] !== '') {
             $explicitContactId = (int) $context['explicit_contact_id'];
-            $explicitAttach = [
+            $activityBinding = [
                 'success' => false,
                 'status' => 'invalid_explicit_contact_id',
                 'error' => '',
+                'binding_contact_before' => '',
+                'binding_contact_after' => '',
             ];
 
-            self::logStructured('crm_rebind_explicit_contact_attempted', $context + [
+            self::logStructured('crm_rebind_activity_binding_attempted', $context + [
                 'hook' => 'OnSessionStart',
                 'contact_id' => $context['explicit_contact_id'],
             ]);
 
             if ($explicitContactId > 0) {
-                $explicitAttach = self::attachRuntimeSessionToContact($eventParams, $explicitContactId);
+                $activityBinding = self::bindCrmActivityToContact($eventParams, $explicitContactId);
             }
 
-            $trackerPreview = $explicitContactId > 0
-                ? self::buildTrackerLinkPreview(
-                    $context['line_id'],
-                    $context['connector_code'],
-                    $explicitContactId,
-                )
-                : null;
-
             self::logStructured(
-                $explicitAttach['success'] ? 'crm_rebind_explicit_contact_succeeded' : 'crm_rebind_explicit_contact_failed',
+                in_array($activityBinding['status'], ['invalid_explicit_contact_id', 'missing_crm_activity_id', 'crm_binding_api_unavailable'], true)
+                    ? 'crm_rebind_activity_binding_skipped'
+                    : ($activityBinding['success'] ? 'crm_rebind_activity_binding_succeeded' : 'crm_rebind_activity_binding_failed'),
                 $context + [
                     'hook' => 'OnSessionStart',
                     'contact_id' => $context['explicit_contact_id'],
-                    'tracker_preview' => $trackerPreview,
-                    'status' => $explicitAttach['status'],
-                    'error' => $explicitAttach['error'],
+                    'status' => $activityBinding['status'],
+                    'error' => $activityBinding['error'],
+                    'binding_contact_before' => $activityBinding['binding_contact_before'],
+                    'binding_contact_after' => $activityBinding['binding_contact_after'],
                 ]
             );
 
-            if ($explicitAttach['success']) {
-                return;
-            }
+            return;
         }
 
         if ($context['phone_candidates'] === []) {
@@ -650,6 +645,7 @@ final class Runtime
             'connector_code' => $connectorCode,
             'session_id' => self::extractSessionId($eventParams),
             'chat_id' => self::extractChatId($eventParams),
+            'crm_activity_id' => self::extractCrmActivityId($eventParams),
             'explicit_contact_id' => $explicitContactProbe['contact_id'],
             'source_path' => $explicitContactProbe['source_path'],
             'retry_after_sync_probe' => $retryAfterSyncProbe['enabled'],
@@ -1174,11 +1170,145 @@ final class Runtime
 
     /**
      * @param  array<string, mixed>  $eventParams
+     * @return array{success: bool, status: string, error: string, binding_contact_before: string, binding_contact_after: string}
+     */
+    private static function bindCrmActivityToContact(array $eventParams, int $contactId): array
+    {
+        $crmActivityId = (int) self::extractCrmActivityId($eventParams);
+
+        if ($crmActivityId <= 0) {
+            return [
+                'success' => false,
+                'status' => 'missing_crm_activity_id',
+                'error' => '',
+                'binding_contact_before' => '',
+                'binding_contact_after' => '',
+            ];
+        }
+
+        if (! class_exists('\\Bitrix\\ImOpenLines\\Crm\\Common') || ! class_exists('\\CCrmOwnerType')) {
+            return [
+                'success' => false,
+                'status' => 'crm_binding_api_unavailable',
+                'error' => '',
+                'binding_contact_before' => '',
+                'binding_contact_after' => '',
+            ];
+        }
+
+        try {
+            $bindingContactBefore = self::extractActivityBindingContactId($crmActivityId);
+
+            $result = \Bitrix\ImOpenLines\Crm\Common::addActivityBindings($crmActivityId, [
+                \CCrmOwnerType::ContactName => $contactId,
+            ]);
+
+            $bindingContactAfter = self::extractActivityBindingContactId($crmActivityId);
+
+            if (! is_object($result) || ! method_exists($result, 'isSuccess') || ! $result->isSuccess()) {
+                return [
+                    'success' => false,
+                    'status' => 'activity_binding_add_failed',
+                    'error' => self::extractResultErrors($result),
+                    'binding_contact_before' => $bindingContactBefore,
+                    'binding_contact_after' => $bindingContactAfter,
+                ];
+            }
+
+            $success = $bindingContactAfter !== '' && (int) $bindingContactAfter === $contactId;
+
+            return [
+                'success' => $success,
+                'status' => $success
+                    ? ($bindingContactBefore === $bindingContactAfter ? 'contact_binding_already_present' : 'contact_binding_added')
+                    : 'contact_binding_not_visible_after_add',
+                'error' => '',
+                'binding_contact_before' => $bindingContactBefore,
+                'binding_contact_after' => $bindingContactAfter,
+            ];
+        } catch (\Throwable $throwable) {
+            return [
+                'success' => false,
+                'status' => 'activity_binding_exception',
+                'error' => $throwable->getMessage(),
+                'binding_contact_before' => '',
+                'binding_contact_after' => '',
+            ];
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $eventParams
      * @return array<string, mixed>
      */
     private static function extractSessionArray(array $eventParams): array
     {
         return self::normalizeArray($eventParams['SESSION'] ?? $eventParams['session'] ?? []);
+    }
+
+    /**
+     * @param  array<string, mixed>  $eventParams
+     */
+    private static function extractCrmActivityId(array $eventParams): string
+    {
+        $session = self::extractSessionArray($eventParams);
+
+        return self::scalarString($session['CRM_ACTIVITY_ID'] ?? '');
+    }
+
+    private static function extractActivityBindingContactId(int $crmActivityId): string
+    {
+        if (! class_exists('\\Bitrix\\ImOpenLines\\Crm\\Common') || $crmActivityId <= 0) {
+            return '';
+        }
+
+        $bindingsResult = \Bitrix\ImOpenLines\Crm\Common::getActivityBindings($crmActivityId);
+
+        if (! is_object($bindingsResult) || ! method_exists($bindingsResult, 'isSuccess') || ! $bindingsResult->isSuccess() || ! method_exists($bindingsResult, 'getData')) {
+            return '';
+        }
+
+        $bindings = $bindingsResult->getData();
+
+        if (! is_array($bindings)) {
+            return '';
+        }
+
+        return self::scalarString($bindings['CONTACT'] ?? '');
+    }
+
+    /**
+     * @param  mixed  $result
+     */
+    private static function extractResultErrors($result): string
+    {
+        if (! is_object($result)) {
+            return '';
+        }
+
+        if (method_exists($result, 'getErrorMessages')) {
+            $messages = $result->getErrorMessages();
+
+            if (is_array($messages)) {
+                return trim(implode('; ', array_map('strval', $messages)));
+            }
+        }
+
+        if (method_exists($result, 'getErrors')) {
+            $errors = $result->getErrors();
+
+            if (is_array($errors)) {
+                return trim(implode('; ', array_map(static function ($error): string {
+                    if (is_object($error) && method_exists($error, 'getMessage')) {
+                        return (string) $error->getMessage();
+                    }
+
+                    return is_scalar($error) ? (string) $error : '';
+                }, $errors)));
+            }
+        }
+
+        return '';
     }
 
     /**
