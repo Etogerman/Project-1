@@ -148,6 +148,47 @@ final class Runtime
             ]
         );
 
+        if ($context['explicit_contact_id'] !== '') {
+            $explicitContactId = (int) $context['explicit_contact_id'];
+            $explicitAttach = [
+                'success' => false,
+                'status' => 'invalid_explicit_contact_id',
+                'error' => '',
+            ];
+
+            self::logStructured('crm_rebind_explicit_contact_attempted', $context + [
+                'hook' => 'OnSessionStart',
+                'contact_id' => $context['explicit_contact_id'],
+            ]);
+
+            if ($explicitContactId > 0) {
+                $explicitAttach = self::attachRuntimeSessionToContact($eventParams, $explicitContactId);
+            }
+
+            $trackerPreview = $explicitContactId > 0
+                ? self::buildTrackerLinkPreview(
+                    $context['line_id'],
+                    $context['connector_code'],
+                    $explicitContactId,
+                )
+                : null;
+
+            self::logStructured(
+                $explicitAttach['success'] ? 'crm_rebind_explicit_contact_succeeded' : 'crm_rebind_explicit_contact_failed',
+                $context + [
+                    'hook' => 'OnSessionStart',
+                    'contact_id' => $context['explicit_contact_id'],
+                    'tracker_preview' => $trackerPreview,
+                    'status' => $explicitAttach['status'],
+                    'error' => $explicitAttach['error'],
+                ]
+            );
+
+            if ($explicitAttach['success']) {
+                return;
+            }
+        }
+
         if ($context['phone_candidates'] === []) {
             self::logStructured('crm_rebind_skipped', $context + [
                 'hook' => 'OnSessionStart',
@@ -635,13 +676,17 @@ final class Runtime
     {
         $session = self::extractSessionArray($eventParams);
         $config = self::extractConfigArray($eventParams);
+        $connectorPayload = self::extractConnectorPayloadArray($eventParams);
+        $connectorEnvelope = self::normalizeArray($connectorPayload['connector'] ?? []);
 
         foreach ([
             $session['CONFIG_ID'] ?? null,
             $config['ID'] ?? null,
             $config['CONFIG_ID'] ?? null,
+            $connectorEnvelope['line_id'] ?? null,
+            $connectorEnvelope['lineId'] ?? null,
         ] as $candidate) {
-            $lineId = trim((string) $candidate);
+            $lineId = self::scalarString($candidate);
 
             if ($lineId !== '') {
                 return $lineId;
@@ -653,13 +698,18 @@ final class Runtime
 
     private static function resolveConnectorCodeFromCrmRebindingParams(array $eventParams): string
     {
+        $connectorPayload = self::extractConnectorPayloadArray($eventParams);
+        $connectorEnvelope = self::normalizeArray($connectorPayload['connector'] ?? []);
+
         foreach ([
+            $connectorEnvelope['connector_id'] ?? null,
+            $connectorEnvelope['connectorId'] ?? null,
             $eventParams['CONNECTOR'] ?? null,
             $eventParams['connector'] ?? null,
             $eventParams['SOURCE'] ?? null,
             $eventParams['source'] ?? null,
         ] as $candidate) {
-            $connectorCode = trim((string) $candidate);
+            $connectorCode = self::scalarString($candidate);
 
             if ($connectorCode !== '') {
                 return $connectorCode;
@@ -687,13 +737,16 @@ final class Runtime
     private static function extractChatId(array $eventParams): string
     {
         $session = self::extractSessionArray($eventParams);
+        $connectorPayload = self::extractConnectorPayloadArray($eventParams);
+        $connectorChat = self::normalizeArray($connectorPayload['chat'] ?? []);
 
         foreach ([
             $session['CHAT_ID'] ?? null,
+            $connectorChat['id'] ?? null,
             self::extractChatIdFromRuntimeSession($eventParams['RUNTIME_SESSION'] ?? null),
             self::extractChatIdFromChatObject($eventParams['chat'] ?? null),
         ] as $candidate) {
-            $chatId = trim((string) $candidate);
+            $chatId = self::scalarString($candidate);
 
             if ($chatId !== '') {
                 return $chatId;
@@ -1138,6 +1191,15 @@ final class Runtime
     }
 
     /**
+     * @param  array<string, mixed>  $eventParams
+     * @return array<string, mixed>
+     */
+    private static function extractConnectorPayloadArray(array $eventParams): array
+    {
+        return self::normalizeArray($eventParams['CONNECTOR'] ?? $eventParams['connector'] ?? []);
+    }
+
+    /**
      * @param  mixed  $value
      * @return mixed
      */
@@ -1199,6 +1261,18 @@ final class Runtime
         }
 
         return $hasPlus ? '+'.$digits : $digits;
+    }
+
+    /**
+     * @param  mixed  $value
+     */
+    private static function scalarString($value): string
+    {
+        if (! is_scalar($value)) {
+            return '';
+        }
+
+        return trim((string) $value);
     }
 
     private static function maskPhoneForLog(string $value): string
