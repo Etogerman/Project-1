@@ -359,7 +359,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         );
 
         $this->assertSame('70906', $payload['MESSAGES'][0]['user']['crm_contact_id'] ?? null);
-        $this->assertArrayNotHasKey('phone', $payload['MESSAGES'][0]['user']);
+        $this->assertSame('+79263527111', $payload['MESSAGES'][0]['user']['phone'] ?? null);
         $this->assertSame('70906', $payload['MESSAGES'][0]['message']['params']['crm_contact_id_probe'] ?? null);
         $this->assertSame('Y', $payload['MESSAGES'][0]['message']['params']['retry_after_sync_probe'] ?? null);
     }
