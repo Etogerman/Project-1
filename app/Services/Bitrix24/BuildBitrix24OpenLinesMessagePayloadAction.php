@@ -20,7 +20,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
     /**
      * @return array<string, mixed>
      */
-    public function handle(Message $message, Bitrix24OpenLinesRouteData $route): array
+    public function handle(Message $message, Bitrix24OpenLinesRouteData $route, bool $retryAfterSync = false): array
     {
         $message->loadMissing([
             'dialog.channel',
@@ -40,6 +40,8 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $userName = $rootContact->display_name;
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 
+        $probePayload = $this->resolveRetryAfterSyncProbePayload($retryAfterSync, $rootContact->bitrix24_contact_id);
+
         return [
             'CONNECTOR' => $route->connectorCode,
             'LINE' => $route->lineId,
@@ -51,12 +53,13 @@ class BuildBitrix24OpenLinesMessagePayloadAction
                 'user' => [
                     'id' => $userId,
                     'name' => $userName,
-                ] + $this->resolveOptionalUserPayload($rootContact->last_name, $phones[0] ?? null),
+                ] + $this->resolveOptionalUserPayload($rootContact->last_name, $phones[0] ?? null)
+                    + ($probePayload['user'] ?? []),
                 'message' => [
                     'id' => 'abrikosoff-message:'.$message->id,
                     'date' => $timestamp->timestamp,
                     'text' => $text,
-                ],
+                ] + ($probePayload['message'] ?? []),
             ]],
         ];
     }
@@ -99,5 +102,36 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $trimmed = trim((string) $value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * @return array{
+     *     user?: array<string, string>,
+     *     message?: array<string, array<string, string>>
+     * }
+     */
+    private function resolveRetryAfterSyncProbePayload(bool $retryAfterSync, mixed $bitrix24ContactId): array
+    {
+        if (! $retryAfterSync) {
+            return [];
+        }
+
+        $contactId = $this->nullableString($bitrix24ContactId);
+
+        if ($contactId === null) {
+            return [];
+        }
+
+        return [
+            'user' => [
+                'crm_contact_id' => $contactId,
+            ],
+            'message' => [
+                'params' => [
+                    'crm_contact_id_probe' => $contactId,
+                    'retry_after_sync_probe' => 'Y',
+                ],
+            ],
+        ];
     }
 }

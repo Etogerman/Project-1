@@ -17,6 +17,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
 
     public function __construct(
         public readonly int $messageId,
+        public readonly bool $retryAfterSync = false,
     ) {}
 
     public function handle(
@@ -30,7 +31,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
         }
 
         try {
-            $exportMessageToBitrix24OpenLinesAction->handle($message);
+            $exportMessageToBitrix24OpenLinesAction->handle($message, $this->retryAfterSync);
         } catch (Throwable $throwable) {
             $logBitrix24ApiCallAction->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
@@ -40,6 +41,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
                     'message_id' => $message->id,
                     'dialog_id' => $message->dialog_id,
                     'contact_id' => $message->contact_id,
+                    'retry_after_sync' => $this->retryAfterSync,
                 ],
                 connection: null,
                 errorMessage: $throwable->getMessage(),

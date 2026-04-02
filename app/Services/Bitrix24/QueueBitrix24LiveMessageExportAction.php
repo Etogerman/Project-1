@@ -15,7 +15,7 @@ class QueueBitrix24LiveMessageExportAction
         private readonly IsMessageReadyForBitrix24LiveExportAction $isMessageReadyForBitrix24LiveExportAction,
     ) {}
 
-    public function handle(Message|int $message): Bitrix24LiveMessageExportQueueResultData
+    public function handle(Message|int $message, bool $retryAfterSync = false): Bitrix24LiveMessageExportQueueResultData
     {
         $message = $message instanceof Message
             ? $message
@@ -64,7 +64,7 @@ class QueueBitrix24LiveMessageExportAction
             ],
         );
 
-        ExportMessageToBitrix24OpenLinesJob::dispatch($message->id)->afterCommit();
+        ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync)->afterCommit();
 
         return new Bitrix24LiveMessageExportQueueResultData(
             queued: true,

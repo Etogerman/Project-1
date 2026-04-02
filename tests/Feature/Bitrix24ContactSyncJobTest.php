@@ -94,7 +94,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
         $this->runSyncJob($contact);
 
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($missedInbound): bool {
-            return $job->messageId === $missedInbound->id;
+            return $job->messageId === $missedInbound->id
+                && $job->retryAfterSync === true;
         });
         Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($outboundAutoReply): bool {
             return $job->messageId === $outboundAutoReply->id;

@@ -23,7 +23,7 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
     ) {}
 
-    public function handle(Message|int $message): Message
+    public function handle(Message|int $message, bool $retryAfterSync = false): Message
     {
         $message = $message instanceof Message
             ? $message
@@ -49,7 +49,7 @@ class ExportMessageToBitrix24OpenLinesAction
 
         try {
             $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
-            $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle($message, $route);
+            $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle($message, $route, $retryAfterSync);
             $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload);
 
             if (! $response->successful) {
@@ -79,6 +79,7 @@ class ExportMessageToBitrix24OpenLinesAction
                     'chat_id' => $chatKey,
                     'connector_code' => $route->connectorCode,
                     'line_id' => $route->lineId,
+                    'retry_after_sync' => $retryAfterSync,
                 ],
                 responsePayload: [
                     'result' => $response->result,

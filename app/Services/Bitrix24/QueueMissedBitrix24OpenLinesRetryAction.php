@@ -25,7 +25,7 @@ class QueueMissedBitrix24OpenLinesRetryAction
             return false;
         }
 
-        $result = $this->queueBitrix24LiveMessageExportAction->handle($message);
+        $result = $this->queueBitrix24LiveMessageExportAction->handle($message, retryAfterSync: true);
 
         return $result->queued || $result->alreadyPending;
     }
