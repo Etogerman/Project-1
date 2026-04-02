@@ -2,15 +2,20 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\SyncContactToBitrix24Job;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\Dialog;
+use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class Bitrix24ContactSyncJobTest extends TestCase
@@ -25,7 +30,124 @@ class Bitrix24ContactSyncJobTest extends TestCase
         config()->set('bitrix24.application.client_secret', 'local.secret');
         config()->set('bitrix24.sources.telegram_id', 'ABRIKOSOFF_TELEGRAM');
         config()->set('bitrix24.sources.max_id', 'ABRIKOSOFF_MAX');
+        config()->set('bitrix24.features.openlines_enabled', true);
+        config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
+        config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
+        config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
+        config()->set('bitrix24.openlines.max_line_id', 'line-max');
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
+    }
+
+    public function test_first_successful_contact_sync_queues_retry_for_latest_missed_inbound_live_message(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_linked_at' => null,
+            'bitrix24_sync_fingerprint' => null,
+        ], channel: $channel);
+
+        $dialog = $this->makeDialog($contact, $channel);
+        $missedInbound = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Первое сообщение до sync',
+            'received_at' => now()->subMinute(),
+        ]);
+        $outboundAutoReply = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_AUTO_REPLY,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
+            'text' => 'Служебный автоответ',
+            'received_at' => now(),
+        ]);
+
+        $initialQueueResult = app(\App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction::class)->handle($missedInbound);
+
+        $this->assertFalse($initialQueueResult->queued);
+        $this->assertFalse($initialQueueResult->ready);
+
+        $contact->forceFill([
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+        ])->save();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'result' => ['CONTACT' => []],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.add.json' => Http::response([
+                'result' => 501,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($missedInbound): bool {
+            return $job->messageId === $missedInbound->id;
+        });
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($outboundAutoReply): bool {
+            return $job->messageId === $outboundAutoReply->id;
+        });
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $missedInbound->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+        ]);
+        $this->assertDatabaseMissing('bitrix24_message_exports', [
+            'message_id' => $outboundAutoReply->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+        ]);
+    }
+
+    public function test_resync_of_already_linked_contact_does_not_queue_missed_live_retry(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_linked_at' => now()->subDay(),
+            'bitrix24_last_synced_at' => now()->subDay(),
+            'bitrix24_sync_fingerprint' => 'existing-sync',
+        ], channel: $channel);
+
+        $dialog = $this->makeDialog($contact, $channel, [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+        ]);
+        $missedInbound = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Старое missed сообщение',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                ]),
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        $this->assertDatabaseMissing('bitrix24_message_exports', [
+            'message_id' => $missedInbound->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+        ]);
     }
 
     public function test_job_creates_bitrix24_contact_when_duplicate_search_returns_no_matches(): void
@@ -815,6 +937,42 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'platform' => Channel::PLATFORM_TELEGRAM,
             'bot_username' => 'abrikosoff_tg',
             'bot_name' => 'Abrikosoff TG',
+        ], $overrides));
+    }
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     */
+    private function makeDialog(Contact $contact, Channel $channel, array $overrides = []): Dialog
+    {
+        $identity = $contact->identities()
+            ->where('channel_id', $channel->id)
+            ->firstOrFail();
+
+        return Dialog::factory()->create(array_merge([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => $channel->platform.'-chat-'.$contact->id,
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+        ], $overrides));
+    }
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     */
+    private function makeMessage(Dialog $dialog, array $overrides = []): Message
+    {
+        $dialog->loadMissing(['contact', 'currentContactIdentity']);
+
+        return Message::factory()->create(array_merge([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => (string) fake()->numerify('######'),
+            'received_at' => now(),
         ], $overrides));
     }
 

@@ -8,6 +8,7 @@ use App\Services\Bitrix24\IsContactReadyForBitrix24SyncAction;
 use App\Services\Bitrix24\LogBitrix24ApiCallAction;
 use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
 use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
+use App\Services\Bitrix24\QueueMissedBitrix24OpenLinesRetryAction;
 use App\Services\Bitrix24\SyncContactToBitrix24Action;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -29,6 +30,7 @@ class SyncContactToBitrix24Job implements ShouldQueue
         LogBitrix24ApiCallAction $logApiCallAction,
         QueueBitrix24DealSyncAction $queueBitrix24DealSyncAction,
         QueueBitrix24HistoryExportAction $queueBitrix24HistoryExportAction,
+        QueueMissedBitrix24OpenLinesRetryAction $queueMissedBitrix24OpenLinesRetryAction,
     ): void {
         $contact = Contact::query()->find($this->contactId);
 
@@ -38,6 +40,8 @@ class SyncContactToBitrix24Job implements ShouldQueue
 
         $rootContact = $resolveRootContactAction->handle($contact);
         $ready = $isContactReadyForBitrix24SyncAction->handle($rootContact);
+        $wasLinkedBeforeSync = filled($rootContact->bitrix24_contact_id)
+            && ($rootContact->bitrix24_linked_at !== null || $rootContact->bitrix24_last_synced_at !== null);
 
         if (! $ready) {
             $rootContact->forceFill([
@@ -85,6 +89,15 @@ class SyncContactToBitrix24Job implements ShouldQueue
         }
 
         $rootContact->refresh();
+        $becameLinkedAfterSync = ! $wasLinkedBeforeSync
+            && filled($rootContact->bitrix24_contact_id)
+            && $rootContact->bitrix24_sync_status === Contact::BITRIX24_SYNC_STATUS_SYNCED
+            && ! $rootContact->bitrix24_sync_pending;
+
+        if ($becameLinkedAfterSync) {
+            $queueMissedBitrix24OpenLinesRetryAction->handle($rootContact);
+        }
+
         $queueBitrix24DealSyncAction->handle($rootContact);
         $queueBitrix24HistoryExportAction->handle($rootContact);
     }
