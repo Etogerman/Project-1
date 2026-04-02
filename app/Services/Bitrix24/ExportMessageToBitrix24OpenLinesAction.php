@@ -16,6 +16,7 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly ResolveBitrix24OpenLinesRouteAction $resolveBitrix24OpenLinesRouteAction,
         private readonly BuildBitrix24OpenLinesMessagePayloadAction $buildBitrix24OpenLinesMessagePayloadAction,
         private readonly IsMessageReadyForBitrix24LiveExportAction $isMessageReadyForBitrix24LiveExportAction,
+        private readonly QueueBitrix24ContactPhoneDedupeAction $queueBitrix24ContactPhoneDedupeAction,
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
     ) {}
@@ -85,6 +86,13 @@ class ExportMessageToBitrix24OpenLinesAction
                 entityType: 'message',
                 entityId: (string) $message->id,
             );
+
+            if (in_array($previousLiveStatus, [
+                Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+                Dialog::BITRIX24_LIVE_STATUS_FAILED,
+            ], true)) {
+                $this->queueBitrix24ContactPhoneDedupeAction->handle($rootContact);
+            }
 
             if (in_array($previousLiveStatus, [
                 Dialog::BITRIX24_LIVE_STATUS_CLOSED,
