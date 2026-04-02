@@ -53,7 +53,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
                 'user' => [
                     'id' => $userId,
                     'name' => $userName,
-                ] + $this->resolveOptionalUserPayload($rootContact->last_name, $phones[0] ?? null)
+                ] + $this->resolveOptionalUserPayload($rootContact->last_name, $phones[0] ?? null, ! $retryAfterSync)
                     + ($probePayload['user'] ?? []),
                 'message' => [
                     'id' => 'abrikosoff-message:'.$message->id,
@@ -85,12 +85,17 @@ class BuildBitrix24OpenLinesMessagePayloadAction
     /**
      * @return array<string, string>
      */
-    private function resolveOptionalUserPayload(?string $lastName, ?string $phone): array
+    private function resolveOptionalUserPayload(?string $lastName, ?string $phone, bool $includePhone = true): array
     {
-        return array_filter([
+        $payload = [
             'last_name' => $this->nullableString($lastName),
-            'phone' => $this->nullableString($phone),
-        ], static fn (mixed $value): bool => $value !== null && $value !== '');
+        ];
+
+        if ($includePhone) {
+            $payload['phone'] = $this->nullableString($phone);
+        }
+
+        return array_filter($payload, static fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
     private function nullableString(mixed $value): ?string
