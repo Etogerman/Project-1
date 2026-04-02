@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\IncomingBotMessage;
+use App\Jobs\DedupeBitrix24ContactPhonesJob;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
@@ -16,6 +17,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Services\Bitrix24\BuildBitrix24OpenLinesMessagePayloadAction;
+use App\Services\Bitrix24\DedupeBitrix24ContactPhonesAction;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Bitrix24\Bitrix24ApiException;
@@ -468,6 +470,133 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'entity_id' => (string) $dialog->id,
             'status' => 'success',
         ]);
+    }
+
+    public function test_first_live_attach_queues_contact_phone_dedupe_job(): void
+    {
+        Queue::fake();
+        $this->makeActiveConnection();
+
+        $dialog = $this->createLiveReadyDialog(dialogAttributes: [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Первый live attach',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        Queue::assertPushed(DedupeBitrix24ContactPhonesJob::class, function (DedupeBitrix24ContactPhonesJob $job) use ($dialog): bool {
+            return $job->contactId === $dialog->contact_id;
+        });
+    }
+
+    public function test_regular_active_live_export_does_not_queue_contact_phone_dedupe_job(): void
+    {
+        Queue::fake();
+        $this->makeActiveConnection();
+
+        $dialog = $this->createLiveReadyDialog(dialogAttributes: [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_ACTIVE,
+            'bitrix24_live_chat_id' => 'abrikosoff-dialog:100',
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Обычное следующее сообщение',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        Queue::assertNotPushed(DedupeBitrix24ContactPhonesJob::class);
+    }
+
+    public function test_contact_phone_dedupe_updates_raw_duplicate_phones_preferring_mobile(): void
+    {
+        $this->makeActiveConnection();
+
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'bitrix24_contact_id' => 'B24-CONTACT-200',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => [
+                    'ID' => 'B24-CONTACT-200',
+                    'PHONE' => [
+                        ['VALUE' => '+7 989 713-33-93', 'VALUE_TYPE' => 'WORK'],
+                        ['VALUE' => '+79897133393', 'VALUE_TYPE' => 'MOBILE'],
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.update.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $updated = app(DedupeBitrix24ContactPhonesAction::class)->handle($contact);
+
+        $this->assertTrue($updated);
+
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/crm.contact.update.json') {
+                return false;
+            }
+
+            $fields = $request['fields'];
+
+            return is_array($fields)
+                && ($fields['PHONE'] ?? null) === [
+                    ['VALUE' => '+79897133393', 'VALUE_TYPE' => 'MOBILE'],
+                ];
+        });
+    }
+
+    public function test_contact_phone_dedupe_skips_update_when_raw_snapshot_has_no_duplicates(): void
+    {
+        $this->makeActiveConnection();
+
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'bitrix24_contact_id' => 'B24-CONTACT-201',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => [
+                    'ID' => 'B24-CONTACT-201',
+                    'PHONE' => [
+                        ['VALUE' => '+7 989 713-33-93', 'VALUE_TYPE' => 'MOBILE'],
+                        ['VALUE' => '+7 926 352-71-11', 'VALUE_TYPE' => 'WORK'],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $updated = app(DedupeBitrix24ContactPhonesAction::class)->handle($contact);
+
+        $this->assertFalse($updated);
+        Http::assertSentCount(1);
+        Http::assertNotSent(function (Request $request): bool {
+            return $request->url() === 'https://client-endpoint.example/rest/crm.contact.update.json';
+        });
     }
 
     public function test_message_from_bitrix24_openlines_is_not_queued_for_reexport(): void
