@@ -36,8 +36,7 @@ final class Runtime
         $eventManager->addEventHandler('imconnector', 'OnDeleteMessageCustom', [self::class, 'onDeleteMessageCustom']);
 
         if (self::crmRebindingEnabled()) {
-            $eventManager->addEventHandler('imopenlines', 'OnBeforeSessionTransfer', [self::class, 'onBeforeSessionTransfer']);
-            $eventManager->addEventHandler('imopenlines', 'OnErrorEventBeforeSessionTransfer', [self::class, 'onErrorEventBeforeSessionTransfer']);
+            $eventManager->addEventHandler('imopenlines', 'OnSessionStart', [self::class, 'onSessionStart']);
         }
     }
 
@@ -122,74 +121,80 @@ final class Runtime
         self::forwardImconnectorEvent('OnDeleteMessageCustom', $args);
     }
 
-    public static function onBeforeSessionTransfer(\Bitrix\Main\Event $event): \Bitrix\Main\EventResult
+    public static function onSessionStart(\Bitrix\Main\Event $event): void
     {
         $eventParams = $event->getParameters();
 
         if (! self::crmRebindingEnabled()) {
-            return new \Bitrix\Main\EventResult(\Bitrix\Main\EventResult::SUCCESS, $eventParams);
+            return;
         }
 
         $context = self::buildCrmRebindingContext($eventParams);
 
         if ($context === null) {
             self::logStructured('crm_rebind_skipped', [
+                'hook' => 'OnSessionStart',
                 'reason' => 'line_not_supported_or_context_incomplete',
+                'event_parameters' => $eventParams,
             ]);
 
-            return new \Bitrix\Main\EventResult(\Bitrix\Main\EventResult::SUCCESS, $eventParams);
+            return;
         }
+
+        self::logStructured(
+            $context['explicit_contact_id'] !== '' ? 'crm_rebind_explicit_contact_probe_detected' : 'crm_rebind_explicit_contact_probe_missing',
+            $context + [
+                'hook' => 'OnSessionStart',
+            ]
+        );
 
         if ($context['phone_candidates'] === []) {
             self::logStructured('crm_rebind_skipped', $context + [
+                'hook' => 'OnSessionStart',
                 'reason' => 'missing_phone_candidates',
             ]);
 
-            return new \Bitrix\Main\EventResult(\Bitrix\Main\EventResult::SUCCESS, $eventParams);
+            return;
         }
 
-        self::logStructured('crm_rebind_attempted', $context);
+        self::logStructured('crm_rebind_attempted', $context + [
+            'hook' => 'OnSessionStart',
+        ]);
 
         $matchingContactIds = self::findExistingContactIdsByPhones($context['phone_candidates']);
 
         if ($matchingContactIds === []) {
-            self::logStructured('crm_rebind_contact_not_found', $context);
+            self::logStructured('crm_rebind_contact_not_found', $context + [
+                'hook' => 'OnSessionStart',
+            ]);
 
-            return new \Bitrix\Main\EventResult(\Bitrix\Main\EventResult::SUCCESS, $eventParams);
+            return;
         }
 
         if (count($matchingContactIds) > 1) {
             self::logStructured('crm_rebind_ambiguous_match', $context + [
+                'hook' => 'OnSessionStart',
                 'matching_contact_ids' => $matchingContactIds,
             ]);
 
-            return new \Bitrix\Main\EventResult(\Bitrix\Main\EventResult::SUCCESS, $eventParams);
+            return;
         }
 
         $contactId = $matchingContactIds[0];
+        $attach = self::attachRuntimeSessionToContact($eventParams, $contactId);
         $trackerPreview = self::buildTrackerLinkPreview(
             $context['line_id'],
             $context['connector_code'],
             $contactId,
         );
 
-        self::logStructured('crm_rebind_contact_found', $context + [
+        self::logStructured($attach['success'] ? 'crm_rebind_succeeded' : 'crm_rebind_failed', $context + [
+            'hook' => 'OnSessionStart',
             'matching_contact_ids' => [$contactId],
+            'contact_id' => $contactId,
             'tracker_preview' => $trackerPreview,
-            'status' => 'attach_api_not_implemented',
-        ]);
-
-        return new \Bitrix\Main\EventResult(\Bitrix\Main\EventResult::SUCCESS, $eventParams);
-    }
-
-    public static function onErrorEventBeforeSessionTransfer(\Bitrix\Main\Event $event): void
-    {
-        if (! self::crmRebindingEnabled()) {
-            return;
-        }
-
-        self::logStructured('crm_rebind_transfer_error', [
-            'event_parameters' => self::sanitizeForLog($event->getParameters()),
+            'status' => $attach['status'],
+            'error' => $attach['error'],
         ]);
     }
 
@@ -513,9 +518,25 @@ final class Runtime
 
     private static function log(string $message): void
     {
-        if (function_exists('AddMessage2Log')) {
+        if (function_exists('AddMessage2Log') && defined('LOG_FILENAME') && (string) LOG_FILENAME !== '') {
             AddMessage2Log($message, 'AbrikosoffOpenLines');
+
+            return;
         }
+
+        $line = sprintf(
+            "[%s] %s\n",
+            date('c'),
+            $message,
+        );
+
+        $logFile = self::crmRebindingLogFile();
+
+        if ($logFile === '') {
+            return;
+        }
+
+        @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
     }
 
     /**
@@ -544,36 +565,64 @@ final class Runtime
         return (bool) self::cfg('crm_rebinding.log_payload', false);
     }
 
+    private static function crmRebindingLogFile(): string
+    {
+        $configured = trim((string) self::cfg('crm_rebinding.log_file', ''));
+
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        return dirname(__DIR__).'/runtime.log';
+    }
+
     /**
      * @param  array<string, mixed>  $eventParams
      * @return array<string, mixed>|null
      */
     private static function buildCrmRebindingContext(array $eventParams): ?array
     {
-        $lineId = self::resolveLineIdFromSessionTransferParams($eventParams);
-        $connectorCode = self::resolveConnectorByLineId($lineId);
+        $lineId = self::resolveLineIdFromCrmRebindingParams($eventParams);
+        $connectorCode = self::resolveConnectorCodeFromCrmRebindingParams($eventParams);
 
-        if ($lineId === '' || $connectorCode === null) {
+        if ($connectorCode === '' && $lineId !== '') {
+            $connectorCode = (string) (self::resolveConnectorByLineId($lineId) ?? '');
+        }
+
+        if ($connectorCode === '' || ! self::supportsConnector($connectorCode)) {
+            return null;
+        }
+
+        if ($lineId === '') {
+            $lineId = trim((string) self::cfg(sprintf('connectors.%s.line_id', $connectorCode), ''));
+        }
+
+        if ($lineId === '') {
             return null;
         }
 
         $phoneCandidates = self::extractPhoneCandidates($eventParams);
-
-        if ($phoneCandidates === []) {
-            return [
-                'line_id' => $lineId,
-                'connector_code' => $connectorCode,
-                'session_id' => self::extractSessionId($eventParams),
-                'chat_id' => self::extractChatId($eventParams),
-                'phone_candidates' => [],
-            ];
-        }
-
-        return [
+        $explicitContactProbe = self::extractExplicitContactProbe($eventParams);
+        $retryAfterSyncProbe = self::extractRetryAfterSyncProbe($eventParams);
+        $baseContext = [
             'line_id' => $lineId,
             'connector_code' => $connectorCode,
             'session_id' => self::extractSessionId($eventParams),
             'chat_id' => self::extractChatId($eventParams),
+            'explicit_contact_id' => $explicitContactProbe['contact_id'],
+            'source_path' => $explicitContactProbe['source_path'],
+            'retry_after_sync_probe' => $retryAfterSyncProbe['enabled'],
+            'retry_after_sync_probe_source_path' => $retryAfterSyncProbe['source_path'],
+            'top_level_keys' => array_values(array_map('strval', array_keys($eventParams))),
+        ];
+
+        if ($phoneCandidates === []) {
+            return $baseContext + [
+                'phone_candidates' => [],
+            ];
+        }
+
+        return $baseContext + [
             'phone_candidates' => $phoneCandidates,
             'phone_lookup_variants' => self::buildPhoneLookupVariants($phoneCandidates),
         ];
@@ -582,10 +631,10 @@ final class Runtime
     /**
      * @param  array<string, mixed>  $eventParams
      */
-    private static function resolveLineIdFromSessionTransferParams(array $eventParams): string
+    private static function resolveLineIdFromCrmRebindingParams(array $eventParams): string
     {
-        $session = self::normalizeArray($eventParams['session'] ?? []);
-        $config = self::normalizeArray($eventParams['config'] ?? []);
+        $session = self::extractSessionArray($eventParams);
+        $config = self::extractConfigArray($eventParams);
 
         foreach ([
             $session['CONFIG_ID'] ?? null,
@@ -602,12 +651,32 @@ final class Runtime
         return '';
     }
 
+    private static function resolveConnectorCodeFromCrmRebindingParams(array $eventParams): string
+    {
+        foreach ([
+            $eventParams['CONNECTOR'] ?? null,
+            $eventParams['connector'] ?? null,
+            $eventParams['SOURCE'] ?? null,
+            $eventParams['source'] ?? null,
+        ] as $candidate) {
+            $connectorCode = trim((string) $candidate);
+
+            if ($connectorCode !== '') {
+                return $connectorCode;
+            }
+        }
+
+        $session = self::extractSessionArray($eventParams);
+
+        return trim((string) ($session['SOURCE'] ?? ''));
+    }
+
     /**
      * @param  array<string, mixed>  $eventParams
      */
     private static function extractSessionId(array $eventParams): string
     {
-        $session = self::normalizeArray($eventParams['session'] ?? []);
+        $session = self::extractSessionArray($eventParams);
 
         return trim((string) ($session['ID'] ?? ''));
     }
@@ -617,10 +686,11 @@ final class Runtime
      */
     private static function extractChatId(array $eventParams): string
     {
-        $session = self::normalizeArray($eventParams['session'] ?? []);
+        $session = self::extractSessionArray($eventParams);
 
         foreach ([
             $session['CHAT_ID'] ?? null,
+            self::extractChatIdFromRuntimeSession($eventParams['RUNTIME_SESSION'] ?? null),
             self::extractChatIdFromChatObject($eventParams['chat'] ?? null),
         ] as $candidate) {
             $chatId = trim((string) $candidate);
@@ -631,6 +701,18 @@ final class Runtime
         }
 
         return '';
+    }
+
+    /**
+     * @param  mixed  $runtimeSession
+     */
+    private static function extractChatIdFromRuntimeSession($runtimeSession): string
+    {
+        if (! is_object($runtimeSession) || ! method_exists($runtimeSession, 'getChat')) {
+            return '';
+        }
+
+        return self::extractChatIdFromChatObject($runtimeSession->getChat());
     }
 
     /**
@@ -664,8 +746,98 @@ final class Runtime
         $phoneCandidates = [];
 
         self::collectPhoneCandidates($eventParams, $phoneCandidates);
+        self::collectPhoneCandidatesFromRuntimeSession($eventParams['RUNTIME_SESSION'] ?? null, $phoneCandidates);
 
         return array_values(array_unique($phoneCandidates));
+    }
+
+    /**
+     * @param  array<string, mixed>  $eventParams
+     * @return array{contact_id: string, source_path: string}
+     */
+    private static function extractExplicitContactProbe(array $eventParams): array
+    {
+        $probe = self::findNestedProbeValue($eventParams, [
+            'crm_contact_id',
+            'crm_contact_id_probe',
+        ]);
+
+        if ($probe === null) {
+            return [
+                'contact_id' => '',
+                'source_path' => 'missing',
+            ];
+        }
+
+        $contactId = trim((string) $probe['value']);
+
+        return [
+            'contact_id' => $contactId,
+            'source_path' => $contactId === '' ? 'missing' : $probe['source_path'],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $eventParams
+     * @return array{enabled: bool, source_path: string}
+     */
+    private static function extractRetryAfterSyncProbe(array $eventParams): array
+    {
+        $probe = self::findNestedProbeValue($eventParams, [
+            'retry_after_sync_probe',
+        ]);
+
+        if ($probe === null) {
+            return [
+                'enabled' => false,
+                'source_path' => 'missing',
+            ];
+        }
+
+        $rawValue = strtoupper(trim((string) $probe['value']));
+
+        return [
+            'enabled' => in_array($rawValue, ['Y', '1', 'TRUE'], true),
+            'source_path' => $probe['source_path'],
+        ];
+    }
+
+    /**
+     * @param  mixed  $runtimeSession
+     * @param  array<int, string>  $phoneCandidates
+     */
+    private static function collectPhoneCandidatesFromRuntimeSession($runtimeSession, array &$phoneCandidates): void
+    {
+        if (! is_object($runtimeSession) || ! method_exists($runtimeSession, 'getCrmManager')) {
+            return;
+        }
+
+        try {
+            $crmManager = $runtimeSession->getCrmManager();
+
+            if (! is_object($crmManager) || ! method_exists($crmManager, 'getFields')) {
+                return;
+            }
+
+            $fields = $crmManager->getFields();
+
+            if (! is_object($fields)) {
+                return;
+            }
+
+            foreach ([
+                method_exists($fields, 'getPersonPhone') ? $fields->getPersonPhone() : null,
+                method_exists($fields, 'getPhones') ? $fields->getPhones() : null,
+            ] as $candidate) {
+                self::collectPhoneCandidates($candidate, $phoneCandidates);
+            }
+        } catch (\Throwable $throwable) {
+            self::logStructured('crm_rebind_tracker_preview_failed', [
+                'hook' => 'OnSessionStart',
+                'error' => $throwable->getMessage(),
+                'phase' => 'extract_runtime_session_phones',
+            ]);
+        }
     }
 
     /**
@@ -703,6 +875,66 @@ final class Runtime
                 }
             }
         }
+    }
+
+    /**
+     * @param  mixed  $value
+     * @param  list<string>  $targetKeys
+     * @return array{value: scalar|null, source_path: string}|null
+     */
+    private static function findNestedProbeValue($value, array $targetKeys, string $path = '')
+    {
+        $normalizedTargetKeys = array_map('strtolower', $targetKeys);
+
+        if (is_array($value)) {
+            foreach ($value as $key => $item) {
+                $keyString = (string) $key;
+                $nextPath = is_int($key)
+                    ? sprintf('%s[%d]', $path, $key)
+                    : ($path === '' ? $keyString : $path.'.'.$keyString);
+
+                if (is_string($key) && in_array(strtolower($key), $normalizedTargetKeys, true) && (is_scalar($item) || $item === null)) {
+                    return [
+                        'value' => $item,
+                        'source_path' => $nextPath,
+                    ];
+                }
+
+                $found = self::findNestedProbeValue($item, $targetKeys, $nextPath);
+
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+
+            return null;
+        }
+
+        if (is_object($value)) {
+            foreach (['toArray', 'getData', 'getFields'] as $method) {
+                if (! method_exists($value, $method)) {
+                    continue;
+                }
+
+                $result = $value->{$method}();
+
+                if (! is_array($result)) {
+                    continue;
+                }
+
+                $found = self::findNestedProbeValue(
+                    $result,
+                    $targetKeys,
+                    $path === '' ? $method : $path.'.'.$method,
+                );
+
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -817,6 +1049,92 @@ final class Runtime
 
             return null;
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $eventParams
+     * @return array{success: bool, status: string, error: string}
+     */
+    private static function attachRuntimeSessionToContact(array $eventParams, int $contactId): array
+    {
+        $runtimeSession = $eventParams['RUNTIME_SESSION'] ?? null;
+
+        if (! is_object($runtimeSession) || ! method_exists($runtimeSession, 'getChat') || ! method_exists($runtimeSession, 'updateCrmFlags')) {
+            return [
+                'success' => false,
+                'status' => 'runtime_session_not_supported',
+                'error' => '',
+            ];
+        }
+
+        if (! class_exists('\\CCrmOwnerType')) {
+            return [
+                'success' => false,
+                'status' => 'crm_owner_type_unavailable',
+                'error' => '',
+            ];
+        }
+
+        $chat = $runtimeSession->getChat();
+
+        if (! is_object($chat) || ! method_exists($chat, 'setCrmFlag')) {
+            return [
+                'success' => false,
+                'status' => 'chat_not_supported',
+                'error' => '',
+            ];
+        }
+
+        try {
+            $runtimeSession->updateCrmFlags([
+                'CRM' => 'Y',
+                'CRM_CREATE' => 'N',
+                'CRM_CREATE_LEAD' => 'N',
+                'CRM_CREATE_COMPANY' => 'N',
+                'CRM_CREATE_CONTACT' => 'N',
+                'CRM_CREATE_DEAL' => 'N',
+            ]);
+
+            $chat->setCrmFlag([
+                'CRM' => 'Y',
+                'ENTITY_TYPE' => \CCrmOwnerType::ContactName,
+                'ENTITY_ID' => $contactId,
+                'CONTACT' => $contactId,
+                'LEAD' => 0,
+                'COMPANY' => 0,
+                'DEAL' => 0,
+            ]);
+
+            return [
+                'success' => true,
+                'status' => 'contact_attached',
+                'error' => '',
+            ];
+        } catch (\Throwable $throwable) {
+            return [
+                'success' => false,
+                'status' => 'attach_failed',
+                'error' => $throwable->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $eventParams
+     * @return array<string, mixed>
+     */
+    private static function extractSessionArray(array $eventParams): array
+    {
+        return self::normalizeArray($eventParams['SESSION'] ?? $eventParams['session'] ?? []);
+    }
+
+    /**
+     * @param  array<string, mixed>  $eventParams
+     * @return array<string, mixed>
+     */
+    private static function extractConfigArray(array $eventParams): array
+    {
+        return self::normalizeArray($eventParams['CONFIG'] ?? $eventParams['config'] ?? []);
     }
 
     /**

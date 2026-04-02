@@ -104,7 +104,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         );
 
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($storedResult): bool {
-            return $job->messageId === $storedResult->message->id;
+            return $job->messageId === $storedResult->message->id
+                && $job->retryAfterSync === false;
         });
 
         $this->assertDatabaseHas('bitrix24_message_exports', [
@@ -322,6 +323,45 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertSame('Live Contact', $payload['MESSAGES'][0]['user']['name'] ?? null);
         $this->assertArrayNotHasKey('last_name', $payload['MESSAGES'][0]['user']);
         $this->assertArrayNotHasKey('phone', $payload['MESSAGES'][0]['user']);
+        $this->assertArrayNotHasKey('crm_contact_id', $payload['MESSAGES'][0]['user']);
+        $this->assertArrayNotHasKey('params', $payload['MESSAGES'][0]['message']);
+    }
+
+    public function test_retry_after_sync_live_payload_includes_explicit_contact_probe_carriers(): void
+    {
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'bitrix24_contact_id' => '70906',
+            'first_name' => 'Герман',
+            'last_name' => 'Германов',
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $dialog->contact_id,
+            'phone_raw' => '+7 926 352-71-11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Клиент поделился телефоном',
+            'received_at' => Carbon::parse('2026-04-01 13:47:00', 'Europe/Moscow'),
+        ]);
+
+        $payload = app(BuildBitrix24OpenLinesMessagePayloadAction::class)->handle(
+            $message,
+            new Bitrix24OpenLinesRouteData(
+                platform: Channel::PLATFORM_TELEGRAM,
+                connectorCode: 'abrikosoff_telegram',
+                lineId: 'line-telegram',
+            ),
+            true,
+        );
+
+        $this->assertSame('70906', $payload['MESSAGES'][0]['user']['crm_contact_id'] ?? null);
+        $this->assertSame('+79263527111', $payload['MESSAGES'][0]['user']['phone'] ?? null);
+        $this->assertSame('70906', $payload['MESSAGES'][0]['message']['params']['crm_contact_id_probe'] ?? null);
+        $this->assertSame('Y', $payload['MESSAGES'][0]['message']['params']['retry_after_sync_probe'] ?? null);
     }
 
     public function test_first_live_attach_logs_immediate_snapshot_and_queues_delayed_raw_snapshot_when_diagnostic_is_enabled(): void
