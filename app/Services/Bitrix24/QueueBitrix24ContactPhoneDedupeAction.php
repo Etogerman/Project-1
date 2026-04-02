@@ -8,6 +8,8 @@ use App\Services\Contacts\ResolveRootContactAction;
 
 class QueueBitrix24ContactPhoneDedupeAction
 {
+    private const INITIAL_DELAY_SECONDS = 30;
+
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
     ) {}
@@ -20,7 +22,9 @@ class QueueBitrix24ContactPhoneDedupeAction
             return false;
         }
 
-        DedupeBitrix24ContactPhonesJob::dispatch($rootContact->id)->afterCommit();
+        DedupeBitrix24ContactPhonesJob::dispatch($rootContact->id)
+            ->delay(now()->addSeconds(self::INITIAL_DELAY_SECONDS))
+            ->afterCommit();
 
         return true;
     }

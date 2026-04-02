@@ -496,7 +496,9 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
 
         Queue::assertPushed(DedupeBitrix24ContactPhonesJob::class, function (DedupeBitrix24ContactPhonesJob $job) use ($dialog): bool {
-            return $job->contactId === $dialog->contact_id;
+            return $job->contactId === $dialog->contact_id
+                && $job->attempt === 1
+                && $job->delay !== null;
         });
     }
 
@@ -597,6 +599,62 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(function (Request $request): bool {
             return $request->url() === 'https://client-endpoint.example/rest/crm.contact.update.json';
         });
+    }
+
+    public function test_contact_phone_dedupe_job_queues_one_retry_when_first_check_has_no_duplicates(): void
+    {
+        Queue::fake();
+        $this->makeActiveConnection();
+
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'bitrix24_contact_id' => 'B24-CONTACT-202',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => [
+                    'ID' => 'B24-CONTACT-202',
+                    'PHONE' => [
+                        ['VALUE' => '+7 989 713-33-93', 'VALUE_TYPE' => 'MOBILE'],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        app()->call([(new DedupeBitrix24ContactPhonesJob($contact->id, 1)), 'handle']);
+
+        Queue::assertPushed(DedupeBitrix24ContactPhonesJob::class, function (DedupeBitrix24ContactPhonesJob $job) use ($contact): bool {
+            return $job->contactId === $contact->id
+                && $job->attempt === 2
+                && $job->delay !== null;
+        });
+    }
+
+    public function test_contact_phone_dedupe_job_does_not_queue_third_attempt(): void
+    {
+        Queue::fake();
+        $this->makeActiveConnection();
+
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'bitrix24_contact_id' => 'B24-CONTACT-203',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => [
+                    'ID' => 'B24-CONTACT-203',
+                    'PHONE' => [
+                        ['VALUE' => '+7 989 713-33-93', 'VALUE_TYPE' => 'MOBILE'],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        app()->call([(new DedupeBitrix24ContactPhonesJob($contact->id, 2)), 'handle']);
+
+        Queue::assertNotPushed(DedupeBitrix24ContactPhonesJob::class);
     }
 
     public function test_message_from_bitrix24_openlines_is_not_queued_for_reexport(): void
