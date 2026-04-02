@@ -13,9 +13,11 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
 use Tests\TestCase;
 
 class Bitrix24ContactSyncJobTest extends TestCase
@@ -35,6 +37,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
         config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
         config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
         config()->set('bitrix24.openlines.max_line_id', 'line-max');
+        config()->set('bitrix24.duplicate_phone_diagnostic.enabled', false);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
     }
 
@@ -148,6 +151,80 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'message_id' => $missedInbound->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
         ]);
+    }
+
+    public function test_first_successful_contact_sync_logs_raw_duplicate_phone_snapshot_when_diagnostic_is_enabled(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_linked_at' => null,
+            'bitrix24_sync_fingerprint' => null,
+        ], channel: $channel);
+
+        config()->set('bitrix24.duplicate_phone_diagnostic.enabled', true);
+
+        $contact->forceFill([
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+        ])->save();
+
+        $diagnosticSpy = Mockery::spy(LogBitrix24RawContactPhoneSnapshotAction::class);
+        $this->app->instance(LogBitrix24RawContactPhoneSnapshotAction::class, $diagnosticSpy);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'result' => ['CONTACT' => []],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.add.json' => Http::response([
+                'result' => 501,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        $diagnosticSpy->shouldHaveReceived('handle')
+            ->once()
+            ->withArgs(static fn (Contact $loggedContact, string $stage): bool => $loggedContact->id === $contact->id
+                && $stage === 'after_contact_sync');
+    }
+
+    public function test_resync_of_already_linked_contact_does_not_log_after_contact_sync_snapshot(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_linked_at' => now()->subDay(),
+            'bitrix24_last_synced_at' => now()->subDay(),
+            'bitrix24_sync_fingerprint' => 'existing-sync',
+        ], channel: $channel);
+
+        config()->set('bitrix24.duplicate_phone_diagnostic.enabled', true);
+
+        $diagnosticSpy = Mockery::spy(LogBitrix24RawContactPhoneSnapshotAction::class);
+        $this->app->instance(LogBitrix24RawContactPhoneSnapshotAction::class, $diagnosticSpy);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                ]),
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        $diagnosticSpy->shouldNotHaveReceived('handle');
     }
 
     public function test_job_creates_bitrix24_contact_when_duplicate_search_returns_no_matches(): void

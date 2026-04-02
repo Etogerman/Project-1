@@ -16,6 +16,8 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly ResolveBitrix24OpenLinesRouteAction $resolveBitrix24OpenLinesRouteAction,
         private readonly BuildBitrix24OpenLinesMessagePayloadAction $buildBitrix24OpenLinesMessagePayloadAction,
         private readonly IsMessageReadyForBitrix24LiveExportAction $isMessageReadyForBitrix24LiveExportAction,
+        private readonly LogBitrix24RawContactPhoneSnapshotAction $logBitrix24RawContactPhoneSnapshotAction,
+        private readonly QueueBitrix24RawContactPhoneSnapshotAction $queueBitrix24RawContactPhoneSnapshotAction,
         private readonly QueueBitrix24ContactPhoneDedupeAction $queueBitrix24ContactPhoneDedupeAction,
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
@@ -91,6 +93,18 @@ class ExportMessageToBitrix24OpenLinesAction
                 Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
                 Dialog::BITRIX24_LIVE_STATUS_FAILED,
             ], true)) {
+                $this->logBitrix24RawContactPhoneSnapshotAction->handle(
+                    $rootContact,
+                    'after_live_export',
+                    $dialog,
+                    $message,
+                );
+                $this->queueBitrix24RawContactPhoneSnapshotAction->handle(
+                    $rootContact,
+                    'delayed_post_attach',
+                    $dialog,
+                    $message,
+                );
                 $this->queueBitrix24ContactPhoneDedupeAction->handle($rootContact);
             }
 

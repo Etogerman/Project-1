@@ -57,6 +57,11 @@ return [
         ],
     ],
 
+    'duplicate_phone_diagnostic' => [
+        'enabled' => (bool) env('BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_ENABLED', false),
+        'delay_seconds' => (int) env('BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_DELAY_SECONDS', 90),
+    ],
+
     'http' => [
         'timeout_seconds' => (int) env('BITRIX24_HTTP_TIMEOUT_SECONDS', 15),
         'connect_timeout_seconds' => (int) env('BITRIX24_HTTP_CONNECT_TIMEOUT_SECONDS', 5),

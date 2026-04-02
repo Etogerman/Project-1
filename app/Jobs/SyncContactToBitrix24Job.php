@@ -6,6 +6,7 @@ use App\Models\Bitrix24SyncLog;
 use App\Models\Contact;
 use App\Services\Bitrix24\IsContactReadyForBitrix24SyncAction;
 use App\Services\Bitrix24\LogBitrix24ApiCallAction;
+use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
 use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
 use App\Services\Bitrix24\QueueMissedBitrix24OpenLinesRetryAction;
@@ -28,6 +29,7 @@ class SyncContactToBitrix24Job implements ShouldQueue
         IsContactReadyForBitrix24SyncAction $isContactReadyForBitrix24SyncAction,
         SyncContactToBitrix24Action $syncContactToBitrix24Action,
         LogBitrix24ApiCallAction $logApiCallAction,
+        LogBitrix24RawContactPhoneSnapshotAction $logBitrix24RawContactPhoneSnapshotAction,
         QueueBitrix24DealSyncAction $queueBitrix24DealSyncAction,
         QueueBitrix24HistoryExportAction $queueBitrix24HistoryExportAction,
         QueueMissedBitrix24OpenLinesRetryAction $queueMissedBitrix24OpenLinesRetryAction,
@@ -95,6 +97,7 @@ class SyncContactToBitrix24Job implements ShouldQueue
             && ! $rootContact->bitrix24_sync_pending;
 
         if ($becameLinkedAfterSync) {
+            $logBitrix24RawContactPhoneSnapshotAction->handle($rootContact, 'after_contact_sync');
             $queueMissedBitrix24OpenLinesRetryAction->handle($rootContact);
         }
 
