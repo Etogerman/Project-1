@@ -6,6 +6,8 @@
         --ac-surface-strong: #ffffff;
         --ac-surface-muted: #f8fafc;
         --ac-surface-emphasis: #fff9e8;
+        --ac-input-surface: #f6f0de;
+        --ac-input-surface-alt: #ecdfbf;
         --ac-border: rgba(148, 163, 184, 0.28);
         --ac-border-strong: rgba(148, 163, 184, 0.42);
         --ac-text: #0f172a;
@@ -37,6 +39,8 @@
         --ac-surface-strong: rgba(15, 23, 42, 0.98);
         --ac-surface-muted: rgba(30, 41, 59, 0.82);
         --ac-surface-emphasis: rgba(51, 65, 85, 0.92);
+        --ac-input-surface: rgba(51, 65, 85, 0.9);
+        --ac-input-surface-alt: rgba(71, 85, 105, 0.86);
         --ac-border: rgba(100, 116, 139, 0.38);
         --ac-border-strong: rgba(148, 163, 184, 0.5);
         --ac-text: #e2e8f0;
@@ -231,8 +235,8 @@
         border-radius: 16px;
         background: linear-gradient(
             180deg,
-            color-mix(in srgb, var(--ac-surface-muted) 54%, var(--ac-surface-strong) 46%) 0%,
-            color-mix(in srgb, var(--ac-surface-strong) 94%, var(--ac-page-bg-alt) 6%) 100%
+            color-mix(in srgb, var(--ac-input-surface-alt) 64%, var(--ac-input-surface) 36%) 0%,
+            color-mix(in srgb, var(--ac-input-surface) 88%, var(--ac-surface-strong) 12%) 100%
         );
         box-shadow:
             inset 0 1px 0 rgba(255, 255, 255, 0.78),
@@ -247,7 +251,7 @@
 
     .fi-input-wrp-prefix,
     .fi-input-wrp-suffix {
-        background: color-mix(in srgb, var(--ac-surface-muted) 80%, var(--ac-surface-strong) 20%);
+        background: color-mix(in srgb, var(--ac-input-surface-alt) 70%, var(--ac-input-surface) 30%);
     }
 
     .fi-input-wrp-prefix {
@@ -420,8 +424,8 @@
         border-color: color-mix(in srgb, var(--ac-border-strong) 84%, var(--ac-text));
         background: linear-gradient(
             180deg,
-            color-mix(in srgb, var(--ac-surface-muted) 72%, var(--ac-surface-strong) 28%) 0%,
-            color-mix(in srgb, var(--ac-surface-strong) 90%, var(--ac-page-bg-alt) 10%) 100%
+            color-mix(in srgb, var(--ac-input-surface-alt) 78%, var(--ac-input-surface) 22%) 0%,
+            color-mix(in srgb, var(--ac-input-surface) 90%, var(--ac-surface-strong) 10%) 100%
         );
         box-shadow:
             inset 0 1px 0 rgba(255, 255, 255, 0.82),
@@ -435,7 +439,7 @@
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-prefix,
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-suffix {
-        background: color-mix(in srgb, var(--ac-surface-muted) 74%, var(--ac-surface-strong) 26%);
+        background: color-mix(in srgb, var(--ac-input-surface-alt) 74%, var(--ac-input-surface) 26%);
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-prefix {
