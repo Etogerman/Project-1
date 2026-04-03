@@ -64,9 +64,9 @@ class AutoReplyRuleResource extends Resource
                             ->live()
                             ->native(false),
                         TextInput::make('keyword')
-                            ->label('Ключевое слово')
-                            ->required(fn (Get $get): bool => static::usesExactKeywordScope((string) $get('match_scope')))
-                            ->hidden(fn (Get $get): bool => ! static::usesExactKeywordScope((string) $get('match_scope')))
+                            ->label(fn (Get $get): string => static::keywordFieldLabel($get('match_scope')))
+                            ->required(fn (Get $get): bool => static::usesKeywordScope($get('match_scope')))
+                            ->hidden(fn (Get $get): bool => ! static::usesKeywordScope($get('match_scope')))
                             ->maxLength(255),
                         Select::make('contact_phone_condition')
                             ->label('Условие по телефону')
@@ -111,10 +111,8 @@ class AutoReplyRuleResource extends Resource
                     ->label('Канал')
                     ->state(fn (AutoReplyRule $record): string => static::formatChannelLabel($record->channel)),
                 TextColumn::make('keyword')
-                    ->label('Ключевое слово')
-                    ->state(fn (AutoReplyRule $record): string => $record->usesAnyInboundScope()
-                        ? 'Любое входящее'
-                        : (string) $record->keyword)
+                    ->label('Условие')
+                    ->state(fn (AutoReplyRule $record): string => static::formatRuleCondition($record))
                     ->searchable()
                     ->sortable(),
                 TextColumn::make('match_scope')
@@ -198,7 +196,7 @@ class AutoReplyRuleResource extends Resource
             ? trim((string) $data['contact_phone_condition'])
             : null;
 
-        $data['keyword'] = static::usesExactKeywordScope((string) $data['match_scope']) && filled($data['keyword'] ?? null)
+        $data['keyword'] = static::usesKeywordScope($data['match_scope'] ?? null) && filled($data['keyword'] ?? null)
             ? trim((string) $data['keyword'])
             : null;
         $data['telegram_button_type'] = filled($data['telegram_button_type'] ?? null)
@@ -207,7 +205,7 @@ class AutoReplyRuleResource extends Resource
         $data['max_button_type'] = filled($data['max_button_type'] ?? null)
             ? trim((string) $data['max_button_type'])
             : null;
-        $data['normalized_keyword'] = static::usesExactKeywordScope((string) $data['match_scope'])
+        $data['normalized_keyword'] = static::usesKeywordScope($data['match_scope'] ?? null)
             ? AutoReplyRule::normalizeKeyword($data['keyword'] ?? null)
             : null;
 
@@ -242,8 +240,13 @@ class AutoReplyRuleResource extends Resource
             return;
         }
 
+        $matchScope = filled($data['match_scope'] ?? null)
+            ? trim((string) $data['match_scope'])
+            : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
+
         $exists = AutoReplyRule::query()
             ->where('channel_id', $channelId)
+            ->where('match_scope', $matchScope)
             ->where('normalized_keyword', $normalizedKeyword)
             ->when($record instanceof AutoReplyRule, fn ($query) => $query->whereKeyNot($record->id))
             ->exists();
@@ -253,7 +256,7 @@ class AutoReplyRuleResource extends Resource
         }
 
         throw ValidationException::withMessages([
-            'keyword' => 'Для этого канала правило с таким ключевым словом уже существует.',
+            'keyword' => 'Для этого канала правило с таким условием уже существует.',
         ]);
     }
 
@@ -342,5 +345,39 @@ class AutoReplyRuleResource extends Resource
         return (($matchScope !== null && $matchScope !== '')
             ? $matchScope
             : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD) === AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
+    }
+
+    protected static function usesKeywordScope(?string $matchScope): bool
+    {
+        return (($matchScope !== null && $matchScope !== '')
+            ? $matchScope
+            : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD) !== AutoReplyRule::MATCH_SCOPE_ANY_INBOUND;
+    }
+
+    protected static function keywordFieldLabel(?string $matchScope): string
+    {
+        return match (($matchScope !== null && $matchScope !== '')
+            ? $matchScope
+            : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD) {
+            AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER => 'Параметр для срабатывания',
+            default => 'Текст для срабатывания',
+        };
+    }
+
+    protected static function formatRuleCondition(AutoReplyRule $record): string
+    {
+        if ($record->usesAnyInboundScope()) {
+            return 'Любое входящее';
+        }
+
+        if ($record->usesExactParameterScope()) {
+            return sprintf('Параметр: %s', (string) $record->keyword);
+        }
+
+        if ($record->usesContainsTextScope()) {
+            return sprintf('Содержит: %s', (string) $record->keyword);
+        }
+
+        return (string) $record->keyword;
     }
 }

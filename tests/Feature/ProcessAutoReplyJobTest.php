@@ -237,6 +237,198 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertTrue($rule->exists);
     }
 
+    public function test_job_prefers_exact_parameter_rule_over_exact_text_rule(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 91015,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => '/start text_1',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('/start text_1'),
+            'reply_text' => 'Text rule',
+            'is_active' => true,
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'TEXT_1',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('TEXT_1'),
+            'reply_text' => 'Parameter rule',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-parameter-rule',
+            'text' => '/start TEXT_1',
+            'message_parameter' => 'TEXT_1',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => $request['text'] === 'Parameter rule');
+    }
+
+    public function test_job_matches_contains_text_rule(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 91016,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'keyword' => 'скидка',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('скидка'),
+            'reply_text' => 'Contains rule',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-contains-rule',
+            'text' => 'Подскажите скидка действует?',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => $request['text'] === 'Contains rule');
+    }
+
+    public function test_job_sends_parameter_based_auto_reply_for_max_bot_started_message(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'message_id' => 'max-out-9104',
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo_123',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_123'),
+            'reply_text' => 'MAX parameter reply',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'external_chat_id' => '700',
+            'external_message_id' => null,
+            'provider_event_key' => 'max-bot-started:700:1',
+            'text' => null,
+            'message_parameter' => 'promo_123',
+            'raw_payload' => [
+                'update_type' => 'bot_started',
+                'payload' => 'promo_123',
+            ],
+        ], [
+            'external_user_id' => '500',
+            'external_username' => 'max_user',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => $request['text'] === 'MAX parameter reply');
+
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'reply_to_message_id' => $message->id,
+            'external_message_id' => 'max-out-9104',
+        ]);
+    }
+
+    public function test_job_sends_parameter_based_auto_reply_for_max_bot_started_message_even_when_contact_is_in_data_collection(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'message_id' => 'max-out-9105',
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo_456',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_456'),
+            'reply_text' => 'Collector-safe MAX parameter reply',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'external_chat_id' => '701',
+            'external_message_id' => null,
+            'provider_event_key' => 'max-bot-started:701:1',
+            'text' => null,
+            'message_parameter' => 'promo_456',
+            'raw_payload' => [
+                'update_type' => 'bot_started',
+                'payload' => 'promo_456',
+            ],
+        ], [
+            'external_user_id' => '501',
+            'external_username' => 'max_user_2',
+        ], [
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_started_at' => now(),
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => $request['text'] === 'Collector-safe MAX parameter reply');
+    }
+
     public function test_job_applies_has_phone_condition_for_exact_rule(): void
     {
         Http::fake([

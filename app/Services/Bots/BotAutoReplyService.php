@@ -62,7 +62,12 @@ class BotAutoReplyService
         }
 
         $matchedRule = $contact instanceof Contact
-            ? $this->resolveAutoReplyRuleAction->handle($channel, $contact, $storedMessage->text)
+            ? $this->resolveAutoReplyRuleAction->handle(
+                $channel,
+                $contact,
+                $storedMessage->text,
+                $storedMessage->message_parameter,
+            )
             : null;
 
         if ($matchedRule !== null) {
@@ -95,6 +100,7 @@ class BotAutoReplyService
                     'match_scope' => null,
                     'contact_phone_condition' => null,
                     'message_text' => $storedMessage->text,
+                    'message_parameter' => $storedMessage->message_parameter,
                 ],
             );
 

@@ -24,10 +24,6 @@ class DispatchStoredInboundBotMessageAction
     ): void {
         $storedMessage = $storedResult->message;
 
-        if ($this->isStoredMaxBotStartedEvent($channel, $storedMessage)) {
-            return;
-        }
-
         $duplicateContext = [
             'platform' => $channel->platform,
             'provider_event_key' => $storedMessage->provider_event_key,
@@ -52,6 +48,10 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
+        if ($this->isStoredMaxBotStartedEventWithoutParameter($channel, $storedMessage)) {
+            return;
+        }
+
         if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
             $this->dispatchContactShareFollowUp($channel, $storedMessage, $storedResult, $deliveryLagSeconds);
 
@@ -63,6 +63,12 @@ class DispatchStoredInboundBotMessageAction
         }
 
         $storedMessage->loadMissing('contact');
+
+        if ($this->isAutoReplyOnlyMaxBotStartedEvent($channel, $storedMessage)) {
+            $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
+
+            return;
+        }
 
         if ($storedMessage->contact?->isInDataCollection()) {
             ProcessDataCollectionResponseJob::dispatch($storedMessage->id)->afterCommit();
@@ -86,29 +92,7 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if (! $storedMessage->wasRecentlyCreated) {
-            $this->channelActivityLogger->info(
-                $channel,
-                'webhook.duplicate_retry_reply',
-                'Повторный webhook поставил автоответ в очередь повторно.',
-                $duplicateContext,
-            );
-        }
-
-        ProcessAutoReplyJob::dispatch($storedMessage->id)->afterCommit();
-
-        $this->channelActivityLogger->info(
-            $channel,
-            'bot.reply_queued',
-            'Автоответ поставлен в очередь.',
-            [
-                'platform' => $channel->platform,
-                'message_id' => $storedMessage->id,
-                'provider_event_key' => $storedMessage->provider_event_key,
-                'external_message_id' => $storedMessage->external_message_id,
-                'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
-            ],
-        );
+        $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
     }
 
     protected function dispatchContactShareFollowUp(
@@ -163,6 +147,48 @@ class DispatchStoredInboundBotMessageAction
         return $channel->platform === Channel::PLATFORM_MAX
             && $storedMessage->direction === Message::DIRECTION_INBOUND
             && data_get($storedMessage->raw_payload, 'update_type') === 'bot_started';
+    }
+
+    protected function isStoredMaxBotStartedEventWithoutParameter(Channel $channel, Message $storedMessage): bool
+    {
+        return $this->isStoredMaxBotStartedEvent($channel, $storedMessage)
+            && ! filled($storedMessage->message_parameter);
+    }
+
+    protected function isAutoReplyOnlyMaxBotStartedEvent(Channel $channel, Message $storedMessage): bool
+    {
+        return $this->isStoredMaxBotStartedEvent($channel, $storedMessage)
+            && filled($storedMessage->message_parameter);
+    }
+
+    /**
+     * @param  array<string, mixed>  $duplicateContext
+     */
+    protected function queueAutoReply(Channel $channel, Message $storedMessage, array $duplicateContext): void
+    {
+        if (! $storedMessage->wasRecentlyCreated) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'webhook.duplicate_retry_reply',
+                'Повторный webhook поставил автоответ в очередь повторно.',
+                $duplicateContext,
+            );
+        }
+
+        ProcessAutoReplyJob::dispatch($storedMessage->id)->afterCommit();
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'bot.reply_queued',
+            'Автоответ поставлен в очередь.',
+            [
+                'platform' => $channel->platform,
+                'message_id' => $storedMessage->id,
+                'provider_event_key' => $storedMessage->provider_event_key,
+                'external_message_id' => $storedMessage->external_message_id,
+                'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            ],
+        );
     }
 
     protected function logOutOfOrderInboundIfNeeded(Channel $channel, Message $storedMessage): void
