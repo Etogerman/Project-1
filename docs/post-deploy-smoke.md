@@ -11,6 +11,23 @@
 - staging и production проверяются отдельно
 - destructive maintenance-команды не запускаются просто ради smoke-check
 
+## Автоматизация
+
+В репозитории можно запускать тот же smoke автоматически через:
+
+- `.github/workflows/post-deploy-smoke.yml`
+
+Для этого в GitHub должны быть настроены environments:
+
+- `staging`
+- `production`
+
+И secrets в каждом environment:
+
+- `PLAYWRIGHT_BASE_URL`
+- `PLAYWRIGHT_ADMIN_EMAIL`
+- `PLAYWRIGHT_ADMIN_PASSWORD`
+
 ## Staging
 
 Проверить:

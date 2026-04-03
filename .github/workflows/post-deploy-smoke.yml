@@ -1,0 +1,97 @@
+name: Post-Deploy Smoke
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: post-deploy-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright-smoke:
+    name: post-deploy-smoke (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - staging
+          - production
+
+    environment: ${{ matrix.environment }}
+
+    env:
+      PLAYWRIGHT_BASE_URL: ${{ secrets.PLAYWRIGHT_BASE_URL }}
+      PLAYWRIGHT_ADMIN_EMAIL: ${{ secrets.PLAYWRIGHT_ADMIN_EMAIL }}
+      PLAYWRIGHT_ADMIN_PASSWORD: ${{ secrets.PLAYWRIGHT_ADMIN_PASSWORD }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Validate environment secrets
+        run: |
+          set -euo pipefail
+
+          for name in PLAYWRIGHT_BASE_URL PLAYWRIGHT_ADMIN_EMAIL PLAYWRIGHT_ADMIN_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required secret: ${name}"
+              exit 1
+            fi
+          done
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Wait for deployed app
+        run: |
+          set -euo pipefail
+
+          readiness_url="${PLAYWRIGHT_BASE_URL%/}/admin/login"
+
+          for attempt in $(seq 1 60); do
+            status_code="$(curl -sS -o /dev/null -w '%{http_code}' "${readiness_url}" || true)"
+
+            if [ "${status_code}" = "200" ]; then
+              echo "App is ready at ${readiness_url}"
+              exit 0
+            fi
+
+            echo "Attempt ${attempt}/60: ${readiness_url} returned ${status_code:-unreachable}"
+            sleep 10
+          done
+
+          echo "::error::Timed out waiting for ${readiness_url}"
+          exit 1
+
+      - name: Run public smoke
+        run: npx playwright test e2e/public.smoke.spec.ts
+
+      - name: Run admin smoke
+        run: npx playwright test e2e/admin.smoke.spec.ts
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-smoke-${{ matrix.environment }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
