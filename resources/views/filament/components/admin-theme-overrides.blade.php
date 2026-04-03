@@ -1395,12 +1395,26 @@
         gap: 0.65rem;
     }
 
+    .ac-contact-modal-dialogs__heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.7rem;
+        flex-wrap: wrap;
+    }
+
+    .ac-contact-modal-dialogs__primary {
+        gap: 0.16rem;
+    }
+
     .ac-contact-modal-surface--dialogs [data-role="contact-dialog"] {
         gap: 0.75rem;
     }
 
-    .ac-contact-modal-surface--dialogs [data-role="contact-dialog"] > .ac-surface__header {
-        gap: 0.65rem;
+    .ac-contact-modal-dialogs__route {
+        font-size: 0.8rem;
+        line-height: 1.4;
+        color: var(--ac-text-muted);
     }
 
     .ac-contact-modal-surface--dialogs .ac-note {
@@ -1413,8 +1427,23 @@
         grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
     }
 
+    .ac-contact-modal-dialogs__meta-panel {
+        padding: 0.65rem 0.75rem;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 88%, var(--ac-surface-strong)) 0%, var(--ac-surface-strong) 100%);
+    }
+
+    .ac-contact-modal-dialogs__meta-panel .ac-meta__label {
+        color: var(--ac-text-muted);
+    }
+
+    .ac-contact-modal-dialogs__meta-panel .ac-meta__value {
+        font-size: 0.88rem;
+    }
+
     .ac-contact-modal-surface--dialogs .ac-preview-card {
         padding: 0.65rem 0.75rem;
+        border-color: color-mix(in srgb, var(--ac-primary) 18%, var(--ac-border));
+        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-primary-soft) 18%, var(--ac-surface-muted)) 0%, var(--ac-surface-strong) 100%);
     }
 
     .ac-contact-modal-surface--dialogs .ac-preview-card__body {
@@ -1426,6 +1455,11 @@
     .ac-contact-modal-surface--dialogs .ac-inline-split {
         align-items: center;
         gap: 0.65rem;
+    }
+
+    .ac-contact-modal-dialogs__cta {
+        padding-top: 0.7rem;
+        border-top: 1px solid color-mix(in srgb, var(--ac-border) 92%, transparent);
     }
 
     .ac-contact-modal-surface--dialogs .ac-pill {

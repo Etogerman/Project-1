@@ -35,8 +35,8 @@
                     class="ac-link-reset ac-list-card ac-list-card--interactive"
                 >
                     <div data-role="contact-dialog" class="ac-panel-stack">
-                        <div class="ac-surface__header ac-surface__header--centered">
-                            <div class="ac-surface__title-group">
+                        <div class="ac-contact-modal-dialogs__heading">
+                            <div class="ac-surface__title-group ac-contact-modal-dialogs__primary">
                                 <p
                                     data-role="dialog-channel"
                                     class="ac-list-card__title"
@@ -45,7 +45,7 @@
                                 </p>
                                 <p
                                     data-role="dialog-route-identity"
-                                    class="ac-surface__subtitle"
+                                    class="ac-surface__subtitle ac-contact-modal-dialogs__route"
                                 >
                                     Источник маршрута: {{ $dialog['route_identity_label'] }}
                                 </p>
@@ -82,42 +82,44 @@
                             </p>
                         </div>
 
-                        <div class="ac-meta-grid ac-meta-grid--compact ac-contact-modal-dialogs__meta">
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    Телефон канала
-                                </p>
-                                <p data-role="dialog-phone" class="ac-meta__value">
-                                    {{ $dialog['phone_label'] }}
-                                </p>
-                            </div>
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    ID чата
-                                </p>
-                                <p data-role="dialog-chat-id" class="ac-meta__value">
-                                    {{ $dialog['external_chat_id_label'] }}
-                                </p>
-                            </div>
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    Последнее входящее
-                                </p>
-                                <p class="ac-meta__value">
-                                    {{ $dialog['last_inbound_label'] }}
-                                </p>
-                            </div>
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    Последнее исходящее
-                                </p>
-                                <p class="ac-meta__value">
-                                    {{ $dialog['last_outbound_label'] }}
-                                </p>
+                        <div class="ac-note-box ac-contact-modal-dialogs__meta-panel">
+                            <div class="ac-meta-grid ac-meta-grid--compact ac-contact-modal-dialogs__meta">
+                                <div class="ac-meta">
+                                    <p class="ac-meta__label">
+                                        Телефон канала
+                                    </p>
+                                    <p data-role="dialog-phone" class="ac-meta__value">
+                                        {{ $dialog['phone_label'] }}
+                                    </p>
+                                </div>
+                                <div class="ac-meta">
+                                    <p class="ac-meta__label">
+                                        ID чата
+                                    </p>
+                                    <p data-role="dialog-chat-id" class="ac-meta__value">
+                                        {{ $dialog['external_chat_id_label'] }}
+                                    </p>
+                                </div>
+                                <div class="ac-meta">
+                                    <p class="ac-meta__label">
+                                        Последнее входящее
+                                    </p>
+                                    <p class="ac-meta__value">
+                                        {{ $dialog['last_inbound_label'] }}
+                                    </p>
+                                </div>
+                                <div class="ac-meta">
+                                    <p class="ac-meta__label">
+                                        Последнее исходящее
+                                    </p>
+                                    <p class="ac-meta__value">
+                                        {{ $dialog['last_outbound_label'] }}
+                                    </p>
+                                </div>
                             </div>
                         </div>
 
-                        <div class="ac-inline-split ac-list-card__section">
+                        <div class="ac-inline-split ac-list-card__section ac-contact-modal-dialogs__cta">
                             <p class="ac-note">Открыть рабочее место диалога</p>
                             <span class="ac-pill" data-tone="primary">Открыть</span>
                         </div>
