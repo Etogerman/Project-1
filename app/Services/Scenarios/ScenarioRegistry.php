@@ -7,7 +7,7 @@ use App\Models\Channel;
 class ScenarioRegistry
 {
     /**
-     * @return array<string, array{handler: class-string, platforms: list<string>|null}>
+     * @return array<string, array{handler: class-string, label: string, platforms: list<string>|null}>
      */
     public function definitions(): array
     {
@@ -73,6 +73,11 @@ class ScenarioRegistry
         return $this->definition($scenarioCode)['handler'] ?? null;
     }
 
+    public function label(?string $scenarioCode): ?string
+    {
+        return $this->definition($scenarioCode)['label'] ?? null;
+    }
+
     public function make(?string $scenarioCode): ?object
     {
         $handlerClass = $this->handlerClass($scenarioCode);
@@ -108,7 +113,7 @@ class ScenarioRegistry
         $options = [];
 
         foreach ($this->compatibleScenarioCodesForChannel($channel) as $scenarioCode) {
-            $options[$scenarioCode] = $scenarioCode;
+            $options[$scenarioCode] = $this->label($scenarioCode) ?? $scenarioCode;
         }
 
         return $options;
@@ -132,7 +137,7 @@ class ScenarioRegistry
     }
 
     /**
-     * @return array{handler: class-string, platforms: list<string>|null}|null
+     * @return array{handler: class-string, label: string, platforms: list<string>|null}|null
      */
     private function definition(?string $scenarioCode): ?array
     {
@@ -150,11 +155,12 @@ class ScenarioRegistry
     }
 
     /**
-     * @return array{handler: class-string, platforms: list<string>|null}|null
+     * @return array{handler: class-string, label: string, platforms: list<string>|null}|null
      */
     private function normalizeDefinition(mixed $definition): ?array
     {
         $handlerClass = null;
+        $label = null;
         $platforms = null;
 
         if (is_string($definition)) {
@@ -164,6 +170,12 @@ class ScenarioRegistry
 
             if (is_string($rawHandler)) {
                 $handlerClass = trim($rawHandler);
+            }
+
+            $rawLabel = $definition['label'] ?? null;
+
+            if (is_string($rawLabel)) {
+                $label = trim($rawLabel);
             }
 
             $rawPlatforms = $definition['platforms'] ?? null;
@@ -187,6 +199,7 @@ class ScenarioRegistry
 
         return [
             'handler' => $handlerClass,
+            'label' => is_string($label) && $label !== '' ? $label : class_basename($handlerClass),
             'platforms' => $platforms === [] ? null : $platforms,
         ];
     }

@@ -14,6 +14,7 @@ return [
     */
     'warmup' => [
         'handler' => \App\Services\Scenarios\WarmupScenario::class,
+        'label' => 'Прогрев',
         'platforms' => [
             Channel::PLATFORM_TELEGRAM,
             Channel::PLATFORM_MAX,
@@ -21,6 +22,7 @@ return [
     ],
     'needs_discovery' => [
         'handler' => \App\Services\Scenarios\NeedsDiscoveryScenario::class,
+        'label' => 'Выявление потребностей',
         'platforms' => [
             Channel::PLATFORM_TELEGRAM,
             Channel::PLATFORM_MAX,
