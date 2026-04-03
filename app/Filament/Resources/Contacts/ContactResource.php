@@ -293,7 +293,6 @@ class ContactResource extends Resource
                 TextColumn::make('display_name')
                     ->label('Контакт')
                     ->toggleable()
-                    ->description(fn (Contact $record): ?string => static::formatContactTableIdentitySummary($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search)),
                 TextColumn::make('inbox_status')
                     ->label('Статус')
@@ -1009,29 +1008,6 @@ class ContactResource extends Resource
         }
 
         return static::formatChannelLabel($channel);
-    }
-
-    protected static function formatContactTableIdentitySummary(Contact $record): ?string
-    {
-        $record->loadMissing('primaryIdentity.channel');
-
-        $parts = [];
-        $channelLabel = static::formatChannelLabel($record->primaryIdentity?->channel, '');
-
-        if ($channelLabel !== '') {
-            $parts[] = $channelLabel;
-        }
-
-        $externalUsername = $record->primaryIdentity?->external_username;
-        $externalUserId = $record->primaryIdentity?->external_user_id;
-
-        if (filled($externalUsername)) {
-            $parts[] = '@'.ltrim((string) $externalUsername, '@');
-        } elseif (filled($externalUserId)) {
-            $parts[] = 'ID: '.$externalUserId;
-        }
-
-        return $parts === [] ? null : implode(' · ', $parts);
     }
 
     protected static function formatPhoneCountSummary(Contact $record): ?string

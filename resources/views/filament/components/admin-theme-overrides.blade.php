@@ -102,7 +102,7 @@
         border-radius: 24px;
         background: var(--ac-surface-strong);
         box-shadow: var(--ac-shadow-sm);
-        overflow: hidden;
+        overflow: visible;
     }
 
     .fi-page-header-main-ctn,
@@ -355,6 +355,11 @@
         border-radius: 18px;
         background: var(--ac-surface-strong);
         box-shadow: var(--ac-shadow-lg);
+    }
+
+    .fi-ta-col-manager-dropdown .fi-dropdown-panel {
+        max-height: min(70vh, 32rem);
+        overflow-y: auto;
     }
 
     .fi-dropdown-list-item {
