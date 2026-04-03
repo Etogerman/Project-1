@@ -50,6 +50,8 @@ class BotIncomingMessageNormalizer
             return null;
         }
 
+        $normalizedText = $this->normalizeText(data_get($message, 'text'));
+
         return new IncomingBotMessage(
             platform: $channel->platform,
             channelId: $channel->id,
@@ -59,7 +61,7 @@ class BotIncomingMessageNormalizer
             externalMessageId: $this->normalizeExternalId(data_get($message, 'message_id')),
             externalUsername: $this->normalizeUsername(data_get($message, 'from.username')),
             contactName: $this->resolvePersonName(data_get($message, 'from')),
-            text: $this->normalizeText(data_get($message, 'text')),
+            text: $normalizedText,
             inboundKind: filled(data_get($message, 'contact.phone_number'))
                 ? IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
                 : IncomingBotMessage::KIND_INBOUND_USER,
@@ -69,6 +71,7 @@ class BotIncomingMessageNormalizer
             receivedAt: $this->resolveReceivedAt([
                 data_get($message, 'date'),
             ]),
+            messageParameter: $this->resolveTelegramStartMessageParameter($normalizedText),
         );
     }
 
@@ -276,6 +279,19 @@ class BotIncomingMessageNormalizer
         $text = trim((string) $value);
 
         return $text !== '' ? $text : null;
+    }
+
+    protected function resolveTelegramStartMessageParameter(?string $text): ?string
+    {
+        if (! filled($text)) {
+            return null;
+        }
+
+        if (! preg_match('/^\/start\s+(.+)$/u', $text, $matches)) {
+            return null;
+        }
+
+        return $this->normalizeText($matches[1] ?? null);
     }
 
     /**

@@ -46,8 +46,102 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('+7 999 123 45 67', $message->sharedPhoneNumber);
         $this->assertSame('200', $message->sharedContactUserId);
         $this->assertNull($message->text);
+        $this->assertNull($message->messageParameter);
         $this->assertSame('88', $message->externalMessageId);
         $this->assertSame('77', $message->providerEventKey);
+    }
+
+    public function test_telegram_start_payload_is_normalized_into_message_parameter(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 78,
+            'message' => [
+                'message_id' => 89,
+                'date' => 1_711_539_200,
+                'text' => '/start TEXT_1',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('/start TEXT_1', $message->text);
+        $this->assertSame('TEXT_1', $message->messageParameter);
+    }
+
+    public function test_plain_telegram_start_does_not_produce_message_parameter(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 79,
+            'message' => [
+                'message_id' => 90,
+                'date' => 1_711_539_200,
+                'text' => '/start',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('/start', $message->text);
+        $this->assertNull($message->messageParameter);
+    }
+
+    public function test_regular_telegram_text_does_not_produce_message_parameter(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 80,
+            'message' => [
+                'message_id' => 91,
+                'date' => 1_711_539_200,
+                'text' => 'hello',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('hello', $message->text);
+        $this->assertNull($message->messageParameter);
     }
 
     public function test_telegram_age_range_callback_query_is_normalized(): void
@@ -83,6 +177,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertInstanceOf(IncomingBotMessage::class, $message);
         $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
         $this->assertSame('24_29', $message->text);
+        $this->assertNull($message->messageParameter);
         $this->assertSame('callback-91', $message->externalMessageId);
         $this->assertSame('91', $message->providerEventKey);
     }
@@ -120,6 +215,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertInstanceOf(IncomingBotMessage::class, $message);
         $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
         $this->assertSame('russian_region_confirm:2', $message->text);
+        $this->assertNull($message->messageParameter);
         $this->assertSame('callback-92', $message->externalMessageId);
         $this->assertSame('92', $message->providerEventKey);
     }
@@ -157,6 +253,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertInstanceOf(IncomingBotMessage::class, $message);
         $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
         $this->assertSame('warmup:positive', $message->text);
+        $this->assertNull($message->messageParameter);
         $this->assertSame('callback-93', $message->externalMessageId);
         $this->assertSame('93', $message->providerEventKey);
     }
@@ -189,6 +286,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('Герман', $message->contactName);
         $this->assertNull($message->externalMessageId);
         $this->assertNull($message->text);
+        $this->assertNull($message->messageParameter);
         $this->assertSame('bot_started', data_get($message->rawPayload, 'update_type'));
         $this->assertStringStartsWith('max-bot-started:', $message->providerEventKey ?? '');
         $this->assertSame('2026-04-03 07:00:00', $message->receivedAt->utc()->format('Y-m-d H:i:s'));
@@ -217,6 +315,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('701', $message->externalChatId);
         $this->assertSame('501', $message->externalUserId);
         $this->assertNull($message->text);
+        $this->assertNull($message->messageParameter);
         $this->assertStringStartsWith('max-bot-started:', $message->providerEventKey ?? '');
     }
 
@@ -255,6 +354,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('+7 999 123 45 67', $message->sharedPhoneNumber);
         $this->assertSame('500', $message->sharedContactUserId);
         $this->assertNull($message->text);
+        $this->assertNull($message->messageParameter);
         $this->assertSame('max-contact-77', $message->externalMessageId);
         $this->assertSame('max-contact-77', $message->providerEventKey);
     }
@@ -301,6 +401,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('79263527111', $message->sharedPhoneNumber);
         $this->assertSame('228532008', $message->sharedContactUserId);
         $this->assertNull($message->text);
+        $this->assertNull($message->messageParameter);
         $this->assertSame('max-contact-vcf-1', $message->externalMessageId);
         $this->assertSame('max-contact-vcf-1', $message->providerEventKey);
     }

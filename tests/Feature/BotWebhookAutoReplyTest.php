@@ -84,9 +84,47 @@ class BotWebhookAutoReplyTest extends TestCase
             'external_chat_id' => '300',
             'external_message_id' => '10',
             'text' => 'hello',
+            'message_parameter' => null,
         ]);
         $this->assertSame('10', $inboundMessage->provider_event_key);
         $this->assertNull($inboundMessage->auto_reply_sent_at);
+    }
+
+    public function test_telegram_start_payload_webhook_saves_message_parameter_and_queues_auto_reply(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            messageId: 11,
+            text: '/start TEXT_1',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($inboundMessage): bool {
+            return $job->inboundMessageId === $inboundMessage->id;
+        });
+
+        $this->assertDatabaseHas('messages', [
+            'id' => $inboundMessage->id,
+            'text' => '/start TEXT_1',
+            'message_parameter' => 'TEXT_1',
+        ]);
     }
 
     public function test_max_webhook_endpoint_accepts_valid_event_and_queues_auto_reply(): void

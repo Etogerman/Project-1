@@ -28,5 +28,6 @@ final readonly class IncomingBotMessage
         public ?string $sharedContactUserId,
         public array $rawPayload,
         public Carbon $receivedAt,
+        public ?string $messageParameter = null,
     ) {}
 }
