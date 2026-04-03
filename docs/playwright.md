@@ -53,3 +53,33 @@ npm run test:e2e
 npm run test:e2e:headed
 npm run test:e2e:report
 ```
+
+## GitHub Actions post-deploy smoke
+
+В репозитории есть отдельный workflow:
+
+- `.github/workflows/post-deploy-smoke.yml`
+
+Он запускается:
+
+- после каждого `push` в `main`
+- вручную через `workflow_dispatch`
+
+Workflow проверяет оба окружения:
+
+- `staging`
+- `production`
+
+Для каждого окружения нужно настроить в GitHub Environments одноимённые
+secrets:
+
+- `PLAYWRIGHT_BASE_URL`
+- `PLAYWRIGHT_ADMIN_EMAIL`
+- `PLAYWRIGHT_ADMIN_PASSWORD`
+
+Smoke идёт по живому URL:
+
+- ждёт доступности `/admin/login`
+- запускает `public.smoke.spec.ts`
+- запускает `admin.smoke.spec.ts`
+- сохраняет Playwright artifacts
