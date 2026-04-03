@@ -54,6 +54,134 @@ class Bitrix24HistoryExportJobTest extends TestCase
         ]);
     }
 
+    public function test_history_export_without_deal_exports_only_contact_timeline(): void
+    {
+        $this->makeActiveConnection();
+        $contact = $this->createHistoryReadyRootContact([
+            'bitrix24_history_sync_pending' => true,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_PENDING,
+        ]);
+        $identity = $contact->primaryIdentity()->firstOrFail();
+
+        $message = $this->makeMessage($contact, $identity, 'Только контакт');
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.timeline.comment.add.json' => Http::response([
+                'result' => 901,
+            ], 200),
+        ]);
+
+        $this->runHistoryExportJob($contact);
+
+        Http::assertSentCount(1);
+        Http::assertSent(function ($request) use ($contact, $message): bool {
+            return $request->url() === 'https://client-endpoint.example/rest/crm.timeline.comment.add.json'
+                && $request['fields']['ENTITY_TYPE'] === 'contact'
+                && $request['fields']['ENTITY_ID'] === $contact->bitrix24_contact_id
+                && str_contains((string) ($request['fields']['COMMENT'] ?? ''), $message->text);
+        });
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_HISTORY,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'bitrix24_timeline_entry_id' => '901',
+        ]);
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'history_export_chunk_sent_deal',
+            'entity_type' => 'deal',
+        ]);
+    }
+
+    public function test_history_export_with_deal_copies_chunk_to_contact_and_deal_timelines(): void
+    {
+        $this->makeActiveConnection();
+        $contact = $this->createHistoryReadyRootContact([
+            'bitrix24_history_sync_pending' => true,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_PENDING,
+            'bitrix24_deal_id' => '888',
+        ]);
+        $identity = $contact->primaryIdentity()->firstOrFail();
+
+        $message = $this->makeMessage($contact, $identity, 'Контакт и сделка');
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.timeline.comment.add.json' => Http::sequence()
+                ->push(['result' => 960], 200)
+                ->push(['result' => 961], 200),
+        ]);
+
+        $this->runHistoryExportJob($contact);
+
+        $requests = Http::recorded()
+            ->map(static fn (array $pair): array => [
+                'entity_type' => $pair[0]['fields']['ENTITY_TYPE'] ?? null,
+                'entity_id' => $pair[0]['fields']['ENTITY_ID'] ?? null,
+                'comment' => (string) ($pair[0]['fields']['COMMENT'] ?? ''),
+            ])
+            ->values();
+
+        $this->assertCount(2, $requests);
+        $this->assertSame('contact', $requests[0]['entity_type']);
+        $this->assertSame($contact->bitrix24_contact_id, $requests[0]['entity_id']);
+        $this->assertSame('deal', $requests[1]['entity_type']);
+        $this->assertSame('888', $requests[1]['entity_id']);
+        $this->assertTrue(str_contains($requests[0]['comment'], $message->text));
+        $this->assertTrue(str_contains($requests[1]['comment'], $message->text));
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_HISTORY,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'bitrix24_timeline_entry_id' => '960',
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'history_export_chunk_sent_deal',
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+            'entity_type' => 'deal',
+            'entity_id' => '888',
+        ]);
+    }
+
+    public function test_history_export_deal_copy_failure_does_not_break_primary_contact_export(): void
+    {
+        $this->makeActiveConnection();
+        $contact = $this->createHistoryReadyRootContact([
+            'bitrix24_history_sync_pending' => true,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_PENDING,
+            'bitrix24_deal_id' => '888',
+        ]);
+        $identity = $contact->primaryIdentity()->firstOrFail();
+
+        $message = $this->makeMessage($contact, $identity, 'Сделка может упасть');
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.timeline.comment.add.json' => Http::sequence()
+                ->push(['result' => 970], 200)
+                ->push(['error' => 'ERROR_CORE', 'error_description' => 'Deal copy failed'], 200),
+        ]);
+
+        $this->runHistoryExportJob($contact);
+
+        $contact->refresh();
+
+        Http::assertSentCount(2);
+        $this->assertSame(Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED, $contact->bitrix24_history_sync_status);
+        $this->assertFalse($contact->bitrix24_history_sync_pending);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_HISTORY,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'bitrix24_timeline_entry_id' => '970',
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'history_export_chunk_failed_deal',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'entity_type' => 'deal',
+            'entity_id' => '888',
+        ]);
+    }
+
     public function test_history_export_orders_messages_by_message_chronology_and_includes_merged_children(): void
     {
         $this->makeActiveConnection();

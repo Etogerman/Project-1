@@ -9,6 +9,8 @@ class ExportBitrix24HistoryChunkAction
 {
     private const ENTITY_TYPE_CONTACT = 'contact';
 
+    private const ENTITY_TYPE_DEAL = 'deal';
+
     public function __construct(
         private readonly Bitrix24ApiClient $apiClient,
         private readonly BuildBitrix24TimelineCommentAction $buildTimelineCommentAction,
@@ -16,25 +18,37 @@ class ExportBitrix24HistoryChunkAction
 
     public function handle(Contact $contact, Bitrix24HistoryExportChunkData $chunk): ?string
     {
-        $response = $this->apiClient->call('crm.timeline.comment.add', [
-            'fields' => [
-                'ENTITY_ID' => $contact->bitrix24_contact_id,
-                'ENTITY_TYPE' => self::ENTITY_TYPE_CONTACT,
-                'COMMENT' => $this->buildTimelineCommentAction->handle($chunk),
-            ],
-        ]);
+        return $this->exportTimelineComment(
+            entityId: (string) $contact->bitrix24_contact_id,
+            entityType: self::ENTITY_TYPE_CONTACT,
+            chunk: $chunk,
+            errorMessage: sprintf(
+                'Bitrix24 history export failed for contact #%d: %s',
+                $contact->id,
+                '%s',
+            ),
+        );
+    }
 
-        if (! $response->successful) {
-            throw new Bitrix24ApiException(
-                sprintf(
-                    'Bitrix24 history export failed for contact #%d: %s',
-                    $contact->id,
-                    $response->errorMessage ?? 'Unknown error.',
-                ),
-            );
+    public function copyToDeal(Contact $contact, Bitrix24HistoryExportChunkData $chunk): ?string
+    {
+        $dealId = $this->normalizeEntityId($contact->bitrix24_deal_id);
+
+        if ($dealId === null) {
+            return null;
         }
 
-        return $this->extractTimelineEntryId($response->result);
+        return $this->exportTimelineComment(
+            entityId: $dealId,
+            entityType: self::ENTITY_TYPE_DEAL,
+            chunk: $chunk,
+            errorMessage: sprintf(
+                'Bitrix24 deal history export failed for contact #%d and deal `%s`: %s',
+                $contact->id,
+                $dealId,
+                '%s',
+            ),
+        );
     }
 
     private function extractTimelineEntryId(mixed $result): ?string
@@ -64,5 +78,44 @@ class ExportBitrix24HistoryChunkAction
         }
 
         return null;
+    }
+
+    private function exportTimelineComment(
+        string $entityId,
+        string $entityType,
+        Bitrix24HistoryExportChunkData $chunk,
+        string $errorMessage,
+    ): ?string {
+        $response = $this->apiClient->call('crm.timeline.comment.add', [
+            'fields' => [
+                'ENTITY_ID' => $entityId,
+                'ENTITY_TYPE' => $entityType,
+                'COMMENT' => $this->buildTimelineCommentAction->handle($chunk),
+            ],
+        ]);
+
+        if (! $response->successful) {
+            throw new Bitrix24ApiException(sprintf(
+                $errorMessage,
+                $response->errorMessage ?? 'Unknown error.',
+            ));
+        }
+
+        return $this->extractTimelineEntryId($response->result);
+    }
+
+    private function normalizeEntityId(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        if ($normalized === '' || ! ctype_digit($normalized)) {
+            return null;
+        }
+
+        return $normalized;
     }
 }
