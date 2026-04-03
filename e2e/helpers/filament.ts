@@ -23,3 +23,33 @@ export async function loginToAdmin(page: Page, email: string, password: string):
     await expect(page).toHaveURL(/\/admin(?:\/)?$/);
     await expect(page.getByText('Инфопанель').first()).toBeVisible();
 }
+
+export async function findFirstResourceRecordPath(page: Page, resourcePath: string): Promise<string | null> {
+    return await page.locator('a[href]').evaluateAll((anchors, pathPrefix) => {
+        const normalizedPrefix = `${pathPrefix}/`;
+
+        for (const anchor of anchors) {
+            const href = anchor.getAttribute('href');
+
+            if (! href) {
+                continue;
+            }
+
+            const url = new URL(href, window.location.origin);
+
+            if (! url.pathname.startsWith(normalizedPrefix)) {
+                continue;
+            }
+
+            const recordKey = url.pathname.slice(normalizedPrefix.length);
+
+            if (recordKey === '' || recordKey.includes('/')) {
+                continue;
+            }
+
+            return `${url.pathname}${url.search}`;
+        }
+
+        return null;
+    }, resourcePath);
+}
