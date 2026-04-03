@@ -6,6 +6,7 @@ use App\Models\Channel;
 use App\Models\Message;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 class BuildConversationFeedViewDataAction
 {
@@ -89,6 +90,12 @@ class BuildConversationFeedViewDataAction
             return (string) $message->text;
         }
 
+        $maxBotStartedDisplayText = $this->resolveMaxBotStartedDisplayText($message);
+
+        if ($maxBotStartedDisplayText !== null) {
+            return $maxBotStartedDisplayText;
+        }
+
         return match ($message->message_kind) {
             Message::KIND_INBOUND_CONTACT_SHARE => 'Поделился номером телефона',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Спасибо, номер получили.',
@@ -98,6 +105,44 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
             default => 'Системное сообщение',
         };
+    }
+
+    protected function resolveMaxBotStartedDisplayText(Message $message): ?string
+    {
+        if ($message->direction !== Message::DIRECTION_INBOUND) {
+            return null;
+        }
+
+        $platform = $message->channel?->platform ?? $message->dialog?->channel?->platform;
+
+        if ($platform !== Channel::PLATFORM_MAX) {
+            return null;
+        }
+
+        if (data_get($message->raw_payload, 'update_type') !== 'bot_started') {
+            return null;
+        }
+
+        $payload = $this->resolveDisplayableBotStartedPayload(
+            data_get($message->raw_payload, 'payload')
+        );
+
+        if ($payload === null) {
+            return 'Открыл бота по диплинку';
+        }
+
+        return 'Открыл бота по диплинку: '.Str::limit($payload, 120, '...');
+    }
+
+    protected function resolveDisplayableBotStartedPayload(mixed $payload): ?string
+    {
+        if (! is_scalar($payload)) {
+            return null;
+        }
+
+        $payload = trim((string) $payload);
+
+        return $payload !== '' ? $payload : null;
     }
 
     protected function formatConversationDateLabel(?Carbon $messageAt): string

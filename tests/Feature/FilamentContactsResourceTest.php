@@ -1522,6 +1522,55 @@ class FilamentContactsResourceTest extends TestCase
         );
     }
 
+    public function test_contact_dialogs_renderer_shows_max_bot_started_without_payload_as_human_readable_preview(): void
+    {
+        $contact = Contact::factory()->create();
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Sales',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $maxIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'platform' => $maxChannel->platform,
+            'external_user_id' => 'max-dialog-1',
+            'external_username' => null,
+        ]);
+        $maxDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'current_contact_identity_id' => $maxIdentity->id,
+            'external_chat_id' => 'max-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+            'last_outbound_at' => null,
+        ]);
+
+        Message::query()->create([
+            'dialog_id' => $maxDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $maxIdentity->id,
+            'channel_id' => $maxChannel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'max-chat-1',
+            'text' => null,
+            'raw_payload' => [
+                'update_type' => 'bot_started',
+                'payload' => '',
+            ],
+            'received_at' => now(),
+        ]);
+
+        $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
+        $dialogsBuilder->setAccessible(true);
+
+        $dialogsHtml = view('filament.contacts.partials.contact-dialogs', $dialogsBuilder->invoke(null, $contact))->render();
+
+        $this->assertStringContainsString('Открыл бота по диплинку', $dialogsHtml);
+        $this->assertStringNotContainsString('Системное сообщение', $dialogsHtml);
+    }
+
     public function test_contact_dialogs_renderer_shows_empty_state_when_contact_has_no_dialogs(): void
     {
         $contact = Contact::factory()->create();
