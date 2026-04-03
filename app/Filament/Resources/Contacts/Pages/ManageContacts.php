@@ -795,13 +795,6 @@ class ManageContacts extends ManageRecords
         $this->resetErrorBag('editingPhoneRaw');
     }
 
-    protected function resetTagAssigningState(): void
-    {
-        $this->showAddTagDialog = false;
-        $this->selectedTagId = '';
-        $this->resetErrorBag('selectedTagId');
-    }
-
     protected function resetProfileEditingState(): void
     {
         $this->showEditProfileDialog = false;
