@@ -156,6 +156,7 @@ class ContactResource extends Resource
                     ->columns(1)
                     ->columnSpanFull(),
                 Section::make('Профиль')
+                    ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--profile'])
                     ->schema([
                         ViewEntry::make('contact_profile')
                             ->hiddenLabel()
@@ -165,7 +166,19 @@ class ContactResource extends Resource
                     ])
                     ->columns(1)
                     ->columnSpanFull(),
+                Section::make('Диалоги')
+                    ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--dialogs'])
+                    ->schema([
+                        ViewEntry::make('dialogs')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.contact-dialogs')
+                            ->viewData(fn (Contact $record): array => static::buildDialogsViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
                 Section::make('Анкета')
+                    ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--collector'])
                     ->schema([
                         ViewEntry::make('contact_collector_status')
                             ->hiddenLabel()
@@ -191,16 +204,6 @@ class ContactResource extends Resource
                             ->hiddenLabel()
                             ->view('filament.contacts.partials.phone-numbers')
                             ->viewData(fn (Contact $record): array => static::buildPhoneNumbersViewData($record))
-                            ->columnSpanFull(),
-                    ])
-                    ->columns(1)
-                    ->columnSpanFull(),
-                Section::make('Диалоги')
-                    ->schema([
-                        ViewEntry::make('dialogs')
-                            ->hiddenLabel()
-                            ->view('filament.contacts.partials.contact-dialogs')
-                            ->viewData(fn (Contact $record): array => static::buildDialogsViewData($record))
                             ->columnSpanFull(),
                     ])
                     ->columns(1)

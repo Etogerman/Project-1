@@ -1,6 +1,6 @@
 <section
     data-role="contact-dialogs"
-    class="ac-surface ac-surface--secondary"
+    class="ac-surface ac-surface--secondary ac-contact-modal-surface ac-contact-modal-surface--dialogs"
 >
     <div class="ac-surface__header ac-surface__header--centered">
         <div class="ac-surface__title-group">
@@ -82,7 +82,7 @@
                             </p>
                         </div>
 
-                        <div class="ac-meta-grid ac-meta-grid--compact">
+                        <div class="ac-meta-grid ac-meta-grid--compact ac-contact-modal-dialogs__meta">
                             <div class="ac-meta">
                                 <p class="ac-meta__label">
                                     Телефон канала

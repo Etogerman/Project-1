@@ -1302,6 +1302,145 @@
         margin-bottom: 0.75rem;
     }
 
+    .ac-contact-modal-section .fi-section-header {
+        padding-bottom: 0.75rem;
+    }
+
+    .ac-contact-modal-section .fi-section-header-text-ctn {
+        gap: 0.25rem;
+    }
+
+    .ac-contact-modal-section .fi-section-header-heading {
+        font-size: 1.02rem;
+        line-height: 1.25;
+    }
+
+    .ac-contact-modal-section .fi-section-header-description {
+        font-size: 0.84rem;
+        line-height: 1.45;
+    }
+
+    .ac-contact-modal-section .fi-section-content-ctn {
+        padding-top: 0.75rem;
+    }
+
+    .ac-contact-modal-surface {
+        padding: 0.85rem 0.9rem;
+        border-radius: 22px;
+    }
+
+    .ac-contact-modal-surface .ac-surface__header {
+        gap: 0.65rem;
+    }
+
+    .ac-contact-modal-surface .ac-surface__title-group {
+        gap: 0.2rem;
+    }
+
+    .ac-contact-modal-surface .ac-surface__eyebrow {
+        font-size: 0.69rem;
+    }
+
+    .ac-contact-modal-surface .ac-surface__title {
+        font-size: 1rem;
+    }
+
+    .ac-contact-modal-surface .ac-surface__subtitle {
+        font-size: 0.84rem;
+        line-height: 1.45;
+    }
+
+    .ac-contact-modal-surface .ac-surface__divider {
+        margin-top: 0.7rem;
+        padding-top: 0.7rem;
+    }
+
+    .ac-contact-modal-surface .ac-card-grid,
+    .ac-contact-modal-surface .ac-meta-grid {
+        gap: 0.7rem;
+    }
+
+    .ac-contact-modal-surface .ac-list-card {
+        border-radius: 16px;
+        padding: 0.75rem 0.85rem;
+    }
+
+    .ac-contact-modal-surface .ac-list-card__title {
+        font-size: 0.95rem;
+    }
+
+    .ac-contact-modal-surface .ac-list-card__section {
+        margin-top: 0.65rem;
+    }
+
+    .ac-contact-modal-surface .ac-meta__label {
+        margin-bottom: 0.18rem;
+    }
+
+    .ac-contact-modal-surface .ac-meta__value {
+        font-size: 0.92rem;
+        line-height: 1.38;
+    }
+
+    .ac-contact-modal-surface .ac-note-box {
+        padding: 0.75rem 0.8rem;
+    }
+
+    .ac-contact-modal-surface--profile .ac-card-grid,
+    .ac-contact-modal-surface--collector .ac-card-grid {
+        grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    }
+
+    .ac-contact-modal-surface--dialogs .ac-list-stack {
+        gap: 0.65rem;
+    }
+
+    .ac-contact-modal-surface--dialogs [data-role="contact-dialog"] {
+        gap: 0.75rem;
+    }
+
+    .ac-contact-modal-surface--dialogs [data-role="contact-dialog"] > .ac-surface__header {
+        gap: 0.65rem;
+    }
+
+    .ac-contact-modal-surface--dialogs .ac-note {
+        font-size: 0.8rem;
+        line-height: 1.45;
+    }
+
+    .ac-contact-modal-dialogs__meta {
+        gap: 0.55rem;
+        grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    }
+
+    .ac-contact-modal-surface--dialogs .ac-preview-card {
+        padding: 0.65rem 0.75rem;
+    }
+
+    .ac-contact-modal-surface--dialogs .ac-preview-card__body {
+        margin-top: 0.45rem;
+        font-size: 0.89rem;
+        line-height: 1.45;
+    }
+
+    .ac-contact-modal-surface--dialogs .ac-inline-split {
+        align-items: center;
+        gap: 0.65rem;
+    }
+
+    .ac-contact-modal-surface--dialogs .ac-pill {
+        min-height: 1.85rem;
+        padding: 0.28rem 0.68rem;
+    }
+
+    .ac-contact-modal-surface--collector .ac-actions {
+        margin-top: 0.75rem;
+    }
+
+    .ac-contact-modal-surface--collector .ac-actions__hint {
+        font-size: 0.82rem;
+    }
+
     @media (max-width: 1140px) {
         .ac-dialog-overview,
         .ac-dialog-workspace {

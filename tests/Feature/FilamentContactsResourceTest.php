@@ -327,10 +327,10 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame([
             'Контакт',
             'Профиль',
+            'Диалоги',
             'Анкета',
             'Работа с контактом',
             'Телефоны',
-            'Диалоги',
             'Подробности',
             'Диагностика webhook',
         ], array_map(
