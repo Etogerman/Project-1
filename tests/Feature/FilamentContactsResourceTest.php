@@ -235,7 +235,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertDontSee('data-role="contact-open-delete-dialog"', false);
     }
 
-    public function test_employee_can_see_edit_phone_control_but_not_delete_for_saved_phone(): void
+    public function test_employee_can_see_edit_and_delete_phone_controls_for_saved_phone(): void
     {
         $employee = User::factory()->create([
             'is_active' => true,
@@ -254,7 +254,7 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
             ->assertSee('data-role="contact-edit-phone"', false)
-            ->assertDontSee('data-role="contact-delete-phone"', false)
+            ->assertSee('data-role="contact-delete-phone"', false)
             ->assertDontSee('data-role="contact-enable-auto-reply"', false)
             ->assertDontSee('data-role="contact-disable-auto-reply"', false)
             ->assertDontSee('data-role="contact-resume-data-collection"', false)
@@ -1405,13 +1405,13 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
             ->assertSee('data-role="contact-edit-phone"', false)
-            ->assertDontSee('data-role="contact-delete-phone"', false)
+            ->assertSee('data-role="contact-delete-phone"', false)
             ->call('openEditPhoneDialog', $phoneNumber->id)
             ->set('editingPhoneRaw', '+7 999 555 55 55')
             ->call('saveMountedContactPhone')
             ->assertHasNoErrors()
             ->assertMountedActionModalSee('+7 999 555 55 55')
-            ->assertDontSee('data-role="contact-delete-phone"', false);
+            ->assertSee('data-role="contact-delete-phone"', false);
 
         $phoneNumber->refresh();
 
@@ -1524,7 +1524,45 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
-    public function test_employee_cannot_delete_phone_number_via_livewire_action(): void
+    public function test_employee_can_delete_primary_phone_number_from_contact_modal_and_promote_next_phone(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create();
+        $primaryPhone = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        $nextPhone = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 555 55 55',
+            'phone_normalized' => '+79995555555',
+            'is_primary' => false,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertSee('data-role="contact-delete-phone"', false)
+            ->call('openDeletePhoneDialog', $primaryPhone->id)
+            ->call('deleteMountedContactPhone')
+            ->assertMountedActionModalSee('+7 999 555 55 55')
+            ->assertMountedActionModalDontSee('+7 999 123 45 67');
+
+        $this->assertDatabaseMissing('contact_phone_numbers', [
+            'id' => $primaryPhone->id,
+        ]);
+        $this->assertDatabaseHas('contact_phone_numbers', [
+            'id' => $nextPhone->id,
+            'is_primary' => true,
+        ]);
+    }
+
+    public function test_employee_can_delete_last_phone_number_from_contact_modal(): void
     {
         $employee = User::factory()->create([
             'is_active' => true,
@@ -1541,11 +1579,11 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($employee)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
-            ->assertDontSee('data-role="contact-delete-phone"', false)
-            ->set('deletingPhoneId', (string) $phoneNumber->id)
-            ->call('deleteMountedContactPhone');
+            ->call('openDeletePhoneDialog', $phoneNumber->id)
+            ->call('deleteMountedContactPhone')
+            ->assertMountedActionModalSee('Номера телефонов для этого контакта ещё не сохранены.');
 
-        $this->assertDatabaseHas('contact_phone_numbers', [
+        $this->assertDatabaseMissing('contact_phone_numbers', [
             'id' => $phoneNumber->id,
         ]);
     }
