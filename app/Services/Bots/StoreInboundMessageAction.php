@@ -11,6 +11,7 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\AssignContactStartTagAction;
 use App\Services\Contacts\BrokenContactMergeChainException;
 use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
@@ -26,6 +27,7 @@ class StoreInboundMessageAction
 {
     public function __construct(
         protected AddContactPhoneAction $addContactPhoneAction,
+        protected AssignContactStartTagAction $assignContactStartTagAction,
         protected FindDuplicateContactRootsByPhoneAction $findDuplicateContactRootsByPhoneAction,
         protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
         protected MergeContactsAction $mergeContactsAction,
@@ -106,6 +108,7 @@ class StoreInboundMessageAction
 
                     $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
                     $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
+                    $this->assignStartTagIfNeeded($channel, $contact, $existingMessage);
                     $this->queueBitrix24LiveMessageExportAction->handle($existingMessage);
 
                     return new StoredInboundMessageResult(
@@ -139,6 +142,7 @@ class StoreInboundMessageAction
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $storedMessage, $message);
                 $this->syncDialogConfirmedPhoneIfNeeded($storedMessage, $message, $phoneCaptureStatus);
+                $this->assignStartTagIfNeeded($channel, $contact, $storedMessage);
                 $this->queueBitrix24LiveMessageExportAction->handle($storedMessage);
 
                 return new StoredInboundMessageResult(
@@ -160,6 +164,7 @@ class StoreInboundMessageAction
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
                 $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
+                $this->assignStartTagIfNeeded($channel, $contact, $existingMessage);
                 $this->queueBitrix24LiveMessageExportAction->handle($existingMessage);
 
                 return new StoredInboundMessageResult(
@@ -242,6 +247,20 @@ class StoreInboundMessageAction
             $message->sharedPhoneNumber,
             $phoneNormalized,
         );
+    }
+
+    protected function assignStartTagIfNeeded(
+        Channel $channel,
+        ?Contact $fallbackContact,
+        Message $storedMessage,
+    ): void {
+        $contact = $storedMessage->contact ?? $fallbackContact;
+
+        if (! $contact instanceof Contact) {
+            return;
+        }
+
+        $this->assignContactStartTagAction->handle($contact, $storedMessage, $channel);
     }
 
     protected function captureSharedPhoneIfNeeded(

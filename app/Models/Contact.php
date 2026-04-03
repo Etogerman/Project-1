@@ -353,6 +353,12 @@ class Contact extends Model
             ->orderByDesc('id');
     }
 
+    public function startTags(): HasMany
+    {
+        return $this->hasMany(ContactStartTag::class)
+            ->orderByDesc('assigned_at')
+            ->orderByDesc('id');
+    }
     public function tags(): BelongsToMany
     {
         return $this->belongsToMany(Tag::class)

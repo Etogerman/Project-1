@@ -330,6 +330,7 @@ class ContactResource extends Resource
                 TextColumn::make('display_name')
                     ->label('Контакт')
                     ->toggleable()
+                    ->description(fn (Contact $record): ?string => static::formatContactTableIdentitySummary($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search)),
                 TextColumn::make('inbox_status')
                     ->label('Статус')
@@ -341,6 +342,11 @@ class ContactResource extends Resource
                     ->label('Ответственный')
                     ->toggleable()
                     ->placeholder('Свободен'),
+                TextColumn::make('tags_summary')
+                    ->label('Теги')
+                    ->toggleable()
+                    ->html()
+                    ->state(fn (Contact $record): HtmlString => static::renderContactTableTags($record)),
                 TextColumn::make('primary_phone_raw')
                     ->label('Телефон')
                     ->toggleable()
@@ -625,37 +631,42 @@ class ContactResource extends Resource
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
         $chronology = static::messageChronology();
-        $latestInboundUserMessageIdSql = $chronology->latestContactMessageIdSql(
+        $latestInboundUserMessageId = $chronology->latestContactMessageIdFragment(
             Message::KIND_INBOUND_USER,
         );
-        $latestInboundUserMessageSortAtSql = $chronology->latestContactMessageSortAtSql(
+        $latestInboundUserMessageSortAt = $chronology->latestContactMessageSortAtFragment(
             Message::KIND_INBOUND_USER,
         );
-        $latestOutboundManualReplyMessageIdSql = $chronology->latestContactMessageIdSql(
+        $latestOutboundManualReplyMessageId = $chronology->latestContactMessageIdFragment(
             Message::KIND_OUTBOUND_MANUAL_REPLY,
         );
-        $latestOutboundManualReplyMessageSortAtSql = $chronology->latestContactMessageSortAtSql(
+        $latestOutboundManualReplyMessageSortAt = $chronology->latestContactMessageSortAtFragment(
             Message::KIND_OUTBOUND_MANUAL_REPLY,
+        );
+        $latestInboundAfterOutboundManualReply = $chronology->buildIsAfterCondition(
+            $latestInboundUserMessageSortAt,
+            $latestInboundUserMessageId,
+            $latestOutboundManualReplyMessageSortAt,
+            $latestOutboundManualReplyMessageId,
         );
 
         return $query
-            ->whereRaw($latestInboundUserMessageIdSql.' is not null')
+            ->whereRaw(
+                $latestInboundUserMessageId['sql'].' is not null',
+                $latestInboundUserMessageId['bindings'],
+            )
             ->where(function (Builder $query) use (
-                $latestInboundUserMessageIdSql,
-                $latestInboundUserMessageSortAtSql,
-                $latestOutboundManualReplyMessageIdSql,
-                $latestOutboundManualReplyMessageSortAtSql,
+                $latestOutboundManualReplyMessageId,
+                $latestInboundAfterOutboundManualReply,
             ): Builder {
                 return $query
-                    ->whereRaw($latestOutboundManualReplyMessageIdSql.' is null')
+                    ->whereRaw(
+                        $latestOutboundManualReplyMessageId['sql'].' is null',
+                        $latestOutboundManualReplyMessageId['bindings'],
+                    )
                     ->orWhereRaw(
-                        sprintf(
-                            '(%1$s > %2$s) or ((%1$s = %2$s) and (%3$s > %4$s))',
-                            $latestInboundUserMessageSortAtSql,
-                            $latestOutboundManualReplyMessageSortAtSql,
-                            $latestInboundUserMessageIdSql,
-                            $latestOutboundManualReplyMessageIdSql,
-                        ),
+                        $latestInboundAfterOutboundManualReply['sql'],
+                        $latestInboundAfterOutboundManualReply['bindings'],
                     );
             });
     }
@@ -1059,6 +1070,29 @@ class ContactResource extends Resource
         }
 
         return static::formatChannelLabel($channel);
+    }
+
+    protected static function formatContactTableIdentitySummary(Contact $record): ?string
+    {
+        $record->loadMissing('primaryIdentity.channel');
+
+        $parts = [];
+        $channelLabel = static::formatChannelLabel($record->primaryIdentity?->channel, '');
+
+        if ($channelLabel !== '') {
+            $parts[] = $channelLabel;
+        }
+
+        $externalUsername = $record->primaryIdentity?->external_username;
+        $externalUserId = $record->primaryIdentity?->external_user_id;
+
+        if (filled($externalUsername)) {
+            $parts[] = '@'.ltrim((string) $externalUsername, '@');
+        } elseif (filled($externalUserId)) {
+            $parts[] = 'ID: '.$externalUserId;
+        }
+
+        return $parts === [] ? null : implode(' · ', $parts);
     }
 
     protected static function formatPhoneCountSummary(Contact $record): ?string

@@ -10,6 +10,38 @@ use Illuminate\Support\Carbon;
 
 class MessageChronology
 {
+    /**
+     * @param  array{sql: string, bindings: list<mixed>}  $leftSortAt
+     * @param  array{sql: string, bindings: list<mixed>}  $leftId
+     * @param  array{sql: string, bindings: list<mixed>}  $rightSortAt
+     * @param  array{sql: string, bindings: list<mixed>}  $rightId
+     * @return array{sql: string, bindings: list<mixed>}
+     */
+    public function buildIsAfterCondition(
+        array $leftSortAt,
+        array $leftId,
+        array $rightSortAt,
+        array $rightId,
+    ): array {
+        return [
+            'sql' => sprintf(
+                '(%1$s > %2$s) or ((%1$s = %2$s) and (%3$s > %4$s))',
+                $leftSortAt['sql'],
+                $rightSortAt['sql'],
+                $leftId['sql'],
+                $rightId['sql'],
+            ),
+            'bindings' => [
+                ...$leftSortAt['bindings'],
+                ...$rightSortAt['bindings'],
+                ...$leftSortAt['bindings'],
+                ...$rightSortAt['bindings'],
+                ...$leftId['bindings'],
+                ...$rightId['bindings'],
+            ],
+        ];
+    }
+
     public function resolveSortAt(Message $message): ?Carbon
     {
         return $message->received_at ?? $message->created_at;
@@ -71,32 +103,44 @@ class MessageChronology
         return $this->applyLatestOrder($query)->limit(1);
     }
 
-    public function latestDialogMessageIdSql(
+    /**
+     * @return array{sql: string, bindings: list<mixed>}
+     */
+    public function latestDialogMessageIdFragment(
         ?string $messageKind = null,
         ?string $direction = null,
-    ): string {
-        return $this->buildLatestMessageIdSql('dialog_id', 'dialogs.id', $messageKind, $direction);
+    ): array {
+        return $this->buildLatestMessageIdFragment('dialog_id', 'dialogs.id', $messageKind, $direction);
     }
 
-    public function latestDialogMessageSortAtSql(
+    /**
+     * @return array{sql: string, bindings: list<mixed>}
+     */
+    public function latestDialogMessageSortAtFragment(
         ?string $messageKind = null,
         ?string $direction = null,
-    ): string {
-        return $this->buildLatestMessageSortAtSql('dialog_id', 'dialogs.id', $messageKind, $direction);
+    ): array {
+        return $this->buildLatestMessageSortAtFragment('dialog_id', 'dialogs.id', $messageKind, $direction);
     }
 
-    public function latestContactMessageIdSql(
+    /**
+     * @return array{sql: string, bindings: list<mixed>}
+     */
+    public function latestContactMessageIdFragment(
         ?string $messageKind = null,
         ?string $direction = null,
-    ): string {
-        return $this->buildLatestMessageIdSql('contact_id', 'contacts.id', $messageKind, $direction);
+    ): array {
+        return $this->buildLatestMessageIdFragment('contact_id', 'contacts.id', $messageKind, $direction);
     }
 
-    public function latestContactMessageSortAtSql(
+    /**
+     * @return array{sql: string, bindings: list<mixed>}
+     */
+    public function latestContactMessageSortAtFragment(
         ?string $messageKind = null,
         ?string $direction = null,
-    ): string {
-        return $this->buildLatestMessageSortAtSql('contact_id', 'contacts.id', $messageKind, $direction);
+    ): array {
+        return $this->buildLatestMessageSortAtFragment('contact_id', 'contacts.id', $messageKind, $direction);
     }
 
     public function compareSortTuple(mixed $leftSortAt, mixed $leftId, mixed $rightSortAt, mixed $rightId): int
@@ -161,7 +205,7 @@ class MessageChronology
     }
 
     /**
-     * @return list<string>
+     * @return array{conditions: list<string>, bindings: list<mixed>}
      */
     private function buildSqlConditions(
         string $foreignColumn,
@@ -170,46 +214,64 @@ class MessageChronology
         ?string $direction,
     ): array {
         $conditions = [sprintf('messages.%s = %s', $foreignColumn, $parentReference)];
+        $bindings = [];
 
         if ($messageKind !== null) {
-            $conditions[] = sprintf("messages.message_kind = '%s'", str_replace("'", "''", $messageKind));
+            $conditions[] = 'messages.message_kind = ?';
+            $bindings[] = $messageKind;
         }
 
         if ($direction !== null) {
-            $conditions[] = sprintf("messages.direction = '%s'", str_replace("'", "''", $direction));
+            $conditions[] = 'messages.direction = ?';
+            $bindings[] = $direction;
         }
 
-        return $conditions;
+        return [
+            'conditions' => $conditions,
+            'bindings' => $bindings,
+        ];
     }
 
-    private function buildLatestMessageIdSql(
+    /**
+     * @return array{sql: string, bindings: list<mixed>}
+     */
+    private function buildLatestMessageIdFragment(
         string $foreignColumn,
         string $parentReference,
         ?string $messageKind,
         ?string $direction,
-    ): string {
+    ): array {
         $conditions = $this->buildSqlConditions($foreignColumn, $parentReference, $messageKind, $direction);
 
-        return sprintf(
-            '(select id from messages where %s order by %s desc, messages.id desc limit 1)',
-            implode(' and ', $conditions),
-            $this->sqlSortAt('messages'),
-        );
+        return [
+            'sql' => sprintf(
+                '(select id from messages where %s order by %s desc, messages.id desc limit 1)',
+                implode(' and ', $conditions['conditions']),
+                $this->sqlSortAt('messages'),
+            ),
+            'bindings' => $conditions['bindings'],
+        ];
     }
 
-    private function buildLatestMessageSortAtSql(
+    /**
+     * @return array{sql: string, bindings: list<mixed>}
+     */
+    private function buildLatestMessageSortAtFragment(
         string $foreignColumn,
         string $parentReference,
         ?string $messageKind,
         ?string $direction,
-    ): string {
+    ): array {
         $conditions = $this->buildSqlConditions($foreignColumn, $parentReference, $messageKind, $direction);
 
-        return sprintf(
-            '(select %s from messages where %s order by %s desc, messages.id desc limit 1)',
-            $this->sqlSortAt('messages'),
-            implode(' and ', $conditions),
-            $this->sqlSortAt('messages'),
-        );
+        return [
+            'sql' => sprintf(
+                '(select %s from messages where %s order by %s desc, messages.id desc limit 1)',
+                $this->sqlSortAt('messages'),
+                implode(' and ', $conditions['conditions']),
+                $this->sqlSortAt('messages'),
+            ),
+            'bindings' => $conditions['bindings'],
+        ];
     }
 }

@@ -827,6 +827,13 @@ class ManageContacts extends ManageRecords
         ]);
     }
 
+    protected function resetTagAssigningState(): void
+    {
+        $this->showAddTagDialog = false;
+        $this->selectedTagId = '';
+        $this->resetErrorBag('selectedTagId');
+    }
+
     protected function resetPhoneDeletingState(): void
     {
         $this->showDeletePhoneDialog = false;

@@ -88,6 +88,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableColumnVisible('id')
             ->assertTableColumnVisible('inbox_status')
             ->assertTableColumnVisible('dedup_status')
+            ->assertTableColumnVisible('tags_summary')
             ->assertCanSeeTableRecords([$contact])
             ->assertTableFilterExists('requires_manual_reply')
             ->assertTableFilterExists('assigned_to_me')
@@ -194,6 +195,7 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Контакт')
+            ->assertMountedActionModalSee('Теги')
             ->assertMountedActionModalSee('Работа с контактом')
             ->assertMountedActionModalSee('Анкета')
             ->assertMountedActionModalSee('Теги контакта')
@@ -352,10 +354,13 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Контакт')
+            ->assertMountedActionModalSee('Теги')
             ->assertSee('data-role="contact-open-assignee-dialog"', false)
             ->assertSee('data-role="contact-edit-profile"', false)
             ->assertDontSee('data-role="contact-edit-phone"', false)
             ->assertDontSee('data-role="contact-delete-phone"', false)
+            ->assertDontSee('data-role="contact-open-tag-dialog"', false)
+            ->assertDontSee('data-role="contact-remove-tag"', false)
             ->assertDontSee('data-role="contact-enable-auto-reply"', false)
             ->assertDontSee('data-role="contact-disable-auto-reply"', false)
             ->assertDontSee('data-role="contact-resume-data-collection"', false)
@@ -665,6 +670,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame([
             'Контакт',
             'Профиль',
+            'Теги',
             'Диалоги',
             'Анкета',
             'Работа с контактом',
@@ -681,6 +687,7 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertFalse($sectionsByHeading['Контакт']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Профиль']->isCollapsible());
+        $this->assertFalse($sectionsByHeading['Теги']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Анкета']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Работа с контактом']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Телефоны']->isCollapsible());
@@ -733,6 +740,129 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('Последнее сообщение')
             ->assertMountedActionModalDontSee('Введите текст ответа')
             ->assertMountedActionModalDontSee('Отправить');
+    }
+
+    public function test_admin_can_assign_contact_tag_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт с тегами',
+        ]);
+        $assignableTag = Tag::factory()->create([
+            'name' => 'VIP сегмент',
+            'color' => Tag::COLOR_SUCCESS,
+            'is_active' => true,
+        ]);
+        Tag::factory()->create([
+            'name' => 'Скрытый тег',
+            'color' => Tag::COLOR_GRAY,
+            'is_active' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Теги')
+            ->call('openAddTagDialog')
+            ->assertSet('showAddTagDialog', true)
+            ->assertSee('VIP сегмент')
+            ->assertDontSee('Скрытый тег')
+            ->set('selectedTagId', (string) $assignableTag->id)
+            ->call('saveMountedContactTag')
+            ->assertHasNoErrors()
+            ->assertNotified()
+            ->assertSet('showAddTagDialog', false)
+            ->assertMountedActionModalSee('VIP сегмент');
+
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $contact->id,
+            'tag_id' => $assignableTag->id,
+            'assigned_by_user_id' => $admin->id,
+        ]);
+    }
+
+    public function test_admin_can_remove_contact_tag_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт с назначенным тегом',
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => 'Удаляемый тег',
+            'color' => Tag::COLOR_WARNING,
+            'is_active' => true,
+        ]);
+
+        $contact->tags()->attach($tag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => $admin->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Удаляемый тег')
+            ->call('removeMountedContactTag', $tag->id)
+            ->assertNotified()
+            ->assertMountedActionModalSee('Для этого контакта теги ещё не назначены.')
+            ->assertMountedActionModalDontSee('Удаляемый тег');
+
+        $this->assertDatabaseMissing('contact_tag', [
+            'contact_id' => $contact->id,
+            'tag_id' => $tag->id,
+        ]);
+    }
+
+    public function test_contacts_table_can_filter_by_tags(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $vipTag = Tag::factory()->create([
+            'name' => 'VIP',
+            'color' => Tag::COLOR_SUCCESS,
+        ]);
+        $leadTag = Tag::factory()->create([
+            'name' => 'Лид',
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+        $vipContact = Contact::factory()->create([
+            'name' => 'VIP контакт',
+        ]);
+        $leadContact = Contact::factory()->create([
+            'name' => 'Лид контакт',
+        ]);
+        $cleanContact = Contact::factory()->create([
+            'name' => 'Без тегов',
+        ]);
+
+        $vipContact->tags()->attach($vipTag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => $admin->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $leadContact->tags()->attach($leadTag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => $admin->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->filterTable('tags', [$vipTag->id])
+            ->assertCanSeeTableRecords([$vipContact])
+            ->assertCanNotSeeTableRecords([$leadContact, $cleanContact]);
     }
 
     public function test_contact_modal_shows_inactive_collector_status(): void
