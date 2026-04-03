@@ -95,6 +95,25 @@ class FilamentUsersResourceTest extends TestCase
         $this->assertTrue(Hash::check('secret12345', $createdUser->password));
     }
 
+    public function test_admin_can_open_create_user_modal_with_polished_sections(): void
+    {
+        $admin = User::factory()->create([
+            'email' => 'admin@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->mountAction('create')
+            ->assertMountedActionModalSee('Основное')
+            ->assertMountedActionModalSee('Базовые данные сотрудника для входа и отображения в админке.')
+            ->assertMountedActionModalSee('Доступ')
+            ->assertMountedActionModalSee('Управление активностью учётной записи и административными правами.')
+            ->assertMountedActionModalSee('Пароль')
+            ->assertMountedActionModalSee('Укажите пароль для нового сотрудника.');
+    }
+
     public function test_admin_can_update_status_and_role_without_overwriting_password(): void
     {
         $admin = User::factory()->create([
