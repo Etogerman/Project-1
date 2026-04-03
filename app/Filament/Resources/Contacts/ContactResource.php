@@ -690,7 +690,6 @@ class ContactResource extends Resource
      *     regionStatusLabel: string,
      *     distanceToMoscowLabel: string,
      *     distanceToMoscowStatusLabel: string,
-     *     messengerName: string,
      *     genderOptions: array<string, string>,
      *     ageRangeOptions: array<string, string>,
      *     regionOptions: array<string, string>
@@ -722,7 +721,6 @@ class ContactResource extends Resource
                 ? $record->distance_to_moscow_km.' км'
                 : '—',
             'distanceToMoscowStatusLabel' => Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status),
-            'messengerName' => $record->name ?? '—',
             'genderOptions' => Contact::genderOptions(),
             'ageRangeOptions' => Contact::ageRangeOptions(),
             'regionOptions' => Contact::russianRegionOptions(),
@@ -1125,6 +1123,7 @@ class ContactResource extends Resource
 
     /**
      * @return array{
+     *     messengerName: string,
      *     dialogs: list<array{
      *         id:int,
      *         url:string,
@@ -1146,6 +1145,7 @@ class ContactResource extends Resource
     protected static function buildDialogsViewData(Contact $record): array
     {
         return [
+            'messengerName' => $record->name ?? '—',
             'dialogs' => app(LoadContactDialogsOverviewAction::class)->handle($record)->all(),
         ];
     }

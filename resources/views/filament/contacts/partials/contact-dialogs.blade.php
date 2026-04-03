@@ -16,6 +16,11 @@
         </p>
     </div>
 
+    <div class="ac-note-box ac-note-box--info ac-surface__divider">
+        <p class="ac-meta__label">Имя из мессенджера</p>
+        <p class="ac-meta__value ac-meta__value--muted">{{ $messengerName }}</p>
+    </div>
+
     @if ($dialogs === [])
         <div data-role="contact-dialogs-empty" class="ac-empty-state ac-surface__divider">
             Диалоги ещё не появились.
