@@ -180,7 +180,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertNull($inboundMessage->auto_reply_sent_at);
     }
 
-    public function test_max_bot_started_webhook_is_saved_without_queuing_runtime_jobs(): void
+    public function test_max_bot_started_webhook_queues_only_auto_reply_runtime_job_when_parameter_is_present(): void
     {
         Queue::fake();
         Http::fake();
@@ -203,7 +203,9 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $storedMessage = $this->inboundMessages()->firstOrFail();
 
-        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
         Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
         Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
         Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
@@ -223,7 +225,38 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
-    public function test_max_bot_started_webhook_does_not_queue_collector_response_for_contact_in_active_data_collection(): void
+    public function test_max_bot_started_webhook_without_parameter_remains_store_only(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $this->maxBotStartedPayload(payload: '   '));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertNull($storedMessage->message_parameter);
+        $this->assertSame('bot_started', data_get($storedMessage->raw_payload, 'update_type'));
+    }
+
+    public function test_max_bot_started_webhook_queues_only_auto_reply_for_contact_in_active_data_collection(): void
     {
         Queue::fake();
         Http::fake();
@@ -257,11 +290,13 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
-        Queue::assertNotPushed(ProcessAutoReplyJob::class);
-        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
-
         $storedMessage = $this->inboundMessages()->latest('id')->firstOrFail();
+
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
 
         $this->assertSame($contact->id, $storedMessage->contact_id);
         $this->assertSame('promo_123', $storedMessage->message_parameter);

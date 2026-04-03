@@ -112,4 +112,75 @@ class ResolveAutoReplyRuleActionTest extends TestCase
         $this->assertInstanceOf(AutoReplyRule::class, $resolved);
         $this->assertTrue($resolved->is($fallbackRule));
     }
+
+    public function test_it_prefers_exact_parameter_rule_over_exact_text_rule(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => '/start text_1',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('/start text_1'),
+            'reply_text' => 'Text match',
+        ]);
+
+        $parameterRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'TEXT_1',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('TEXT_1'),
+            'reply_text' => 'Parameter match',
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, '/start TEXT_1', 'TEXT_1');
+
+        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
+        $this->assertTrue($resolved->is($parameterRule));
+    }
+
+    public function test_it_matches_contains_text_rule_by_substring(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+
+        $containsRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'keyword' => 'скидка',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('скидка'),
+            'reply_text' => 'Contains match',
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'У меня есть скидка на заказ');
+
+        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
+        $this->assertTrue($resolved->is($containsRule));
+    }
+
+    public function test_it_respects_phone_condition_for_exact_parameter_rules(): void
+    {
+        $channel = Channel::factory()->create();
+        $contactWithPhone = Contact::factory()->create();
+        $contactWithoutPhone = Contact::factory()->create();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contactWithPhone->id,
+            'is_primary' => true,
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo_123',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_123'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+        ]);
+
+        $resolver = app(ResolveAutoReplyRuleAction::class);
+
+        $this->assertTrue($resolver->handle($channel, $contactWithPhone, null, 'promo_123')?->is($rule) ?? false);
+        $this->assertNull($resolver->handle($channel, $contactWithoutPhone, null, 'promo_123'));
+    }
 }

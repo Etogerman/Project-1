@@ -9,10 +9,31 @@ use Illuminate\Database\Eloquent\Builder;
 
 class ResolveAutoReplyRuleAction
 {
-    public function handle(Channel $channel, Contact $contact, ?string $messageText): ?AutoReplyRule
+    public function handle(
+        Channel $channel,
+        Contact $contact,
+        ?string $messageText,
+        ?string $messageParameter = null,
+    ): ?AutoReplyRule
     {
         $contactHasPhone = $contact->phoneNumbers()->exists();
         $normalizedText = AutoReplyRule::normalizeKeyword($messageText);
+        $normalizedParameter = AutoReplyRule::normalizeKeyword($messageParameter);
+
+        if (filled($normalizedParameter)) {
+            $parameterRule = AutoReplyRule::query()
+                ->active()
+                ->where('channel_id', $channel->id)
+                ->where('match_scope', AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER)
+                ->where('normalized_keyword', $normalizedParameter)
+                ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
+                ->orderBy('id')
+                ->first();
+
+            if ($parameterRule instanceof AutoReplyRule) {
+                return $parameterRule;
+            }
+        }
 
         if (filled($normalizedText)) {
             $exactRule = AutoReplyRule::query()
@@ -21,10 +42,26 @@ class ResolveAutoReplyRuleAction
                 ->where('match_scope', AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD)
                 ->where('normalized_keyword', $normalizedText)
                 ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
+                ->orderBy('id')
                 ->first();
 
             if ($exactRule instanceof AutoReplyRule) {
                 return $exactRule;
+            }
+
+            $containsRule = AutoReplyRule::query()
+                ->active()
+                ->where('channel_id', $channel->id)
+                ->where('match_scope', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT)
+                ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
+                ->orderByRaw('char_length(normalized_keyword) desc')
+                ->orderBy('id')
+                ->get()
+                ->first(fn (AutoReplyRule $rule): bool => filled($rule->normalized_keyword)
+                    && str_contains($normalizedText, (string) $rule->normalized_keyword));
+
+            if ($containsRule instanceof AutoReplyRule) {
+                return $containsRule;
             }
         }
 
@@ -39,6 +76,7 @@ class ResolveAutoReplyRuleAction
                     ? AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
                     : AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE]
             )
+            ->orderBy('id')
             ->first();
     }
 

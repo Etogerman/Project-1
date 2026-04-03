@@ -70,7 +70,7 @@ class ProcessAutoReplyJob implements ShouldQueue
             return;
         }
 
-        if ($message->contact?->isInDataCollection()) {
+        if ($message->contact?->isInDataCollection() && ! $this->isAutoReplyOnlyMaxBotStartedEvent($message)) {
             return;
         }
 
@@ -123,7 +123,15 @@ class ProcessAutoReplyJob implements ShouldQueue
             return 'skipped_no_rule';
         }
 
-        if ($message->contact !== null && $resolveAutoReplyRuleAction->handle($channel, $message->contact, $message->text) !== null) {
+        if (
+            $message->contact !== null
+            && $resolveAutoReplyRuleAction->handle(
+                $channel,
+                $message->contact,
+                $message->text,
+                $message->message_parameter,
+            ) !== null
+        ) {
             return 'rule';
         }
 
@@ -142,7 +150,12 @@ class ProcessAutoReplyJob implements ShouldQueue
             return null;
         }
 
-        $rule = $resolveAutoReplyRuleAction->handle($channel, $message->contact, $message->text);
+        $rule = $resolveAutoReplyRuleAction->handle(
+            $channel,
+            $message->contact,
+            $message->text,
+            $message->message_parameter,
+        );
 
         if ($rule === null) {
             return null;
@@ -153,5 +166,12 @@ class ProcessAutoReplyJob implements ShouldQueue
             \App\Models\Channel::PLATFORM_MAX => $rule->max_button_type,
             default => null,
         };
+    }
+
+    protected function isAutoReplyOnlyMaxBotStartedEvent(Message $message): bool
+    {
+        return $message->channel?->platform === \App\Models\Channel::PLATFORM_MAX
+            && data_get($message->raw_payload, 'update_type') === 'bot_started'
+            && filled($message->message_parameter);
     }
 }

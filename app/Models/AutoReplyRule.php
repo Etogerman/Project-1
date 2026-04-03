@@ -15,6 +15,10 @@ class AutoReplyRule extends Model
 
     public const MATCH_SCOPE_EXACT_KEYWORD = 'exact_keyword';
 
+    public const MATCH_SCOPE_CONTAINS_TEXT = 'contains_text';
+
+    public const MATCH_SCOPE_EXACT_PARAMETER = 'exact_parameter';
+
     public const MATCH_SCOPE_ANY_INBOUND = 'any_inbound';
 
     public const CONTACT_PHONE_CONDITION_HAS_PHONE = 'has_phone';
@@ -74,8 +78,10 @@ class AutoReplyRule extends Model
     public static function matchScopeOptions(): array
     {
         return [
-            self::MATCH_SCOPE_EXACT_KEYWORD => 'По ключевому слову',
-            self::MATCH_SCOPE_ANY_INBOUND => 'На любое входящее',
+            self::MATCH_SCOPE_CONTAINS_TEXT => 'Содержит текст в сообщении',
+            self::MATCH_SCOPE_EXACT_KEYWORD => 'Точное соответствие текста в сообщении',
+            self::MATCH_SCOPE_EXACT_PARAMETER => 'Точное соответствие параметра сообщения',
+            self::MATCH_SCOPE_ANY_INBOUND => 'Любое входящее',
         ];
     }
 
@@ -105,9 +111,24 @@ class AutoReplyRule extends Model
         return ($this->match_scope ?? self::MATCH_SCOPE_EXACT_KEYWORD) === self::MATCH_SCOPE_EXACT_KEYWORD;
     }
 
+    public function usesContainsTextScope(): bool
+    {
+        return $this->match_scope === self::MATCH_SCOPE_CONTAINS_TEXT;
+    }
+
+    public function usesExactParameterScope(): bool
+    {
+        return $this->match_scope === self::MATCH_SCOPE_EXACT_PARAMETER;
+    }
+
     public function usesAnyInboundScope(): bool
     {
         return $this->match_scope === self::MATCH_SCOPE_ANY_INBOUND;
+    }
+
+    public function usesKeywordScope(): bool
+    {
+        return ! $this->usesAnyInboundScope();
     }
 
     /**
@@ -181,7 +202,7 @@ class AutoReplyRule extends Model
 
         if (! filled($normalizedKeyword)) {
             throw ValidationException::withMessages([
-                'keyword' => 'Для правила по ключевому слову нужно указать ключевое слово.',
+                'keyword' => 'Для этого правила нужно указать значение для срабатывания.',
             ]);
         }
 
