@@ -5,11 +5,12 @@ namespace App\Services\Bots;
 use App\Models\AutoReplyRule;
 use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Contact;
+use App\Services\Contacts\ResolveRootContactAction;
 
 class ApplyAutoReplyRuleTagEffectsAction
 {
     public function __construct(
-        private readonly \App\Services\Contacts\ResolveRootContactAction $resolveRootContactAction,
+        private readonly ResolveRootContactAction $resolveRootContactAction,
     ) {}
 
     public function handle(Contact $contact, AutoReplyRule $rule): Contact
