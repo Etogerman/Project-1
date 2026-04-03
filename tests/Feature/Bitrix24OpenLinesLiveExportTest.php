@@ -651,7 +651,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Queue::assertNotPushed(DedupeBitrix24ContactPhonesJob::class);
     }
 
-    public function test_contact_phone_dedupe_updates_raw_duplicate_phones_preferring_mobile(): void
+    public function test_contact_phone_dedupe_updates_raw_duplicate_phones_preferring_work(): void
     {
         $this->makeActiveConnection();
 
@@ -688,7 +688,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             return is_array($fields)
                 && ($fields['PHONE'] ?? null) === [
-                    ['VALUE' => '+79897133393', 'VALUE_TYPE' => 'MOBILE'],
+                    ['VALUE' => '+79897133393', 'VALUE_TYPE' => 'WORK'],
                 ];
         });
     }

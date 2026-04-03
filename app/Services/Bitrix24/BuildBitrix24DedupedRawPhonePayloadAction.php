@@ -68,7 +68,7 @@ class BuildBitrix24DedupedRawPhonePayloadAction
     private function selectCanonicalEntry(array $entries): array
     {
         foreach ($entries as $entry) {
-            if ($entry['value_type'] === 'MOBILE') {
+            if ($entry['value_type'] === 'WORK') {
                 return $entry;
             }
         }
