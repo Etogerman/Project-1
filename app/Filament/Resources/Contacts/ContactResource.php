@@ -354,11 +354,6 @@ class ContactResource extends Resource
                     ->description(fn (Contact $record): ?string => static::formatPhoneCountSummary($record))
                     ->copyable(fn (Contact $record): bool => filled($record->getAttribute('primary_phone_raw')))
                     ->copyableState(fn (Contact $record): ?string => $record->getAttribute('primary_phone_raw')),
-                TextColumn::make('tags_summary')
-                    ->label('Теги')
-                    ->toggleable()
-                    ->html()
-                    ->state(fn (Contact $record): HtmlString => static::renderContactTableTags($record)),
                 TextColumn::make('latest_message_text')
                     ->label('Последнее сообщение')
                     ->toggleable()
