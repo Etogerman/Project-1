@@ -626,37 +626,42 @@ class ContactResource extends Resource
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
         $chronology = static::messageChronology();
-        $latestInboundUserMessageIdSql = $chronology->latestContactMessageIdSql(
+        $latestInboundUserMessageId = $chronology->latestContactMessageIdFragment(
             Message::KIND_INBOUND_USER,
         );
-        $latestInboundUserMessageSortAtSql = $chronology->latestContactMessageSortAtSql(
+        $latestInboundUserMessageSortAt = $chronology->latestContactMessageSortAtFragment(
             Message::KIND_INBOUND_USER,
         );
-        $latestOutboundManualReplyMessageIdSql = $chronology->latestContactMessageIdSql(
+        $latestOutboundManualReplyMessageId = $chronology->latestContactMessageIdFragment(
             Message::KIND_OUTBOUND_MANUAL_REPLY,
         );
-        $latestOutboundManualReplyMessageSortAtSql = $chronology->latestContactMessageSortAtSql(
+        $latestOutboundManualReplyMessageSortAt = $chronology->latestContactMessageSortAtFragment(
             Message::KIND_OUTBOUND_MANUAL_REPLY,
+        );
+        $latestInboundAfterOutboundManualReply = $chronology->buildIsAfterCondition(
+            $latestInboundUserMessageSortAt,
+            $latestInboundUserMessageId,
+            $latestOutboundManualReplyMessageSortAt,
+            $latestOutboundManualReplyMessageId,
         );
 
         return $query
-            ->whereRaw($latestInboundUserMessageIdSql.' is not null')
+            ->whereRaw(
+                $latestInboundUserMessageId['sql'].' is not null',
+                $latestInboundUserMessageId['bindings'],
+            )
             ->where(function (Builder $query) use (
-                $latestInboundUserMessageIdSql,
-                $latestInboundUserMessageSortAtSql,
-                $latestOutboundManualReplyMessageIdSql,
-                $latestOutboundManualReplyMessageSortAtSql,
+                $latestOutboundManualReplyMessageId,
+                $latestInboundAfterOutboundManualReply,
             ): Builder {
                 return $query
-                    ->whereRaw($latestOutboundManualReplyMessageIdSql.' is null')
+                    ->whereRaw(
+                        $latestOutboundManualReplyMessageId['sql'].' is null',
+                        $latestOutboundManualReplyMessageId['bindings'],
+                    )
                     ->orWhereRaw(
-                        sprintf(
-                            '(%1$s > %2$s) or ((%1$s = %2$s) and (%3$s > %4$s))',
-                            $latestInboundUserMessageSortAtSql,
-                            $latestOutboundManualReplyMessageSortAtSql,
-                            $latestInboundUserMessageIdSql,
-                            $latestOutboundManualReplyMessageIdSql,
-                        ),
+                        $latestInboundAfterOutboundManualReply['sql'],
+                        $latestInboundAfterOutboundManualReply['bindings'],
                     );
             });
     }
