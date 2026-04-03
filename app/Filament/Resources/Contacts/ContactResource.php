@@ -730,7 +730,7 @@ class ContactResource extends Resource
             'genderOptions' => Contact::genderOptions(),
             'ageRangeOptions' => Contact::ageRangeOptions(),
             'regionOptions' => Contact::russianRegionOptions(),
-            'canEditProfile' => static::canCurrentUserManageContactMutations(),
+            'canEditProfile' => static::canCurrentUserManageContactProfile(),
         ];
     }
 
@@ -1236,6 +1236,11 @@ class ContactResource extends Resource
     protected static function canCurrentUserDeleteContact(): bool
     {
         return static::currentUser()?->canManageContactWorkspaceMutations() ?? false;
+    }
+
+    protected static function canCurrentUserManageContactProfile(): bool
+    {
+        return static::currentUser()?->canManageContactProfile() ?? false;
     }
 
     protected static function canCurrentUserManageContactMutations(): bool

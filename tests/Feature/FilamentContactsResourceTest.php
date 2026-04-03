@@ -213,7 +213,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('Recent messages');
     }
 
-    public function test_employee_can_view_contact_details_with_ownership_controls_only(): void
+    public function test_employee_can_view_contact_details_with_profile_and_ownership_controls_only(): void
     {
         $employee = User::factory()->create([
             'is_active' => true,
@@ -226,13 +226,134 @@ class FilamentContactsResourceTest extends TestCase
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Контакт')
             ->assertSee('data-role="contact-open-assignee-dialog"', false)
-            ->assertDontSee('data-role="contact-edit-profile"', false)
+            ->assertSee('data-role="contact-edit-profile"', false)
             ->assertDontSee('data-role="contact-edit-phone"', false)
             ->assertDontSee('data-role="contact-delete-phone"', false)
             ->assertDontSee('data-role="contact-enable-auto-reply"', false)
             ->assertDontSee('data-role="contact-disable-auto-reply"', false)
             ->assertDontSee('data-role="contact-resume-data-collection"', false)
             ->assertDontSee('data-role="contact-open-delete-dialog"', false);
+    }
+
+    public function test_employee_can_edit_contact_profile_from_contact_modal(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Имя из мессенджера',
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Профиль')
+            ->assertSee('data-role="contact-edit-profile"', false)
+            ->call('openEditProfileDialog')
+            ->set('editingFirstName', 'Герман')
+            ->set('editingLastName', 'Абрикосов')
+            ->set('editingGender', 'male')
+            ->set('editingBirthDate', now()->subYears(29)->toDateString())
+            ->set('editingAgeYears', '35')
+            ->set('editingAgeRange', '30_39')
+            ->set('editingCountry', 'Россия')
+            ->set('editingCity', 'Москва')
+            ->set('editingRegion', 'Московская область')
+            ->call('saveMountedContactProfile')
+            ->assertHasNoErrors()
+            ->assertMountedActionModalSee('Герман')
+            ->assertMountedActionModalSee('Абрикосов')
+            ->assertMountedActionModalSee('Мужской')
+            ->assertMountedActionModalSee('30 - 39 лет')
+            ->assertMountedActionModalSee('Россия')
+            ->assertMountedActionModalSee('Москва')
+            ->assertMountedActionModalSee('Московская область')
+            ->assertMountedActionModalSee('Определён')
+            ->assertMountedActionModalSee('Имя из мессенджера')
+            ->assertDontSee('data-role="contact-edit-phone"', false)
+            ->assertDontSee('data-role="contact-delete-phone"', false)
+            ->assertDontSee('data-role="contact-enable-auto-reply"', false)
+            ->assertDontSee('data-role="contact-disable-auto-reply"', false)
+            ->assertDontSee('data-role="contact-resume-data-collection"', false)
+            ->assertDontSee('data-role="contact-open-delete-dialog"', false);
+
+        $contact->refresh();
+
+        $this->assertSame('Герман', $contact->first_name);
+        $this->assertSame('Абрикосов', $contact->last_name);
+        $this->assertSame('male', $contact->gender);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Москва', $contact->city);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame(Contact::REGION_STATUS_RESOLVED, $contact->region_status);
+        $this->assertSame(Contact::REGION_SOURCE_MANUAL, $contact->region_source);
+        $this->assertSame('30_39', $contact->age_range);
+        $this->assertNotNull($contact->birth_date);
+        $this->assertNull($contact->age_years);
+        $this->assertSame('Герман Абрикосов', $contact->display_name);
+    }
+
+    public function test_employee_can_edit_root_profile_from_merged_contact_modal(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Основной контакт',
+            'first_name' => null,
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+            'first_name' => null,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $merged)
+            ->call('openEditProfileDialog')
+            ->set('editingFirstName', 'Герман')
+            ->call('saveMountedContactProfile')
+            ->assertHasNoErrors()
+            ->assertSet('mountedActions.0.context.recordKey', (string) $root->id)
+            ->assertMountedActionModalSee('Герман');
+
+        $this->assertSame('Герман', $root->fresh()->first_name);
+        $this->assertNull($merged->fresh()->first_name);
+    }
+
+    public function test_employee_profile_validation_matches_admin_rules(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Старое имя',
+            'birth_date' => null,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('openEditProfileDialog')
+            ->set('editingGender', 'unknown')
+            ->set('editingBirthDate', now()->addDay()->toDateString())
+            ->set('editingRegion', 'Несуществующий регион')
+            ->call('saveMountedContactProfile')
+            ->assertHasErrors([
+                'editingGender',
+                'editingBirthDate',
+                'editingRegion',
+            ]);
+
+        $contact->refresh();
+
+        $this->assertSame('Старое имя', $contact->first_name);
+        $this->assertNull($contact->birth_date);
     }
 
     public function test_employee_can_reassign_foreign_contact_via_responsible_dialog(): void
