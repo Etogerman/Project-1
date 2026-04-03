@@ -278,6 +278,28 @@
             0 2px 8px rgba(15, 23, 42, 0.06);
     }
 
+    .fi-input-wrp:has(textarea.fi-input) {
+        border-color: color-mix(in srgb, var(--ac-border-strong) 76%, var(--ac-text-soft));
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--ac-input-surface-alt) 72%, var(--ac-input-surface) 28%) 0%,
+            color-mix(in srgb, var(--ac-input-surface) 92%, var(--ac-surface-strong) 8%) 100%
+        );
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.82),
+            inset 0 0 0 1px rgba(148, 163, 184, 0.08),
+            0 2px 8px rgba(15, 23, 42, 0.06);
+    }
+
+    .fi-input-wrp:has(textarea.fi-input):hover {
+        border-color: color-mix(in srgb, var(--ac-border-strong) 62%, var(--ac-primary));
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.84),
+            inset 0 0 0 1px color-mix(in srgb, var(--ac-primary-soft) 36%, transparent),
+            0 0 0 1px color-mix(in srgb, var(--ac-primary-soft) 44%, transparent),
+            0 4px 12px rgba(15, 23, 42, 0.08);
+    }
+
     .fi-input-wrp:focus-within {
         border-color: color-mix(in srgb, var(--ac-primary) 72%, white 28%);
         background: color-mix(in srgb, var(--ac-surface-strong) 88%, var(--ac-primary-soft));
@@ -462,6 +484,28 @@
             0 4px 12px rgba(15, 23, 42, 0.06);
     }
 
+    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:has(textarea.fi-input) {
+        border-color: color-mix(in srgb, var(--ac-border-strong) 72%, var(--ac-text));
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--ac-input-surface-alt) 84%, var(--ac-input-surface) 16%) 0%,
+            color-mix(in srgb, var(--ac-input-surface) 94%, var(--ac-surface-strong) 6%) 100%
+        );
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.86),
+            inset 0 0 0 1px rgba(148, 163, 184, 0.1),
+            0 2px 10px rgba(15, 23, 42, 0.08);
+    }
+
+    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:has(textarea.fi-input):hover {
+        border-color: color-mix(in srgb, var(--ac-border-strong) 58%, var(--ac-primary));
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.88),
+            inset 0 0 0 1px color-mix(in srgb, var(--ac-primary-soft) 42%, transparent),
+            0 0 0 1px color-mix(in srgb, var(--ac-primary-soft) 54%, transparent),
+            0 4px 14px rgba(15, 23, 42, 0.08);
+    }
+
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:focus-within {
         border-color: color-mix(in srgb, var(--ac-primary) 72%, white 28%);
         background: color-mix(in srgb, var(--ac-surface-strong) 84%, var(--ac-primary-soft));
@@ -469,6 +513,10 @@
             inset 0 1px 0 rgba(255, 255, 255, 0.88),
             0 0 0 1px color-mix(in srgb, var(--ac-primary) 38%, transparent),
             0 0 0 4px color-mix(in srgb, var(--ac-primary-soft) 76%, transparent);
+    }
+
+    textarea.fi-input {
+        line-height: 1.6;
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:has([aria-invalid='true']) {
