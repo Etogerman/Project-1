@@ -13,6 +13,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -81,6 +82,54 @@ class PurgeRuntimeDataCommandTest extends TestCase
         $this->assertDatabaseHas('auto_reply_rules', ['id' => $fixture['rule']->id]);
     }
 
+    public function test_force_is_blocked_in_production_without_confirm_flag(): void
+    {
+        $fixture = $this->seedRuntimeFixture();
+
+        $this->runInEnvironment('production', function (): void {
+            $this->artisan('maintenance:purge-runtime-data', ['--force' => true])
+                ->expectsOutput('Destructive purge in production requires both --force and --confirm-production-purge.')
+                ->assertFailed();
+        });
+
+        $this->assertDatabaseHas('contacts', ['id' => $fixture['contact']->id]);
+        $this->assertDatabaseHas('dialogs', ['id' => $fixture['dialog']->id]);
+        $this->assertDatabaseHas('messages', ['id' => $fixture['message']->id]);
+        $this->assertDatabaseHas('users', ['id' => $fixture['user']->id]);
+        $this->assertDatabaseHas('channels', ['id' => $fixture['channel']->id]);
+        $this->assertDatabaseHas('auto_reply_rules', ['id' => $fixture['rule']->id]);
+    }
+
+    public function test_force_runs_in_production_with_confirm_flag(): void
+    {
+        $fixture = $this->seedRuntimeFixture();
+
+        $this->runInEnvironment('production', function (): void {
+            $this->artisan('maintenance:purge-runtime-data', [
+                '--force' => true,
+                '--confirm-production-purge' => true,
+            ])
+                ->expectsOutput('Runtime data purge completed.')
+                ->assertSuccessful();
+        });
+
+        $this->assertDatabaseCount('messages', 0);
+        $this->assertDatabaseCount('dialogs', 0);
+        $this->assertDatabaseCount('contact_phone_numbers', 0);
+        $this->assertDatabaseCount('contact_identities', 0);
+        $this->assertDatabaseCount('contact_merge_logs', 0);
+        $this->assertDatabaseCount('contact_duplicate_reviews', 0);
+        $this->assertDatabaseCount('contacts', 0);
+        $this->assertDatabaseCount('channel_activity_logs', 0);
+        $this->assertSame(0, DB::table('jobs')->count());
+        $this->assertSame(0, DB::table('failed_jobs')->count());
+        $this->assertSame(0, DB::table('job_batches')->count());
+
+        $this->assertDatabaseHas('users', ['id' => $fixture['user']->id]);
+        $this->assertDatabaseHas('channels', ['id' => $fixture['channel']->id]);
+        $this->assertDatabaseHas('auto_reply_rules', ['id' => $fixture['rule']->id]);
+    }
+
     public function test_force_preserves_sessions_by_default(): void
     {
         $this->seedRuntimeFixture();
@@ -118,7 +167,10 @@ class PurgeRuntimeDataCommandTest extends TestCase
             ->with('maintenance.runtime_data_purge_dry_run', \Mockery::on(function (array $context): bool {
                 return $context['environment'] === app()->environment()
                     && $context['dry_run'] === true
+                    && $context['force'] === false
+                    && $context['production_guard_confirmed'] === false
                     && $context['included_sessions'] === false
+                    && is_string($context['driver'])
                     && $context['messages_count'] === 1
                     && $context['dialogs_count'] === 1
                     && $context['contacts_count'] === 2
@@ -139,7 +191,39 @@ class PurgeRuntimeDataCommandTest extends TestCase
             ->with('maintenance.runtime_data_purged', \Mockery::on(function (array $context): bool {
                 return $context['environment'] === app()->environment()
                     && $context['dry_run'] === false
+                    && $context['force'] === true
+                    && $context['production_guard_confirmed'] === false
                     && $context['included_sessions'] === false
+                    && is_string($context['driver'])
+                    && $context['messages_count'] === 1
+                    && $context['dialogs_count'] === 1
+                    && $context['contacts_count'] === 2
+                    && is_string($context['purged_at']);
+            }));
+    }
+
+    public function test_command_logs_summary_event_for_confirmed_production_force(): void
+    {
+        Log::spy();
+
+        $this->seedRuntimeFixture();
+
+        $this->runInEnvironment('production', function (): void {
+            $this->artisan('maintenance:purge-runtime-data', [
+                '--force' => true,
+                '--confirm-production-purge' => true,
+            ])->assertSuccessful();
+        });
+
+        Log::shouldHaveReceived('info')
+            ->once()
+            ->with('maintenance.runtime_data_purged', \Mockery::on(function (array $context): bool {
+                return $context['environment'] === 'production'
+                    && $context['dry_run'] === false
+                    && $context['force'] === true
+                    && $context['production_guard_confirmed'] === true
+                    && $context['included_sessions'] === false
+                    && is_string($context['driver'])
                     && $context['messages_count'] === 1
                     && $context['dialogs_count'] === 1
                     && $context['contacts_count'] === 2
@@ -274,5 +358,31 @@ class PurgeRuntimeDataCommandTest extends TestCase
             'payload' => 'payload',
             'last_activity' => now()->timestamp,
         ]);
+    }
+
+    private function runInEnvironment(string $environment, Closure $callback): void
+    {
+        $original = app()->environment();
+        $originalAppEnv = env('APP_ENV');
+
+        putenv("APP_ENV={$environment}");
+        $_ENV['APP_ENV'] = $environment;
+        $_SERVER['APP_ENV'] = $environment;
+        $this->app->detectEnvironment(fn (): string => $environment);
+
+        try {
+            $callback();
+        } finally {
+            if ($originalAppEnv === false || $originalAppEnv === null) {
+                putenv('APP_ENV');
+                unset($_ENV['APP_ENV'], $_SERVER['APP_ENV']);
+            } else {
+                putenv("APP_ENV={$originalAppEnv}");
+                $_ENV['APP_ENV'] = $originalAppEnv;
+                $_SERVER['APP_ENV'] = $originalAppEnv;
+            }
+
+            $this->app->detectEnvironment(fn (): string => $original);
+        }
     }
 }
