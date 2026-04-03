@@ -718,6 +718,104 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('Системное сообщение');
     }
 
+    public function test_dialog_view_shows_telegram_start_payload_as_human_readable_deep_link_event(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Продакшен',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+            'is_active' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Герман Абрикосов',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '8010492155',
+            'external_username' => 'german_a',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '8010492155',
+        ]);
+        $payload = str_repeat('TEXT_1-', 25);
+        $expectedDisplayText = 'Открыл бота по диплинку: '.Str::limit($payload, 120, '...');
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => '/start '.$payload,
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee($expectedDisplayText)
+            ->assertDontSee('/start '.$payload);
+    }
+
+    public function test_dialog_view_keeps_plain_telegram_start_command_as_raw_text(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Продакшен',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+            'is_active' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Герман Абрикосов',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '8010492155',
+            'external_username' => 'german_a',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '8010492155',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => '/start',
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('/start')
+            ->assertDontSee('Открыл бота по диплинку');
+    }
+
     public function test_dialog_view_queries_messages_by_dialog_id_not_contact_id(): void
     {
         $admin = User::factory()->create([

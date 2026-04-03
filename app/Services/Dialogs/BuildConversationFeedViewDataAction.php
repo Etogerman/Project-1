@@ -86,6 +86,12 @@ class BuildConversationFeedViewDataAction
 
     protected function resolveConversationDisplayText(Message $message): string
     {
+        $telegramStartPayloadDisplayText = $this->resolveTelegramStartPayloadDisplayText($message);
+
+        if ($telegramStartPayloadDisplayText !== null) {
+            return $telegramStartPayloadDisplayText;
+        }
+
         if (filled($message->text)) {
             return (string) $message->text;
         }
@@ -105,6 +111,33 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
             default => 'Системное сообщение',
         };
+    }
+
+    protected function resolveTelegramStartPayloadDisplayText(Message $message): ?string
+    {
+        if ($message->direction !== Message::DIRECTION_INBOUND) {
+            return null;
+        }
+
+        $platform = $message->channel?->platform ?? $message->dialog?->channel?->platform;
+
+        if ($platform !== Channel::PLATFORM_TELEGRAM || ! filled($message->text)) {
+            return null;
+        }
+
+        $normalizedText = trim((string) $message->text);
+
+        if (! preg_match('/^\/start\s+(.+)$/u', $normalizedText, $matches)) {
+            return null;
+        }
+
+        $payload = $this->resolveDisplayableBotStartedPayload($matches[1] ?? null);
+
+        if ($payload === null) {
+            return null;
+        }
+
+        return 'Открыл бота по диплинку: '.Str::limit($payload, 120, '...');
     }
 
     protected function resolveMaxBotStartedDisplayText(Message $message): ?string
