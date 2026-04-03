@@ -126,6 +126,7 @@ class StoreInboundMessageAction
                     'external_chat_id' => $message->externalChatId,
                     'external_message_id' => $message->externalMessageId,
                     'text' => $message->text,
+                    'message_parameter' => $message->messageParameter,
                     'raw_payload' => $message->rawPayload,
                     'received_at' => $message->receivedAt,
                 ]);

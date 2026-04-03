@@ -73,6 +73,7 @@ class Message extends Model
         'external_chat_id',
         'external_message_id',
         'text',
+        'message_parameter',
         'raw_payload',
         'received_at',
         'auto_reply_sent_at',
