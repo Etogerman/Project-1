@@ -1,22 +1,36 @@
 <section
     data-role="contact-dialogs"
-    class="ac-surface"
+    class="ac-surface ac-surface--secondary"
 >
+    <div class="ac-surface__header ac-surface__header--centered">
+        <div class="ac-surface__title-group">
+            <p class="ac-surface__eyebrow">Диалоги</p>
+            <h3 class="ac-surface__title">Каналы общения с контактом</h3>
+            <p class="ac-surface__subtitle">
+                Здесь собраны все рабочие диалоги по каналам. Откройте нужный, чтобы продолжить переписку.
+            </p>
+        </div>
+
+        <p class="ac-note">
+            Нажмите на карточку диалога, чтобы перейти в рабочее место оператора.
+        </p>
+    </div>
+
     @if ($dialogs === [])
-        <div data-role="contact-dialogs-empty" class="ac-empty-state">
+        <div data-role="contact-dialogs-empty" class="ac-empty-state ac-surface__divider">
             Диалоги ещё не появились.
         </div>
     @else
-        <div class="ac-list-stack">
+        <div class="ac-list-stack ac-surface__divider">
             @foreach ($dialogs as $dialog)
                 <a
                     href="{{ $dialog['url'] }}"
                     data-role="dialog-card-link"
                     data-dialog-id="{{ $dialog['id'] }}"
-                    class="ac-link-reset ac-list-card"
+                    class="ac-link-reset ac-list-card ac-list-card--interactive"
                 >
                     <div data-role="contact-dialog" class="ac-panel-stack">
-                        <div class="ac-surface__header">
+                        <div class="ac-surface__header ac-surface__header--centered">
                             <div class="ac-surface__title-group">
                                 <p
                                     data-role="dialog-channel"
@@ -28,7 +42,7 @@
                                     data-role="dialog-route-identity"
                                     class="ac-surface__subtitle"
                                 >
-                                    Route source: {{ $dialog['route_identity_label'] }}
+                                    Источник маршрута: {{ $dialog['route_identity_label'] }}
                                 </p>
                             </div>
 
@@ -63,7 +77,7 @@
                             </p>
                         </div>
 
-                        <div class="ac-meta-grid">
+                        <div class="ac-meta-grid ac-meta-grid--compact">
                             <div class="ac-meta">
                                 <p class="ac-meta__label">
                                     Телефон канала
@@ -74,7 +88,7 @@
                             </div>
                             <div class="ac-meta">
                                 <p class="ac-meta__label">
-                                    Chat ID
+                                    ID чата
                                 </p>
                                 <p data-role="dialog-chat-id" class="ac-meta__value">
                                     {{ $dialog['external_chat_id_label'] }}
@@ -96,6 +110,11 @@
                                     {{ $dialog['last_outbound_label'] }}
                                 </p>
                             </div>
+                        </div>
+
+                        <div class="ac-inline-split ac-list-card__section">
+                            <p class="ac-note">Открыть рабочее место диалога</p>
+                            <span class="ac-pill" data-tone="primary">Открыть</span>
                         </div>
                     </div>
                 </a>

@@ -290,26 +290,16 @@ class ContactResource extends Resource
     {
         return $table
             ->columns([
-                TextColumn::make('id')
-                    ->label('ID')
-                    ->sortable()
-                    ->copyable()
-                    ->toggleable(),
                 TextColumn::make('display_name')
                     ->label('Контакт')
                     ->toggleable()
+                    ->description(fn (Contact $record): ?string => static::formatContactTableIdentitySummary($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search)),
                 TextColumn::make('inbox_status')
                     ->label('Статус')
                     ->state(fn (Contact $record): string => static::formatInboxStatus($record))
                     ->badge()
                     ->color(fn (Contact $record): string => static::getInboxStatusColor($record))
-                    ->toggleable(),
-                TextColumn::make('dedup_status')
-                    ->label('Проверка дубля')
-                    ->state(fn (Contact $record): string => static::formatDedupStatus($record))
-                    ->badge()
-                    ->color(fn (Contact $record): string => static::getDedupStatusColor($record))
                     ->toggleable(),
                 TextColumn::make('assignedUser.name')
                     ->label('Ответственный')
@@ -319,6 +309,7 @@ class ContactResource extends Resource
                     ->label('Телефон')
                     ->toggleable()
                     ->placeholder('—')
+                    ->description(fn (Contact $record): ?string => static::formatPhoneCountSummary($record))
                     ->copyable(fn (Contact $record): bool => filled($record->getAttribute('primary_phone_raw')))
                     ->copyableState(fn (Contact $record): ?string => $record->getAttribute('primary_phone_raw')),
                 TextColumn::make('latest_message_text')
@@ -326,8 +317,30 @@ class ContactResource extends Resource
                     ->toggleable()
                     ->placeholder('—')
                     ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->text)
+                    ->description(fn (Contact $record): ?string => static::formatLatestConversationMetaSummary($record))
                     ->limit(60)
                     ->tooltip(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->text),
+                TextColumn::make('latest_message_received_at')
+                    ->label('Активность')
+                    ->toggleable()
+                    ->placeholder('—')
+                    ->state(fn (Contact $record) => static::resolveLatestConversationMessageSortAt($record))
+                    ->dateTime('d.m.Y H:i')
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
+                        ->orderBy('latest_message_sort_at', $direction)
+                        ->orderBy('latest_message_id', $direction)
+                        ->orderBy('contacts.id', $direction)),
+                TextColumn::make('dedup_status')
+                    ->label('Проверка дубля')
+                    ->state(fn (Contact $record): string => static::formatDedupStatus($record))
+                    ->badge()
+                    ->color(fn (Contact $record): string => static::getDedupStatusColor($record))
+                    ->toggleable(),
+                TextColumn::make('id')
+                    ->label('ID')
+                    ->sortable()
+                    ->copyable()
+                    ->toggleable(),
                 TextColumn::make('latest_message_kind')
                     ->label('Тип')
                     ->toggleable()
@@ -335,22 +348,26 @@ class ContactResource extends Resource
                     ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->message_kind)
                     ->badge()
                     ->formatStateUsing(fn (?string $state): string => static::formatMessageKind($state))
-                    ->color(fn (?string $state): string => static::getMessageKindColor($state)),
+                    ->color(fn (?string $state): string => static::getMessageKindColor($state))
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('latest_message_channel')
                     ->label('Канал')
                     ->toggleable()
                     ->placeholder('—')
-                    ->state(fn (Contact $record): ?string => static::formatLatestMessageChannel(static::resolveLatestConversationMessage($record))),
+                    ->state(fn (Contact $record): ?string => static::formatLatestMessageChannel(static::resolveLatestConversationMessage($record)))
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('primaryIdentity.external_user_id')
                     ->label('Внешний ID')
                     ->toggleable()
                     ->placeholder('—')
-                    ->copyable(),
+                    ->copyable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('primaryIdentity.external_username')
                     ->label('Username')
                     ->toggleable()
                     ->placeholder('—')
-                    ->formatStateUsing(fn (?string $state): string => filled($state) ? '@'.ltrim($state, '@') : '—'),
+                    ->formatStateUsing(fn (?string $state): string => filled($state) ? '@'.ltrim($state, '@') : '—')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('messages_count')
                     ->label('Сообщений')
                     ->toggleable()
@@ -363,16 +380,6 @@ class ContactResource extends Resource
                     ->badge()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('latest_message_received_at')
-                    ->label('Активность')
-                    ->toggleable()
-                    ->placeholder('—')
-                    ->state(fn (Contact $record) => static::resolveLatestConversationMessageSortAt($record))
-                    ->dateTime('d.m.Y H:i')
-                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
-                        ->orderBy('latest_message_sort_at', $direction)
-                        ->orderBy('latest_message_id', $direction)
-                        ->orderBy('contacts.id', $direction)),
                 TextColumn::make('created_at')
                     ->label('Создан')
                     ->dateTime('d.m.Y H:i')
@@ -384,16 +391,16 @@ class ContactResource extends Resource
                     ->label('Требует ответа')
                     ->query(fn (Builder $query): Builder => static::applyRequiresManualReplyFilter($query)),
                 Filter::make('assigned_to_me')
-                    ->label('Мои')
+                    ->label('Назначены мне')
                     ->query(fn (Builder $query): Builder => static::applyAssignedToMeFilter($query)),
                 Filter::make('unassigned_contacts')
-                    ->label('Свободные')
+                    ->label('Без ответственного')
                     ->query(fn (Builder $query): Builder => $query->whereNull('assigned_user_id')),
                 Filter::make('duplicate_review_pending')
                     ->label('Нужна проверка дубля')
                     ->query(fn (Builder $query): Builder => $query->where('duplicate_review_status', Contact::DUPLICATE_REVIEW_STATUS_PENDING)),
                 Filter::make('has_phone')
-                    ->label('Есть телефон')
+                    ->label('С телефоном')
                     ->query(fn (Builder $query): Builder => $query->whereHas('phoneNumbers')),
                 Filter::make('without_phone')
                     ->label('Без телефона')
@@ -1002,6 +1009,58 @@ class ContactResource extends Resource
         }
 
         return static::formatChannelLabel($channel);
+    }
+
+    protected static function formatContactTableIdentitySummary(Contact $record): ?string
+    {
+        $record->loadMissing('primaryIdentity.channel');
+
+        $parts = [];
+        $channelLabel = static::formatChannelLabel($record->primaryIdentity?->channel, '');
+
+        if ($channelLabel !== '') {
+            $parts[] = $channelLabel;
+        }
+
+        $externalUsername = $record->primaryIdentity?->external_username;
+        $externalUserId = $record->primaryIdentity?->external_user_id;
+
+        if (filled($externalUsername)) {
+            $parts[] = '@'.ltrim((string) $externalUsername, '@');
+        } elseif (filled($externalUserId)) {
+            $parts[] = 'ID: '.$externalUserId;
+        }
+
+        return $parts === [] ? null : implode(' · ', $parts);
+    }
+
+    protected static function formatPhoneCountSummary(Contact $record): ?string
+    {
+        $phoneCount = (int) ($record->getAttribute('phone_count') ?? 0);
+
+        if ($phoneCount <= 0) {
+            return 'Телефон ещё не сохранён';
+        }
+
+        return sprintf('Всего номеров: %d', $phoneCount);
+    }
+
+    protected static function formatLatestConversationMetaSummary(Contact $record): ?string
+    {
+        $message = static::resolveLatestConversationMessage($record);
+
+        if (! $message instanceof Message) {
+            return null;
+        }
+
+        $parts = [static::formatMessageKind($message->message_kind)];
+        $channelLabel = static::formatLatestMessageChannel($message);
+
+        if (filled($channelLabel)) {
+            $parts[] = $channelLabel;
+        }
+
+        return implode(' · ', $parts);
     }
 
     protected static function formatDedupStatus(Contact $record): string

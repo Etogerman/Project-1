@@ -94,13 +94,10 @@ class DialogResource extends Resource
     {
         return $table
             ->columns([
-                TextColumn::make('id')
-                    ->label('ID')
-                    ->sortable()
-                    ->toggleable(),
                 TextColumn::make('contact_label')
                     ->label('Контакт')
                     ->state(fn (Dialog $record): string => $record->contact?->display_name ?? 'Контакт не найден')
+                    ->description(fn (Dialog $record): ?string => static::formatDialogTableIdentitySummary($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search))
                     ->toggleable(),
                 TextColumn::make('inbox_status')
@@ -135,6 +132,7 @@ class DialogResource extends Resource
                 TextColumn::make('preview_text')
                     ->label('Последнее сообщение')
                     ->state(fn (Dialog $record): string => static::resolvePreviewText($record))
+                    ->description(fn (Dialog $record): ?string => static::formatPreviewMetaSummary($record))
                     ->tooltip(fn (Dialog $record): string => static::resolvePreviewText($record))
                     ->limit(80)
                     ->toggleable(),
@@ -146,16 +144,20 @@ class DialogResource extends Resource
                         ->orderBy('dialogs.last_message_at', $direction)
                         ->orderBy('dialogs.id', $direction))
                     ->toggleable(),
+                TextColumn::make('id')
+                    ->label('ID')
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('phone_label')
                     ->label('Телефон канала')
                     ->state(fn (Dialog $record): string => static::formatDialogPhoneLabel($record))
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('route_source')
-                    ->label('Route source')
+                    ->label('Источник маршрута')
                     ->state(fn (Dialog $record): string => static::formatDialogRouteIdentityLabel($record))
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('external_chat_id')
-                    ->label('Chat ID')
+                    ->label('ID чата')
                     ->state(fn (Dialog $record): string => filled($record->external_chat_id) ? (string) $record->external_chat_id : 'Не задан')
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
@@ -165,10 +167,10 @@ class DialogResource extends Resource
                     ->default()
                     ->query(fn (Builder $query): Builder => static::applyRequiresManualReplyFilter($query)),
                 Filter::make('assigned_to_me')
-                    ->label('Мои')
+                    ->label('Назначены мне')
                     ->query(fn (Builder $query): Builder => static::applyAssignedToMeFilter($query)),
                 Filter::make('unassigned_dialogs')
-                    ->label('Свободные')
+                    ->label('Без ответственного')
                     ->query(fn (Builder $query): Builder => $query->whereHas('contact', fn (Builder $query): Builder => $query->whereNull('assigned_user_id'))),
                 SelectFilter::make('channel_id')
                     ->label('Канал')
@@ -313,6 +315,25 @@ class DialogResource extends Resource
             Message::SENT_BY_TYPE_SYSTEM => 'gray',
             default => 'gray',
         };
+    }
+
+    protected static function formatPreviewMetaSummary(Dialog $record): ?string
+    {
+        $previewMessage = static::resolvePreviewMessage($record);
+
+        if (! $previewMessage instanceof Message) {
+            return null;
+        }
+
+        $parts = [
+            $previewMessage->direction === Message::DIRECTION_INBOUND ? 'Входящее' : 'Исходящее',
+        ];
+
+        if (filled($record->channel?->display_title)) {
+            $parts[] = $record->channel->display_title;
+        }
+
+        return implode(' · ', $parts);
     }
 
     protected static function dialogRequiresManualReply(Dialog $record): bool
@@ -508,5 +529,23 @@ class DialogResource extends Resource
         }
 
         return 'Не задан';
+    }
+
+    protected static function formatDialogTableIdentitySummary(Dialog $dialog): ?string
+    {
+        $parts = [];
+        $routeIdentityLabel = static::formatDialogRouteIdentityLabel($dialog);
+
+        if ($routeIdentityLabel !== 'Не задан') {
+            $parts[] = $routeIdentityLabel;
+        }
+
+        $phoneLabel = static::formatDialogPhoneLabel($dialog);
+
+        if ($phoneLabel !== 'Телефон в этом канале не подтвержден') {
+            $parts[] = $phoneLabel;
+        }
+
+        return $parts === [] ? null : implode(' · ', $parts);
     }
 }
