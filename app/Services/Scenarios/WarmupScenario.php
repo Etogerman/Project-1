@@ -6,6 +6,7 @@ use App\Data\Scenarios\ScenarioInboundResult;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\ScenarioRun;
+use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\Bots\TelegramBotApiService;
 
@@ -26,18 +27,24 @@ class WarmupScenario implements ScenarioHandler
 
     public function __construct(
         private readonly TelegramBotApiService $telegramBotApiService,
+        private readonly MaxBotApiService $maxBotApiService,
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
     ) {}
 
     public function shouldStart(Message $message): bool
     {
+        $platform = $message->channel?->platform;
+
         if (
-            $message->channel?->platform !== Channel::PLATFORM_TELEGRAM
+            ! in_array($platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
             || $message->message_kind !== Message::KIND_INBOUND_USER
             || $message->dialog_id === null
             || ! filled($message->text)
-            || is_array(data_get($message->raw_payload, 'callback_query'))
         ) {
+            return false;
+        }
+
+        if ($platform === Channel::PLATFORM_TELEGRAM && is_array(data_get($message->raw_payload, 'callback_query'))) {
             return false;
         }
 
@@ -55,19 +62,34 @@ class WarmupScenario implements ScenarioHandler
     {
         $channel = $message->channel;
 
-        if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_TELEGRAM) {
+        if (! $channel instanceof Channel) {
             return;
         }
 
-        $deliveryResult = $this->telegramBotApiService->sendTextMessage(
-            $channel,
-            $message->external_chat_id,
-            $message->contactIdentity?->external_user_id,
-            $this->messageText(),
-            [
-                'inline_keyboard' => $this->telegramInlineKeyboard($run->id),
-            ],
-        );
+        $buttonLabels = $this->buttonLabelsForPlatform($channel->platform);
+        $deliveryResult = match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
+                $channel,
+                $message->external_chat_id,
+                $message->contactIdentity?->external_user_id,
+                $this->messageTextForPlatform($channel->platform),
+                [
+                    'inline_keyboard' => $this->telegramInlineKeyboard($run->id, $buttonLabels),
+                ],
+            ),
+            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
+                $channel,
+                $message->external_chat_id,
+                $message->contactIdentity?->external_user_id,
+                $this->messageTextForPlatform($channel->platform),
+                $this->maxAttachments($buttonLabels),
+            ),
+            default => null,
+        };
+
+        if ($deliveryResult === null) {
+            return;
+        }
 
         $outboundMessage = $this->storeOutboundScenarioMessageAction->handle(
             $channel,
@@ -83,6 +105,8 @@ class WarmupScenario implements ScenarioHandler
             'state_payload' => [
                 'trigger_message_id' => $message->id,
                 'prompt_message_id' => $outboundMessage->id,
+                'expected_actions' => array_keys($buttonLabels),
+                'expected_labels' => $buttonLabels,
             ],
         ])->save();
     }
@@ -90,6 +114,39 @@ class WarmupScenario implements ScenarioHandler
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
     {
         $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
+        $channel = $message->channel;
+        $expectedLabels = $this->expectedLabelsFromStatePayload(
+            $statePayload,
+            $channel instanceof Channel ? $channel->platform : null,
+        );
+
+        if ($channel?->platform === Channel::PLATFORM_MAX) {
+            $matchedAction = $this->matchMaxAction($expectedLabels, $message->text);
+
+            if ($matchedAction === null) {
+                return new ScenarioInboundResult(
+                    consumed: false,
+                    status: ScenarioRun::STATUS_CANCELLED,
+                    currentStep: null,
+                    statePayload: $statePayload,
+                    exitOutcome: 'interrupted_by_other_message',
+                );
+            }
+
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_COMPLETED,
+                currentStep: null,
+                statePayload: array_merge($statePayload, [
+                    'reaction_message_id' => $message->id,
+                    'reaction_action' => $matchedAction,
+                    'reaction_label' => $expectedLabels[$matchedAction],
+                    'reaction_source' => 'max_text_match',
+                ]),
+                exitOutcome: $this->exitOutcomeForAction($matchedAction),
+            );
+        }
+
         $callback = $this->parseTelegramCallbackData((string) data_get($message->raw_payload, 'callback_query.data', ''));
 
         if ($callback === null) {
@@ -112,7 +169,7 @@ class WarmupScenario implements ScenarioHandler
             );
         }
 
-        if (! array_key_exists($callback['action'], $this->buttonLabels())) {
+        if (! array_key_exists($callback['action'], $expectedLabels)) {
             return new ScenarioInboundResult(
                 consumed: true,
                 status: ScenarioRun::STATUS_CANCELLED,
@@ -131,36 +188,59 @@ class WarmupScenario implements ScenarioHandler
             statePayload: array_merge($statePayload, [
                 'reaction_message_id' => $message->id,
                 'reaction_action' => $action,
-                'reaction_label' => $this->buttonLabels()[$action],
+                'reaction_label' => $expectedLabels[$action],
                 'reaction_source' => 'telegram_callback',
             ]),
-            exitOutcome: match ($action) {
-                self::ACTION_POSITIVE => 'reacted_positive',
-                self::ACTION_LATER => 'reacted_later',
-                default => 'reacted_decline',
-            },
+            exitOutcome: $this->exitOutcomeForAction($action),
         );
     }
 
     /**
      * @return array<int, array<int, array{text: string, callback_data: string}>>
      */
-    private function telegramInlineKeyboard(int $runId): array
+    private function telegramInlineKeyboard(int $runId, array $buttonLabels): array
     {
         return array_map(
             fn (string $action, string $label): array => [[
                 'text' => $label,
                 'callback_data' => sprintf('scenario:%s:%d:%s', self::code(), $runId, $action),
             ]],
-            array_keys($this->buttonLabels()),
-            array_values($this->buttonLabels()),
+            array_keys($buttonLabels),
+            array_values($buttonLabels),
         );
     }
 
-    private function messageText(): string
+    /**
+     * @param  array<string, string>  $buttonLabels
+     * @return array<int, array<string, mixed>>
+     */
+    private function maxAttachments(array $buttonLabels): array
     {
+        $buttons = [];
+
+        foreach ($buttonLabels as $label) {
+            $buttons[] = [[
+                'type' => 'message',
+                'text' => $label,
+            ]];
+        }
+
+        return [[
+            'type' => 'inline_keyboard',
+            'payload' => [
+                'buttons' => $buttons,
+            ],
+        ]];
+    }
+
+    private function messageTextForPlatform(?string $platform): string
+    {
+        $configPrefix = $platform === Channel::PLATFORM_MAX
+            ? 'bots.scenarios.warmup.max'
+            : 'bots.scenarios.warmup.telegram';
+
         return (string) config(
-            'bots.scenarios.warmup.telegram.text',
+            "{$configPrefix}.text",
             'Прежде чем перейти дальше, подскажите, вам интересно получить несколько коротких материалов?'
         );
     }
@@ -168,13 +248,71 @@ class WarmupScenario implements ScenarioHandler
     /**
      * @return array<string, string>
      */
-    private function buttonLabels(): array
+    private function buttonLabelsForPlatform(?string $platform): array
     {
+        $configPrefix = $platform === Channel::PLATFORM_MAX
+            ? 'bots.scenarios.warmup.max.buttons'
+            : 'bots.scenarios.warmup.telegram.buttons';
+
         return [
-            self::ACTION_POSITIVE => (string) config('bots.scenarios.warmup.telegram.buttons.positive', 'Да, интересно'),
-            self::ACTION_LATER => (string) config('bots.scenarios.warmup.telegram.buttons.later', 'Позже'),
-            self::ACTION_DECLINE => (string) config('bots.scenarios.warmup.telegram.buttons.decline', 'Не интересно'),
+            self::ACTION_POSITIVE => (string) config("{$configPrefix}.positive", 'Да, интересно'),
+            self::ACTION_LATER => (string) config("{$configPrefix}.later", 'Позже'),
+            self::ACTION_DECLINE => (string) config("{$configPrefix}.decline", 'Не интересно'),
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, string>
+     */
+    private function expectedLabelsFromStatePayload(array $statePayload, ?string $platform): array
+    {
+        $expectedLabels = data_get($statePayload, 'expected_labels');
+
+        if (is_array($expectedLabels)) {
+            $normalizedExpectedLabels = [];
+
+            foreach ($expectedLabels as $action => $label) {
+                if (! is_string($action) || ! is_string($label) || trim($action) === '' || trim($label) === '') {
+                    continue;
+                }
+
+                $normalizedExpectedLabels[trim($action)] = trim($label);
+            }
+
+            if ($normalizedExpectedLabels !== []) {
+                return $normalizedExpectedLabels;
+            }
+        }
+
+        return $this->buttonLabelsForPlatform($platform);
+    }
+
+    /**
+     * @param  array<string, string>  $expectedLabels
+     */
+    private function matchMaxAction(array $expectedLabels, ?string $normalizedText): ?string
+    {
+        if (! filled($normalizedText)) {
+            return null;
+        }
+
+        foreach ($expectedLabels as $action => $label) {
+            if ($normalizedText === $label) {
+                return $action;
+            }
+        }
+
+        return null;
+    }
+
+    private function exitOutcomeForAction(string $action): string
+    {
+        return match ($action) {
+            self::ACTION_POSITIVE => 'reacted_positive',
+            self::ACTION_LATER => 'reacted_later',
+            default => 'reacted_decline',
+        };
     }
 
     /**

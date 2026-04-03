@@ -373,7 +373,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->test(ManageChannels::class)
             ->mountTableAction('manageScenarios', $channel)
             ->assertMountedActionModalSee('Сценарии канала')
-            ->assertMountedActionModalSee('Для этого канала нет доступных сценариев');
+            ->assertMountedActionModalSee('Активные сценарии')
+            ->assertMountedActionModalSee('warmup');
     }
 
     public function test_admin_can_enable_warmup_scenario_for_telegram_channel(): void
@@ -472,7 +473,7 @@ class FilamentChannelsResourceTest extends TestCase
         ]);
     }
 
-    public function test_admin_cannot_enable_incompatible_scenario_for_max_channel(): void
+    public function test_admin_can_enable_warmup_scenario_for_max_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -487,13 +488,24 @@ class FilamentChannelsResourceTest extends TestCase
             ->callTableAction('manageScenarios', $channel, [
                 'scenario_codes' => ['warmup'],
             ])
-            ->assertHasTableActionErrors();
+            ->assertHasNoTableActionErrors();
 
-        $this->assertDatabaseCount('scenario_channel_bindings', 0);
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => true,
+        ]);
     }
 
     public function test_manage_scenarios_deactivates_existing_incompatible_active_binding(): void
     {
+        config()->set('scenarios.legacy_telegram_only', [
+            'handler' => \App\Services\Scenarios\WarmupScenario::class,
+            'platforms' => [
+                Channel::PLATFORM_TELEGRAM,
+            ],
+        ]);
+
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
@@ -504,7 +516,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'legacy_telegram_only',
             'is_active' => true,
         ]);
 
@@ -517,7 +529,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertDatabaseHas('scenario_channel_bindings', [
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'legacy_telegram_only',
             'is_active' => false,
         ]);
     }
