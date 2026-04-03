@@ -185,17 +185,59 @@
         transition: transform 140ms ease, box-shadow 140ms ease;
     }
 
+    .fi-btn {
+        font-weight: 700;
+    }
+
+    .fi-btn:not(.fi-color-primary):not(.fi-color-success):not(.fi-color-danger):not(.fi-color-warning):not(.fi-color-info) {
+        border-color: rgba(51, 65, 85, 0.92);
+        background: linear-gradient(
+            180deg,
+            #475569 0%,
+            #334155 100%
+        );
+        color: #ffffff;
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.08),
+            0 12px 28px -22px rgba(15, 23, 42, 0.62);
+    }
+
     .fi-btn:hover,
     .fi-icon-btn:hover {
         transform: translateY(-1px);
         box-shadow: 0 18px 36px -26px rgba(15, 23, 42, 0.62);
     }
 
+    .fi-btn:not(.fi-color-primary):not(.fi-color-success):not(.fi-color-danger):not(.fi-color-warning):not(.fi-color-info):hover {
+        border-color: rgba(30, 41, 59, 0.96);
+        background: linear-gradient(
+            180deg,
+            #334155 0%,
+            #1e293b 100%
+        );
+        color: #ffffff;
+    }
+
+    .fi-btn.fi-color-primary,
+    .fi-btn.fi-color-success,
+    .fi-btn.fi-color-danger,
+    .fi-btn.fi-color-warning,
+    .fi-btn.fi-color-info {
+        color: #ffffff;
+    }
+
     .fi-input-wrp {
-        border-color: var(--ac-border-strong);
+        border-color: color-mix(in srgb, var(--ac-border-strong) 85%, var(--ac-text-soft));
         border-radius: 16px;
-        background: var(--ac-surface-strong);
-        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--ac-surface-muted) 54%, var(--ac-surface-strong) 46%) 0%,
+            color-mix(in srgb, var(--ac-surface-strong) 94%, var(--ac-page-bg-alt) 6%) 100%
+        );
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.78),
+            0 1px 2px rgba(15, 23, 42, 0.08);
+        transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
     }
 
     .fi-input,
@@ -203,8 +245,42 @@
         color: var(--ac-text);
     }
 
+    .fi-input-wrp-prefix,
+    .fi-input-wrp-suffix {
+        background: color-mix(in srgb, var(--ac-surface-muted) 80%, var(--ac-surface-strong) 20%);
+    }
+
+    .fi-input-wrp-prefix {
+        border-inline-end: 1px solid color-mix(in srgb, var(--ac-border-strong) 82%, transparent);
+    }
+
+    .fi-input-wrp-suffix {
+        border-inline-start: 1px solid color-mix(in srgb, var(--ac-border-strong) 82%, transparent);
+    }
+
+    .fi-input-wrp-actions {
+        color: color-mix(in srgb, var(--ac-text-soft) 82%, var(--ac-text));
+    }
+
     .fi-input::placeholder {
-        color: var(--ac-text-soft);
+        color: color-mix(in srgb, var(--ac-text-soft) 86%, var(--ac-text-muted));
+    }
+
+    .fi-input-wrp:hover {
+        border-color: color-mix(in srgb, var(--ac-border-strong) 72%, var(--ac-primary));
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.82),
+            0 0 0 1px color-mix(in srgb, var(--ac-primary-soft) 38%, transparent),
+            0 2px 8px rgba(15, 23, 42, 0.06);
+    }
+
+    .fi-input-wrp:focus-within {
+        border-color: color-mix(in srgb, var(--ac-primary) 72%, white 28%);
+        background: color-mix(in srgb, var(--ac-surface-strong) 88%, var(--ac-primary-soft));
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.84),
+            0 0 0 1px color-mix(in srgb, var(--ac-primary) 30%, transparent),
+            0 0 0 4px color-mix(in srgb, var(--ac-primary-soft) 56%, transparent);
     }
 
     .fi-ta-main {
@@ -341,51 +417,54 @@
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp {
-        border-color: color-mix(in srgb, var(--ac-border-strong) 90%, var(--ac-text-soft));
+        border-color: color-mix(in srgb, var(--ac-border-strong) 84%, var(--ac-text));
         background: linear-gradient(
             180deg,
-            color-mix(in srgb, var(--ac-surface-strong) 88%, var(--ac-page-bg-alt) 12%) 0%,
-            color-mix(in srgb, var(--ac-surface-muted) 92%, white 8%) 100%
+            color-mix(in srgb, var(--ac-surface-muted) 72%, var(--ac-surface-strong) 28%) 0%,
+            color-mix(in srgb, var(--ac-surface-strong) 90%, var(--ac-page-bg-alt) 10%) 100%
         );
         box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.72),
-            0 1px 2px rgba(15, 23, 42, 0.04);
+            inset 0 1px 0 rgba(255, 255, 255, 0.82),
+            0 1px 2px rgba(15, 23, 42, 0.08);
         transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input::placeholder {
-        color: color-mix(in srgb, var(--ac-text-soft) 88%, var(--ac-text-muted));
+        color: color-mix(in srgb, var(--ac-text-soft) 76%, var(--ac-text));
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-prefix,
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-suffix {
-        background: color-mix(in srgb, var(--ac-surface-muted) 84%, white 16%);
+        background: color-mix(in srgb, var(--ac-surface-muted) 74%, var(--ac-surface-strong) 26%);
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-prefix {
-        border-inline-end: 1px solid color-mix(in srgb, var(--ac-border-strong) 85%, transparent);
+        border-inline-end: 1px solid color-mix(in srgb, var(--ac-border-strong) 78%, var(--ac-text-soft));
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-suffix {
-        border-inline-start: 1px solid color-mix(in srgb, var(--ac-border-strong) 85%, transparent);
+        border-inline-start: 1px solid color-mix(in srgb, var(--ac-border-strong) 78%, var(--ac-text-soft));
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-actions {
-        color: var(--ac-text-soft);
+        color: color-mix(in srgb, var(--ac-text-soft) 78%, var(--ac-text));
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:hover {
-        border-color: color-mix(in srgb, var(--ac-border-strong) 78%, var(--ac-primary));
-        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06), 0 0 0 1px color-mix(in srgb, var(--ac-primary-soft) 45%, transparent);
+        border-color: color-mix(in srgb, var(--ac-border-strong) 66%, var(--ac-primary));
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.86),
+            0 0 0 1px color-mix(in srgb, var(--ac-primary-soft) 54%, transparent),
+            0 4px 12px rgba(15, 23, 42, 0.06);
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:focus-within {
         border-color: color-mix(in srgb, var(--ac-primary) 72%, white 28%);
-        background: color-mix(in srgb, var(--ac-surface-strong) 90%, var(--ac-primary-soft));
+        background: color-mix(in srgb, var(--ac-surface-strong) 84%, var(--ac-primary-soft));
         box-shadow:
-            inset 0 1px 2px rgba(15, 23, 42, 0.06),
-            0 0 0 1px color-mix(in srgb, var(--ac-primary) 35%, transparent),
-            0 0 0 4px color-mix(in srgb, var(--ac-primary-soft) 70%, transparent);
+            inset 0 1px 0 rgba(255, 255, 255, 0.88),
+            0 0 0 1px color-mix(in srgb, var(--ac-primary) 38%, transparent),
+            0 0 0 4px color-mix(in srgb, var(--ac-primary-soft) 76%, transparent);
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:has([aria-invalid='true']) {
@@ -808,16 +887,22 @@
         justify-content: center;
         gap: 0.35rem;
         min-height: 2.75rem;
-        border: 1px solid var(--ac-border-strong);
+        border: 1px solid rgba(51, 65, 85, 0.92);
         border-radius: 14px;
-        background: var(--ac-surface-strong);
+        background: linear-gradient(
+            180deg,
+            #475569 0%,
+            #334155 100%
+        );
         padding: 0.7rem 1rem;
         font-size: 0.875rem;
         font-weight: 700;
         line-height: 1.2;
-        color: var(--ac-text);
+        color: #ffffff;
         text-decoration: none;
-        box-shadow: 0 10px 24px -22px rgba(15, 23, 42, 0.55);
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.08),
+            0 10px 24px -22px rgba(15, 23, 42, 0.55);
         cursor: pointer;
         transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
     }
@@ -825,6 +910,18 @@
     .ac-button:hover {
         transform: translateY(-1px);
         box-shadow: 0 18px 34px -26px rgba(15, 23, 42, 0.6);
+    }
+
+    .ac-button:not(.ac-button--primary):not(.ac-button--primary-soft):not(.ac-button--success):not(.ac-button--danger):not(.ac-button--danger-soft):hover {
+        border-color: rgba(30, 41, 59, 0.96);
+        background: linear-gradient(
+            180deg,
+            #334155 0%,
+            #1e293b 100%
+        );
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.1),
+            0 18px 34px -26px rgba(15, 23, 42, 0.6);
     }
 
     .ac-button:disabled,
@@ -836,8 +933,12 @@
     }
 
     .ac-button--secondary {
-        background: var(--ac-surface-strong);
-        color: var(--ac-text);
+        background: linear-gradient(
+            180deg,
+            #475569 0%,
+            #334155 100%
+        );
+        color: #ffffff;
     }
 
     .ac-button--primary {
@@ -847,9 +948,13 @@
     }
 
     .ac-button--primary-soft {
-        border-color: color-mix(in srgb, var(--ac-primary) 30%, transparent);
-        background: var(--ac-primary-soft);
-        color: var(--ac-primary);
+        border-color: color-mix(in srgb, var(--ac-primary) 46%, transparent);
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--ac-primary) 84%, #ffffff 16%) 0%,
+            color-mix(in srgb, var(--ac-primary) 90%, #1e3a8a 10%) 100%
+        );
+        color: #ffffff;
     }
 
     .ac-button--success {
@@ -866,8 +971,8 @@
 
     .ac-button--danger-soft {
         border-color: color-mix(in srgb, var(--ac-danger) 30%, transparent);
-        background: var(--ac-surface-strong);
-        color: var(--ac-danger);
+        background: color-mix(in srgb, var(--ac-danger) 82%, #7f1d1d 18%);
+        color: #ffffff;
     }
 
     .ac-button--full {
