@@ -1571,6 +1571,52 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringNotContainsString('Системное сообщение', $dialogsHtml);
     }
 
+    public function test_contact_dialogs_renderer_shows_telegram_start_payload_as_human_readable_preview(): void
+    {
+        $contact = Contact::factory()->create();
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Продакшен',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $telegramIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'platform' => $telegramChannel->platform,
+            'external_user_id' => 'telegram-dialog-start',
+            'external_username' => 'telegram_customer',
+        ]);
+        $telegramDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'current_contact_identity_id' => $telegramIdentity->id,
+            'external_chat_id' => 'tg-chat-start',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+            'last_outbound_at' => null,
+        ]);
+
+        Message::query()->create([
+            'dialog_id' => $telegramDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $telegramIdentity->id,
+            'channel_id' => $telegramChannel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'tg-chat-start',
+            'text' => '/start TEXT_1',
+            'raw_payload' => ['message' => ['text' => '/start TEXT_1']],
+            'received_at' => now(),
+        ]);
+
+        $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
+        $dialogsBuilder->setAccessible(true);
+
+        $dialogsHtml = view('filament.contacts.partials.contact-dialogs', $dialogsBuilder->invoke(null, $contact))->render();
+
+        $this->assertStringContainsString('Открыл бота по диплинку: TEXT_1', $dialogsHtml);
+        $this->assertStringNotContainsString('/start TEXT_1', $dialogsHtml);
+    }
+
     public function test_contact_dialogs_renderer_shows_empty_state_when_contact_has_no_dialogs(): void
     {
         $contact = Contact::factory()->create();
