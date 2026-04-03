@@ -111,7 +111,9 @@ class FilamentUsersResourceTest extends TestCase
             ->assertMountedActionModalSee('Доступ')
             ->assertMountedActionModalSee('Управление активностью учётной записи и административными правами.')
             ->assertMountedActionModalSee('Пароль')
-            ->assertMountedActionModalSee('Укажите пароль для нового сотрудника.');
+            ->assertMountedActionModalSee('Укажите пароль для нового сотрудника.')
+            ->assertMountedActionModalSee('Отключённый сотрудник не сможет войти в панель.')
+            ->assertMountedActionModalSee('Администратор управляет сотрудниками и настройками панели.');
     }
 
     public function test_admin_can_update_status_and_role_without_overwriting_password(): void
