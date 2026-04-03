@@ -4,12 +4,14 @@ namespace App\Console\Commands;
 
 use App\Services\Maintenance\PurgeRuntimeDataAction;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class PurgeRuntimeDataCommand extends Command
 {
     protected $signature = 'maintenance:purge-runtime-data
         {--force : Delete runtime data instead of running in dry-run mode}
+        {--confirm-production-purge : Confirm destructive purge when APP_ENV is production}
         {--include-sessions : Also purge session rows}';
 
     protected $description = 'Purge non-config runtime data while preserving users, channels, and auto reply rules.';
@@ -24,6 +26,13 @@ class PurgeRuntimeDataCommand extends Command
     {
         $includeSessions = (bool) $this->option('include-sessions');
         $force = (bool) $this->option('force');
+        $confirmProductionPurge = (bool) $this->option('confirm-production-purge');
+
+        if ($force && app()->environment('production') && ! $confirmProductionPurge) {
+            $this->error('Destructive purge in production requires both --force and --confirm-production-purge.');
+
+            return self::FAILURE;
+        }
 
         $result = $this->purgeRuntimeDataAction->handle($force, $includeSessions);
 
@@ -56,6 +65,9 @@ class PurgeRuntimeDataCommand extends Command
                 $result->toLogContext(),
                 [
                     'environment' => app()->environment(),
+                    'force' => $force,
+                    'production_guard_confirmed' => $force && app()->environment('production') && $confirmProductionPurge,
+                    'driver' => DB::getDriverName(),
                     'purged_at' => now()->toIso8601String(),
                 ],
             ),
