@@ -372,8 +372,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->mountTableAction('manageScenarios', $channel)
             ->assertMountedActionModalSee('Сценарии канала')
             ->assertMountedActionModalSee('Активные сценарии')
-            ->assertMountedActionModalSee('warmup')
-            ->assertMountedActionModalSee('needs_discovery')
+            ->assertMountedActionModalSee('Прогрев')
+            ->assertMountedActionModalSee('Выявление потребностей')
             ->assertTableActionDataSet([
                 'scenario_codes' => [],
             ]);
@@ -394,8 +394,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->mountTableAction('manageScenarios', $channel)
             ->assertMountedActionModalSee('Сценарии канала')
             ->assertMountedActionModalSee('Активные сценарии')
-            ->assertMountedActionModalSee('warmup')
-            ->assertMountedActionModalSee('needs_discovery');
+            ->assertMountedActionModalSee('Прогрев')
+            ->assertMountedActionModalSee('Выявление потребностей');
     }
 
     public function test_admin_can_enable_warmup_scenario_for_telegram_channel(): void
