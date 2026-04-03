@@ -235,6 +235,32 @@ class FilamentContactsResourceTest extends TestCase
             ->assertDontSee('data-role="contact-open-delete-dialog"', false);
     }
 
+    public function test_employee_can_see_edit_phone_control_but_not_delete_for_saved_phone(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertSee('data-role="contact-edit-phone"', false)
+            ->assertDontSee('data-role="contact-delete-phone"', false)
+            ->assertDontSee('data-role="contact-enable-auto-reply"', false)
+            ->assertDontSee('data-role="contact-disable-auto-reply"', false)
+            ->assertDontSee('data-role="contact-resume-data-collection"', false)
+            ->assertDontSee('data-role="contact-open-delete-dialog"', false);
+    }
+
     public function test_employee_can_edit_contact_profile_from_contact_modal(): void
     {
         $employee = User::factory()->create([
@@ -1361,6 +1387,38 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame('+79995555555', $phoneNumber->phone_normalized);
     }
 
+    public function test_employee_can_edit_saved_phone_number_from_contact_modal(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create();
+        $phoneNumber = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertSee('data-role="contact-edit-phone"', false)
+            ->assertDontSee('data-role="contact-delete-phone"', false)
+            ->call('openEditPhoneDialog', $phoneNumber->id)
+            ->set('editingPhoneRaw', '+7 999 555 55 55')
+            ->call('saveMountedContactPhone')
+            ->assertHasNoErrors()
+            ->assertMountedActionModalSee('+7 999 555 55 55')
+            ->assertDontSee('data-role="contact-delete-phone"', false);
+
+        $phoneNumber->refresh();
+
+        $this->assertSame('+7 999 555 55 55', $phoneNumber->phone_raw);
+        $this->assertSame('+79995555555', $phoneNumber->phone_normalized);
+    }
+
     public function test_admin_cannot_edit_phone_number_to_duplicate_value_for_same_contact(): void
     {
         $admin = User::factory()->create([
@@ -1382,6 +1440,40 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('openEditPhoneDialog', $editablePhone->id)
+            ->set('editingPhoneRaw', '+7 999 555 55 55')
+            ->call('saveMountedContactPhone')
+            ->assertHasErrors(['editingPhoneRaw']);
+
+        $editablePhone->refresh();
+
+        $this->assertSame('+7 999 123 45 67', $editablePhone->phone_raw);
+        $this->assertSame('+79991234567', $editablePhone->phone_normalized);
+    }
+
+    public function test_employee_cannot_edit_phone_number_to_duplicate_value_for_same_contact(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create();
+        $editablePhone = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 555 55 55',
+            'phone_normalized' => '+79995555555',
+            'is_primary' => false,
+        ]);
+
+        Livewire::actingAs($employee)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
             ->call('openEditPhoneDialog', $editablePhone->id)
@@ -1429,6 +1521,32 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertDatabaseHas('contact_phone_numbers', [
             'id' => $nextPhone->id,
             'is_primary' => true,
+        ]);
+    }
+
+    public function test_employee_cannot_delete_phone_number_via_livewire_action(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create();
+        $phoneNumber = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertDontSee('data-role="contact-delete-phone"', false)
+            ->set('deletingPhoneId', (string) $phoneNumber->id)
+            ->call('deleteMountedContactPhone');
+
+        $this->assertDatabaseHas('contact_phone_numbers', [
+            'id' => $phoneNumber->id,
         ]);
     }
 

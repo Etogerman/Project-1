@@ -1113,7 +1113,11 @@ class ContactResource extends Resource
     }
 
     /**
-     * @return array{phoneNumbers: array<int, array{id:int, phone:string, source:string, is_primary:bool}>}
+     * @return array{
+     *     phoneNumbers: array<int, array{id:int, phone:string, source:string, is_primary:bool}>,
+     *     canEditPhones: bool,
+     *     canDeletePhones: bool
+     * }
      */
     protected static function buildPhoneNumbersViewData(Contact $record): array
     {
@@ -1130,7 +1134,8 @@ class ContactResource extends Resource
                     'is_primary' => $phoneNumber->is_primary,
                 ])
                 ->all(),
-            'canManagePhones' => static::canCurrentUserManageContactMutations(),
+            'canEditPhones' => static::canCurrentUserEditExistingContactPhones(),
+            'canDeletePhones' => static::canCurrentUserManageContactMutations(),
         ];
     }
 
@@ -1241,6 +1246,11 @@ class ContactResource extends Resource
     protected static function canCurrentUserManageContactProfile(): bool
     {
         return static::currentUser()?->canManageContactProfile() ?? false;
+    }
+
+    protected static function canCurrentUserEditExistingContactPhones(): bool
+    {
+        return static::currentUser()?->canEditExistingContactPhones() ?? false;
     }
 
     protected static function canCurrentUserManageContactMutations(): bool

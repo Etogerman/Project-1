@@ -108,6 +108,11 @@ class User extends Authenticatable implements FilamentUser
         return $this->canViewWorkspaces();
     }
 
+    public function canEditExistingContactPhones(): bool
+    {
+        return $this->canViewWorkspaces();
+    }
+
     public function canReplyInDialogs(): bool
     {
         return $this->canViewWorkspaces();
