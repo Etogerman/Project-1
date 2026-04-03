@@ -14,6 +14,8 @@ class ProcessBitrix24WebhookEventJob implements ShouldQueue
 {
     use Queueable;
 
+    public int $timeout = 60;
+
     public function __construct(
         public readonly int $webhookEventId,
     ) {}

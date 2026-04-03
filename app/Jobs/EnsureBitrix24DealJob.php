@@ -16,6 +16,8 @@ class EnsureBitrix24DealJob implements ShouldQueue
 {
     use Queueable;
 
+    public int $timeout = 60;
+
     public function __construct(
         public readonly int $contactId,
     ) {}
