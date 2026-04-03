@@ -10,6 +10,7 @@ use App\Services\Bitrix24\LogBitrix24ApiCallAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class EnsureBitrix24DealJob implements ShouldQueue
@@ -52,6 +53,16 @@ class EnsureBitrix24DealJob implements ShouldQueue
             $rootContact->forceFill([
                 'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_FAILED,
             ])->save();
+
+            Log::critical('Bitrix24 deal sync job failed.', [
+                'job' => self::class,
+                'contact_id' => $this->contactId,
+                'root_contact_id' => $rootContact->id,
+                'bitrix24_contact_id' => $rootContact->bitrix24_contact_id,
+                'bitrix24_deal_id' => $rootContact->bitrix24_deal_id,
+                'exception_class' => $throwable::class,
+                'exception_message' => $throwable->getMessage(),
+            ]);
 
             $logApiCallAction->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,

@@ -14,6 +14,7 @@ use App\Services\Bitrix24\SyncContactToBitrix24Action;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class SyncContactToBitrix24Job implements ShouldQueue
@@ -65,6 +66,15 @@ class SyncContactToBitrix24Job implements ShouldQueue
             $rootContact->forceFill([
                 'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_FAILED,
             ])->save();
+
+            Log::critical('Bitrix24 contact sync job failed.', [
+                'job' => self::class,
+                'contact_id' => $this->contactId,
+                'root_contact_id' => $rootContact->id,
+                'bitrix24_contact_id' => $rootContact->bitrix24_contact_id,
+                'exception_class' => $throwable::class,
+                'exception_message' => $throwable->getMessage(),
+            ]);
 
             $logApiCallAction->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
