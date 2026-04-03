@@ -212,6 +212,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertSame(Message::KIND_INBOUND_USER, $storedMessage->message_kind);
         $this->assertNull($storedMessage->text);
         $this->assertNull($storedMessage->external_message_id);
+        $this->assertSame('promo_123', $storedMessage->message_parameter);
         $this->assertSame('bot_started', data_get($storedMessage->raw_payload, 'update_type'));
         $this->assertStringStartsWith('max-bot-started:', $storedMessage->provider_event_key ?? '');
         $this->assertDatabaseHas('contact_identities', [
@@ -263,6 +264,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $storedMessage = $this->inboundMessages()->latest('id')->firstOrFail();
 
         $this->assertSame($contact->id, $storedMessage->contact_id);
+        $this->assertSame('promo_123', $storedMessage->message_parameter);
         $this->assertSame('bot_started', data_get($storedMessage->raw_payload, 'update_type'));
     }
 
