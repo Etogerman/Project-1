@@ -189,6 +189,7 @@ class ContactResource extends Resource
                     ->columns(1)
                     ->columnSpanFull(),
                 Section::make('Работа с контактом')
+                    ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--secondary ac-contact-modal-section--ownership'])
                     ->schema([
                         ViewEntry::make('ownership_controls')
                             ->hiddenLabel()
@@ -199,6 +200,7 @@ class ContactResource extends Resource
                     ->columns(1)
                     ->columnSpanFull(),
                 Section::make('Телефоны')
+                    ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--secondary ac-contact-modal-section--phones'])
                     ->schema([
                         ViewEntry::make('phone_numbers')
                             ->hiddenLabel()
@@ -209,6 +211,7 @@ class ContactResource extends Resource
                     ->columns(1)
                     ->columnSpanFull(),
                 Section::make('Подробности')
+                    ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--secondary ac-contact-modal-section--details'])
                     ->schema([
                         TextEntry::make('id')
                             ->label('ID')

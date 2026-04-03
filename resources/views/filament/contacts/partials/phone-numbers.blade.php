@@ -1,4 +1,4 @@
-<section data-role="contact-phone-numbers" class="ac-surface ac-surface--secondary">
+<section data-role="contact-phone-numbers" class="ac-surface ac-surface--secondary ac-contact-modal-surface ac-contact-modal-surface--secondary-block ac-contact-modal-surface--phones">
     <div class="ac-surface__header ac-surface__header--centered">
         <div class="ac-surface__title-group">
             <p class="ac-surface__eyebrow">Телефоны</p>
