@@ -9,6 +9,7 @@ use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactStartTag;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bots\StoreInboundMessageAction;
@@ -22,6 +23,122 @@ use Tests\TestCase;
 class StoreInboundMessageActionTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_store_inbound_message_assigns_start_tag_for_telegram_start_payload(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: '300',
+                externalUserId: '200',
+                providerEventKey: 'telegram-update-start-1',
+                externalMessageId: 'start-1',
+                externalUsername: 'telegram_user',
+                contactName: 'Тестовый контакт',
+                text: '/start TEXT_1',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => '/start TEXT_1']],
+                receivedAt: Carbon::parse('2026-04-03 14:00:00'),
+            ),
+        );
+
+        $this->assertDatabaseHas('contact_start_tags', [
+            'contact_id' => $storedResult->message->contact_id,
+            'category' => ContactStartTag::CATEGORY_START_PAYLOAD,
+            'code' => 'TEXT_1',
+            'source' => ContactStartTag::SOURCE_TELEGRAM_START,
+            'source_message_id' => $storedResult->message->id,
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'id' => $storedResult->message->id,
+            'message_parameter' => 'TEXT_1',
+        ]);
+    }
+
+    public function test_store_inbound_message_assigns_start_tag_for_max_bot_started_payload(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: '700',
+                externalUserId: '500',
+                providerEventKey: 'max-bot-started:700:2026-04-03T14:10:00+03:00',
+                externalMessageId: null,
+                externalUsername: 'max_user',
+                contactName: 'MAX контакт',
+                text: null,
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: [
+                    'update_type' => 'bot_started',
+                    'payload' => 'TEXT_1',
+                ],
+                receivedAt: Carbon::parse('2026-04-03 14:10:00'),
+            ),
+        );
+
+        $this->assertDatabaseHas('contact_start_tags', [
+            'contact_id' => $storedResult->message->contact_id,
+            'category' => ContactStartTag::CATEGORY_START_PAYLOAD,
+            'code' => 'TEXT_1',
+            'source' => ContactStartTag::SOURCE_MAX_START,
+            'source_message_id' => $storedResult->message->id,
+        ]);
+    }
+
+    public function test_store_inbound_message_replay_does_not_duplicate_start_tag(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payloadMessage = new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: '300',
+            externalUserId: '200',
+            providerEventKey: 'telegram-update-start-replay',
+            externalMessageId: 'start-replay',
+            externalUsername: 'telegram_user',
+            contactName: 'Тестовый контакт',
+            text: '/start TEXT_1',
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: ['message' => ['text' => '/start TEXT_1']],
+            receivedAt: Carbon::parse('2026-04-03 14:20:00'),
+        );
+
+        $firstResult = app(StoreInboundMessageAction::class)->handle($channel, $payloadMessage);
+        $secondResult = app(StoreInboundMessageAction::class)->handle($channel, $payloadMessage);
+
+        $this->assertTrue($firstResult->message->is($secondResult->message));
+        $this->assertDatabaseCount('contact_start_tags', 1);
+        $this->assertDatabaseHas('contact_start_tags', [
+            'contact_id' => $firstResult->message->contact_id,
+            'category' => ContactStartTag::CATEGORY_START_PAYLOAD,
+            'code' => 'TEXT_1',
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'id' => $firstResult->message->id,
+            'message_parameter' => 'TEXT_1',
+        ]);
+    }
 
     public function test_store_inbound_message_saves_phone_from_contact_share(): void
     {
