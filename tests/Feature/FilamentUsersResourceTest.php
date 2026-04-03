@@ -165,6 +165,36 @@ class FilamentUsersResourceTest extends TestCase
         $this->assertTrue(Hash::check('new-secret123', $user->password));
     }
 
+    public function test_admin_can_view_user_in_polished_overview_modal(): void
+    {
+        $admin = User::factory()->create([
+            'email' => 'admin@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $user = User::factory()->create([
+            'name' => 'Геннадий',
+            'email' => 'g_e_n_a@mail.ru',
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->mountTableAction('view', $user)
+            ->assertMountedActionModalSee('Команда')
+            ->assertMountedActionModalSee('Профиль сотрудника и права доступа в админке.')
+            ->assertMountedActionModalSee('Основное')
+            ->assertMountedActionModalSee('Доступ')
+            ->assertMountedActionModalSee('Служебное')
+            ->assertMountedActionModalSee('Геннадий')
+            ->assertMountedActionModalSee('g_e_n_a@mail.ru')
+            ->assertMountedActionModalSee('Активен')
+            ->assertMountedActionModalSee('Сотрудник')
+            ->assertMountedActionModalSee('Создан')
+            ->assertMountedActionModalSee('Обновлён');
+    }
+
     public function test_admin_cannot_deactivate_self(): void
     {
         $admin = User::factory()->create([

@@ -9,11 +9,11 @@ use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
-use Filament\Infolists\Components\IconEntry;
-use Filament\Infolists\Components\TextEntry;
+use Filament\Infolists\Components\ViewEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
@@ -103,28 +103,14 @@ class UserResource extends Resource
             ->components([
                 Section::make('Сотрудник')
                     ->schema([
-                        TextEntry::make('id')
-                            ->label('ID')
-                            ->copyable(),
-                        TextEntry::make('name')
-                            ->label('Имя'),
-                        TextEntry::make('email')
-                            ->label('Email')
-                            ->copyable(),
-                        IconEntry::make('is_active')
-                            ->label('Активен')
-                            ->boolean(),
-                        IconEntry::make('is_admin')
-                            ->label('Администратор')
-                            ->boolean(),
-                        TextEntry::make('created_at')
-                            ->label('Создан')
-                            ->dateTime('d.m.Y H:i'),
-                        TextEntry::make('updated_at')
-                            ->label('Обновлён')
-                            ->dateTime('d.m.Y H:i'),
+                        ViewEntry::make('user_overview')
+                            ->hiddenLabel()
+                            ->view('filament.users.partials.user-overview')
+                            ->viewData(fn (User $record): array => static::buildUserOverviewViewData($record))
+                            ->columnSpanFull(),
                     ])
-                    ->columns(2),
+                    ->columns(1)
+                    ->columnSpanFull(),
             ]);
     }
 
@@ -180,7 +166,8 @@ class UserResource extends Resource
             ->emptyStateHeading('Сотрудники ещё не добавлены')
             ->emptyStateDescription('Добавьте первого сотрудника команды.')
             ->recordActions([
-                ViewAction::make(),
+                ViewAction::make()
+                    ->modalWidth(Width::FourExtraLarge),
                 EditAction::make()
                     ->beforeFormValidated(function (EditAction $action): void {
                         $record = $action->getRecord();
@@ -204,6 +191,34 @@ class UserResource extends Resource
     {
         return [
             'index' => ManageUsers::route('/'),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     name: string,
+     *     email: string,
+     *     idLabel: string,
+     *     activeLabel: string,
+     *     activeTone: string,
+     *     roleLabel: string,
+     *     roleTone: string,
+     *     createdAtLabel: string,
+     *     updatedAtLabel: string
+     * }
+     */
+    protected static function buildUserOverviewViewData(User $record): array
+    {
+        return [
+            'name' => $record->name,
+            'email' => $record->email,
+            'idLabel' => (string) $record->id,
+            'activeLabel' => $record->is_active ? 'Активен' : 'Отключён',
+            'activeTone' => $record->is_active ? 'success' : 'danger',
+            'roleLabel' => $record->is_admin ? 'Администратор' : 'Сотрудник',
+            'roleTone' => $record->is_admin ? 'warning' : 'neutral',
+            'createdAtLabel' => static::formatUserTimestamp($record->created_at),
+            'updatedAtLabel' => static::formatUserTimestamp($record->updated_at),
         ];
     }
 
@@ -235,5 +250,10 @@ class UserResource extends Resource
         if ($messages !== []) {
             throw ValidationException::withMessages($messages);
         }
+    }
+
+    protected static function formatUserTimestamp(mixed $timestamp): string
+    {
+        return $timestamp?->format('d.m.Y H:i') ?? '—';
     }
 }
