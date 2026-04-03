@@ -140,6 +140,8 @@ class SyncChatHistoryToBitrix24Action
                 entityType: 'contact',
                 entityId: (string) $contact->id,
             );
+
+            $this->copyChunkToDealTimeline($connection, $contact, $chunk, $batchUuid);
         }
 
         $contact->forceFill([
@@ -166,5 +168,79 @@ class SyncChatHistoryToBitrix24Action
         );
 
         return $contact->fresh();
+    }
+
+    private function copyChunkToDealTimeline(
+        mixed $connection,
+        Contact $contact,
+        mixed $chunk,
+        string $batchUuid,
+    ): void {
+        $bitrix24DealId = $this->normalizeEntityId($contact->bitrix24_deal_id);
+
+        if ($bitrix24DealId === null) {
+            return;
+        }
+
+        try {
+            $timelineEntryId = $this->exportHistoryChunkAction->copyToDeal($contact, $chunk);
+        } catch (Throwable $throwable) {
+            $this->logApiCallAction->handle(
+                direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+                operation: 'history_export_chunk_failed_deal',
+                status: Bitrix24SyncLog::STATUS_FAILED,
+                requestPayload: [
+                    'contact_id' => $contact->id,
+                    'bitrix24_contact_id' => $contact->bitrix24_contact_id,
+                    'bitrix24_deal_id' => $bitrix24DealId,
+                    'batch_uuid' => $batchUuid,
+                    'chunk_sequence' => $chunk->sequence,
+                    'chunk_total' => $chunk->total,
+                    'message_ids' => $chunk->messageIds(),
+                ],
+                connection: $connection,
+                errorMessage: $throwable->getMessage(),
+                entityType: 'deal',
+                entityId: $bitrix24DealId,
+            );
+
+            return;
+        }
+
+        $this->logApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'history_export_chunk_sent_deal',
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'contact_id' => $contact->id,
+                'bitrix24_contact_id' => $contact->bitrix24_contact_id,
+                'bitrix24_deal_id' => $bitrix24DealId,
+                'batch_uuid' => $batchUuid,
+                'chunk_sequence' => $chunk->sequence,
+                'chunk_total' => $chunk->total,
+                'message_ids' => $chunk->messageIds(),
+            ],
+            responsePayload: [
+                'bitrix24_timeline_entry_id' => $timelineEntryId,
+            ],
+            connection: $connection,
+            entityType: 'deal',
+            entityId: $bitrix24DealId,
+        );
+    }
+
+    private function normalizeEntityId(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        if ($normalized === '' || ! ctype_digit($normalized)) {
+            return null;
+        }
+
+        return $normalized;
     }
 }
