@@ -315,4 +315,9 @@ class Channel extends Model
     {
         return $this->hasMany(AutoReplyRule::class);
     }
+
+    public function scenarioBindings(): HasMany
+    {
+        return $this->hasMany(ScenarioChannelBinding::class);
+    }
 }
