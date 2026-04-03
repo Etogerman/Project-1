@@ -167,6 +167,12 @@ class BotWebhookController extends Controller
 
             $storedResult = $storeInboundMessageAction->handle($channel, $message);
             $storedMessage = $storedResult->message;
+
+            if ($this->isStoredMaxBotStartedEvent($channel, $storedMessage)) {
+                return response()->json([
+                    'ok' => true,
+                ]);
+            }
             $duplicateContext = [
                 'platform' => $channel->platform,
                 'provider_event_key' => $storedMessage->provider_event_key,
@@ -359,6 +365,13 @@ class BotWebhookController extends Controller
                 ),
             ],
         );
+    }
+
+    protected function isStoredMaxBotStartedEvent(Channel $channel, Message $storedMessage): bool
+    {
+        return $channel->platform === Channel::PLATFORM_MAX
+            && $storedMessage->direction === Message::DIRECTION_INBOUND
+            && data_get($storedMessage->raw_payload, 'update_type') === 'bot_started';
     }
 
     /**

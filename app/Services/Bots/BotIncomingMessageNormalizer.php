@@ -147,7 +147,13 @@ class BotIncomingMessageNormalizer
      */
     protected function normalizeMax(Channel $channel, array $payload): ?IncomingBotMessage
     {
-        if (($payload['update_type'] ?? null) !== 'message_created') {
+        $updateType = (string) ($payload['update_type'] ?? '');
+
+        if ($updateType === 'bot_started') {
+            return $this->normalizeMaxBotStarted($channel, $payload);
+        }
+
+        if ($updateType !== 'message_created') {
             return null;
         }
 
@@ -196,6 +202,39 @@ class BotIncomingMessageNormalizer
             receivedAt: $this->resolveReceivedAt([
                 data_get($message, 'timestamp'),
                 data_get($message, 'created_at'),
+                data_get($payload, 'timestamp'),
+                data_get($payload, 'created_at'),
+            ]),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function normalizeMaxBotStarted(Channel $channel, array $payload): ?IncomingBotMessage
+    {
+        $chatId = $this->normalizeExternalId($payload['chat_id'] ?? null);
+        $userId = $this->normalizeExternalId(data_get($payload, 'user.user_id'));
+
+        if (! filled($chatId) || ! filled($userId)) {
+            return null;
+        }
+
+        return new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $chatId,
+            externalUserId: $userId,
+            providerEventKey: $this->resolveMaxBotStartedEventKey($payload, $chatId, $userId),
+            externalMessageId: null,
+            externalUsername: $this->normalizeUsername(data_get($payload, 'user.username')),
+            contactName: $this->resolvePersonName(data_get($payload, 'user')),
+            text: null,
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: $payload,
+            receivedAt: $this->resolveReceivedAt([
                 data_get($payload, 'timestamp'),
                 data_get($payload, 'created_at'),
             ]),
@@ -264,6 +303,22 @@ class BotIncomingMessageNormalizer
                 ?? data_get($message, 'message_id')
                 ?? data_get($message, 'id')
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxBotStartedEventKey(array $payload, string $chatId, string $userId): string
+    {
+        $fingerprint = [
+            'chat_id' => $chatId,
+            'user_id' => $userId,
+            'payload' => $this->normalizeText($payload['payload'] ?? null),
+            'timestamp' => $this->normalizeExternalId($payload['timestamp'] ?? null),
+            'created_at' => $this->normalizeExternalId($payload['created_at'] ?? null),
+        ];
+
+        return 'max-bot-started:'.sha1((string) json_encode($fingerprint, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
     /**
