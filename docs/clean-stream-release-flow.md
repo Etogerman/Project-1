@@ -74,7 +74,9 @@
 Даже если deploy уходит автоматически в staging и production:
 
 - релиз не считается закрытым, пока не пройден post-deploy smoke-check
-- smoke-check проводится на staging и production отдельно
+- smoke-check проводится по реально рабочим окружениям текущего release flow
+- если staging отсутствует или не поддерживает нужный интеграционный контур,
+  production-only smoke считается корректным временным режимом
 - destructive maintenance-команды не запускаются просто ради проверки
 
 Подробный checklist см. в `docs/post-deploy-smoke.md`.
