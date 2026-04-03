@@ -57,9 +57,9 @@
         --ac-shadow-lg: 0 28px 78px -36px rgba(2, 6, 23, 0.92);
     }
 
-    .fi-admin-content-wide {
-        width: 100%;
-        max-width: min(92vw, 1820px);
+    .fi-main.fi-admin-content-wide {
+        width: min(90%, 2200px);
+        max-width: none;
     }
 
     .fi-main-sidebar {
@@ -1101,6 +1101,12 @@
 
         .ac-composer {
             position: static;
+        }
+    }
+
+    @media (max-width: 1280px) {
+        .fi-main.fi-admin-content-wide {
+            width: 100%;
         }
     }
 
