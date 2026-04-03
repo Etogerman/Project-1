@@ -337,6 +337,21 @@ class Contact extends Model
         return $this->hasMany(ContactDuplicateReview::class);
     }
 
+    public function openDuplicateReviews(): HasMany
+    {
+        return $this->duplicateReviews()
+            ->where('status', ContactDuplicateReview::STATUS_OPEN)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
+    }
+
+    public function recentMergedChildren(): HasMany
+    {
+        return $this->mergedChildren()
+            ->orderByDesc('merged_at')
+            ->orderByDesc('id');
+    }
+
     public function mergeLogsAsPrimary(): HasMany
     {
         return $this->hasMany(ContactMergeLog::class, 'primary_contact_id');

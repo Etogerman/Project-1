@@ -98,9 +98,27 @@ class ContactResource extends Resource
             ])
             ->with([
                 'assignedUser',
+                'mergedInto',
                 'primaryIdentity.channel',
                 'latestConversationMessage.channel',
                 'latestInboundMessage.channel',
+                'openDuplicateReviews' => fn (Builder $query): Builder => $query
+                    ->select([
+                        'id',
+                        'contact_id',
+                        'review_type',
+                        'phone_normalized',
+                        'candidate_root_contact_ids',
+                        'created_at',
+                    ]),
+                'recentMergedChildren' => fn (Builder $query): Builder => $query
+                    ->select([
+                        'id',
+                        'merged_into_contact_id',
+                        'merged_at',
+                        'merge_trigger_phone',
+                        'merge_reason',
+                    ]),
             ])
             ->withCount([
                 'duplicateReviews as open_duplicate_reviews_count' => fn (Builder $query): Builder => $query
@@ -794,21 +812,17 @@ class ContactResource extends Resource
      */
     protected static function buildDedupStatusViewData(Contact $record): array
     {
-        $record->loadMissing('mergedInto');
+        $record->loadMissing([
+            'mergedInto',
+            'openDuplicateReviews',
+            'recentMergedChildren',
+        ]);
         $openReviewsCount = static::resolveOpenDuplicateReviewsCount($record);
         $mergedChildrenCount = static::resolveMergedChildrenCount($record);
 
-        $openReviews = $record->duplicateReviews()
-            ->where('status', ContactDuplicateReview::STATUS_OPEN)
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->get();
+        $openReviews = $record->openDuplicateReviews;
 
-        $mergedChildren = $record->mergedChildren()
-            ->orderByDesc('merged_at')
-            ->orderByDesc('id')
-            ->limit(5)
-            ->get();
+        $mergedChildren = $record->recentMergedChildren->take(5);
 
         $dedupStatusLabel = $record->isMerged()
             ? 'Архивный дубль'
