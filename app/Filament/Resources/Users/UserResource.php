@@ -53,7 +53,8 @@ class UserResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Сотрудник')
+                Section::make('Основное')
+                    ->description('Базовые данные сотрудника для входа и отображения в админке.')
                     ->schema([
                         TextInput::make('name')
                             ->label('Имя')
@@ -67,16 +68,30 @@ class UserResource extends Resource
                             ->mutateStateForValidationUsing(fn (?string $state): ?string => static::normalizeEmail($state))
                             ->dehydrateStateUsing(fn (?string $state): ?string => static::normalizeEmail($state))
                             ->maxLength(255),
+                    ])
+                    ->columns(2),
+                Section::make('Доступ')
+                    ->description('Управление активностью учётной записи и административными правами.')
+                    ->schema([
                         Toggle::make('is_active')
                             ->label('Активен')
                             ->default(true)
                             ->disabled(fn (?User $record, string $operation): bool => $operation === 'edit' && auth()->id() === $record?->id)
+                            ->helperText('Отключённый сотрудник не сможет войти в панель.')
                             ->inline(false),
                         Toggle::make('is_admin')
                             ->label('Администратор')
                             ->default(false)
                             ->disabled(fn (?User $record, string $operation): bool => $operation === 'edit' && auth()->id() === $record?->id)
+                            ->helperText('Администратор управляет сотрудниками и настройками панели.')
                             ->inline(false),
+                    ])
+                    ->columns(2),
+                Section::make('Пароль')
+                    ->description(fn (string $operation): string => $operation === 'create'
+                        ? 'Укажите пароль для нового сотрудника.'
+                        : 'Оставьте поля пустыми, если пароль менять не нужно.')
+                    ->schema([
                         TextInput::make('password')
                             ->label('Пароль')
                             ->password()
@@ -133,15 +148,15 @@ class UserResource extends Resource
                     ->sortable()
                     ->copyable(),
                 TextColumn::make('is_active')
-                    ->label('Активен')
+                    ->label('Статус')
                     ->badge()
-                    ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключен')
+                    ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключён')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
                     ->sortable(),
                 TextColumn::make('is_admin')
-                    ->label('Админ')
+                    ->label('Роль')
                     ->badge()
-                    ->formatStateUsing(fn (bool $state): string => $state ? 'Да' : 'Нет')
+                    ->formatStateUsing(fn (bool $state): string => $state ? 'Администратор' : 'Сотрудник')
                     ->color(fn (bool $state): string => $state ? 'warning' : 'gray')
                     ->sortable(),
                 TextColumn::make('created_at')
@@ -165,10 +180,12 @@ class UserResource extends Resource
             ->defaultSort('created_at', 'desc')
             ->emptyStateHeading('Сотрудники ещё не добавлены')
             ->emptyStateDescription('Добавьте первого сотрудника команды.')
+            ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
                 ViewAction::make()
                     ->modalWidth(Width::FourExtraLarge),
                 EditAction::make()
+                    ->modalWidth(Width::FourExtraLarge)
                     ->beforeFormValidated(function (EditAction $action): void {
                         $record = $action->getRecord();
 
