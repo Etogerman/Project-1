@@ -246,6 +246,17 @@ return [
                     'decline' => env('BOT_WARMUP_TELEGRAM_BUTTON_DECLINE', 'Не интересно'),
                 ],
             ],
+            'max' => [
+                'text' => env(
+                    'BOT_WARMUP_MAX_TEXT',
+                    'Прежде чем перейти дальше, подскажите, вам интересно получить несколько коротких материалов?'
+                ),
+                'buttons' => [
+                    'positive' => env('BOT_WARMUP_MAX_BUTTON_POSITIVE', 'Да, интересно'),
+                    'later' => env('BOT_WARMUP_MAX_BUTTON_LATER', 'Позже'),
+                    'decline' => env('BOT_WARMUP_MAX_BUTTON_DECLINE', 'Не интересно'),
+                ],
+            ],
         ],
     ],
 

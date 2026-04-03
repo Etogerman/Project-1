@@ -16,6 +16,7 @@ return [
         'handler' => \App\Services\Scenarios\WarmupScenario::class,
         'platforms' => [
             Channel::PLATFORM_TELEGRAM,
+            Channel::PLATFORM_MAX,
         ],
     ],
 ];
