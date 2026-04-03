@@ -1,16 +1,46 @@
-<section data-role="contact-ownership-controls" class="ac-surface">
-    <div class="ac-inline-split">
-        <div class="ac-meta ac-meta--wide">
-            <p class="ac-meta__label">Ответственный</p>
-            <p class="ac-meta__value ac-meta__value--emphasis">{{ $assignedUserLabel }}</p>
+<section data-role="contact-ownership-controls" class="ac-surface ac-surface--secondary">
+    <div class="ac-surface__header ac-surface__header--centered">
+        <div class="ac-surface__title-group">
+            <p class="ac-surface__eyebrow">Работа с контактом</p>
+            <h3 class="ac-surface__title">Кто ведёт клиента</h3>
+            <p class="ac-surface__subtitle">
+                Здесь задаётся ответственный и определяется, можно ли оставлять автоответы включёнными.
+            </p>
+        </div>
+    </div>
 
-            <div class="ac-surface__divider">
-                <p class="ac-meta__label">Автоответы</p>
+    <div class="ac-card-grid ac-surface__divider">
+        <article class="ac-list-card ac-list-card--soft">
+            <p class="ac-list-card__title">Ответственный</p>
+            <p class="ac-list-card__body">Текущий оператор, который ведёт контакт.</p>
+
+            <div class="ac-list-card__section">
+                <p class="ac-meta__value ac-meta__value--emphasis">{{ $assignedUserLabel }}</p>
+            </div>
+        </article>
+
+        <article class="ac-list-card ac-list-card--soft">
+            <p class="ac-list-card__title">Автоответы</p>
+            <p class="ac-list-card__body">Можно оставить включёнными или полностью отключить для этого клиента.</p>
+
+            <div class="ac-list-card__section">
                 <span class="ac-pill" data-tone="{{ $autoReplyEnabled ? 'success' : 'danger' }}">
                     {{ $autoReplyStatusLabel }}
                 </span>
             </div>
+        </article>
+    </div>
+
+    @if (filled($ownershipHint))
+        <div class="ac-note-box ac-note-box--info ac-surface__divider">
+            <p class="ac-copy">{{ $ownershipHint }}</p>
         </div>
+    @endif
+
+    <div class="ac-actions ac-actions--between ac-surface__divider">
+        <p class="ac-note ac-actions__hint">
+            Основное действие здесь — назначить ответственного. Остальные действия меняют только режим сопровождения контакта.
+        </p>
 
         <div class="ac-button-group">
             <button
@@ -21,7 +51,7 @@
                 wire:target="openAssignContactDialog,saveMountedContactAssignee"
                 class="ac-button ac-button--primary"
             >
-                <span wire:loading.remove wire:target="openAssignContactDialog,saveMountedContactAssignee">Изменить</span>
+                <span wire:loading.remove wire:target="openAssignContactDialog,saveMountedContactAssignee">Изменить ответственного</span>
                 <span wire:loading wire:target="openAssignContactDialog,saveMountedContactAssignee">Открываем...</span>
             </button>
 
@@ -66,9 +96,9 @@
     </div>
 
     @if (filled($deleteBlockedReason))
-        <p data-role="contact-delete-blocked-reason" class="ac-note ac-note--danger ac-note--offset">
-            {{ $deleteBlockedReason }}
-        </p>
+        <div data-role="contact-delete-blocked-reason" class="ac-note-box ac-note-box--danger ac-note--offset">
+            <p class="ac-copy"><strong>Удаление недоступно.</strong> {{ $deleteBlockedReason }}</p>
+        </div>
     @endif
 
     @if ($this->showAssignContactDialog)
@@ -93,9 +123,9 @@
                     </div>
 
                     @if (filled($ownershipHint))
-                        <p class="ac-copy ac-copy--spaced">
-                            {{ $ownershipHint }}
-                        </p>
+                        <div class="ac-note-box ac-note-box--info ac-copy--spaced">
+                            <p class="ac-copy">{{ $ownershipHint }}</p>
+                        </div>
                     @endif
 
                     <label for="contact-assignee-select" class="ac-field-label">

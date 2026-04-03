@@ -1,6 +1,6 @@
 <section
     data-role="conversation-reply-form"
-    class="ac-surface ac-surface--emphasis"
+    class="ac-surface ac-surface--emphasis ac-composer"
 >
     @php
         $replyTextModel = $replyTextModel ?? 'dialogReplyText';
@@ -8,8 +8,21 @@
         $submitMethod = $submitMethod ?? 'sendDialogReply';
     @endphp
 
-    <div class="ac-surface__title-group">
-        <h3 class="ac-surface__title">Ответ</h3>
+    <div class="ac-inline-split">
+        <div class="ac-surface__title-group">
+            <p class="ac-surface__eyebrow">Ручной ответ</p>
+            <h3 class="ac-surface__title">Написать клиенту</h3>
+            <p class="ac-surface__subtitle">
+                Сообщение уйдёт в этот диалог и сразу сохранится в истории переписки.
+            </p>
+        </div>
+
+        <p class="ac-note">
+            До 2000 символов
+        </p>
+    </div>
+
+    <div class="ac-note-stack ac-surface__divider">
         @if (! $autoReplyEnabled)
             <p class="ac-note ac-note--warning">
                 Автоответы для этого контакта отключены. Это не влияет на ручной ответ.
@@ -21,20 +34,22 @@
             </p>
         @elseif ($canClaim)
             <p class="ac-note ac-note--warning">
-                Ответственный пока не выбран. Его можно выбрать выше, либо просто отправить сообщение — контакт закрепится за вами автоматически.
+                Ответственный пока не выбран. Если отправить сообщение сейчас, контакт автоматически закрепится за вами.
             </p>
         @endif
-    </div>
 
-    <div class="ac-surface__divider">
+        <label for="conversation-reply-textarea" class="ac-field-label">
+            Сообщение
+        </label>
         <textarea
+            id="conversation-reply-textarea"
             data-role="conversation-reply-textarea"
             wire:model.defer="{{ $replyTextModel }}"
-            rows="3"
+            rows="4"
             maxlength="2000"
-            placeholder="Введите текст ответа"
+            placeholder="Введите текст ответа клиенту"
             @disabled(! $canReply)
-            class="ac-textarea"
+            class="ac-textarea ac-textarea--composer"
         ></textarea>
 
         @error($replyErrorModel)
@@ -42,7 +57,11 @@
         @enderror
     </div>
 
-    <div class="ac-actions">
+    <div class="ac-actions ac-actions--between">
+        <p class="ac-note ac-actions__hint">
+            Ответ будет отправлен от имени выбранного канала и попадёт в историю этого диалога.
+        </p>
+
         <button
             data-role="conversation-reply-submit"
             type="button"

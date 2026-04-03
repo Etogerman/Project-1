@@ -1,59 +1,11 @@
-<section data-role="contact-profile" class="ac-surface">
-    <div class="ac-meta-grid">
-        <div class="ac-meta">
-            <p class="ac-meta__label">Имя</p>
-            <p class="ac-meta__value">{{ $firstName ?: '—' }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Фамилия</p>
-            <p class="ac-meta__value">{{ $lastName ?: '—' }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Пол</p>
-            <p class="ac-meta__value">{{ $genderLabel }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Возраст</p>
-            <p class="ac-meta__value">{{ $effectiveAgeLabel }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Возрастной диапазон</p>
-            <p class="ac-meta__value">{{ $ageRangeLabel }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Дата рождения</p>
-            <p class="ac-meta__value">{{ $birthDateLabel }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Страна</p>
-            <p class="ac-meta__value">{{ $country }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Город</p>
-            <p class="ac-meta__value">{{ $city }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Регион</p>
-            <p class="ac-meta__value">{{ $region }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Статус региона</p>
-            <p class="ac-meta__value">{{ $regionStatusLabel }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Расстояние до Москвы</p>
-            <p class="ac-meta__value">{{ $distanceToMoscowLabel }}</p>
-        </div>
-        <div class="ac-meta">
-            <p class="ac-meta__label">Статус расчёта</p>
-            <p class="ac-meta__value">{{ $distanceToMoscowStatusLabel }}</p>
-        </div>
-    </div>
-
-    <div class="ac-inline-split ac-surface__divider">
-        <div class="ac-meta">
-            <p class="ac-meta__label">Имя из мессенджера</p>
-            <p class="ac-meta__value ac-meta__value--muted">{{ $messengerName }}</p>
+<section data-role="contact-profile" class="ac-surface ac-surface--secondary">
+    <div class="ac-surface__header ac-surface__header--centered">
+        <div class="ac-surface__title-group">
+            <p class="ac-surface__eyebrow">Операторский профиль</p>
+            <h3 class="ac-surface__title">Что уже известно о контакте</h3>
+            <p class="ac-surface__subtitle">
+                Основные данные и локация собраны отдельно от имени, которое пришло из мессенджера.
+            </p>
         </div>
 
         <button
@@ -66,6 +18,75 @@
         >
             Изменить профиль
         </button>
+    </div>
+
+    <div class="ac-card-grid ac-surface__divider">
+        <article class="ac-list-card ac-list-card--soft">
+            <p class="ac-list-card__title">Основное</p>
+
+            <div class="ac-meta-grid ac-meta-grid--compact ac-list-card__section">
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Имя</p>
+                    <p class="ac-meta__value">{{ $firstName ?: '—' }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Фамилия</p>
+                    <p class="ac-meta__value">{{ $lastName ?: '—' }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Пол</p>
+                    <p class="ac-meta__value">{{ $genderLabel }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Возраст</p>
+                    <p class="ac-meta__value">{{ $effectiveAgeLabel }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Возрастной диапазон</p>
+                    <p class="ac-meta__value">{{ $ageRangeLabel }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Дата рождения</p>
+                    <p class="ac-meta__value">{{ $birthDateLabel }}</p>
+                </div>
+            </div>
+        </article>
+
+        <article class="ac-list-card ac-list-card--soft">
+            <p class="ac-list-card__title">Локация и квалификация</p>
+
+            <div class="ac-meta-grid ac-meta-grid--compact ac-list-card__section">
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Страна</p>
+                    <p class="ac-meta__value">{{ $country }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Город</p>
+                    <p class="ac-meta__value">{{ $city }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Регион</p>
+                    <p class="ac-meta__value">{{ $region }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Статус региона</p>
+                    <p class="ac-meta__value">{{ $regionStatusLabel }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Расстояние до Москвы</p>
+                    <p class="ac-meta__value">{{ $distanceToMoscowLabel }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Статус расчёта</p>
+                    <p class="ac-meta__value">{{ $distanceToMoscowStatusLabel }}</p>
+                </div>
+            </div>
+        </article>
+    </div>
+
+    <div class="ac-note-box ac-note-box--info ac-surface__divider">
+        <p class="ac-meta__label">Имя из мессенджера</p>
+        <p class="ac-meta__value ac-meta__value--muted">{{ $messengerName }}</p>
     </div>
 
     @if ($this->showEditProfileDialog)

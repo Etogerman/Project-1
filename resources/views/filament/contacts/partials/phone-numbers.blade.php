@@ -1,14 +1,24 @@
-<section data-role="contact-phone-numbers" class="ac-surface">
+<section data-role="contact-phone-numbers" class="ac-surface ac-surface--secondary">
+    <div class="ac-surface__header ac-surface__header--centered">
+        <div class="ac-surface__title-group">
+            <p class="ac-surface__eyebrow">Телефоны</p>
+            <h3 class="ac-surface__title">Номера контакта</h3>
+            <p class="ac-surface__subtitle">
+                Основной номер отмечен отдельно. Остальные остаются в карточке как дополнительные.
+            </p>
+        </div>
+    </div>
+
     @if ($phoneNumbers === [])
-        <p class="ac-copy">
-            Номера телефонов ещё не сохранены.
-        </p>
+        <div class="ac-empty-state ac-surface__divider">
+            Номера телефонов для этого контакта ещё не сохранены.
+        </div>
     @else
-        <div class="ac-list-stack">
+        <div class="ac-list-stack ac-surface__divider">
             @foreach ($phoneNumbers as $phoneNumber)
-                <div class="ac-list-card">
+                <article class="ac-list-card ac-list-card--soft">
                     <div class="ac-inline-split">
-                        <div>
+                        <div class="ac-surface__title-group">
                             <p class="ac-list-card__title">
                                 {{ $phoneNumber['phone'] }}
                             </p>
@@ -17,35 +27,35 @@
                             </p>
                         </div>
 
-                        <div class="ac-button-group ac-button-group--end">
-                            <span class="ac-pill" data-tone="{{ $phoneNumber['is_primary'] ? 'success' : 'neutral' }}">
-                                {{ $phoneNumber['is_primary'] ? 'Основной' : 'Дополнительный' }}
-                            </span>
-
-                            <button
-                                data-role="contact-edit-phone"
-                                type="button"
-                                wire:click="openEditPhoneDialog({{ $phoneNumber['id'] }})"
-                                wire:loading.attr="disabled"
-                                wire:target="openEditPhoneDialog,saveMountedContactPhone"
-                                class="ac-button ac-button--primary-soft"
-                            >
-                                Изменить
-                            </button>
-
-                            <button
-                                data-role="contact-delete-phone"
-                                type="button"
-                                wire:click="openDeletePhoneDialog({{ $phoneNumber['id'] }})"
-                                wire:loading.attr="disabled"
-                                wire:target="openDeletePhoneDialog,deleteMountedContactPhone"
-                                class="ac-button ac-button--danger-soft"
-                            >
-                                Удалить
-                            </button>
-                        </div>
+                        <span class="ac-pill" data-tone="{{ $phoneNumber['is_primary'] ? 'success' : 'neutral' }}">
+                            {{ $phoneNumber['is_primary'] ? 'Основной' : 'Дополнительный' }}
+                        </span>
                     </div>
-                </div>
+
+                    <div class="ac-actions ac-surface__divider">
+                        <button
+                            data-role="contact-edit-phone"
+                            type="button"
+                            wire:click="openEditPhoneDialog({{ $phoneNumber['id'] }})"
+                            wire:loading.attr="disabled"
+                            wire:target="openEditPhoneDialog,saveMountedContactPhone"
+                            class="ac-button ac-button--primary-soft"
+                        >
+                            Изменить
+                        </button>
+
+                        <button
+                            data-role="contact-delete-phone"
+                            type="button"
+                            wire:click="openDeletePhoneDialog({{ $phoneNumber['id'] }})"
+                            wire:loading.attr="disabled"
+                            wire:target="openDeletePhoneDialog,deleteMountedContactPhone"
+                            class="ac-button ac-button--danger-soft"
+                        >
+                            Удалить
+                        </button>
+                    </div>
+                </article>
             @endforeach
         </div>
     @endif
