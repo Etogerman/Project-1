@@ -387,7 +387,7 @@ class ManageContacts extends ManageRecords
 
     public function openDeletePhoneDialog(int|string $phoneId): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось открыть удаление номера')) {
+        if ($this->abortIfContactPhoneDeleteForbidden('Не удалось открыть удаление номера')) {
             return;
         }
 
@@ -482,7 +482,7 @@ class ManageContacts extends ManageRecords
 
     public function deleteMountedContactPhone(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось удалить номер')) {
+        if ($this->abortIfContactPhoneDeleteForbidden('Не удалось удалить номер')) {
             return;
         }
 
@@ -777,6 +777,21 @@ class ManageContacts extends ManageRecords
         return true;
     }
 
+    protected function abortIfContactPhoneDeleteForbidden(string $title): bool
+    {
+        if ($this->canCurrentEmployeeDeleteExistingContactPhones()) {
+            return false;
+        }
+
+        Notification::make()
+            ->danger()
+            ->title($title)
+            ->body('Это действие недоступно текущему сотруднику.')
+            ->send();
+
+        return true;
+    }
+
     protected function canCurrentEmployeeManageContactMutations(): bool
     {
         $employee = auth()->user();
@@ -807,5 +822,13 @@ class ManageContacts extends ManageRecords
 
         return $employee instanceof User
             && $employee->canEditExistingContactPhones();
+    }
+
+    protected function canCurrentEmployeeDeleteExistingContactPhones(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canDeleteExistingContactPhones();
     }
 }

@@ -1135,7 +1135,7 @@ class ContactResource extends Resource
                 ])
                 ->all(),
             'canEditPhones' => static::canCurrentUserEditExistingContactPhones(),
-            'canDeletePhones' => static::canCurrentUserManageContactMutations(),
+            'canDeletePhones' => static::canCurrentUserDeleteExistingContactPhones(),
         ];
     }
 
@@ -1251,6 +1251,11 @@ class ContactResource extends Resource
     protected static function canCurrentUserEditExistingContactPhones(): bool
     {
         return static::currentUser()?->canEditExistingContactPhones() ?? false;
+    }
+
+    protected static function canCurrentUserDeleteExistingContactPhones(): bool
+    {
+        return static::currentUser()?->canDeleteExistingContactPhones() ?? false;
     }
 
     protected static function canCurrentUserManageContactMutations(): bool
