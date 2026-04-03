@@ -224,6 +224,7 @@ class BotIncomingMessageNormalizer
     {
         $chatId = $this->normalizeExternalId($payload['chat_id'] ?? null);
         $userId = $this->normalizeExternalId(data_get($payload, 'user.user_id'));
+        $messageParameter = $this->normalizeText($payload['payload'] ?? null);
 
         if (! filled($chatId) || ! filled($userId)) {
             return null;
@@ -247,6 +248,7 @@ class BotIncomingMessageNormalizer
                 data_get($payload, 'timestamp'),
                 data_get($payload, 'created_at'),
             ]),
+            messageParameter: $messageParameter,
         );
     }
 

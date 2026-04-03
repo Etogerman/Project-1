@@ -286,7 +286,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('Герман', $message->contactName);
         $this->assertNull($message->externalMessageId);
         $this->assertNull($message->text);
-        $this->assertNull($message->messageParameter);
+        $this->assertSame('promo_123', $message->messageParameter);
         $this->assertSame('bot_started', data_get($message->rawPayload, 'update_type'));
         $this->assertStringStartsWith('max-bot-started:', $message->providerEventKey ?? '');
         $this->assertSame('2026-04-03 07:00:00', $message->receivedAt->utc()->format('Y-m-d H:i:s'));
@@ -314,6 +314,33 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
         $this->assertSame('701', $message->externalChatId);
         $this->assertSame('501', $message->externalUserId);
+        $this->assertNull($message->text);
+        $this->assertNull($message->messageParameter);
+        $this->assertStringStartsWith('max-bot-started:', $message->providerEventKey ?? '');
+    }
+
+    public function test_max_bot_started_payload_with_blank_deep_link_payload_does_not_produce_message_parameter(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'bot_started',
+            'chat_id' => 702,
+            'payload' => '   ',
+            'timestamp' => '2026-04-03T10:06:00+03:00',
+            'user' => [
+                'user_id' => 502,
+                'is_bot' => false,
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('702', $message->externalChatId);
+        $this->assertSame('502', $message->externalUserId);
         $this->assertNull($message->text);
         $this->assertNull($message->messageParameter);
         $this->assertStringStartsWith('max-bot-started:', $message->providerEventKey ?? '');
