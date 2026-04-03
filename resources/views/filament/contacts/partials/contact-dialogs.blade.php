@@ -1,53 +1,32 @@
 <section
     data-role="contact-dialogs"
-    style="border: 1px solid #d1d5db; border-radius: 16px; background: #ffffff; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05); padding: 1rem;"
+    class="ac-surface"
 >
     @if ($dialogs === [])
-        <div
-            data-role="contact-dialogs-empty"
-            style="border: 1px dashed #d1d5db; border-radius: 14px; background: #ffffff; padding: 1.2rem 1rem; text-align: center; font-size: 0.9rem; color: #6b7280;"
-        >
+        <div data-role="contact-dialogs-empty" class="ac-empty-state">
             Диалоги ещё не появились.
         </div>
     @else
-        <div style="display: grid; gap: 0.75rem;">
+        <div class="ac-list-stack">
             @foreach ($dialogs as $dialog)
-                @php
-                    $routeTone = match ($dialog['route_status_tone']) {
-                        'success' => ['background' => '#dcfce7', 'color' => '#166534'],
-                        'warning' => ['background' => '#fef3c7', 'color' => '#92400e'],
-                        default => ['background' => '#f3f4f6', 'color' => '#4b5563'],
-                    };
-                    $previewSenderTone = match ($dialog['preview_sender_tone']) {
-                        'success' => ['background' => '#dcfce7', 'color' => '#166534'],
-                        'warning' => ['background' => '#fef3c7', 'color' => '#92400e'],
-                        'primary' => ['background' => '#dbeafe', 'color' => '#1d4ed8'],
-                        'info' => ['background' => '#e0f2fe', 'color' => '#0369a1'],
-                        default => ['background' => '#f3f4f6', 'color' => '#4b5563'],
-                    };
-                @endphp
-
                 <a
                     href="{{ $dialog['url'] }}"
                     data-role="dialog-card-link"
                     data-dialog-id="{{ $dialog['id'] }}"
-                    style="display: block; border: 1px solid #e5e7eb; border-radius: 14px; background: #ffffff; padding: 0.9rem 1rem; text-decoration: none; color: inherit; cursor: pointer;"
+                    class="ac-link-reset ac-list-card"
                 >
-                    <div
-                        data-role="contact-dialog"
-                        style="display: grid; gap: 0.85rem;"
-                    >
-                        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;">
-                            <div style="display: grid; gap: 0.3rem;">
+                    <div data-role="contact-dialog" class="ac-panel-stack">
+                        <div class="ac-surface__header">
+                            <div class="ac-surface__title-group">
                                 <p
                                     data-role="dialog-channel"
-                                    style="margin: 0; font-size: 0.95rem; font-weight: 700; color: #111827;"
+                                    class="ac-list-card__title"
                                 >
                                     {{ $dialog['channel_label'] }}
                                 </p>
                                 <p
                                     data-role="dialog-route-identity"
-                                    style="margin: 0; font-size: 0.82rem; color: #6b7280;"
+                                    class="ac-surface__subtitle"
                                 >
                                     Route source: {{ $dialog['route_identity_label'] }}
                                 </p>
@@ -56,66 +35,64 @@
                             <span
                                 data-role="dialog-route-status"
                                 data-tone="{{ $dialog['route_status_tone'] }}"
-                                style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; padding: 0.35rem 0.7rem; font-size: 0.75rem; font-weight: 700; background: {{ $routeTone['background'] }}; color: {{ $routeTone['color'] }};"
+                                class="ac-pill"
                             >
                                 {{ $dialog['route_status_label'] }}
                             </span>
                         </div>
 
-                        <div
-                            data-role="dialog-preview"
-                            style="border: 1px solid #e5e7eb; border-radius: 12px; background: #f8fafc; padding: 0.75rem 0.85rem;"
-                        >
-                            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap;">
+                        <div data-role="dialog-preview" class="ac-preview-card">
+                            <div class="ac-surface__header">
                                 @if (filled($dialog['preview_sender_label']))
                                     <span
                                         data-role="dialog-preview-sender"
-                                        style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; padding: 0.28rem 0.6rem; font-size: 0.75rem; font-weight: 700; background: {{ $previewSenderTone['background'] }}; color: {{ $previewSenderTone['color'] }};"
+                                        class="ac-pill"
+                                        data-tone="{{ $dialog['preview_sender_tone'] }}"
                                     >
                                         {{ $dialog['preview_sender_label'] }}
                                     </span>
                                 @endif
 
-                                <span style="font-size: 0.78rem; color: #6b7280;">
+                                <span class="ac-note">
                                     {{ $dialog['last_message_label'] }}
                                 </span>
                             </div>
 
-                            <p style="margin: 0.6rem 0 0; color: #111827; font-size: 0.92rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                            <p class="ac-preview-card__body">
                                 {{ $dialog['preview_text'] }}
                             </p>
                         </div>
 
-                        <div style="display: grid; gap: 0.85rem; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));">
-                            <div>
-                                <p style="margin: 0 0 0.25rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+                        <div class="ac-meta-grid">
+                            <div class="ac-meta">
+                                <p class="ac-meta__label">
                                     Телефон канала
                                 </p>
-                                <p data-role="dialog-phone" style="margin: 0; font-size: 0.92rem; color: #111827;">
+                                <p data-role="dialog-phone" class="ac-meta__value">
                                     {{ $dialog['phone_label'] }}
                                 </p>
                             </div>
-                            <div>
-                                <p style="margin: 0 0 0.25rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+                            <div class="ac-meta">
+                                <p class="ac-meta__label">
                                     Chat ID
                                 </p>
-                                <p data-role="dialog-chat-id" style="margin: 0; font-size: 0.92rem; color: #111827;">
+                                <p data-role="dialog-chat-id" class="ac-meta__value">
                                     {{ $dialog['external_chat_id_label'] }}
                                 </p>
                             </div>
-                            <div>
-                                <p style="margin: 0 0 0.25rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+                            <div class="ac-meta">
+                                <p class="ac-meta__label">
                                     Последнее входящее
                                 </p>
-                                <p style="margin: 0; font-size: 0.92rem; color: #111827;">
+                                <p class="ac-meta__value">
                                     {{ $dialog['last_inbound_label'] }}
                                 </p>
                             </div>
-                            <div>
-                                <p style="margin: 0 0 0.25rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+                            <div class="ac-meta">
+                                <p class="ac-meta__label">
                                     Последнее исходящее
                                 </p>
-                                <p style="margin: 0; font-size: 0.92rem; color: #111827;">
+                                <p class="ac-meta__value">
                                     {{ $dialog['last_outbound_label'] }}
                                 </p>
                             </div>

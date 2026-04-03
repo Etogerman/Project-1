@@ -1,32 +1,32 @@
 <section
     data-role="contact-dedup-status"
-    style="border: 1px solid #d1d5db; border-radius: 16px; background: #ffffff; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05); padding: 1rem;"
+    class="ac-surface"
 >
-    <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
-        <div>
-            <p style="margin: 0 0 0.35rem; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+    <div class="ac-inline-split">
+        <div class="ac-meta">
+            <p class="ac-meta__label">
                 Статус
             </p>
-            <p style="margin: 0; font-size: 1rem; font-weight: 700; color: {{ $dedupStatusTone === 'warning' ? '#b45309' : ($dedupStatusTone === 'info' ? '#1d4ed8' : '#374151') }};">
+            <span class="ac-pill" data-tone="{{ $dedupStatusTone }}">
                 {{ $dedupStatusLabel }}
-            </p>
+            </span>
         </div>
 
         @if ($isMerged)
-            <div style="min-width: 18rem; flex: 1 1 22rem; text-align: right;">
-                <p style="margin: 0 0 0.35rem; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+            <div class="ac-meta ac-right-aligned">
+                <p class="ac-meta__label">
                     Основной контакт
                 </p>
-                <p style="margin: 0; font-size: 0.95rem; font-weight: 700; color: #111827;">
+                <p class="ac-meta__value ac-meta__value--emphasis">
                     {{ $rootContactLabel }}
                 </p>
             </div>
         @elseif ($mergedChildrenCount > 0)
-            <div style="min-width: 18rem; flex: 1 1 22rem; text-align: right;">
-                <p style="margin: 0 0 0.35rem; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+            <div class="ac-meta ac-right-aligned">
+                <p class="ac-meta__label">
                     Склеено дублей
                 </p>
-                <p style="margin: 0; font-size: 0.95rem; font-weight: 700; color: #111827;">
+                <p class="ac-meta__value ac-meta__value--emphasis">
                     {{ $mergedChildrenCount }}
                 </p>
             </div>
@@ -34,41 +34,41 @@
     </div>
 
     @if ($isMerged)
-        <div style="margin-top: 1rem; display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));">
-            <div>
-                <p style="margin: 0 0 0.25rem; font-size: 0.8125rem; color: #6b7280;">Склеен</p>
-                <p style="margin: 0; font-size: 0.95rem; font-weight: 600; color: #111827;">{{ $mergedAtLabel }}</p>
+        <div class="ac-meta-grid ac-surface__divider">
+            <div class="ac-meta">
+                <p class="ac-meta__label">Склеен</p>
+                <p class="ac-meta__value ac-meta__value--emphasis">{{ $mergedAtLabel }}</p>
             </div>
-            <div>
-                <p style="margin: 0 0 0.25rem; font-size: 0.8125rem; color: #6b7280;">Причина</p>
-                <p style="margin: 0; font-size: 0.95rem; font-weight: 600; color: #111827;">{{ $mergeReasonLabel }}</p>
+            <div class="ac-meta">
+                <p class="ac-meta__label">Причина</p>
+                <p class="ac-meta__value ac-meta__value--emphasis">{{ $mergeReasonLabel }}</p>
             </div>
-            <div>
-                <p style="margin: 0 0 0.25rem; font-size: 0.8125rem; color: #6b7280;">Триггерный телефон</p>
-                <p style="margin: 0; font-size: 0.95rem; font-weight: 600; color: #111827;">{{ $mergeTriggerPhone }}</p>
+            <div class="ac-meta">
+                <p class="ac-meta__label">Триггерный телефон</p>
+                <p class="ac-meta__value ac-meta__value--emphasis">{{ $mergeTriggerPhone }}</p>
             </div>
         </div>
     @endif
 
     @if ($openReviewsCount > 0)
-        <div style="margin-top: 1rem;">
-            <p style="margin: 0 0 0.75rem; font-size: 0.875rem; font-weight: 700; color: #111827;">
+        <div class="ac-surface__divider">
+            <p class="ac-list-card__title ac-title-with-gap">
                 Открытые проверки: {{ $openReviewsCount }}
             </p>
 
-            <div style="display: grid; gap: 0.75rem;">
+            <div class="ac-list-stack">
                 @foreach ($openReviews as $review)
-                    <article style="border: 1px solid #fde68a; border-radius: 12px; background: #fffbeb; padding: 0.85rem 0.95rem;">
-                        <p style="margin: 0 0 0.4rem; font-size: 0.95rem; font-weight: 700; color: #92400e;">
+                    <article class="ac-list-card ac-list-card--warning">
+                        <p class="ac-list-card__title">
                             {{ $review['typeLabel'] }}
                         </p>
-                        <p style="margin: 0; font-size: 0.875rem; color: #4b5563;">
+                        <p class="ac-list-card__body">
                             Телефон: <strong>{{ $review['phoneLabel'] }}</strong>
                         </p>
-                        <p style="margin: 0.2rem 0 0; font-size: 0.875rem; color: #4b5563;">
+                        <p class="ac-list-card__body">
                             Кандидаты: {{ $review['candidateRootsLabel'] }}
                         </p>
-                        <p style="margin: 0.2rem 0 0; font-size: 0.8125rem; color: #6b7280;">
+                        <p class="ac-note">
                             Создано: {{ $review['createdAtLabel'] }}
                         </p>
                     </article>
@@ -78,24 +78,24 @@
     @endif
 
     @if ((! $isMerged) && ($mergedChildrenCount > 0))
-        <div style="margin-top: 1rem;">
-            <p style="margin: 0 0 0.75rem; font-size: 0.875rem; font-weight: 700; color: #111827;">
+        <div class="ac-surface__divider">
+            <p class="ac-list-card__title ac-title-with-gap">
                 Последние склейки
             </p>
 
-            <div style="display: grid; gap: 0.75rem;">
+            <div class="ac-list-stack">
                 @foreach ($mergedChildren as $mergedChild)
-                    <article style="border: 1px solid #d1d5db; border-radius: 12px; background: #f9fafb; padding: 0.85rem 0.95rem;">
-                        <p style="margin: 0 0 0.4rem; font-size: 0.95rem; font-weight: 700; color: #111827;">
+                    <article class="ac-list-card">
+                        <p class="ac-list-card__title">
                             Дубль #{{ $mergedChild['id'] }}
                         </p>
-                        <p style="margin: 0; font-size: 0.875rem; color: #4b5563;">
+                        <p class="ac-list-card__body">
                             Склеен: {{ $mergedChild['mergedAtLabel'] }}
                         </p>
-                        <p style="margin: 0.2rem 0 0; font-size: 0.875rem; color: #4b5563;">
+                        <p class="ac-list-card__body">
                             Причина: {{ $mergedChild['reasonLabel'] }}
                         </p>
-                        <p style="margin: 0.2rem 0 0; font-size: 0.875rem; color: #4b5563;">
+                        <p class="ac-list-card__body">
                             Триггерный телефон: {{ $mergedChild['triggerPhone'] }}
                         </p>
                     </article>

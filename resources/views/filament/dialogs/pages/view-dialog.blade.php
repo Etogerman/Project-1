@@ -1,23 +1,12 @@
 <x-filament-panels::page>
-    @php
-        $routeTone = match ($dialogHeader['route_status_tone']) {
-            'success' => ['background' => '#dcfce7', 'color' => '#166534'],
-            'warning' => ['background' => '#fef3c7', 'color' => '#92400e'],
-            default => ['background' => '#f3f4f6', 'color' => '#4b5563'],
-        };
-    @endphp
-
-    <div data-role="dialog-page" style="display: grid; gap: 1rem;">
-        <section
-            data-role="dialog-header"
-            style="border: 1px solid #d1d5db; border-radius: 16px; background: #ffffff; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05); padding: 1rem;"
-        >
-            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;">
-                <div style="display: grid; gap: 0.35rem;">
-                    <h2 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #111827;">
+    <div data-role="dialog-page" class="ac-panel-stack">
+        <section data-role="dialog-header" class="ac-surface">
+            <div class="ac-surface__header">
+                <div class="ac-surface__title-group">
+                    <h2 class="ac-surface__title">
                         {{ $dialogHeader['channel_label'] }}
                     </h2>
-                    <p style="margin: 0; font-size: 0.88rem; color: #6b7280;">
+                    <p class="ac-surface__subtitle">
                         Платформа: {{ $dialogHeader['platform_label'] }}
                     </p>
                 </div>
@@ -25,60 +14,57 @@
                 <span
                     data-role="dialog-route-status"
                     data-tone="{{ $dialogHeader['route_status_tone'] }}"
-                    style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; padding: 0.35rem 0.7rem; font-size: 0.75rem; font-weight: 700; background: {{ $routeTone['background'] }}; color: {{ $routeTone['color'] }};"
+                    class="ac-pill"
                 >
                     {{ $dialogHeader['route_status_label'] }}
                 </span>
             </div>
 
-            <div style="display: grid; gap: 0.85rem; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); margin-top: 0.9rem;">
-                <div>
-                    <p style="margin: 0 0 0.25rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+            <div class="ac-meta-grid ac-surface__divider">
+                <div class="ac-meta">
+                    <p class="ac-meta__label">
                         Route source
                     </p>
-                    <p style="margin: 0; font-size: 0.92rem; color: #111827;">
+                    <p class="ac-meta__value">
                         {{ $dialogHeader['route_source_label'] }}
                     </p>
                 </div>
-                <div>
-                    <p style="margin: 0 0 0.25rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+                <div class="ac-meta">
+                    <p class="ac-meta__label">
                         Chat ID
                     </p>
-                    <p style="margin: 0; font-size: 0.92rem; color: #111827;">
+                    <p class="ac-meta__value">
                         {{ $dialogHeader['external_chat_id_label'] }}
                     </p>
                 </div>
-                <div>
-                    <p style="margin: 0 0 0.25rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.01em; color: #6b7280; text-transform: uppercase;">
+                <div class="ac-meta">
+                    <p class="ac-meta__label">
                         Телефон канала
                     </p>
-                    <p style="margin: 0; font-size: 0.92rem; color: #111827;">
+                    <p class="ac-meta__value">
                         {{ $dialogHeader['phone_label'] }}
                     </p>
                 </div>
             </div>
         </section>
 
-        <section
-            data-role="dialog-contact-summary"
-            style="border: 1px solid #d1d5db; border-radius: 16px; background: #ffffff; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05); padding: 1rem;"
-        >
-            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;">
-                <div style="display: grid; gap: 0.3rem;">
-                    <h3 style="margin: 0; font-size: 1rem; font-weight: 700; color: #111827;">
+        <section data-role="dialog-contact-summary" class="ac-surface">
+            <div class="ac-surface__header">
+                <div class="ac-surface__title-group">
+                    <h3 class="ac-surface__title">
                         {{ $contactSummary['contact_label'] }}
                     </h3>
-                    <p style="margin: 0; font-size: 0.88rem; color: #6b7280;">
+                    <p class="ac-surface__subtitle">
                         Ответственный: {{ $contactSummary['assigned_user_label'] }}
                     </p>
-                    <p style="margin: 0; font-size: 0.88rem; color: #6b7280;">
+                    <p class="ac-surface__subtitle">
                         Телефон: {{ $contactSummary['phone_label'] }}
                     </p>
                 </div>
 
                 <a
                     href="{{ $contactUrl }}"
-                    style="display: inline-flex; align-items: center; justify-content: center; border: 1px solid #cbd5e1; border-radius: 999px; background: #ffffff; padding: 0.5rem 0.85rem; font-size: 0.8rem; font-weight: 700; color: #0f172a; text-decoration: none;"
+                    class="ac-button ac-button--secondary"
                 >
                     Открыть контакт
                 </a>
@@ -128,14 +114,14 @@
             x-init="$nextTick(() => { if (! initialized) { scrollToBottom(); initialized = true; } })"
             x-on:dialog-history-older-messages-loaded.window="$nextTick(() => restorePositionAfterPrepend())"
             x-on:dialog-reply-sent.window="$nextTick(() => scrollToBottom())"
-            style="border: 1px solid #d1d5db; border-radius: 16px; background: #ffffff; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05); padding: 1rem;"
+            class="ac-surface"
         >
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.85rem; flex-wrap: wrap;">
+            <div class="ac-surface__header">
                 <div>
-                    <h3 style="margin: 0; font-size: 1rem; font-weight: 700; color: #111827;">
+                    <h3 class="ac-surface__title">
                         История сообщений
                     </h3>
-                    <p style="margin: 0.2rem 0 0; font-size: 0.82rem; color: #6b7280;">
+                    <p class="ac-surface__subtitle">
                         Только сообщения этого диалога.
                     </p>
                 </div>
@@ -148,7 +134,7 @@
                         wire:click="loadOlderMessages"
                         wire:loading.attr="disabled"
                         wire:target="loadOlderMessages"
-                        style="display: inline-flex; align-items: center; justify-content: center; border: 1px solid #cbd5e1; border-radius: 999px; background: #ffffff; padding: 0.5rem 0.85rem; font-size: 0.8rem; font-weight: 700; color: #0f172a;"
+                        class="ac-button ac-button--secondary"
                     >
                         <span wire:loading.remove wire:target="loadOlderMessages">Загрузить более ранние сообщения</span>
                         <span wire:loading wire:target="loadOlderMessages">Загружаем…</span>

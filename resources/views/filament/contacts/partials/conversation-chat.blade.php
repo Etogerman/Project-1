@@ -1,25 +1,17 @@
 <div
     data-role="conversation-thread"
-    style="max-height: 36rem; overflow-y: auto; border: 1px solid #d1d5db; border-radius: 18px; background: #f8fafc; padding: 0.75rem;"
+    class="ac-thread"
 >
     @if ($messages === [])
-        <div
-            data-role="conversation-empty"
-            style="border: 1px dashed #d1d5db; border-radius: 14px; background: #ffffff; padding: 1.5rem 1rem; text-align: center; font-size: 0.875rem; color: #6b7280;"
-        >
+        <div data-role="conversation-empty" class="ac-empty-state">
             Сообщений ещё не было.
         </div>
     @else
         @php($previousDateKey = null)
         @foreach ($messages as $message)
             @if ($previousDateKey !== $message['date_key'])
-                <div
-                    data-role="conversation-date-separator"
-                    style="display: flex; justify-content: center; padding: 0.25rem 0 0.75rem;"
-                >
-                    <span
-                        style="display: inline-flex; align-items: center; justify-content: center; border: 1px solid #d1d5db; border-radius: 999px; background: #ffffff; padding: 0.3rem 0.75rem; font-size: 0.75rem; font-weight: 600; color: #6b7280;"
-                    >
+                <div data-role="conversation-date-separator" class="ac-thread__date">
+                    <span class="ac-thread__date-pill">
                         {{ $message['date_label'] }}
                     </span>
                 </div>
@@ -30,32 +22,18 @@
                 data-role="conversation-message"
                 data-direction="{{ $message['direction'] }}"
                 data-kind="{{ $message['kind'] }}"
-                style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-bottom: 0.5rem;"
+                @class([
+                    'ac-message',
+                    'ac-message--outbound' => $message['is_outbound'],
+                    'ac-message--inbound' => ! $message['is_outbound'],
+                ])
             >
-                <article
-                    style="
-                        display: inline-flex;
-                        flex-direction: column;
-                        align-items: flex-start;
-                        width: auto;
-                        max-width: 58%;
-                        border: 1px solid {{ $message['is_outbound'] ? '#bbf7d0' : '#e5e7eb' }};
-                        border-radius: 14px;
-                        border-top-right-radius: {{ $message['is_outbound'] ? '4px' : '14px' }};
-                        border-top-left-radius: {{ $message['is_outbound'] ? '14px' : '4px' }};
-                        background: {{ $message['is_outbound'] ? '#ecfdf5' : '#ffffff' }};
-                        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-                        padding: 0.45rem 0.65rem;
-                        text-align: left;
-                    "
-                >
-                    <div
-                        data-role="conversation-meta"
-                        style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.35rem;"
-                    >
+                <article class="ac-message__bubble">
+                    <div data-role="conversation-meta" class="ac-message__meta">
                         <span
                             data-role="conversation-channel"
-                            style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: {{ $message['is_outbound'] ? '#d1fae5' : '#e5e7eb' }}; color: {{ $message['is_outbound'] ? '#065f46' : '#4b5563' }}; padding: 0.2rem 0.55rem; font-size: 0.68rem; font-weight: 700;"
+                            class="ac-pill"
+                            data-tone="{{ $message['is_outbound'] ? 'success' : 'neutral' }}"
                         >
                             {{ $message['channel_label'] }}
                         </span>
@@ -63,16 +41,19 @@
                         @if (filled($message['sender_label']))
                             <span
                                 data-role="conversation-sender"
-                                style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #dbeafe; color: #1d4ed8; padding: 0.2rem 0.55rem; font-size: 0.68rem; font-weight: 700;"
+                                class="ac-pill"
+                                data-tone="primary"
                             >
                                 {{ $message['sender_label'] }}
                             </span>
                         @endif
                     </div>
 
-                    <div style="white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.4; color: #111827; text-align: left;">{{ $message['display_text'] }}</div>
+                    <div class="ac-message__text">{{ $message['display_text'] }}</div>
 
-                    <div style="display: flex; justify-content: {{ $message['is_outbound'] ? 'flex-end' : 'flex-start' }}; width: 100%; margin-top: 0.2rem;"><time style="font-size: 0.68rem; line-height: 1; color: #6b7280; font-style: italic;">{{ $message['timestamp_label'] }}</time></div>
+                    <div class="ac-message__time">
+                        <time>{{ $message['timestamp_label'] }}</time>
+                    </div>
                 </article>
             </div>
         @endforeach
