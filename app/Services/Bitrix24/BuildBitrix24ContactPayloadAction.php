@@ -51,7 +51,7 @@ class BuildBitrix24ContactPayloadAction
             $payload['PHONE'] = array_map(
                 static fn (string $phone, int $index): array => [
                     'VALUE' => $phone,
-                    'VALUE_TYPE' => $index === 0 ? 'MOBILE' : 'OTHER',
+                    'VALUE_TYPE' => $index === 0 ? 'WORK' : 'OTHER',
                 ],
                 $phones,
                 array_keys($phones),

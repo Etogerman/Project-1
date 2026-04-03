@@ -28,7 +28,7 @@ class MergeBitrix24ContactPhonesAction
 
             $mergedPhones[$normalizedPhone] = [
                 'VALUE' => $normalizedPhone,
-                'VALUE_TYPE' => $index === 0 ? 'MOBILE' : 'OTHER',
+                'VALUE_TYPE' => $index === 0 ? 'WORK' : 'OTHER',
             ];
         }
 

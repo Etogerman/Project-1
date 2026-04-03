@@ -282,7 +282,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
                 && $fields['UF_CRM_ABRIKOSOFF_BOT_CODE'] === 'abrikosoff_tg'
                 && $fields['UF_CRM_ABRIKOSOFF_BOT_NAME'] === 'Abrikosoff TG'
                 && $fields['PHONE'][0]['VALUE'] === '+79991234567'
-                && $fields['PHONE'][0]['VALUE_TYPE'] === 'MOBILE'
+                && $fields['PHONE'][0]['VALUE_TYPE'] === 'WORK'
                 && $fields['PHONE'][1]['VALUE'] === '+79995555555'
                 && $fields['PHONE'][1]['VALUE_TYPE'] === 'OTHER';
         });
@@ -668,7 +668,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
         });
     }
 
-    public function test_remote_only_phone_is_preserved_during_update(): void
+    public function test_update_rewrites_matching_remote_mobile_phone_to_work_and_preserves_remote_only_phone(): void
     {
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
@@ -706,6 +706,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             return is_array($phones)
                 && count($phones) === 2
                 && $phones[0]['VALUE'] === '+79991234567'
+                && $phones[0]['VALUE_TYPE'] === 'WORK'
                 && $phones[1]['VALUE'] === '+7 900 000 00 00'
                 && $phones[1]['VALUE_TYPE'] === 'WORK';
         });
@@ -998,7 +999,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
                 ->get()
                 ->map(fn (ContactPhoneNumber $phone): array => [
                     'VALUE' => $phone->phone_normalized,
-                    'VALUE_TYPE' => $phone->is_primary ? 'MOBILE' : 'OTHER',
+                    'VALUE_TYPE' => $phone->is_primary ? 'WORK' : 'OTHER',
                 ])
                 ->values()
                 ->all(),
