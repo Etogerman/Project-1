@@ -15,17 +15,10 @@ concurrency:
 
 jobs:
   playwright-smoke:
-    name: post-deploy-smoke (${{ matrix.environment }})
+    name: post-deploy-smoke (production)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        environment:
-          - staging
-          - production
-
-    environment: ${{ matrix.environment }}
+    environment: production
 
     env:
       PLAYWRIGHT_BASE_URL: ${{ secrets.PLAYWRIGHT_BASE_URL }}
@@ -90,7 +83,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-smoke-${{ matrix.environment }}
+          name: playwright-smoke-production
           path: |
             playwright-report/
             test-results/

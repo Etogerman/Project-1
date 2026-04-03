@@ -3,12 +3,12 @@
 ## Цель
 
 Закрывать релиз не фактом deploy, а фактом подтверждённого smoke-check
-на staging и production.
+на реальном рабочем окружении.
 
 ## Обязательное правило
 
 - auto-deploy сам по себе не означает, что релиз принят
-- staging и production проверяются отдельно
+- если staging реально не функционирует, автоматический smoke идёт только по production
 - destructive maintenance-команды не запускаются просто ради smoke-check
 
 ## Автоматизация
@@ -17,12 +17,11 @@
 
 - `.github/workflows/post-deploy-smoke.yml`
 
-Для этого в GitHub должны быть настроены environments:
+Сейчас для этого в GitHub должен быть настроен environment:
 
-- `staging`
 - `production`
 
-И secrets в каждом environment:
+И secrets в нём:
 
 - `PLAYWRIGHT_BASE_URL`
 - `PLAYWRIGHT_ADMIN_EMAIL`
@@ -30,19 +29,14 @@
 
 ## Staging
 
-Проверить:
+Если отдельный staging отсутствует или не поддерживает нужный интеграционный
+контур, staging не должен оставаться формально включённым в автоматический smoke.
 
-- `/`
-- `/admin/login`
-- login flow администратора
-- ключевой admin route, относящийся к выпущенному scope
-- отсутствие новых `500` в логах после проверки
+В таком случае:
 
-Рекомендуемые admin routes по типу релиза:
-
-- UI/admin changes: `/admin/contacts`, `/admin/dialogs`, релевантная operator page
-- runtime/webhook changes: безопасный happy-path и отсутствие ошибок в логах
-- QA/Playwright changes: public smoke и admin smoke через браузер
+- workflow проверяет только `production`
+- staging остаётся отдельным follow-up шагом
+- staging добавляется обратно только после появления реально рабочего окружения
 
 ## Production
 
@@ -80,7 +74,7 @@
 
 ## Минимальный формат фиксации результата
 
-Для каждого окружения:
+Для каждого реально проверяемого окружения:
 
 - `status: ok | warn | fail | skip`
 - что именно проверено
