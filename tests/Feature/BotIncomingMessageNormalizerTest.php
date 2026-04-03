@@ -124,6 +124,65 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('92', $message->providerEventKey);
     }
 
+    public function test_max_bot_started_payload_is_normalized_as_store_only_inbound_event(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'bot_started',
+            'chat_id' => 700,
+            'payload' => 'promo_123',
+            'timestamp' => '2026-04-03T10:00:00+03:00',
+            'user' => [
+                'user_id' => 500,
+                'username' => 'max_user',
+                'name' => 'Герман',
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
+        $this->assertSame('700', $message->externalChatId);
+        $this->assertSame('500', $message->externalUserId);
+        $this->assertSame('max_user', $message->externalUsername);
+        $this->assertSame('Герман', $message->contactName);
+        $this->assertNull($message->externalMessageId);
+        $this->assertNull($message->text);
+        $this->assertSame('bot_started', data_get($message->rawPayload, 'update_type'));
+        $this->assertStringStartsWith('max-bot-started:', $message->providerEventKey ?? '');
+        $this->assertSame('2026-04-03 07:00:00', $message->receivedAt->utc()->format('Y-m-d H:i:s'));
+    }
+
+    public function test_max_bot_started_payload_without_deep_link_payload_is_normalized(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'bot_started',
+            'chat_id' => 701,
+            'timestamp' => '2026-04-03T10:05:00+03:00',
+            'user' => [
+                'user_id' => 501,
+                'is_bot' => false,
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
+        $this->assertSame('701', $message->externalChatId);
+        $this->assertSame('501', $message->externalUserId);
+        $this->assertNull($message->text);
+        $this->assertStringStartsWith('max-bot-started:', $message->providerEventKey ?? '');
+    }
+
     public function test_max_contact_share_payload_is_normalized(): void
     {
         $channel = Channel::factory()->create([
