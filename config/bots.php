@@ -258,6 +258,28 @@ return [
                 ],
             ],
         ],
+        'needs_discovery' => [
+            'primary_goal' => [
+                'question' => env(
+                    'BOT_NEEDS_DISCOVERY_PRIMARY_GOAL_QUESTION',
+                    'Какая задача для вас сейчас самая важная?'
+                ),
+            ],
+            'main_blocker' => [
+                'question' => env(
+                    'BOT_NEEDS_DISCOVERY_MAIN_BLOCKER_QUESTION',
+                    'Что мешает решить её быстрее или проще?'
+                ),
+            ],
+            'completion_message' => env(
+                'BOT_NEEDS_DISCOVERY_COMPLETION_MESSAGE',
+                'Спасибо, записали.'
+            ),
+            'skip_commands' => [
+                'пропустить',
+                'skip',
+            ],
+        ],
     ],
 
     'webhook_secret_length' => 40,

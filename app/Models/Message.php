@@ -51,6 +51,8 @@ class Message extends Model
 
     public const SENT_BY_SYSTEM_CODE_SCENARIO_WARMUP = 'scenario_warmup';
 
+    public const SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY = 'scenario_needs_discovery';
+
     public const SENT_BY_SYSTEM_CODE_LEGACY_UNKNOWN_KIND = 'legacy_unknown_kind';
 
     public const SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES = 'bitrix24_openlines';

@@ -1,0 +1,379 @@
+<?php
+
+namespace App\Services\Scenarios;
+
+use App\Data\Scenarios\ScenarioInboundResult;
+use App\Models\Channel;
+use App\Models\Contact;
+use App\Models\Message;
+use App\Models\ScenarioChannelBinding;
+use App\Models\ScenarioRun;
+use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\StoreOutboundScenarioMessageAction;
+use App\Services\Bots\TelegramBotApiService;
+use Illuminate\Support\Str;
+use InvalidArgumentException;
+
+class NeedsDiscoveryScenario implements ScenarioHandler
+{
+    public const STEP_PRIMARY_GOAL = 'primary_goal';
+
+    public const STEP_MAIN_BLOCKER = 'main_blocker';
+
+    public const OUTCOME_COMPLETED_WITH_ANSWERS = 'completed_with_answers';
+
+    public const OUTCOME_COMPLETED_WITH_PARTIAL_ANSWERS = 'completed_with_partial_answers';
+
+    public const OUTCOME_COMPLETED_SKIPPED = 'completed_skipped';
+
+    public static function code(): string
+    {
+        return 'needs_discovery';
+    }
+
+    public function __construct(
+        private readonly TelegramBotApiService $telegramBotApiService,
+        private readonly MaxBotApiService $maxBotApiService,
+        private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
+    ) {}
+
+    public function shouldStart(Message $message): bool
+    {
+        $platform = $message->channel?->platform;
+        $contact = $message->contact;
+
+        if (
+            ! in_array($platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
+            || $message->message_kind !== Message::KIND_INBOUND_USER
+            || $message->dialog_id === null
+            || ! filled($message->text)
+            || ! $contact instanceof Contact
+            || ! $contact->isAutoReplyEnabled()
+            || $contact->isInDataCollection()
+            || $contact->data_collection_status !== Contact::DATA_COLLECTION_STATUS_COMPLETED
+        ) {
+            return false;
+        }
+
+        if (ScenarioRun::query()
+            ->where('dialog_id', $message->dialog_id)
+            ->where('scenario_code', self::code())
+            ->exists()) {
+            return false;
+        }
+
+        return $this->warmupAllowsStart($message);
+    }
+
+    public function start(ScenarioRun $run, Message $message): void
+    {
+        $outboundQuestion = $this->sendScenarioMessage(
+            $message,
+            $this->questionForStep(self::STEP_PRIMARY_GOAL),
+        );
+
+        $run->forceFill([
+            'current_step' => self::STEP_PRIMARY_GOAL,
+            'state_payload' => [
+                'trigger_message_id' => $message->id,
+                'question_message_ids' => [
+                    self::STEP_PRIMARY_GOAL => $outboundQuestion->id,
+                    self::STEP_MAIN_BLOCKER => null,
+                ],
+                'completion_message_id' => null,
+                'answers' => [
+                    self::STEP_PRIMARY_GOAL => [
+                        'text' => null,
+                        'message_id' => null,
+                        'skipped' => false,
+                    ],
+                    self::STEP_MAIN_BLOCKER => [
+                        'text' => null,
+                        'message_id' => null,
+                        'skipped' => false,
+                    ],
+                ],
+            ],
+        ])->save();
+    }
+
+    public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
+    {
+        $statePayload = $this->ensureStatePayload(is_array($run->state_payload) ? $run->state_payload : []);
+        $normalizedText = $this->normalizeText($message->text);
+
+        if ($normalizedText === '') {
+            return new ScenarioInboundResult(
+                consumed: false,
+                status: ScenarioRun::STATUS_CANCELLED,
+                currentStep: null,
+                statePayload: $statePayload,
+                exitOutcome: 'interrupted_by_other_message',
+            );
+        }
+
+        return match ($run->current_step) {
+            self::STEP_PRIMARY_GOAL => $this->handlePrimaryGoalStep($message, $statePayload, $normalizedText),
+            self::STEP_MAIN_BLOCKER => $this->handleMainBlockerStep($message, $statePayload, $normalizedText),
+            default => new ScenarioInboundResult(
+                consumed: false,
+                status: ScenarioRun::STATUS_CANCELLED,
+                currentStep: null,
+                statePayload: $statePayload,
+                exitOutcome: 'unknown_step',
+            ),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function handlePrimaryGoalStep(
+        Message $message,
+        array $statePayload,
+        string $normalizedText,
+    ): ScenarioInboundResult {
+        $updatedStatePayload = $this->storeAnswer(
+            $statePayload,
+            self::STEP_PRIMARY_GOAL,
+            $message,
+            $this->isSkipCommand($normalizedText),
+        );
+
+        $nextQuestion = $this->sendScenarioMessage(
+            $message,
+            $this->questionForStep(self::STEP_MAIN_BLOCKER),
+        );
+
+        $updatedStatePayload['question_message_ids'][self::STEP_MAIN_BLOCKER] = $nextQuestion->id;
+
+        return new ScenarioInboundResult(
+            consumed: true,
+            status: ScenarioRun::STATUS_ACTIVE,
+            currentStep: self::STEP_MAIN_BLOCKER,
+            statePayload: $updatedStatePayload,
+            exitOutcome: null,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function handleMainBlockerStep(
+        Message $message,
+        array $statePayload,
+        string $normalizedText,
+    ): ScenarioInboundResult {
+        $updatedStatePayload = $this->storeAnswer(
+            $statePayload,
+            self::STEP_MAIN_BLOCKER,
+            $message,
+            $this->isSkipCommand($normalizedText),
+        );
+
+        $completionMessage = $this->sendScenarioMessage(
+            $message,
+            $this->completionMessage(),
+        );
+
+        $updatedStatePayload['completion_message_id'] = $completionMessage->id;
+
+        return new ScenarioInboundResult(
+            consumed: true,
+            status: ScenarioRun::STATUS_COMPLETED,
+            currentStep: null,
+            statePayload: $updatedStatePayload,
+            exitOutcome: $this->resolveCompletionOutcome($updatedStatePayload),
+        );
+    }
+
+    private function warmupAllowsStart(Message $message): bool
+    {
+        $warmupIsBound = ScenarioChannelBinding::query()
+            ->active()
+            ->where('channel_id', $message->channel_id)
+            ->where('scenario_code', WarmupScenario::code())
+            ->exists();
+
+        if (! $warmupIsBound) {
+            return true;
+        }
+
+        $warmupRun = ScenarioRun::query()
+            ->where('dialog_id', $message->dialog_id)
+            ->where('scenario_code', WarmupScenario::code())
+            ->latest('id')
+            ->first();
+
+        return $warmupRun instanceof ScenarioRun && ! $warmupRun->isActive();
+    }
+
+    private function sendScenarioMessage(Message $inboundMessage, string $text): Message
+    {
+        $channel = $inboundMessage->channel;
+
+        if (! $channel instanceof Channel) {
+            throw new InvalidArgumentException('Scenario inbound message does not have a channel relation.');
+        }
+
+        $deliveryResult = match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
+                $channel,
+                $inboundMessage->external_chat_id,
+                $inboundMessage->contactIdentity?->external_user_id,
+                $text,
+            ),
+            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
+                $channel,
+                $inboundMessage->external_chat_id,
+                $inboundMessage->contactIdentity?->external_user_id,
+                $text,
+            ),
+            default => throw new InvalidArgumentException("Unsupported scenario platform [{$channel->platform}]."),
+        };
+
+        $outboundMessage = $this->storeOutboundScenarioMessageAction->handle(
+            $channel,
+            $inboundMessage,
+            $deliveryResult,
+            Message::SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY,
+        );
+
+        $channel->markReplySent();
+
+        return $outboundMessage;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function ensureStatePayload(array $statePayload): array
+    {
+        $statePayload['question_message_ids'] = is_array($statePayload['question_message_ids'] ?? null)
+            ? $statePayload['question_message_ids']
+            : [];
+
+        $statePayload['answers'] = is_array($statePayload['answers'] ?? null)
+            ? $statePayload['answers']
+            : [];
+
+        foreach ([self::STEP_PRIMARY_GOAL, self::STEP_MAIN_BLOCKER] as $step) {
+            if (! array_key_exists($step, $statePayload['question_message_ids'])) {
+                $statePayload['question_message_ids'][$step] = null;
+            }
+
+            $answerPayload = $statePayload['answers'][$step] ?? [];
+            $statePayload['answers'][$step] = [
+                'text' => $answerPayload['text'] ?? null,
+                'message_id' => $answerPayload['message_id'] ?? null,
+                'skipped' => (bool) ($answerPayload['skipped'] ?? false),
+            ];
+        }
+
+        if (! array_key_exists('completion_message_id', $statePayload)) {
+            $statePayload['completion_message_id'] = null;
+        }
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function storeAnswer(array $statePayload, string $step, Message $message, bool $skipped): array
+    {
+        $statePayload['answers'][$step] = [
+            'text' => $skipped ? null : $message->text,
+            'message_id' => $message->id,
+            'skipped' => $skipped,
+        ];
+
+        return $statePayload;
+    }
+
+    private function resolveCompletionOutcome(array $statePayload): string
+    {
+        $answers = is_array($statePayload['answers'] ?? null)
+            ? $statePayload['answers']
+            : [];
+
+        $skippedCount = 0;
+        $answeredCount = 0;
+
+        foreach ([self::STEP_PRIMARY_GOAL, self::STEP_MAIN_BLOCKER] as $step) {
+            $answerPayload = $answers[$step] ?? [];
+
+            if (($answerPayload['skipped'] ?? false) === true) {
+                $skippedCount++;
+
+                continue;
+            }
+
+            if (filled($answerPayload['text'] ?? null)) {
+                $answeredCount++;
+            }
+        }
+
+        if ($skippedCount === 2) {
+            return self::OUTCOME_COMPLETED_SKIPPED;
+        }
+
+        if ($answeredCount === 2) {
+            return self::OUTCOME_COMPLETED_WITH_ANSWERS;
+        }
+
+        return self::OUTCOME_COMPLETED_WITH_PARTIAL_ANSWERS;
+    }
+
+    private function questionForStep(string $step): string
+    {
+        return (string) config(sprintf('bots.scenarios.%s.%s.question', self::code(), $step));
+    }
+
+    private function completionMessage(): string
+    {
+        return (string) config(sprintf('bots.scenarios.%s.completion_message', self::code()));
+    }
+
+    private function isSkipCommand(string $normalizedText): bool
+    {
+        return in_array($normalizedText, $this->skipCommands(), true);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function skipCommands(): array
+    {
+        $skipCommands = config(sprintf('bots.scenarios.%s.skip_commands', self::code()), []);
+
+        if (! is_array($skipCommands)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($skipCommands as $skipCommand) {
+            if (! is_string($skipCommand)) {
+                continue;
+            }
+
+            $value = $this->normalizeText($skipCommand);
+
+            if ($value === '') {
+                continue;
+            }
+
+            $normalized[] = $value;
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    private function normalizeText(?string $text): string
+    {
+        return Str::lower(trim((string) $text));
+    }
+}

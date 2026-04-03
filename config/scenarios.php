@@ -19,4 +19,11 @@ return [
             Channel::PLATFORM_MAX,
         ],
     ],
+    'needs_discovery' => [
+        'handler' => \App\Services\Scenarios\NeedsDiscoveryScenario::class,
+        'platforms' => [
+            Channel::PLATFORM_TELEGRAM,
+            Channel::PLATFORM_MAX,
+        ],
+    ],
 ];
