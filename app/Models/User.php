@@ -98,6 +98,21 @@ class User extends Authenticatable implements FilamentUser
         return $this->is_active && (bool) $this->is_admin;
     }
 
+    public function canManageContactOwnership(): bool
+    {
+        return $this->canViewWorkspaces();
+    }
+
+    public function canReplyInDialogs(): bool
+    {
+        return $this->canViewWorkspaces();
+    }
+
+    public function canBeAssignedToContacts(): bool
+    {
+        return $this->canViewWorkspaces();
+    }
+
     protected function email(): Attribute
     {
         return Attribute::make(

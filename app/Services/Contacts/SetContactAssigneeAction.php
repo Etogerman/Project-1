@@ -15,7 +15,7 @@ class SetContactAssigneeAction
 
     public function handle(Contact $contact, User $actor, ?int $assigneeId): Contact
     {
-        if (! $actor->is_active || ! $actor->is_admin) {
+        if (! $actor->canManageContactOwnership()) {
             throw new AuthorizationException();
         }
 
@@ -27,10 +27,9 @@ class SetContactAssigneeAction
             $assignee = User::query()
                 ->whereKey($assigneeId)
                 ->where('is_active', true)
-                ->where('is_admin', true)
                 ->first();
 
-            if (! $assignee instanceof User) {
+            if (! $assignee instanceof User || ! $assignee->canBeAssignedToContacts()) {
                 throw new InvalidArgumentException('Не удалось выбрать ответственного сотрудника.');
             }
         }

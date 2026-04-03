@@ -15,7 +15,7 @@ class ReleaseContactAssignmentAction
 
     public function handle(Contact $contact, User $actor): Contact
     {
-        if (! $actor->is_active || ! $actor->is_admin) {
+        if (! $actor->canManageContactOwnership()) {
             throw new AuthorizationException();
         }
 
@@ -23,7 +23,7 @@ class ReleaseContactAssignmentAction
 
         $updated = Contact::query()
             ->whereKey($contact->id)
-            ->where('assigned_user_id', $actor->id)
+            ->whereNotNull('assigned_user_id')
             ->update([
                 'assigned_user_id' => null,
                 'updated_at' => now(),
@@ -41,6 +41,6 @@ class ReleaseContactAssignmentAction
             throw new InvalidArgumentException('Контакт уже свободен.');
         }
 
-        throw new InvalidArgumentException('Нельзя снять с работы контакт, назначенный другому сотруднику.');
+        throw new InvalidArgumentException('Не удалось снять контакт с работы.');
     }
 }

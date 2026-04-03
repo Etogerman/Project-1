@@ -213,7 +213,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('Recent messages');
     }
 
-    public function test_employee_can_view_contact_details_without_mutation_controls(): void
+    public function test_employee_can_view_contact_details_with_ownership_controls_only(): void
     {
         $employee = User::factory()->create([
             'is_active' => true,
@@ -225,14 +225,78 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Контакт')
+            ->assertSee('data-role="contact-open-assignee-dialog"', false)
             ->assertDontSee('data-role="contact-edit-profile"', false)
             ->assertDontSee('data-role="contact-edit-phone"', false)
             ->assertDontSee('data-role="contact-delete-phone"', false)
-            ->assertDontSee('data-role="contact-open-assignee-dialog"', false)
             ->assertDontSee('data-role="contact-enable-auto-reply"', false)
             ->assertDontSee('data-role="contact-disable-auto-reply"', false)
             ->assertDontSee('data-role="contact-resume-data-collection"', false)
             ->assertDontSee('data-role="contact-open-delete-dialog"', false);
+    }
+
+    public function test_employee_can_reassign_foreign_contact_via_responsible_dialog(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'name' => 'Оператор',
+        ]);
+        $owner = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Текущий ответственный',
+        ]);
+        $target = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'name' => 'Новый оператор',
+        ]);
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $owner->id,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('openAssignContactDialog')
+            ->assertMountedActionModalSee('Новый оператор')
+            ->set('selectedAssigneeId', (string) $target->id)
+            ->call('saveMountedContactAssignee')
+            ->assertNotified()
+            ->assertMountedActionModalSee('Новый оператор');
+
+        $contact->refresh();
+
+        $this->assertSame($target->id, $contact->assigned_user_id);
+    }
+
+    public function test_employee_can_clear_foreign_contact_responsible_via_dialog(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $owner = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $owner->id,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('openAssignContactDialog')
+            ->set('selectedAssigneeId', '')
+            ->call('saveMountedContactAssignee')
+            ->assertNotified()
+            ->assertMountedActionModalSee('Свободен');
+
+        $contact->refresh();
+
+        $this->assertNull($contact->assigned_user_id);
     }
 
     public function test_employee_cannot_delete_contact_via_livewire_action(): void

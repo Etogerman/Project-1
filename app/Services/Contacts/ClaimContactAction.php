@@ -15,7 +15,7 @@ class ClaimContactAction
 
     public function handle(Contact $contact, User $actor): Contact
     {
-        if (! $actor->is_active || ! $actor->is_admin) {
+        if (! $actor->canManageContactOwnership()) {
             throw new AuthorizationException();
         }
 
