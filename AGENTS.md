@@ -307,6 +307,15 @@ Abrikosoff Connector — операторская платформа для ра
   и не начинает реализацию
 - commit, push, migrate, deploy — только по отдельной явной команде пользователя
 
+Стабильные process-правила:
+- новые clean streams режутся от `origin/main`, а не от stale mixed-ветки
+- перед новым extraction сначала делается audit residual diff против `origin/main`
+- каждый clean stream публикуется отдельной веткой и отдельным draft PR
+- auto-deploy не закрывает релиз сам по себе: после deploy обязателен post-deploy smoke-check
+- старая mixed-ветка используется только как `reference-only`, пока явно не доказано обратное
+- подробный workflow описан в `docs/clean-stream-release-flow.md`
+- operational checklist описан в `docs/post-deploy-smoke.md`
+
 Перед предложением изменений:
 1. Изучить существующие пути в коде.
 2. Найти минимальную безопасную точку расширения.
