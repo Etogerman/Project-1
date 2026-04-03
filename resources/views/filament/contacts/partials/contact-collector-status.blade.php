@@ -1,6 +1,6 @@
 <section
     data-role="contact-collector-status"
-    class="ac-surface ac-surface--secondary"
+    class="ac-surface ac-surface--secondary ac-contact-modal-surface ac-contact-modal-surface--collector"
 >
     <div class="ac-surface__header ac-surface__header--centered">
         <div class="ac-surface__title-group">
