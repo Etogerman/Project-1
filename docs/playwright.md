@@ -65,13 +65,15 @@ npm run test:e2e:report
 - после каждого `push` в `main`
 - вручную через `workflow_dispatch`
 
-Workflow проверяет оба окружения:
+Workflow сейчас автоматически проверяет:
 
-- `staging`
 - `production`
 
-Для каждого окружения нужно настроить в GitHub Environments одноимённые
-secrets:
+Сейчас workflow intentionally проверяет только `production`.
+`staging` будет добавлен обратно отдельным шагом, когда появится
+рабочее Bitrix24 staging-окружение.
+
+Для GitHub Environment `production` нужно настроить secrets:
 
 - `PLAYWRIGHT_BASE_URL`
 - `PLAYWRIGHT_ADMIN_EMAIL`
