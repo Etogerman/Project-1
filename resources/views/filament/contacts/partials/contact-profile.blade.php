@@ -4,7 +4,7 @@
             <p class="ac-surface__eyebrow">Операторский профиль</p>
             <h3 class="ac-surface__title">Что уже известно о контакте</h3>
             <p class="ac-surface__subtitle">
-                Основные данные и локация собраны отдельно от имени, которое пришло из мессенджера.
+                Здесь собраны подтверждённые оператором данные и локация контакта.
             </p>
         </div>
 
@@ -82,11 +82,6 @@
                 </div>
             </div>
         </article>
-    </div>
-
-    <div class="ac-note-box ac-note-box--info ac-surface__divider">
-        <p class="ac-meta__label">Имя из мессенджера</p>
-        <p class="ac-meta__value ac-meta__value--muted">{{ $messengerName }}</p>
     </div>
 
     @if ($this->showEditProfileDialog)
