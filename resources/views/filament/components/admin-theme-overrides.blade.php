@@ -1475,6 +1475,154 @@
         font-size: 0.82rem;
     }
 
+    .ac-contact-modal-section--secondary .fi-section-header {
+        padding-bottom: 0.6rem;
+    }
+
+    .ac-contact-modal-section--secondary .fi-section-header-heading {
+        font-size: 0.98rem;
+        color: color-mix(in srgb, var(--ac-text) 88%, var(--ac-text-muted));
+    }
+
+    .ac-contact-modal-section--secondary .fi-section-header-description {
+        font-size: 0.8rem;
+        color: var(--ac-text-muted);
+    }
+
+    .ac-contact-modal-section--secondary .fi-section-content-ctn {
+        padding-top: 0.55rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block {
+        border-color: color-mix(in srgb, var(--ac-border) 90%, transparent);
+        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 94%, var(--ac-surface-strong)) 0%, var(--ac-surface-strong) 100%);
+        box-shadow: 0 12px 24px -26px rgba(15, 23, 42, 0.22);
+        padding: 0.75rem 0.8rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-surface__header {
+        gap: 0.55rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-surface__title-group {
+        gap: 0.18rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-surface__eyebrow {
+        font-size: 0.66rem;
+        color: var(--ac-text-muted);
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-surface__title {
+        font-size: 0.96rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-surface__subtitle {
+        font-size: 0.82rem;
+        line-height: 1.42;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-surface__divider {
+        margin-top: 0.6rem;
+        padding-top: 0.6rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-card-grid,
+    .ac-contact-modal-surface--secondary-block .ac-list-stack,
+    .ac-contact-modal-surface--secondary-block .ac-meta-grid {
+        gap: 0.6rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-list-card {
+        border-radius: 15px;
+        padding: 0.72rem 0.78rem;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 95%, var(--ac-surface-strong)) 0%, var(--ac-surface-strong) 100%);
+        box-shadow: none;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-list-card__body {
+        font-size: 0.84rem;
+        line-height: 1.45;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-list-card__section {
+        margin-top: 0.5rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-note-box {
+        padding: 0.68rem 0.75rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-note {
+        font-size: 0.79rem;
+        line-height: 1.45;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-actions {
+        gap: 0.6rem;
+        margin-top: 0.8rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-actions--between {
+        align-items: flex-start;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-actions__hint {
+        flex-basis: 17rem;
+        max-width: 34rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-button-group {
+        gap: 0.55rem;
+    }
+
+    .ac-contact-modal-surface--secondary-block .ac-button {
+        min-height: 2.55rem;
+        padding: 0.62rem 0.9rem;
+        border-radius: 13px;
+        box-shadow: none;
+    }
+
+    .ac-contact-modal-surface--ownership .ac-card-grid {
+        grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    }
+
+    .ac-contact-modal-surface--phones .ac-empty-state {
+        padding: 1rem 0.9rem;
+    }
+
+    .ac-contact-modal-surface--phones .ac-inline-split {
+        align-items: center;
+        gap: 0.65rem;
+    }
+
+    .ac-contact-modal-surface--phones .ac-pill {
+        min-height: 1.8rem;
+        padding: 0.25rem 0.62rem;
+    }
+
+    .ac-contact-modal-surface--phones .ac-actions {
+        justify-content: flex-start;
+    }
+
+    .ac-contact-modal-section--details .fi-section-header {
+        padding-bottom: 0.45rem;
+    }
+
+    .ac-contact-modal-section--details .fi-section-header-heading {
+        font-size: 0.94rem;
+        color: var(--ac-text-muted);
+    }
+
+    .ac-contact-modal-section--details .fi-section-content-ctn {
+        padding-top: 0.45rem;
+    }
+
+    .ac-contact-modal-section--details .fi-section-content {
+        border-radius: 18px;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 86%, var(--ac-surface-strong)) 0%, var(--ac-surface-strong) 100%);
+    }
+
     @media (max-width: 1140px) {
         .ac-dialog-overview,
         .ac-dialog-workspace {
