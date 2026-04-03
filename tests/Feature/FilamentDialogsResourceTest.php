@@ -15,6 +15,7 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Http\Client\Request;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
@@ -681,6 +682,40 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Автоответчик')
             ->assertSee('Автоответ')
             ->assertSee('Поделился номером телефона');
+    }
+
+    public function test_dialog_view_shows_max_bot_started_payload_as_human_readable_system_event(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $contact = $dialog->contact;
+        $identity = $dialog->currentContactIdentity;
+        $channel = $dialog->channel;
+        $payload = str_repeat('TEXT_1-', 25);
+        $expectedDisplayText = 'Открыл бота по диплинку: '.Str::limit($payload, 120, '...');
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $channel?->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => null,
+            'raw_payload' => [
+                'update_type' => 'bot_started',
+                'payload' => $payload,
+            ],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee($expectedDisplayText)
+            ->assertDontSee('Системное сообщение');
     }
 
     public function test_dialog_view_queries_messages_by_dialog_id_not_contact_id(): void
