@@ -354,12 +354,13 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertMountedActionModalSee('Сценарии канала')
             ->assertMountedActionModalSee('Активные сценарии')
             ->assertMountedActionModalSee('warmup')
+            ->assertMountedActionModalSee('needs_discovery')
             ->assertTableActionDataSet([
                 'scenario_codes' => [],
             ]);
     }
 
-    public function test_manage_scenarios_modal_shows_empty_state_for_max_channel(): void
+    public function test_manage_scenarios_modal_shows_compatible_scenarios_for_max_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -374,7 +375,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->mountTableAction('manageScenarios', $channel)
             ->assertMountedActionModalSee('Сценарии канала')
             ->assertMountedActionModalSee('Активные сценарии')
-            ->assertMountedActionModalSee('warmup');
+            ->assertMountedActionModalSee('warmup')
+            ->assertMountedActionModalSee('needs_discovery');
     }
 
     public function test_admin_can_enable_warmup_scenario_for_telegram_channel(): void
@@ -493,6 +495,30 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertDatabaseHas('scenario_channel_bindings', [
             'channel_id' => $channel->id,
             'scenario_code' => 'warmup',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_admin_can_enable_needs_discovery_scenario_for_telegram_channel(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('manageScenarios', $channel, [
+                'scenario_codes' => ['needs_discovery'],
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => 'needs_discovery',
             'is_active' => true,
         ]);
     }
