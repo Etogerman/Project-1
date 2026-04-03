@@ -29,6 +29,8 @@ class Message extends Model
 
     public const KIND_OUTBOUND_DATA_COLLECTION_COMPLETION = 'outbound_data_collection_completion';
 
+    public const KIND_OUTBOUND_SCENARIO_MESSAGE = 'outbound_scenario_message';
+
     public const SENT_BY_TYPE_CONTACT = 'contact';
 
     public const SENT_BY_TYPE_OPERATOR = 'operator';
@@ -46,6 +48,8 @@ class Message extends Model
     public const SENT_BY_SYSTEM_CODE_DATA_COLLECTION_QUESTION = 'data_collection_question';
 
     public const SENT_BY_SYSTEM_CODE_DATA_COLLECTION_COMPLETION = 'data_collection_completion';
+
+    public const SENT_BY_SYSTEM_CODE_SCENARIO_WARMUP = 'scenario_warmup';
 
     public const SENT_BY_SYSTEM_CODE_LEGACY_UNKNOWN_KIND = 'legacy_unknown_kind';
 

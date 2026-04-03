@@ -139,6 +139,12 @@ class BotIncomingMessageNormalizer
             return $normalized !== '' ? 'russian_region_confirm:'.$normalized : null;
         }
 
+        if (preg_match('/^scenario:warmup:(\d+):([a-z_]+)$/', $value, $matches)) {
+            $action = trim((string) ($matches[2] ?? ''));
+
+            return $action !== '' ? 'warmup:'.$action : null;
+        }
+
         return null;
     }
 

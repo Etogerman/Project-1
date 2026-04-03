@@ -3,14 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessDataCollectionResponseJob;
-use App\Jobs\ProcessAutoReplyJob;
-use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
-use App\Models\Message;
 use App\Models\ContactIdentity;
+use App\Models\Message;
+use App\Models\ScenarioRun;
 use App\Services\Bots\BotWebhookRateLimiter;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Http\JsonResponse;
@@ -25,6 +25,7 @@ class BotWebhookController extends Controller
         Channel $channel,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
+        DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         TelegramBotApiService $telegramBotApiService,
@@ -35,6 +36,7 @@ class BotWebhookController extends Controller
             expectedPlatform: Channel::PLATFORM_TELEGRAM,
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
+            dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
             telegramBotApiService: $telegramBotApiService,
@@ -46,6 +48,7 @@ class BotWebhookController extends Controller
         Channel $channel,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
+        DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
     ): JsonResponse {
@@ -55,6 +58,7 @@ class BotWebhookController extends Controller
             expectedPlatform: Channel::PLATFORM_MAX,
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
+            dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
         );
@@ -66,6 +70,7 @@ class BotWebhookController extends Controller
         string $expectedPlatform,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
+        DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ?TelegramBotApiService $telegramBotApiService = null,
@@ -137,6 +142,7 @@ class BotWebhookController extends Controller
                 telegramBotApiService: $telegramBotApiService,
                 botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
                 storeInboundMessageAction: $storeInboundMessageAction,
+                dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
                 channelActivityLogger: $channelActivityLogger,
             );
         }
@@ -166,138 +172,7 @@ class BotWebhookController extends Controller
             }
 
             $storedResult = $storeInboundMessageAction->handle($channel, $message);
-            $storedMessage = $storedResult->message;
-
-            if ($this->isStoredMaxBotStartedEvent($channel, $storedMessage)) {
-                return response()->json([
-                    'ok' => true,
-                ]);
-            }
-            $duplicateContext = [
-                'platform' => $channel->platform,
-                'provider_event_key' => $storedMessage->provider_event_key,
-                'message_id' => $storedMessage->id,
-                'external_message_id' => $storedMessage->external_message_id,
-            ];
-
-            if ($storedMessage->wasRecentlyCreated) {
-                $this->logOutOfOrderInboundIfNeeded($channel, $storedMessage, $channelActivityLogger);
-            }
-
-            if ($storedMessage->hasSuccessfulAutoReply()) {
-                if (! $storedMessage->wasRecentlyCreated) {
-                    $channelActivityLogger->info(
-                        $channel,
-                        'webhook.duplicate_ignored',
-                        'Повторный webhook обработан без повторной отправки ответа.',
-                        $duplicateContext,
-                    );
-                }
-
-                return response()->json([
-                    'ok' => true,
-                ]);
-            }
-
-            if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
-                if (
-                    $deliveryLagSeconds !== null
-                    && $storedMessage->wasRecentlyCreated
-                    && $storedResult->shouldQueuePhoneCaptureFollowUp()
-                ) {
-                    $channelActivityLogger->info(
-                        $channel,
-                        'contact.phone_capture_arrived_late',
-                        'Поздний phone share из MAX успешно дошёл до обработки.',
-                        [
-                            'platform' => $channel->platform,
-                            'contact_id' => $storedMessage->contact_id,
-                            'message_id' => $storedMessage->id,
-                            'provider_event_key' => $storedMessage->provider_event_key,
-                            'external_message_id' => $storedMessage->external_message_id,
-                            'phone_capture_status' => $storedResult->phoneCaptureStatus,
-                            'delivery_lag_seconds' => $deliveryLagSeconds,
-                        ],
-                    );
-                }
-
-                if (! $storedResult->shouldQueuePhoneCaptureFollowUp()) {
-                    return response()->json([
-                        'ok' => true,
-                    ]);
-                }
-
-                ProcessPhoneCaptureFollowUpJob::dispatch($storedMessage->id, $storedResult->phoneCaptureStatus)->afterCommit();
-
-                $channelActivityLogger->info(
-                    $channel,
-                    'contact.phone_capture_confirmation_queued',
-                    'Подтверждение после получения номера поставлено в очередь.',
-                    [
-                        'platform' => $channel->platform,
-                        'contact_id' => $storedMessage->contact_id,
-                        'message_id' => $storedMessage->id,
-                        'button_type' => 'request_phone',
-                        'phone_capture_status' => $storedResult->phoneCaptureStatus,
-                    ],
-                );
-
-                return response()->json([
-                    'ok' => true,
-                ]);
-            }
-
-            if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
-                return response()->json([
-                    'ok' => true,
-                ]);
-            }
-
-            $storedMessage->loadMissing('contact');
-
-            if ($storedMessage->contact?->isInDataCollection()) {
-                ProcessDataCollectionResponseJob::dispatch($storedMessage->id)->afterCommit();
-
-                $channelActivityLogger->info(
-                    $channel,
-                    'contact.data_collection_response_queued',
-                    'Ответ пользователя поставлен в очередь на обработку сборщиком профиля.',
-                    [
-                        'platform' => $channel->platform,
-                        'message_id' => $storedMessage->id,
-                        'contact_id' => $storedMessage->contact_id,
-                        'current_field' => $storedMessage->contact?->data_collection_current_field,
-                    ],
-                );
-
-                return response()->json([
-                    'ok' => true,
-                ]);
-            }
-
-            if (! $storedMessage->wasRecentlyCreated) {
-                $channelActivityLogger->info(
-                    $channel,
-                    'webhook.duplicate_retry_reply',
-                    'Повторный webhook поставил автоответ в очередь повторно.',
-                    $duplicateContext,
-                );
-            }
-
-            ProcessAutoReplyJob::dispatch($storedMessage->id)->afterCommit();
-
-            $channelActivityLogger->info(
-                $channel,
-                'bot.reply_queued',
-                'Автоответ поставлен в очередь.',
-                [
-                    'platform' => $channel->platform,
-                    'message_id' => $storedMessage->id,
-                    'provider_event_key' => $storedMessage->provider_event_key,
-                    'external_message_id' => $storedMessage->external_message_id,
-                    'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
-                ],
-            );
+            $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult, $deliveryLagSeconds);
         }
 
         return response()->json([
@@ -317,63 +192,6 @@ class BotWebhookController extends Controller
         return $lagSeconds > $thresholdSeconds ? $lagSeconds : null;
     }
 
-    protected function logOutOfOrderInboundIfNeeded(
-        Channel $channel,
-        Message $storedMessage,
-        ChannelActivityLogger $channelActivityLogger,
-    ): void {
-        if (
-            $channel->platform !== Channel::PLATFORM_MAX
-            || $storedMessage->direction !== Message::DIRECTION_INBOUND
-            || $storedMessage->received_at === null
-            || $storedMessage->contact_id === null
-        ) {
-            return;
-        }
-
-        $newerInbound = Message::query()
-            ->where('channel_id', $storedMessage->channel_id)
-            ->where('contact_id', $storedMessage->contact_id)
-            ->where('direction', Message::DIRECTION_INBOUND)
-            ->whereKeyNot($storedMessage->id)
-            ->whereNotNull('received_at')
-            ->where('received_at', '>', $storedMessage->received_at)
-            ->orderByDesc('received_at')
-            ->orderByDesc('id')
-            ->first();
-
-        if (! $newerInbound instanceof Message || $newerInbound->received_at === null) {
-            return;
-        }
-
-        $channelActivityLogger->info(
-            $channel,
-            'webhook.out_of_order_received',
-            'Webhook из MAX получен не по порядку относительно уже сохранённых входящих сообщений.',
-            [
-                'platform' => $channel->platform,
-                'contact_id' => $storedMessage->contact_id,
-                'message_id' => $storedMessage->id,
-                'provider_event_key' => $storedMessage->provider_event_key,
-                'external_message_id' => $storedMessage->external_message_id,
-                'received_at' => $storedMessage->received_at->toIso8601String(),
-                'newer_inbound_message_id' => $newerInbound->id,
-                'newer_inbound_received_at' => $newerInbound->received_at->toIso8601String(),
-                'seconds_behind_latest_inbound' => max(
-                    0,
-                    $newerInbound->received_at->getTimestamp() - $storedMessage->received_at->getTimestamp(),
-                ),
-            ],
-        );
-    }
-
-    protected function isStoredMaxBotStartedEvent(Channel $channel, Message $storedMessage): bool
-    {
-        return $channel->platform === Channel::PLATFORM_MAX
-            && $storedMessage->direction === Message::DIRECTION_INBOUND
-            && data_get($storedMessage->raw_payload, 'update_type') === 'bot_started';
-    }
-
     /**
      * @param  array<string, mixed>  $payload
      */
@@ -383,6 +201,7 @@ class BotWebhookController extends Controller
         ?TelegramBotApiService $telegramBotApiService,
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
+        DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
         $callbackQueryId = trim((string) data_get($payload, 'callback_query.id', ''));
@@ -393,7 +212,13 @@ class BotWebhookController extends Controller
 
         $callback = $this->normalizeTelegramDataCollectionCallback($payload);
 
-        if ($callback === null || ! $this->isTelegramDataCollectionCallbackActionable($channel, $payload, $callback['field'])) {
+        if ($callback !== null) {
+            if (! $this->isTelegramDataCollectionCallbackActionable($channel, $payload, $callback['field'])) {
+                return response()->json([
+                    'ok' => true,
+                ]);
+            }
+        } elseif (! $this->isTelegramWarmupScenarioCallbackActionable($channel, $payload)) {
             return response()->json([
                 'ok' => true,
             ]);
@@ -432,7 +257,12 @@ class BotWebhookController extends Controller
                     'current_field' => $storedMessage->contact?->data_collection_current_field,
                 ],
             );
+            return response()->json([
+                'ok' => true,
+            ]);
         }
+
+        $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult);
 
         return response()->json([
             'ok' => true,
@@ -488,6 +318,41 @@ class BotWebhookController extends Controller
 
         return $identity?->contact?->isInDataCollection() === true
             && $identity->contact->data_collection_current_field === $field;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function isTelegramWarmupScenarioCallbackActionable(Channel $channel, array $payload): bool
+    {
+        $callbackData = trim((string) data_get($payload, 'callback_query.data', ''));
+
+        if (! preg_match('/^scenario:warmup:(\d+):([a-z_]+)$/', $callbackData, $matches)) {
+            return false;
+        }
+
+        $runId = (int) ($matches[1] ?? 0);
+        $externalUserId = trim((string) data_get($payload, 'callback_query.from.id', ''));
+        $externalChatId = trim((string) data_get($payload, 'callback_query.message.chat.id', ''));
+
+        if ($runId <= 0 || $externalUserId === '' || $externalChatId === '') {
+            return false;
+        }
+
+        $run = ScenarioRun::query()
+            ->with('dialog.currentContactIdentity')
+            ->active()
+            ->whereKey($runId)
+            ->where('scenario_code', 'warmup')
+            ->first();
+
+        if (! $run instanceof ScenarioRun || ! $run->dialog) {
+            return false;
+        }
+
+        return (int) $run->dialog->channel_id === (int) $channel->id
+            && (string) ($run->dialog->external_chat_id ?? '') === $externalChatId
+            && (string) ($run->dialog->currentContactIdentity?->external_user_id ?? '') === $externalUserId;
     }
 
     /**

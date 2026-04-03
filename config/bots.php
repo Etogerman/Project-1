@@ -233,6 +233,22 @@ return [
         'Спасибо! Мы вас узнали, {name}. У нас осталось несколько вопросов.'
     ),
 
+    'scenarios' => [
+        'warmup' => [
+            'telegram' => [
+                'text' => env(
+                    'BOT_WARMUP_TELEGRAM_TEXT',
+                    'Прежде чем перейти дальше, подскажите, вам интересно получить несколько коротких материалов?'
+                ),
+                'buttons' => [
+                    'positive' => env('BOT_WARMUP_TELEGRAM_BUTTON_POSITIVE', 'Да, интересно'),
+                    'later' => env('BOT_WARMUP_TELEGRAM_BUTTON_LATER', 'Позже'),
+                    'decline' => env('BOT_WARMUP_TELEGRAM_BUTTON_DECLINE', 'Не интересно'),
+                ],
+            ],
+        ],
+    ],
+
     'webhook_secret_length' => 40,
 
     'rate_limit' => [

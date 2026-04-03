@@ -1,0 +1,80 @@
+<?php
+
+namespace App\Services\Scenarios;
+
+use App\Jobs\ProcessScenarioInboundJob;
+use App\Jobs\ProcessScenarioStartJob;
+use App\Models\Channel;
+use App\Models\Message;
+use App\Models\ScenarioChannelBinding;
+use App\Models\ScenarioRun;
+
+class DispatchStoredInboundScenarioAction
+{
+    public function __construct(
+        private readonly ScenarioRegistry $scenarioRegistry,
+    ) {}
+
+    public function handle(Channel $channel, Message $storedMessage): bool
+    {
+        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER || $storedMessage->dialog_id === null) {
+            return false;
+        }
+
+        $activeRun = ScenarioRun::query()
+            ->active()
+            ->where('dialog_id', $storedMessage->dialog_id)
+            ->orderBy('id')
+            ->first();
+
+        if ($activeRun instanceof ScenarioRun) {
+            ProcessScenarioInboundJob::dispatch($storedMessage->id, $activeRun->id)->afterCommit();
+
+            return true;
+        }
+
+        if ($this->isStoredTelegramScenarioCallback($channel, $storedMessage)) {
+            return true;
+        }
+
+        $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog']);
+
+        foreach ($this->activeBindingsForChannel($channel->id) as $binding) {
+            $handler = $this->scenarioRegistry->make($binding->scenario_code);
+
+            if (! $handler instanceof ScenarioHandler) {
+                continue;
+            }
+
+            if (! $handler->shouldStart($storedMessage)) {
+                continue;
+            }
+
+            ProcessScenarioStartJob::dispatch($storedMessage->id, $binding->scenario_code)->afterCommit();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @return iterable<int, ScenarioChannelBinding>
+     */
+    private function activeBindingsForChannel(int $channelId): iterable
+    {
+        return ScenarioChannelBinding::query()
+            ->active()
+            ->where('channel_id', $channelId)
+            ->orderBy('id')
+            ->get();
+    }
+
+    private function isStoredTelegramScenarioCallback(Channel $channel, Message $storedMessage): bool
+    {
+        return $channel->platform === Channel::PLATFORM_TELEGRAM
+            && is_array($storedMessage->raw_payload)
+            && is_array(data_get($storedMessage->raw_payload, 'callback_query'))
+            && str_starts_with((string) data_get($storedMessage->raw_payload, 'callback_query.data', ''), 'scenario:');
+    }
+}
