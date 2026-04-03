@@ -12,6 +12,8 @@ use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\User;
 use Filament\Facades\Filament;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -95,6 +97,23 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
         $this->assertTrue($channel->is_active);
         $this->assertSame('telegram-secret-token', $channel->credentials['token']);
+    }
+
+    public function test_channel_form_uses_polished_section_layout(): void
+    {
+        $schema = ChannelResource::form(new Schema(null));
+
+        /** @var array<int, Section> $sections */
+        $sections = $schema->getComponents();
+
+        $this->assertSame([
+            'Основное',
+            'Доступ и режим',
+            'Токен',
+        ], array_map(
+            fn (Section $section): string => (string) $section->getHeading(),
+            $sections,
+        ));
     }
 
     public function test_admin_can_create_max_bot_channel(): void

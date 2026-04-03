@@ -26,6 +26,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
@@ -60,33 +61,59 @@ class ChannelResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Канал связи')
+                Section::make('Основное')
+                    ->description('Название, платформа и тип подключения этого канала.')
+                    ->extraAttributes(['class' => 'ac-channel-form-section ac-channel-form-section--profile'])
                     ->schema([
                         TextInput::make('name')
                             ->label('Название')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
                             ->required()
-                            ->maxLength(255),
+                            ->maxLength(255)
+                            ->columnSpanFull(),
                         Select::make('platform')
                             ->label('Платформа')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
                             ->options(Channel::platformOptions())
                             ->required()
                             ->native(false),
                         Select::make('connection_type')
                             ->label('Тип')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
                             ->options(Channel::connectionTypeOptions())
                             ->default(Channel::CONNECTION_TYPE_BOT)
                             ->required()
                             ->native(false),
+                    ])
+                    ->columns(2),
+                Section::make('Доступ и режим')
+                    ->description('Управление активностью канала и режимом обработки входящих сообщений.')
+                    ->extraAttributes(['class' => 'ac-channel-form-section ac-channel-form-section--access'])
+                    ->schema([
                         Select::make('auto_reply_mode')
                             ->label('Режим автоответа')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
                             ->options(Channel::autoReplyModeOptions())
                             ->default(Channel::AUTO_REPLY_MODE_RULES_ONLY)
                             ->required()
                             ->native(false),
+                        Toggle::make('is_active')
+                            ->label('Активен')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-toggle'])
+                            ->default(true)
+                            ->helperText('Отключённый канал не будет использоваться для приёма и отправки сообщений.')
+                            ->inline(false),
+                    ])
+                    ->columns(2),
+                Section::make('Токен')
+                    ->description('При редактировании можно оставить поле пустым. Webhook и секрет регистрируются отдельным действием после сохранения канала.')
+                    ->extraAttributes(['class' => 'ac-channel-form-section ac-channel-form-section--token'])
+                    ->schema([
                         TextInput::make('credentials.token')
                             ->label('Токен')
                             ->password()
                             ->revealable()
+                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
                             ->required(fn (string $operation): bool => $operation === 'create')
                             ->afterStateHydrated(function (TextInput $component, string $operation): void {
                                 if ($operation === 'edit') {
@@ -95,13 +122,11 @@ class ChannelResource extends Resource
                             })
                             ->dehydrateStateUsing(fn (?string $state): ?string => filled($state) ? trim($state) : null)
                             ->dehydrated(fn (?string $state, string $operation): bool => $operation === 'create' || filled($state))
-                            ->helperText('Оставьте пустым при редактировании, чтобы сохранить текущий токен. Webhook и секрет регистрируются отдельным действием.')
-                            ->maxLength(65535),
-                        Toggle::make('is_active')
-                            ->label('Активен')
-                            ->default(true)
-                            ->inline(false),
+                            ->helperText('Оставьте пустым, чтобы сохранить текущий токен.')
+                            ->maxLength(65535)
+                            ->columnSpanFull(),
                     ])
+                    ->columnSpanFull()
                     ->columns(2),
             ]);
     }
@@ -269,7 +294,8 @@ class ChannelResource extends Resource
                     ->copyable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('name')
-                    ->label('Название')
+                    ->label('Канал')
+                    ->description(fn (Channel $record): string => static::buildChannelTableSummary($record))
                     ->searchable()
                     ->sortable(),
                 TextColumn::make('bot_name')
@@ -288,10 +314,12 @@ class ChannelResource extends Resource
                     ->label('Состояние')
                     ->state(fn (Channel $record): string => $record->getHealthStatusLabel())
                     ->badge()
+                    ->extraAttributes(['class' => 'ac-channel-table-badge'])
                     ->color(fn (Channel $record): string => $record->getHealthStatusColor()),
                 TextColumn::make('platform')
                     ->label('Платформа')
                     ->badge()
+                    ->extraAttributes(['class' => 'ac-channel-table-badge'])
                     ->formatStateUsing(fn (string $state): string => Channel::platformOptions()[$state] ?? $state)
                     ->color('info')
                     ->searchable()
@@ -299,6 +327,7 @@ class ChannelResource extends Resource
                 TextColumn::make('connection_type')
                     ->label('Тип')
                     ->badge()
+                    ->extraAttributes(['class' => 'ac-channel-table-badge'])
                     ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state)
                     ->color('gray')
                     ->sortable(),
@@ -306,11 +335,13 @@ class ChannelResource extends Resource
                     ->label('Автоответ')
                     ->state(fn (Channel $record): string => $record->getAutoReplyModeLabel())
                     ->badge()
+                    ->extraAttributes(['class' => 'ac-channel-table-badge'])
                     ->color(fn (Channel $record): string => static::getAutoReplyModeColor($record->auto_reply_mode))
                     ->sortable(),
                 TextColumn::make('is_active')
                     ->label('Активен')
                     ->badge()
+                    ->extraAttributes(['class' => 'ac-channel-table-badge'])
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключен')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
                     ->sortable()
@@ -319,6 +350,7 @@ class ChannelResource extends Resource
                     ->label('Webhook')
                     ->state(fn (Channel $record): string => $record->getWebhookStatusLabel())
                     ->badge()
+                    ->extraAttributes(['class' => 'ac-channel-table-badge'])
                     ->color(fn (Channel $record): string => $record->getWebhookStatusColor()),
                 TextColumn::make('bot_external_id')
                     ->label('Внешний ID')
@@ -361,6 +393,7 @@ class ChannelResource extends Resource
                     ->trueLabel('Только активные')
                     ->falseLabel('Только отключённые'),
             ])
+            ->recordActionsColumnLabel('Кнопки')
             ->columnManager()
             ->deferColumnManager(false)
             ->reorderableColumns()
@@ -373,6 +406,7 @@ class ChannelResource extends Resource
                     ->icon(Heroicon::OutlinedBolt)
                     ->color('success')
                     ->iconButton()
+                    ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Зарегистрировать webhook')
                     ->requiresConfirmation()
                     ->visible(fn (Channel $record): bool => $record->is_active && $record->connection_type === Channel::CONNECTION_TYPE_BOT)
@@ -402,6 +436,7 @@ class ChannelResource extends Resource
                     ->icon(Heroicon::OutlinedArrowPath)
                     ->color('gray')
                     ->iconButton()
+                    ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Обновить данные бота')
                     ->visible(fn (Channel $record): bool => $record->connection_type === Channel::CONNECTION_TYPE_BOT && $record->hasBotTokenConfigured())
                     ->action(function (Channel $record): void {
@@ -430,6 +465,7 @@ class ChannelResource extends Resource
                     ->icon(Heroicon::OutlinedAdjustmentsHorizontal)
                     ->color('gray')
                     ->iconButton()
+                    ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Сценарии')
                     ->modalWidth(Width::Large)
                     ->modalHeading('Сценарии канала')
@@ -473,10 +509,17 @@ class ChannelResource extends Resource
                     ->modalWidth(Width::SevenExtraLarge)
                     ->icon(Heroicon::OutlinedEye)
                     ->iconButton()
+                    ->color('gray')
+                    ->extraAttributes(['class' => 'ac-channel-table-action'])
                     ->tooltip('Просмотр'),
                 EditAction::make()
+                    ->modalWidth(Width::FourExtraLarge)
                     ->icon(Heroicon::OutlinedPencilSquare)
                     ->iconButton()
+                    ->color('gray')
+                    ->extraAttributes(['class' => 'ac-channel-table-action'])
+                    ->modalFooterActionsAlignment(Alignment::End)
+                    ->extraModalWindowAttributes(['class' => 'ac-channel-form-modal'])
                     ->tooltip('Изменить')
                     ->using(function (array $data, Channel $record): void {
                         $record->update(static::mutateChannelData($data, $record));
@@ -739,6 +782,23 @@ class ChannelResource extends Resource
             Channel::AUTO_REPLY_MODE_RULES_ONLY, Channel::AUTO_REPLY_MODE_LEGACY_DEFAULT => 'info',
             default => 'gray',
         };
+    }
+
+    protected static function buildChannelTableSummary(Channel $record): string
+    {
+        if (filled($record->bot_username)) {
+            return $record->getBotUsernameLabel() ?? 'Данные бота синхронизированы';
+        }
+
+        if (filled($record->bot_name)) {
+            return (string) $record->bot_name;
+        }
+
+        if ($record->hasBotTokenConfigured()) {
+            return 'Токен сохранён, данные бота ещё не загружены';
+        }
+
+        return 'Токен ещё не настроен';
     }
 
     protected static function resolveLatestSavedMessageReplyStatus(Channel $record): ?string
