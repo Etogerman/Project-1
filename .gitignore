@@ -29,3 +29,5 @@ yarn-error.log
 /legacy/dist
 /legacy/node_modules
 /legacy/package-lock.json
+/playwright-report
+/test-results
