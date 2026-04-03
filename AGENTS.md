@@ -312,6 +312,8 @@ Abrikosoff Connector — операторская платформа для ра
 - новые clean streams режутся от `origin/main`, а не от stale mixed-ветки
 - перед новым extraction сначала делается audit residual diff против `origin/main`
 - каждый clean stream публикуется отдельной веткой и отдельным draft PR
+- описание PR на GitHub и сопроводительные GitHub-комментарии по изменениям
+  пишутся на русском языке
 - auto-deploy не закрывает релиз сам по себе: после deploy обязателен post-deploy smoke-check
 - старая mixed-ветка используется только как `reference-only`, пока явно не доказано обратное
 - подробный workflow описан в `docs/clean-stream-release-flow.md`
