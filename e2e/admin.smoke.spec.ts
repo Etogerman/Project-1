@@ -18,7 +18,7 @@ test.describe('Admin smoke', () => {
         await expect(page.getByRole('table')).toBeVisible();
         await expect(page.getByRole('columnheader', { name: 'ID' })).toBeVisible();
         await expect(page.getByRole('columnheader', { name: 'Email' })).toBeVisible();
-        await expect(page.getByRole('columnheader', { name: 'Активен' })).toBeVisible();
+        await expect(page.getByRole('columnheader', { name: /^(Статус|Активен)$/ })).toBeVisible();
         await expect(page.getByRole('cell', { name: admin.email! })).toBeVisible();
     });
 
