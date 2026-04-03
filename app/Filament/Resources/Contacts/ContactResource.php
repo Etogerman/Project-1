@@ -724,6 +724,7 @@ class ContactResource extends Resource
             'genderOptions' => Contact::genderOptions(),
             'ageRangeOptions' => Contact::ageRangeOptions(),
             'regionOptions' => Contact::russianRegionOptions(),
+            'canEditProfile' => static::canCurrentUserManageContactMutations(),
         ];
     }
 
@@ -752,6 +753,7 @@ class ContactResource extends Resource
                 ? (string) ((int) $record->data_collection_attempts_count)
                 : '—',
             'canResume' => static::canResumeDataCollection($record),
+            'canResumeAction' => static::canCurrentUserManageContactMutations(),
             'firstName' => $record->first_name ?: '—',
             'country' => $record->country ?: '—',
             'city' => $record->city ?: '—',
@@ -1095,8 +1097,11 @@ class ContactResource extends Resource
             'ownershipHint' => static::getOwnershipHint($record),
             'autoReplyEnabled' => $record->isAutoReplyEnabled(),
             'autoReplyStatusLabel' => $record->isAutoReplyEnabled() ? 'Включены' : 'Отключены',
+            'canManageOwnership' => static::canCurrentUserManageContactMutations(),
             'canDeleteContact' => static::canDeleteContactFromUi($record),
-            'deleteBlockedReason' => static::getDeleteBlockedReason($record),
+            'deleteBlockedReason' => static::canCurrentUserManageContactMutations()
+                ? static::getDeleteBlockedReason($record)
+                : null,
         ];
     }
 
@@ -1118,6 +1123,7 @@ class ContactResource extends Resource
                     'is_primary' => $phoneNumber->is_primary,
                 ])
                 ->all(),
+            'canManagePhones' => static::canCurrentUserManageContactMutations(),
         ];
     }
 
@@ -1221,7 +1227,19 @@ class ContactResource extends Resource
 
     protected static function canCurrentUserDeleteContact(): bool
     {
-        return (bool) (auth()->user()?->is_active && auth()->user()?->is_admin);
+        return static::currentUser()?->canManageContactWorkspaceMutations() ?? false;
+    }
+
+    protected static function canCurrentUserManageContactMutations(): bool
+    {
+        return static::currentUser()?->canManageContactWorkspaceMutations() ?? false;
+    }
+
+    protected static function currentUser(): ?User
+    {
+        $user = auth()->user();
+
+        return $user instanceof User ? $user : null;
     }
 
     protected static function resolveDeleteContactPreview(Contact $record): ResolvedContactDeletePreviewResult

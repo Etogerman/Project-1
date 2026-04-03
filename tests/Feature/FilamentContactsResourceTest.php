@@ -97,16 +97,26 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableHeaderActionsExistInOrder([]);
     }
 
-    public function test_active_non_admin_user_gets_forbidden_on_contacts_page(): void
+    public function test_active_employee_can_open_contacts_page_in_read_only_mode(): void
     {
         $user = User::factory()->create([
             'is_active' => true,
             'is_admin' => false,
         ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Read only contact',
+        ]);
 
         $this->actingAs($user)
             ->get('/admin/contacts')
-            ->assertForbidden();
+            ->assertOk()
+            ->assertSee('Контакты');
+
+        Livewire::actingAs($user)
+            ->test(ManageContacts::class)
+            ->assertCanSeeTableRecords([$contact])
+            ->assertTableActionExists('view', null, $contact)
+            ->assertTableActionDoesNotExist('delete', null, $contact);
     }
 
     public function test_contacts_table_hides_merged_contacts_from_default_listing(): void
@@ -201,6 +211,45 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('Назначение')
             ->assertMountedActionModalDontSee('Identities list')
             ->assertMountedActionModalDontSee('Recent messages');
+    }
+
+    public function test_employee_can_view_contact_details_without_mutation_controls(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create();
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Контакт')
+            ->assertDontSee('data-role="contact-edit-profile"', false)
+            ->assertDontSee('data-role="contact-edit-phone"', false)
+            ->assertDontSee('data-role="contact-delete-phone"', false)
+            ->assertDontSee('data-role="contact-open-assignee-dialog"', false)
+            ->assertDontSee('data-role="contact-enable-auto-reply"', false)
+            ->assertDontSee('data-role="contact-disable-auto-reply"', false)
+            ->assertDontSee('data-role="contact-resume-data-collection"', false)
+            ->assertDontSee('data-role="contact-open-delete-dialog"', false);
+    }
+
+    public function test_employee_cannot_delete_contact_via_livewire_action(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create();
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->call('deleteMountedContact')
+            ->assertNotified();
+
+        $this->assertModelExists($contact);
     }
 
     public function test_contacts_table_shows_pending_duplicate_review_badge_and_filter(): void

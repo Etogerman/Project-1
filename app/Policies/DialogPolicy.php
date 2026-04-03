@@ -39,6 +39,6 @@ class DialogPolicy
 
     protected function canViewDialogs(User $user): bool
     {
-        return $user->is_active && $user->is_admin;
+        return $user->canViewWorkspaces();
     }
 }

@@ -39,6 +39,6 @@ class AutoReplyRulePolicy
 
     protected function canManageRules(User $user): bool
     {
-        return $user->is_active && $user->is_admin;
+        return $user->canManageSystem();
     }
 }

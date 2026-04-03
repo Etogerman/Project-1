@@ -42,57 +42,59 @@
             Основное действие здесь — назначить ответственного. Остальные действия меняют только режим сопровождения контакта.
         </p>
 
-        <div class="ac-button-group">
-            <button
-                data-role="contact-open-assignee-dialog"
-                type="button"
-                wire:click="openAssignContactDialog"
-                wire:loading.attr="disabled"
-                wire:target="openAssignContactDialog,saveMountedContactAssignee"
-                class="ac-button ac-button--primary"
-            >
-                <span wire:loading.remove wire:target="openAssignContactDialog,saveMountedContactAssignee">Изменить ответственного</span>
-                <span wire:loading wire:target="openAssignContactDialog,saveMountedContactAssignee">Открываем...</span>
-            </button>
+        @if ($canManageOwnership)
+            <div class="ac-button-group">
+                <button
+                    data-role="contact-open-assignee-dialog"
+                    type="button"
+                    wire:click="openAssignContactDialog"
+                    wire:loading.attr="disabled"
+                    wire:target="openAssignContactDialog,saveMountedContactAssignee"
+                    class="ac-button ac-button--primary"
+                >
+                    <span wire:loading.remove wire:target="openAssignContactDialog,saveMountedContactAssignee">Изменить ответственного</span>
+                    <span wire:loading wire:target="openAssignContactDialog,saveMountedContactAssignee">Открываем...</span>
+                </button>
 
-            @if ($autoReplyEnabled)
-                <button
-                    data-role="contact-disable-auto-reply"
-                    type="button"
-                    wire:click="disableMountedContactAutoReply"
-                    wire:loading.attr="disabled"
-                    wire:target="disableMountedContactAutoReply,enableMountedContactAutoReply"
-                    class="ac-button ac-button--danger-soft"
-                >
-                    Отключить автоответы
-                </button>
-            @else
-                <button
-                    data-role="contact-enable-auto-reply"
-                    type="button"
-                    wire:click="enableMountedContactAutoReply"
-                    wire:loading.attr="disabled"
-                    wire:target="disableMountedContactAutoReply,enableMountedContactAutoReply"
-                    class="ac-button ac-button--success"
-                >
-                    Включить автоответы
-                </button>
-            @endif
+                @if ($autoReplyEnabled)
+                    <button
+                        data-role="contact-disable-auto-reply"
+                        type="button"
+                        wire:click="disableMountedContactAutoReply"
+                        wire:loading.attr="disabled"
+                        wire:target="disableMountedContactAutoReply,enableMountedContactAutoReply"
+                        class="ac-button ac-button--danger-soft"
+                    >
+                        Отключить автоответы
+                    </button>
+                @else
+                    <button
+                        data-role="contact-enable-auto-reply"
+                        type="button"
+                        wire:click="enableMountedContactAutoReply"
+                        wire:loading.attr="disabled"
+                        wire:target="disableMountedContactAutoReply,enableMountedContactAutoReply"
+                        class="ac-button ac-button--success"
+                    >
+                        Включить автоответы
+                    </button>
+                @endif
 
-            @if ($canDeleteContact)
-                <button
-                    data-role="contact-open-delete-dialog"
-                    type="button"
-                    wire:click="openDeleteContactDialog"
-                    wire:loading.attr="disabled"
-                    wire:target="openDeleteContactDialog,deleteMountedContact"
-                    class="ac-button ac-button--danger-soft"
-                >
-                    <span wire:loading.remove wire:target="openDeleteContactDialog,deleteMountedContact">Удалить клиента</span>
-                    <span wire:loading wire:target="openDeleteContactDialog,deleteMountedContact">Удаляем...</span>
-                </button>
-            @endif
-        </div>
+                @if ($canDeleteContact)
+                    <button
+                        data-role="contact-open-delete-dialog"
+                        type="button"
+                        wire:click="openDeleteContactDialog"
+                        wire:loading.attr="disabled"
+                        wire:target="openDeleteContactDialog,deleteMountedContact"
+                        class="ac-button ac-button--danger-soft"
+                    >
+                        <span wire:loading.remove wire:target="openDeleteContactDialog,deleteMountedContact">Удалить клиента</span>
+                        <span wire:loading wire:target="openDeleteContactDialog,deleteMountedContact">Удаляем...</span>
+                    </button>
+                @endif
+            </div>
+        @endif
     </div>
 
     @if (filled($deleteBlockedReason))
@@ -101,7 +103,7 @@
         </div>
     @endif
 
-    @if ($this->showAssignContactDialog)
+    @if ($canManageOwnership && $this->showAssignContactDialog)
         <div data-role="contact-assignee-dialog-backdrop" class="ac-modal-backdrop ac-modal-backdrop--drawer">
             <div data-role="contact-assignee-dialog" class="ac-modal ac-modal--drawer">
                 <div class="ac-modal__body">
@@ -167,7 +169,7 @@
         </div>
     @endif
 
-    @if ($this->showDeleteContactDialog)
+    @if ($canManageOwnership && $this->showDeleteContactDialog)
         <div data-role="contact-delete-dialog-backdrop" class="ac-modal-backdrop">
             <div data-role="contact-delete-dialog" class="ac-modal ac-modal--sm">
                 <div class="ac-modal__body">

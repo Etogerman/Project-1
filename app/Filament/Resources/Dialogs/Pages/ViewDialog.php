@@ -184,6 +184,7 @@ class ViewDialog extends ViewRecord
 
     /**
      * @return array{
+     *     isVisible:bool,
      *     canReply:bool,
      *     blockedReason:?string,
      *     canClaim:bool,
@@ -198,6 +199,7 @@ class ViewDialog extends ViewRecord
         $replyOwner = $this->resolveReplyOwnerContact();
 
         return [
+            'isVisible' => $this->canCurrentUserManageDialogReplies(),
             'canReply' => $this->canCurrentUserReplyToDialog(),
             'blockedReason' => $this->getDialogReplyBlockedReason(),
             'canClaim' => $this->canCurrentUserClaimDialog(),
@@ -320,13 +322,29 @@ class ViewDialog extends ViewRecord
 
     protected function canCurrentUserReplyToDialog(): bool
     {
+        if (! $this->canCurrentUserManageDialogReplies()) {
+            return false;
+        }
+
         return in_array($this->getDialogOwnershipState(), ['mine', 'unassigned'], true)
             && $this->getDialogRouteBlockedReason() === null;
     }
 
     protected function canCurrentUserClaimDialog(): bool
     {
+        if (! $this->canCurrentUserManageDialogReplies()) {
+            return false;
+        }
+
         return $this->getDialogOwnershipState() === 'unassigned';
+    }
+
+    protected function canCurrentUserManageDialogReplies(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canManageContactWorkspaceMutations();
     }
 
     protected function getDialogReplyBlockedReason(): ?string

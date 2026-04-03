@@ -32,35 +32,37 @@
                         </span>
                     </div>
 
-                    <div class="ac-actions ac-surface__divider">
-                        <button
-                            data-role="contact-edit-phone"
-                            type="button"
-                            wire:click="openEditPhoneDialog({{ $phoneNumber['id'] }})"
-                            wire:loading.attr="disabled"
-                            wire:target="openEditPhoneDialog,saveMountedContactPhone"
-                            class="ac-button ac-button--primary-soft"
-                        >
-                            Изменить
-                        </button>
+                    @if ($canManagePhones)
+                        <div class="ac-actions ac-surface__divider">
+                            <button
+                                data-role="contact-edit-phone"
+                                type="button"
+                                wire:click="openEditPhoneDialog({{ $phoneNumber['id'] }})"
+                                wire:loading.attr="disabled"
+                                wire:target="openEditPhoneDialog,saveMountedContactPhone"
+                                class="ac-button ac-button--primary-soft"
+                            >
+                                Изменить
+                            </button>
 
-                        <button
-                            data-role="contact-delete-phone"
-                            type="button"
-                            wire:click="openDeletePhoneDialog({{ $phoneNumber['id'] }})"
-                            wire:loading.attr="disabled"
-                            wire:target="openDeletePhoneDialog,deleteMountedContactPhone"
-                            class="ac-button ac-button--danger-soft"
-                        >
-                            Удалить
-                        </button>
-                    </div>
+                            <button
+                                data-role="contact-delete-phone"
+                                type="button"
+                                wire:click="openDeletePhoneDialog({{ $phoneNumber['id'] }})"
+                                wire:loading.attr="disabled"
+                                wire:target="openDeletePhoneDialog,deleteMountedContactPhone"
+                                class="ac-button ac-button--danger-soft"
+                            >
+                                Удалить
+                            </button>
+                        </div>
+                    @endif
                 </article>
             @endforeach
         </div>
     @endif
 
-    @if ($this->showEditPhoneDialog)
+    @if ($canManagePhones && $this->showEditPhoneDialog)
         <div data-role="contact-phone-edit-dialog-backdrop" class="ac-modal-backdrop">
             <div data-role="contact-phone-edit-dialog" class="ac-modal ac-modal--md">
                 <div class="ac-modal__body">
@@ -122,7 +124,7 @@
         </div>
     @endif
 
-    @if ($this->showDeletePhoneDialog)
+    @if ($canManagePhones && $this->showDeletePhoneDialog)
         <div data-role="contact-phone-delete-dialog-backdrop" class="ac-modal-backdrop">
             <div data-role="contact-phone-delete-dialog" class="ac-modal ac-modal--sm">
                 <div class="ac-modal__body">

@@ -72,6 +72,24 @@ class FilamentAdminAuthTest extends TestCase
             ->assertSee($version);
     }
 
+    public function test_employee_dashboard_hides_system_navigation_items(): void
+    {
+        $user = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $this->actingAs($user)
+            ->get('/admin')
+            ->assertOk()
+            ->assertSee('Контакты')
+            ->assertSee('Диалоги')
+            ->assertDontSee('Каналы связи')
+            ->assertDontSee('Правила автоответа')
+            ->assertDontSee('Bitrix24')
+            ->assertDontSee('Сотрудники');
+    }
+
     public function test_inactive_user_cannot_log_in_to_the_admin_panel(): void
     {
         $user = User::factory()->create([

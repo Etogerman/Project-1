@@ -39,6 +39,6 @@ class Bitrix24ConnectionPolicy
 
     protected function canViewDiagnostics(User $user): bool
     {
-        return $user->is_active && $user->is_admin;
+        return $user->canManageSystem();
     }
 }
