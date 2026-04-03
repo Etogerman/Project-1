@@ -189,7 +189,9 @@
                 @include('filament.contacts.partials.conversation-chat', ['messages' => $conversationMessages])
             </section>
 
-            @include('filament.dialogs.partials.reply-composer', $replyComposer)
+            @if ($replyComposer['isVisible'])
+                @include('filament.dialogs.partials.reply-composer', $replyComposer)
+            @endif
         </div>
     </div>
 </x-filament-panels::page>

@@ -15,6 +15,10 @@ class User extends Authenticatable implements FilamentUser
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable;
 
+    public const ROLE_ADMIN = 'admin';
+
+    public const ROLE_EMPLOYEE = 'employee';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -25,6 +29,7 @@ class User extends Authenticatable implements FilamentUser
         'email',
         'is_active',
         'is_admin',
+        'role',
         'password',
     ];
 
@@ -42,12 +47,55 @@ class User extends Authenticatable implements FilamentUser
         'email_verified_at' => 'datetime',
         'is_active' => 'boolean',
         'is_admin' => 'boolean',
+        'role' => 'string',
         'password' => 'hashed',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $user): void {
+            if ($user->isDirty('role')) {
+                $user->is_admin = $user->resolvedRole() === self::ROLE_ADMIN;
+
+                return;
+            }
+
+            if ($user->isDirty('is_admin') || blank($user->role)) {
+                $user->role = $user->is_admin
+                    ? self::ROLE_ADMIN
+                    : self::ROLE_EMPLOYEE;
+            }
+        });
+    }
 
     public function canAccessPanel(Panel $panel): bool
     {
         return (bool) $this->is_active;
+    }
+
+    public function resolvedRole(): string
+    {
+        return $this->role === self::ROLE_ADMIN
+            ? self::ROLE_ADMIN
+            : self::ROLE_EMPLOYEE;
+    }
+
+    public function canManageSystem(): bool
+    {
+        return $this->is_active && $this->resolvedRole() === self::ROLE_ADMIN;
+    }
+
+    public function canViewWorkspaces(): bool
+    {
+        return $this->is_active && in_array($this->resolvedRole(), [
+            self::ROLE_ADMIN,
+            self::ROLE_EMPLOYEE,
+        ], true);
+    }
+
+    public function canManageContactWorkspaceMutations(): bool
+    {
+        return $this->is_active && (bool) $this->is_admin;
     }
 
     protected function email(): Attribute

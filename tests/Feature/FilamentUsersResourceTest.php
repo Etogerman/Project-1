@@ -88,6 +88,7 @@ class FilamentUsersResourceTest extends TestCase
             'email' => 'manager@example.com',
             'is_active' => true,
             'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
         ]);
 
         $createdUser = User::where('email', 'manager@example.com')->firstOrFail();
@@ -149,6 +150,7 @@ class FilamentUsersResourceTest extends TestCase
         $this->assertSame('Editor Updated', $user->name);
         $this->assertFalse($user->is_active);
         $this->assertTrue($user->is_admin);
+        $this->assertSame(User::ROLE_ADMIN, $user->role);
         $this->assertSame($previousPasswordHash, $user->password);
     }
 

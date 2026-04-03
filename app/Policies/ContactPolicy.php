@@ -39,6 +39,6 @@ class ContactPolicy
 
     protected function canViewContacts(User $user): bool
     {
-        return $user->is_active && $user->is_admin;
+        return $user->canViewWorkspaces();
     }
 }

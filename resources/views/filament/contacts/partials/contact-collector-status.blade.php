@@ -56,7 +56,7 @@
         </article>
     </div>
 
-    @if ($canResume)
+    @if ($canResume && $canResumeAction)
         <div class="ac-actions ac-actions--between ac-surface__divider">
             <p class="ac-note ac-actions__hint">
                 Возобновление продолжит анкету с ближайшего безопасного шага и отправит следующий вопрос клиенту.

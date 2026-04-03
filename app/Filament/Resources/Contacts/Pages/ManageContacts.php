@@ -75,6 +75,10 @@ class ManageContacts extends ManageRecords
 
     public function claimMountedContact(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось взять контакт в работу')) {
+            return;
+        }
+
         $record = $this->getMountedTableActionRecord();
 
         if (! $record instanceof Contact) {
@@ -110,6 +114,10 @@ class ManageContacts extends ManageRecords
 
     public function releaseMountedContact(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось снять контакт с работы')) {
+            return;
+        }
+
         $record = $this->getMountedTableActionRecord();
 
         if (! $record instanceof Contact) {
@@ -145,6 +153,10 @@ class ManageContacts extends ManageRecords
 
     public function openAssignContactDialog(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось открыть выбор ответственного')) {
+            return;
+        }
+
         $record = $this->getMountedTableActionRecord();
 
         if (! $record instanceof Contact) {
@@ -171,6 +183,10 @@ class ManageContacts extends ManageRecords
 
     public function saveMountedContactAssignee(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось сохранить ответственного')) {
+            return;
+        }
+
         $record = $this->getMountedTableActionRecord();
 
         if (! $record instanceof Contact) {
@@ -211,6 +227,10 @@ class ManageContacts extends ManageRecords
 
     public function openEditPhoneDialog(int|string $phoneId): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось открыть редактирование номера')) {
+            return;
+        }
+
         try {
             $phoneNumber = $this->resolveMountedContactPhoneNumber($phoneId);
 
@@ -228,6 +248,10 @@ class ManageContacts extends ManageRecords
 
     public function openEditProfileDialog(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось открыть редактирование профиля')) {
+            return;
+        }
+
         $record = $this->getMountedTableActionRecord();
 
         if (! $record instanceof Contact) {
@@ -259,6 +283,10 @@ class ManageContacts extends ManageRecords
 
     public function saveMountedContactProfile(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось обновить профиль')) {
+            return;
+        }
+
         $validated = $this->validate([
             'editingFirstName' => ['nullable', 'string', 'max:255'],
             'editingLastName' => ['nullable', 'string', 'max:255'],
@@ -314,6 +342,10 @@ class ManageContacts extends ManageRecords
 
     public function saveMountedContactPhone(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось обновить номер')) {
+            return;
+        }
+
         $validated = $this->validate([
             'editingPhoneRaw' => ['required', 'string', 'max:64'],
         ]);
@@ -355,6 +387,10 @@ class ManageContacts extends ManageRecords
 
     public function openDeletePhoneDialog(int|string $phoneId): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось открыть удаление номера')) {
+            return;
+        }
+
         try {
             $phoneNumber = $this->resolveMountedContactPhoneNumber($phoneId);
 
@@ -377,6 +413,10 @@ class ManageContacts extends ManageRecords
 
     public function openDeleteContactDialog(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось открыть удаление контакта')) {
+            return;
+        }
+
         $record = $this->getMountedTableActionRecord();
 
         if (! $record instanceof Contact) {
@@ -410,6 +450,10 @@ class ManageContacts extends ManageRecords
 
     public function deleteMountedContact(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось удалить контакт')) {
+            return;
+        }
+
         try {
             $record = $this->getMountedTableActionRecord();
 
@@ -438,6 +482,10 @@ class ManageContacts extends ManageRecords
 
     public function deleteMountedContactPhone(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось удалить номер')) {
+            return;
+        }
+
         try {
             $record = $this->getMountedTableActionRecord();
 
@@ -478,6 +526,10 @@ class ManageContacts extends ManageRecords
 
     public function resumeMountedContactDataCollection(): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось возобновить анкету')) {
+            return;
+        }
+
         $record = $this->getMountedTableActionRecord();
 
         if (! $record instanceof Contact) {
@@ -533,6 +585,10 @@ class ManageContacts extends ManageRecords
 
     protected function setMountedContactAutoReplyEnabled(bool $isEnabled): void
     {
+        if ($this->abortIfContactMutationForbidden('Не удалось обновить автоответы')) {
+            return;
+        }
+
         $record = $this->getMountedTableActionRecord();
 
         if (! $record instanceof Contact) {
@@ -659,5 +715,28 @@ class ManageContacts extends ManageRecords
         $this->deletingContactLabel = '';
         $this->deletingContactHasMergeHistory = false;
         $this->deletingContactCounts = [];
+    }
+
+    protected function abortIfContactMutationForbidden(string $title): bool
+    {
+        if ($this->canCurrentEmployeeManageContactMutations()) {
+            return false;
+        }
+
+        Notification::make()
+            ->danger()
+            ->title($title)
+            ->body('Это действие доступно только администратору.')
+            ->send();
+
+        return true;
+    }
+
+    protected function canCurrentEmployeeManageContactMutations(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canManageContactWorkspaceMutations();
     }
 }

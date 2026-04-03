@@ -28,6 +28,7 @@ class UserFactory extends Factory
             'email_verified_at' => now(),
             'is_active' => true,
             'is_admin' => false,
+            'role' => \App\Models\User::ROLE_EMPLOYEE,
             'password' => static::$password ??= 'password',
             'remember_token' => Str::random(10),
         ];

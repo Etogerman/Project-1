@@ -8,16 +8,18 @@
             </p>
         </div>
 
-        <button
-            data-role="contact-edit-profile"
-            type="button"
-            wire:click="openEditProfileDialog"
-            wire:loading.attr="disabled"
-            wire:target="openEditProfileDialog,saveMountedContactProfile"
-            class="ac-button ac-button--primary-soft"
-        >
-            Изменить профиль
-        </button>
+        @if ($canEditProfile)
+            <button
+                data-role="contact-edit-profile"
+                type="button"
+                wire:click="openEditProfileDialog"
+                wire:loading.attr="disabled"
+                wire:target="openEditProfileDialog,saveMountedContactProfile"
+                class="ac-button ac-button--primary-soft"
+            >
+                Изменить профиль
+            </button>
+        @endif
     </div>
 
     <div class="ac-card-grid ac-surface__divider">
@@ -84,7 +86,7 @@
         </article>
     </div>
 
-    @if ($this->showEditProfileDialog)
+    @if ($canEditProfile && $this->showEditProfileDialog)
         <div data-role="contact-profile-edit-dialog-backdrop" class="ac-modal-backdrop">
             <div data-role="contact-profile-edit-dialog" class="ac-modal">
                 <div class="ac-modal__body">

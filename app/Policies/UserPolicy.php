@@ -38,6 +38,6 @@ class UserPolicy
 
     protected function canManageUsers(User $user): bool
     {
-        return $user->is_active && $user->is_admin;
+        return $user->canManageSystem();
     }
 }

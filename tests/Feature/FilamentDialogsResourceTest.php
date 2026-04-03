@@ -63,7 +63,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee($dialog->contact->display_name);
     }
 
-    public function test_non_admin_cannot_open_dialog_view_page(): void
+    public function test_employee_can_open_dialog_view_page_without_reply_composer(): void
     {
         $user = User::factory()->create([
             'is_active' => true,
@@ -73,10 +73,11 @@ class FilamentDialogsResourceTest extends TestCase
 
         $this->actingAs($user)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
-            ->assertForbidden();
+            ->assertOk()
+            ->assertDontSee('data-role="conversation-reply-form"', false);
     }
 
-    public function test_non_admin_cannot_open_dialogs_inbox_page(): void
+    public function test_employee_can_open_dialogs_inbox_page(): void
     {
         $user = User::factory()->create([
             'is_active' => true,
@@ -85,7 +86,8 @@ class FilamentDialogsResourceTest extends TestCase
 
         $this->actingAs($user)
             ->get(DialogResource::getUrl('index'))
-            ->assertForbidden();
+            ->assertOk()
+            ->assertSee('Диалоги');
     }
 
     public function test_dialogs_inbox_defaults_to_requires_manual_reply_filter(): void
@@ -915,6 +917,24 @@ class FilamentDialogsResourceTest extends TestCase
         Http::assertSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
             && str_contains($request->url(), 'chat_id=66552012')
             && $request['text'] === 'Ответ из dialog page');
+    }
+
+    public function test_employee_cannot_send_reply_from_dialog_page(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $initialMessagesCount = Message::query()->count();
+
+        Livewire::actingAs($employee)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->set('dialogReplyText', 'Employee reply attempt')
+            ->call('sendDialogReply')
+            ->assertNotified();
+
+        $this->assertSame($initialMessagesCount, Message::query()->count());
     }
 
     public function test_dialog_view_shows_auto_claim_hint_for_unassigned_contact(): void
