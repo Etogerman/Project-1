@@ -248,7 +248,7 @@ class ManageContacts extends ManageRecords
 
     public function openEditProfileDialog(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось открыть редактирование профиля')) {
+        if ($this->abortIfContactProfileForbidden('Не удалось открыть редактирование профиля')) {
             return;
         }
 
@@ -283,7 +283,7 @@ class ManageContacts extends ManageRecords
 
     public function saveMountedContactProfile(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось обновить профиль')) {
+        if ($this->abortIfContactProfileForbidden('Не удалось обновить профиль')) {
             return;
         }
 
@@ -732,6 +732,21 @@ class ManageContacts extends ManageRecords
         return true;
     }
 
+    protected function abortIfContactProfileForbidden(string $title): bool
+    {
+        if ($this->canCurrentEmployeeManageContactProfile()) {
+            return false;
+        }
+
+        Notification::make()
+            ->danger()
+            ->title($title)
+            ->body('Это действие недоступно текущему сотруднику.')
+            ->send();
+
+        return true;
+    }
+
     protected function abortIfContactOwnershipForbidden(string $title): bool
     {
         if ($this->canCurrentEmployeeManageContactOwnership()) {
@@ -753,6 +768,14 @@ class ManageContacts extends ManageRecords
 
         return $employee instanceof User
             && $employee->canManageContactWorkspaceMutations();
+    }
+
+    protected function canCurrentEmployeeManageContactProfile(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canManageContactProfile();
     }
 
     protected function canCurrentEmployeeManageContactOwnership(): bool
