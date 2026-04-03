@@ -4,10 +4,13 @@ namespace App\Filament\Resources\Contacts\Pages;
 
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Models\Contact;
+use App\Models\Tag;
 use App\Models\User;
+use App\Services\Contacts\AssignContactTagAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
+use App\Services\Contacts\RemoveContactTagAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\Contacts\ResolveRootContactAction;
@@ -31,6 +34,8 @@ class ManageContacts extends ManageRecords
 
     public bool $showAssignContactDialog = false;
     public string $selectedAssigneeId = '';
+    public bool $showAddTagDialog = false;
+    public string $selectedTagId = '';
     public bool $showEditPhoneDialog = false;
     public string $editingPhoneId = '';
     public string $editingPhoneRaw = '';
@@ -181,6 +186,33 @@ class ManageContacts extends ManageRecords
         $this->selectedAssigneeId = '';
     }
 
+    public function openAddTagDialog(): void
+    {
+        if ($this->abortIfContactMutationForbidden('Не удалось открыть выбор тега')) {
+            return;
+        }
+
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть выбор тега')
+                ->body('Не удалось определить текущий контакт.')
+                ->send();
+
+            return;
+        }
+
+        $this->selectedTagId = '';
+        $this->showAddTagDialog = true;
+    }
+
+    public function closeAddTagDialog(): void
+    {
+        $this->resetTagAssigningState();
+    }
+
     public function saveMountedContactAssignee(): void
     {
         if ($this->abortIfContactOwnershipForbidden('Не удалось сохранить ответственного')) {
@@ -220,6 +252,92 @@ class ManageContacts extends ManageRecords
             Notification::make()
                 ->danger()
                 ->title('Не удалось сохранить ответственного')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function saveMountedContactTag(): void
+    {
+        if ($this->abortIfContactMutationForbidden('Не удалось назначить тег')) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'selectedTagId' => ['required', 'integer', 'exists:tags,id'],
+        ]);
+
+        try {
+            $record = $this->getMountedTableActionRecord();
+
+            if (! $record instanceof Contact) {
+                throw new RuntimeException('Не удалось определить текущий контакт.');
+            }
+
+            $employee = $this->resolveCurrentEmployee();
+            $tag = Tag::query()
+                ->active()
+                ->whereKey((int) $validated['selectedTagId'])
+                ->first();
+
+            if (! $tag instanceof Tag) {
+                throw new RuntimeException('Не удалось выбрать активный тег.');
+            }
+
+            $contact = app(AssignContactTagAction::class)->handle($record, $tag, $employee);
+
+            $this->resetTagAssigningState();
+            $this->remountViewForContact($contact);
+
+            Notification::make()
+                ->success()
+                ->title('Тег назначен')
+                ->body('Изменения сохранены.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось назначить тег')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function removeMountedContactTag(int|string $tagId): void
+    {
+        if ($this->abortIfContactMutationForbidden('Не удалось снять тег')) {
+            return;
+        }
+
+        try {
+            $record = $this->getMountedTableActionRecord();
+
+            if (! $record instanceof Contact) {
+                throw new RuntimeException('Не удалось определить текущий контакт.');
+            }
+
+            $employee = $this->resolveCurrentEmployee();
+            $tag = $record->tags()
+                ->whereKey((int) $tagId)
+                ->first();
+
+            if (! $tag instanceof Tag) {
+                throw new RuntimeException('Не удалось определить выбранный тег.');
+            }
+
+            $contact = app(RemoveContactTagAction::class)->handle($record, $tag, $employee);
+
+            $this->replaceMountedTableActionWithEffectiveContact($contact);
+
+            Notification::make()
+                ->success()
+                ->title('Тег снят')
+                ->body('Изменения сохранены.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось снять тег')
                 ->body($throwable->getMessage())
                 ->send();
         }
@@ -675,6 +793,13 @@ class ManageContacts extends ManageRecords
         $this->editingPhoneId = '';
         $this->editingPhoneRaw = '';
         $this->resetErrorBag('editingPhoneRaw');
+    }
+
+    protected function resetTagAssigningState(): void
+    {
+        $this->showAddTagDialog = false;
+        $this->selectedTagId = '';
+        $this->resetErrorBag('selectedTagId');
     }
 
     protected function resetProfileEditingState(): void

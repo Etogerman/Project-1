@@ -12,6 +12,7 @@ use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\Tag;
 use App\Models\User;
 use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,13 +30,14 @@ class PurgeRuntimeDataCommandTest extends TestCase
 
         $this->artisan('maintenance:purge-runtime-data')
             ->expectsOutput('Runtime data purge dry-run completed.')
-            ->expectsOutputToContain('Runtime tables to purge: messages, dialogs, contact_phone_numbers, contact_identities, contact_merge_logs, contact_duplicate_reviews, contacts, channel_activity_logs, jobs, failed_jobs, job_batches')
+            ->expectsOutputToContain('Runtime tables to purge: messages, dialogs, contact_phone_numbers, contact_tag, contact_identities, contact_merge_logs, contact_duplicate_reviews, contacts, channel_activity_logs, jobs, failed_jobs, job_batches')
             ->expectsTable(
                 ['Table', 'Before', 'After'],
                 [
                     ['messages', '1', '1'],
                     ['dialogs', '1', '1'],
                     ['contact_phone_numbers', '1', '1'],
+                    ['contact_tag', '1', '1'],
                     ['contact_identities', '1', '1'],
                     ['contact_merge_logs', '1', '1'],
                     ['contact_duplicate_reviews', '1', '1'],
@@ -51,6 +53,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
         $this->assertDatabaseHas('contacts', ['id' => $fixture['contact']->id]);
         $this->assertDatabaseHas('dialogs', ['id' => $fixture['dialog']->id]);
         $this->assertDatabaseHas('messages', ['id' => $fixture['message']->id]);
+        $this->assertDatabaseHas('contact_tag', ['contact_id' => $fixture['contact']->id, 'tag_id' => $fixture['tag']->id]);
         $this->assertDatabaseHas('channel_activity_logs', ['id' => $fixture['activityLog']->id]);
         $this->assertSame(1, DB::table('jobs')->count());
         $this->assertSame(1, DB::table('failed_jobs')->count());
@@ -68,6 +71,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
         $this->assertDatabaseCount('messages', 0);
         $this->assertDatabaseCount('dialogs', 0);
         $this->assertDatabaseCount('contact_phone_numbers', 0);
+        $this->assertDatabaseCount('contact_tag', 0);
         $this->assertDatabaseCount('contact_identities', 0);
         $this->assertDatabaseCount('contact_merge_logs', 0);
         $this->assertDatabaseCount('contact_duplicate_reviews', 0);
@@ -80,6 +84,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
         $this->assertDatabaseHas('users', ['id' => $fixture['user']->id]);
         $this->assertDatabaseHas('channels', ['id' => $fixture['channel']->id]);
         $this->assertDatabaseHas('auto_reply_rules', ['id' => $fixture['rule']->id]);
+        $this->assertDatabaseHas('tags', ['id' => $fixture['tag']->id]);
     }
 
     public function test_force_is_blocked_in_production_without_confirm_flag(): void
@@ -116,6 +121,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
         $this->assertDatabaseCount('messages', 0);
         $this->assertDatabaseCount('dialogs', 0);
         $this->assertDatabaseCount('contact_phone_numbers', 0);
+        $this->assertDatabaseCount('contact_tag', 0);
         $this->assertDatabaseCount('contact_identities', 0);
         $this->assertDatabaseCount('contact_merge_logs', 0);
         $this->assertDatabaseCount('contact_duplicate_reviews', 0);
@@ -128,6 +134,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
         $this->assertDatabaseHas('users', ['id' => $fixture['user']->id]);
         $this->assertDatabaseHas('channels', ['id' => $fixture['channel']->id]);
         $this->assertDatabaseHas('auto_reply_rules', ['id' => $fixture['rule']->id]);
+        $this->assertDatabaseHas('tags', ['id' => $fixture['tag']->id]);
     }
 
     public function test_force_preserves_sessions_by_default(): void
@@ -173,6 +180,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
                     && is_string($context['driver'])
                     && $context['messages_count'] === 1
                     && $context['dialogs_count'] === 1
+                    && $context['contact_tag_count'] === 1
                     && $context['contacts_count'] === 2
                     && is_string($context['purged_at']);
             }));
@@ -197,6 +205,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
                     && is_string($context['driver'])
                     && $context['messages_count'] === 1
                     && $context['dialogs_count'] === 1
+                    && $context['contact_tag_count'] === 1
                     && $context['contacts_count'] === 2
                     && is_string($context['purged_at']);
             }));
@@ -226,6 +235,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
                     && is_string($context['driver'])
                     && $context['messages_count'] === 1
                     && $context['dialogs_count'] === 1
+                    && $context['contact_tag_count'] === 1
                     && $context['contacts_count'] === 2
                     && is_string($context['purged_at']);
             }));
@@ -241,6 +251,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
      *   dialog: Dialog,
      *   message: Message,
      *   phone: ContactPhoneNumber,
+     *   tag: Tag,
      *   review: ContactDuplicateReview,
      *   mergeLog: ContactMergeLog,
      *   activityLog: ChannelActivityLog
@@ -258,6 +269,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
                 'dialog' => Dialog::query()->firstOrFail(),
                 'message' => Message::query()->firstOrFail(),
                 'phone' => ContactPhoneNumber::query()->firstOrFail(),
+                'tag' => Tag::query()->firstOrFail(),
                 'review' => ContactDuplicateReview::query()->firstOrFail(),
                 'mergeLog' => ContactMergeLog::query()->firstOrFail(),
                 'activityLog' => ChannelActivityLog::query()->firstOrFail(),
@@ -294,6 +306,16 @@ class PurgeRuntimeDataCommandTest extends TestCase
         ]);
         $phone = ContactPhoneNumber::factory()->create([
             'contact_id' => $contact->id,
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => 'Runtime Fixture',
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+        $contact->tags()->attach($tag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => $user->id,
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
         $review = ContactDuplicateReview::factory()->create([
             'contact_id' => $contact->id,
@@ -345,7 +367,7 @@ class PurgeRuntimeDataCommandTest extends TestCase
             'finished_at' => null,
         ]);
 
-        return compact('user', 'channel', 'rule', 'contact', 'identity', 'dialog', 'message', 'phone', 'review', 'mergeLog', 'activityLog');
+        return compact('user', 'channel', 'rule', 'contact', 'identity', 'dialog', 'message', 'phone', 'tag', 'review', 'mergeLog', 'activityLog');
     }
 
     private function seedSessionRow(string $id): void

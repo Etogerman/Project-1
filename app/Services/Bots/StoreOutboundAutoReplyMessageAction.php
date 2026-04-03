@@ -3,6 +3,7 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\AutoReplyDeliveryResult;
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
@@ -14,14 +15,22 @@ class StoreOutboundAutoReplyMessageAction
     public function __construct(
         private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
         private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
+        private readonly ApplyAutoReplyRuleTagEffectsAction $applyAutoReplyRuleTagEffectsAction,
     ) {}
 
-    public function handle(Channel $channel, Message $inboundMessage, AutoReplyDeliveryResult $deliveryResult): Message
+    public function handle(
+        Channel $channel,
+        Message $inboundMessage,
+        AutoReplyDeliveryResult $deliveryResult,
+        ?AutoReplyRule $matchedRule = null,
+    ): Message
     {
-        return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult): Message {
+        return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult, $matchedRule): Message {
             $inboundMessage->forceFill([
                 'auto_reply_sent_at' => now(),
             ])->save();
+
+            $contact = $inboundMessage->contact()->firstOrFail();
 
             $outboundMessage = Message::query()->create([
                 'contact_id' => $inboundMessage->contact_id,
@@ -40,7 +49,7 @@ class StoreOutboundAutoReplyMessageAction
 
             $outboundMessage = $this->syncMessageDialogMetadataAction->handle(
                 $outboundMessage,
-                $inboundMessage->contact()->firstOrFail(),
+                $contact,
                 $channel,
                 $inboundMessage->contactIdentity,
                 $inboundMessage->external_chat_id,
@@ -48,6 +57,10 @@ class StoreOutboundAutoReplyMessageAction
                 null,
                 Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
             );
+
+            if ($matchedRule instanceof AutoReplyRule) {
+                $this->applyAutoReplyRuleTagEffectsAction->handle($contact, $matchedRule);
+            }
 
             $this->queueBitrix24LiveMessageExportAction->handle($outboundMessage);
 

@@ -4,7 +4,10 @@ namespace App\Filament\Resources\AutoReplyRules;
 
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
 use App\Models\AutoReplyRule;
+use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
+use App\Models\Tag;
+use App\Services\Bots\SyncAutoReplyRuleTagEffectsAction;
 use BackedEnum;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
@@ -21,6 +24,9 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -41,6 +47,11 @@ class AutoReplyRuleResource extends Resource
     protected static ?int $navigationSort = 20;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedDocumentText;
+
+    public static function getEloquentQuery(): Builder
+    {
+        return parent::getEloquentQuery()->with(['channel', 'tagEffects.tag']);
+    }
 
     public static function form(Schema $schema): Schema
     {
@@ -100,6 +111,48 @@ class AutoReplyRuleResource extends Resource
                             ->inline(false),
                     ])
                     ->columns(2),
+                Section::make('Теги')
+                    ->schema([
+                        Select::make('assign_tag_ids')
+                            ->label('Назначить теги')
+                            ->options(fn (?AutoReplyRule $record): array => static::getTagOptions($record))
+                            ->multiple()
+                            ->searchable()
+                            ->preload()
+                            ->native(false)
+                            ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                $record?->loadMissing('tagEffects');
+
+                                $component->state(
+                                    $record?->tagEffects
+                                        ->where('effect', AutoReplyRuleTagEffect::EFFECT_ASSIGN)
+                                        ->pluck('tag_id')
+                                        ->map(fn (mixed $tagId): int => (int) $tagId)
+                                        ->all() ?? [],
+                                );
+                            })
+                            ->helperText('Эти теги будут назначены контакту только после успешной отправки автоответа.'),
+                        Select::make('remove_tag_ids')
+                            ->label('Снять теги')
+                            ->options(fn (?AutoReplyRule $record): array => static::getTagOptions($record))
+                            ->multiple()
+                            ->searchable()
+                            ->preload()
+                            ->native(false)
+                            ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                $record?->loadMissing('tagEffects');
+
+                                $component->state(
+                                    $record?->tagEffects
+                                        ->where('effect', AutoReplyRuleTagEffect::EFFECT_REMOVE)
+                                        ->pluck('tag_id')
+                                        ->map(fn (mixed $tagId): int => (int) $tagId)
+                                        ->all() ?? [],
+                                );
+                            })
+                            ->helperText('Эти теги будут сняты только после успешной отправки автоответа.'),
+                    ])
+                    ->columns(2),
             ]);
     }
 
@@ -142,6 +195,13 @@ class AutoReplyRuleResource extends Resource
                             ?? AutoReplyRule::maxButtonTypeOptions()[$state]
                             ?? $state)
                         : '—'),
+                TextColumn::make('tag_effects_summary')
+                    ->label('Теги')
+                    ->state(fn (AutoReplyRule $record): string => static::formatTagEffectsSummary($record))
+                    ->placeholder('—')
+                    ->wrap()
+                    ->limit(80)
+                    ->tooltip(fn (AutoReplyRule $record): string => static::formatTagEffectsSummary($record)),
                 TextColumn::make('is_active')
                     ->label('Активно')
                     ->badge()
@@ -168,8 +228,8 @@ class AutoReplyRuleResource extends Resource
             ->emptyStateDescription('Создайте первое правило для точного совпадения текста.')
             ->recordActions([
                 EditAction::make()
-                    ->using(function (array $data, AutoReplyRule $record): void {
-                        $record->update(static::mutateAutoReplyRuleData($data, $record));
+                    ->using(function (array $data, AutoReplyRule $record): AutoReplyRule {
+                        return static::saveAutoReplyRule($data, $record);
                     }),
                 DeleteAction::make(),
             ])
@@ -212,6 +272,38 @@ class AutoReplyRuleResource extends Resource
         static::guardAgainstConflictingRule($data, $record);
 
         return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public static function saveAutoReplyRule(array $data, ?AutoReplyRule $record = null): AutoReplyRule
+    {
+        $tagEffects = static::extractTagEffectIds($data);
+        $ruleData = static::mutateAutoReplyRuleData(
+            Arr::except($data, ['assign_tag_ids', 'remove_tag_ids']),
+            $record,
+        );
+
+        /** @var AutoReplyRule $rule */
+        $rule = DB::transaction(function () use ($record, $ruleData, $tagEffects): AutoReplyRule {
+            if ($record instanceof AutoReplyRule) {
+                $record->update($ruleData);
+                $rule = $record;
+            } else {
+                $rule = AutoReplyRule::query()->create($ruleData);
+            }
+
+            app(SyncAutoReplyRuleTagEffectsAction::class)->handle(
+                $rule,
+                $tagEffects['assignTagIds'],
+                $tagEffects['removeTagIds'],
+            );
+
+            return $rule;
+        });
+
+        return $rule->fresh(['channel', 'tagEffects.tag']) ?? $rule;
     }
 
     /**
@@ -379,5 +471,89 @@ class AutoReplyRuleResource extends Resource
         }
 
         return (string) $record->keyword;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array{assignTagIds:list<int>, removeTagIds:list<int>}
+     */
+    protected static function extractTagEffectIds(array $data): array
+    {
+        return [
+            'assignTagIds' => static::normalizeTagIds($data['assign_tag_ids'] ?? []),
+            'removeTagIds' => static::normalizeTagIds($data['remove_tag_ids'] ?? []),
+        ];
+    }
+
+    /**
+     * @param  list<int|string>|mixed  $tagIds
+     * @return list<int>
+     */
+    protected static function normalizeTagIds(mixed $tagIds): array
+    {
+        return collect(Arr::wrap($tagIds))
+            ->map(fn (mixed $tagId): int => (int) $tagId)
+            ->filter(fn (int $tagId): bool => $tagId > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected static function getTagOptions(?AutoReplyRule $record = null): array
+    {
+        $currentTagIds = $record?->tagEffects()
+            ->pluck('tag_id')
+            ->map(fn (mixed $tagId): int => (int) $tagId)
+            ->all() ?? [];
+
+        return Tag::query()
+            ->where(function (Builder $query) use ($currentTagIds): void {
+                $query->where('is_active', true);
+
+                if ($currentTagIds !== []) {
+                    $query->orWhereIn('id', $currentTagIds);
+                }
+            })
+            ->orderBy('name')
+            ->get()
+            ->mapWithKeys(fn (Tag $tag): array => [
+                $tag->id => $tag->is_active
+                    ? $tag->name
+                    : $tag->name.' (отключён)',
+            ])
+            ->all();
+    }
+
+    protected static function formatTagEffectsSummary(AutoReplyRule $record): string
+    {
+        $record->loadMissing('tagEffects.tag');
+
+        $assignTags = $record->tagEffects
+            ->where('effect', AutoReplyRuleTagEffect::EFFECT_ASSIGN)
+            ->map(fn (AutoReplyRuleTagEffect $effect): string => $effect->tag?->name ?? ('#'.$effect->tag_id))
+            ->sort()
+            ->values()
+            ->all();
+        $removeTags = $record->tagEffects
+            ->where('effect', AutoReplyRuleTagEffect::EFFECT_REMOVE)
+            ->map(fn (AutoReplyRuleTagEffect $effect): string => $effect->tag?->name ?? ('#'.$effect->tag_id))
+            ->sort()
+            ->values()
+            ->all();
+
+        $parts = [];
+
+        if ($assignTags !== []) {
+            $parts[] = 'Назначить: '.implode(', ', $assignTags);
+        }
+
+        if ($removeTags !== []) {
+            $parts[] = 'Снять: '.implode(', ', $removeTags);
+        }
+
+        return $parts === [] ? '—' : implode(' | ', $parts);
     }
 }

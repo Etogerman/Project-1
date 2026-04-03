@@ -143,7 +143,7 @@ class BotAutoReplyService
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
         };
 
-        $this->storeOutboundAutoReplyMessageAction->handle($channel, $storedMessage, $deliveryResult);
+        $this->storeOutboundAutoReplyMessageAction->handle($channel, $storedMessage, $deliveryResult, $matchedRule);
 
         $channel->markReplySent();
 

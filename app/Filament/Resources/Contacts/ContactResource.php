@@ -10,6 +10,7 @@ use App\Models\ContactDuplicateReview;
 use App\Models\Dialog;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
+use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\DeleteContactAction;
@@ -31,6 +32,7 @@ use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Database\Eloquent\Builder;
@@ -99,6 +101,7 @@ class ContactResource extends Resource
             ->with([
                 'assignedUser',
                 'mergedInto',
+                'tags',
                 'primaryIdentity.channel',
                 'latestConversationMessage.channel',
                 'latestInboundMessage.channel',
@@ -180,6 +183,16 @@ class ContactResource extends Resource
                             ->hiddenLabel()
                             ->view('filament.contacts.partials.contact-profile')
                             ->viewData(fn (Contact $record): array => static::buildContactProfileViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
+                Section::make('Теги')
+                    ->schema([
+                        ViewEntry::make('contact_tags')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.contact-tags')
+                            ->viewData(fn (Contact $record): array => static::buildTagsViewData($record))
                             ->columnSpanFull(),
                     ])
                     ->columns(1)
@@ -335,6 +348,11 @@ class ContactResource extends Resource
                     ->description(fn (Contact $record): ?string => static::formatPhoneCountSummary($record))
                     ->copyable(fn (Contact $record): bool => filled($record->getAttribute('primary_phone_raw')))
                     ->copyableState(fn (Contact $record): ?string => $record->getAttribute('primary_phone_raw')),
+                TextColumn::make('tags_summary')
+                    ->label('Теги')
+                    ->toggleable()
+                    ->html()
+                    ->state(fn (Contact $record): HtmlString => static::renderContactTableTags($record)),
                 TextColumn::make('latest_message_text')
                     ->label('Последнее сообщение')
                     ->toggleable()
@@ -428,6 +446,17 @@ class ContactResource extends Resource
                 Filter::make('without_phone')
                     ->label('Без телефона')
                     ->query(fn (Builder $query): Builder => $query->whereDoesntHave('phoneNumbers')),
+                SelectFilter::make('tags')
+                    ->label('Теги')
+                    ->multiple()
+                    ->preload()
+                    ->relationship(
+                        'tags',
+                        'name',
+                        fn (Builder $query): Builder => $query
+                            ->where('is_active', true)
+                            ->orderBy('name'),
+                    ),
             ])
             ->columnManager()
             ->deferColumnManager(false)
@@ -447,6 +476,8 @@ class ContactResource extends Resource
                         $schema?->fill();
                         $livewire->showAssignContactDialog = false;
                         $livewire->selectedAssigneeId = '';
+                        $livewire->showAddTagDialog = false;
+                        $livewire->selectedTagId = '';
                         $livewire->showEditPhoneDialog = false;
                         $livewire->editingPhoneId = '';
                         $livewire->editingPhoneRaw = '';
@@ -1128,6 +1159,38 @@ class ContactResource extends Resource
 
     /**
      * @return array{
+     *     canManageTags: bool,
+     *     tags: array<int, array{id:int,name:string,slug:string,color:string,is_active:bool}>,
+     *     availableTags: array<int, string>
+     * }
+     */
+    protected static function buildTagsViewData(Contact $record): array
+    {
+        $record->loadMissing('tags');
+        $assignedTagIds = $record->tags
+            ->pluck('id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
+
+        return [
+            'canManageTags' => static::canCurrentUserManageContactMutations(),
+            'tags' => $record->tags
+                ->sortBy('name')
+                ->values()
+                ->map(fn (Tag $tag): array => [
+                    'id' => $tag->id,
+                    'name' => $tag->name,
+                    'slug' => $tag->slug,
+                    'color' => $tag->color,
+                    'is_active' => $tag->is_active,
+                ])
+                ->all(),
+            'availableTags' => static::getAvailableTagOptions($assignedTagIds),
+        ];
+    }
+
+    /**
+     * @return array{
      *     phoneNumbers: array<int, array{id:int, phone:string, source:string, is_primary:bool}>,
      *     canEditPhones: bool,
      *     canDeletePhones: bool
@@ -1151,6 +1214,36 @@ class ContactResource extends Resource
             'canEditPhones' => static::canCurrentUserEditExistingContactPhones(),
             'canDeletePhones' => static::canCurrentUserDeleteExistingContactPhones(),
         ];
+    }
+
+    protected static function renderContactTableTags(Contact $record): HtmlString
+    {
+        $record->loadMissing('tags');
+
+        if ($record->tags->isEmpty()) {
+            return new HtmlString('—');
+        }
+
+        $visibleTags = $record->tags
+            ->sortBy('name')
+            ->take(3)
+            ->map(fn (Tag $tag): string => sprintf(
+                '<span class="ac-pill" data-tone="%s">%s</span>',
+                e($tag->color),
+                e($tag->name),
+            ))
+            ->implode(' ');
+
+        $remainingCount = $record->tags->count() - min($record->tags->count(), 3);
+
+        if ($remainingCount > 0) {
+            $visibleTags .= ' '.sprintf(
+                '<span class="ac-pill" data-tone="gray">+%d</span>',
+                $remainingCount,
+            );
+        }
+
+        return new HtmlString($visibleTags);
     }
 
     /**
@@ -1208,6 +1301,24 @@ class ContactResource extends Resource
             ->filter(fn (User $user): bool => $user->canBeAssignedToContacts())
             ->pluck('name', 'id')
             ->map(fn (string $name, int|string $id): string => filled($name) ? $name : 'Сотрудник #'.$id)
+            ->all();
+    }
+
+    /**
+     * @param  list<int>  $excludedTagIds
+     * @return array<int, string>
+     */
+    protected static function getAvailableTagOptions(array $excludedTagIds = []): array
+    {
+        return Tag::query()
+            ->active()
+            ->when(
+                $excludedTagIds !== [],
+                fn (Builder $query): Builder => $query->whereNotIn('id', $excludedTagIds),
+            )
+            ->orderBy('name')
+            ->get()
+            ->mapWithKeys(fn (Tag $tag): array => [$tag->id => $tag->name])
             ->all();
     }
 
