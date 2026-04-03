@@ -341,7 +341,37 @@
     }
 
     .ac-user-form-modal .fi-input-wrp {
+        border-color: color-mix(in srgb, var(--ac-border-strong) 90%, var(--ac-text-soft));
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--ac-surface-strong) 88%, var(--ac-page-bg-alt) 12%) 0%,
+            color-mix(in srgb, var(--ac-surface-muted) 92%, white 8%) 100%
+        );
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.72),
+            0 1px 2px rgba(15, 23, 42, 0.04);
         transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    }
+
+    .ac-user-form-modal .fi-input::placeholder {
+        color: color-mix(in srgb, var(--ac-text-soft) 88%, var(--ac-text-muted));
+    }
+
+    .ac-user-form-modal .fi-input-wrp-prefix,
+    .ac-user-form-modal .fi-input-wrp-suffix {
+        background: color-mix(in srgb, var(--ac-surface-muted) 84%, white 16%);
+    }
+
+    .ac-user-form-modal .fi-input-wrp-prefix {
+        border-inline-end: 1px solid color-mix(in srgb, var(--ac-border-strong) 85%, transparent);
+    }
+
+    .ac-user-form-modal .fi-input-wrp-suffix {
+        border-inline-start: 1px solid color-mix(in srgb, var(--ac-border-strong) 85%, transparent);
+    }
+
+    .ac-user-form-modal .fi-input-wrp-actions {
+        color: var(--ac-text-soft);
     }
 
     .ac-user-form-modal .fi-input-wrp:hover {
@@ -402,7 +432,11 @@
     }
 
     .ac-user-form-field .fi-input-wrp {
-        background: color-mix(in srgb, var(--ac-surface-strong) 92%, white 8%);
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--ac-surface-strong) 86%, var(--ac-page-bg-alt) 14%) 0%,
+            color-mix(in srgb, var(--ac-surface-muted) 90%, white 10%) 100%
+        );
     }
 
     .ac-user-form-toggle {
