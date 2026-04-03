@@ -32,10 +32,6 @@
             <p class="ac-note ac-note--danger">
                 {{ $blockedReason }}
             </p>
-        @elseif ($canClaim)
-            <p class="ac-note ac-note--warning">
-                Ответственный пока не выбран. Если отправить сообщение сейчас, контакт автоматически закрепится за вами.
-            </p>
         @endif
 
         <label for="conversation-reply-textarea" class="ac-field-label">

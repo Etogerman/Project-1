@@ -63,7 +63,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee($dialog->contact->display_name);
     }
 
-    public function test_employee_can_open_dialog_view_page_without_reply_composer(): void
+    public function test_employee_can_open_dialog_view_page_with_reply_composer(): void
     {
         $user = User::factory()->create([
             'is_active' => true,
@@ -74,7 +74,7 @@ class FilamentDialogsResourceTest extends TestCase
         $this->actingAs($user)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
-            ->assertDontSee('data-role="conversation-reply-form"', false);
+            ->assertSee('data-role="conversation-reply-form"', false);
     }
 
     public function test_employee_can_open_dialogs_inbox_page(): void
@@ -912,32 +912,53 @@ class FilamentDialogsResourceTest extends TestCase
 
         $dialog->contact->refresh();
 
-        $this->assertSame($admin->id, $dialog->contact->assigned_user_id);
+        $this->assertNull($dialog->contact->assigned_user_id);
 
         Http::assertSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
             && str_contains($request->url(), 'chat_id=66552012')
             && $request['text'] === 'Ответ из dialog page');
     }
 
-    public function test_employee_cannot_send_reply_from_dialog_page(): void
+    public function test_employee_can_send_reply_from_dialog_page_without_reassigning_foreign_contact(): void
     {
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response([
+                'message' => [
+                    'message_id' => 'max-employee-reply-001',
+                ],
+            ]),
+        ]);
+
         $employee = User::factory()->create([
             'is_active' => true,
             'is_admin' => false,
         ]);
+        $owner = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
         $dialog = $this->createDialogWithMessages();
-        $initialMessagesCount = Message::query()->count();
+        $dialog->contact->update([
+            'assigned_user_id' => $owner->id,
+        ]);
 
+        $initialMessagesCount = Message::query()->count();
         Livewire::actingAs($employee)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->set('dialogReplyText', 'Employee reply attempt')
             ->call('sendDialogReply')
-            ->assertNotified();
+            ->assertNotified()
+            ->assertDispatched('dialog-reply-sent')
+            ->assertSee('Employee reply attempt');
 
-        $this->assertSame($initialMessagesCount, Message::query()->count());
+        $this->assertSame($initialMessagesCount + 1, Message::query()->count());
+
+        $dialog->contact->refresh();
+
+        $this->assertSame($owner->id, $dialog->contact->assigned_user_id);
     }
 
-    public function test_dialog_view_shows_auto_claim_hint_for_unassigned_contact(): void
+    public function test_dialog_view_does_not_show_auto_claim_hint_for_unassigned_contact(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -950,10 +971,10 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
-            ->assertSee('Ответственный пока не выбран. Его можно выбрать выше, либо просто отправить сообщение — контакт закрепится за вами автоматически.');
+            ->assertDontSee('контакт закрепится за вами автоматически');
     }
 
-    public function test_dialog_view_disables_reply_for_foreign_assignee(): void
+    public function test_dialog_view_does_not_block_reply_for_foreign_assignee(): void
     {
         $owner = User::factory()->create([
             'is_active' => true,
@@ -971,7 +992,8 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
-            ->assertSee('Контакт уже назначен сотруднику Другой сотрудник.');
+            ->assertDontSee('Контакт уже назначен сотруднику Другой сотрудник.')
+            ->assertSee('data-role="conversation-reply-form"', false);
     }
 
     public function test_dialog_view_disables_reply_for_unsendable_exact_dialog(): void

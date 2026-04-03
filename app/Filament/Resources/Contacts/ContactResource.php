@@ -1100,7 +1100,8 @@ class ContactResource extends Resource
             'ownershipHint' => static::getOwnershipHint($record),
             'autoReplyEnabled' => $record->isAutoReplyEnabled(),
             'autoReplyStatusLabel' => $record->isAutoReplyEnabled() ? 'Включены' : 'Отключены',
-            'canManageOwnership' => static::canCurrentUserManageContactMutations(),
+            'canManageOwnership' => static::canCurrentUserManageContactOwnership(),
+            'canManageAutoReply' => static::canCurrentUserManageContactMutations(),
             'canDeleteContact' => static::canDeleteContactFromUi($record),
             'deleteBlockedReason' => static::canCurrentUserManageContactMutations()
                 ? static::getDeleteBlockedReason($record)
@@ -1180,8 +1181,9 @@ class ContactResource extends Resource
     {
         return User::query()
             ->where('is_active', true)
-            ->where('is_admin', true)
             ->orderBy('name')
+            ->get()
+            ->filter(fn (User $user): bool => $user->canBeAssignedToContacts())
             ->pluck('name', 'id')
             ->map(fn (string $name, int|string $id): string => filled($name) ? $name : 'Сотрудник #'.$id)
             ->all();
@@ -1236,6 +1238,11 @@ class ContactResource extends Resource
     protected static function canCurrentUserManageContactMutations(): bool
     {
         return static::currentUser()?->canManageContactWorkspaceMutations() ?? false;
+    }
+
+    protected static function canCurrentUserManageContactOwnership(): bool
+    {
+        return static::currentUser()?->canManageContactOwnership() ?? false;
     }
 
     protected static function currentUser(): ?User

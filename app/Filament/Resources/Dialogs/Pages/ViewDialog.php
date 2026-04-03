@@ -187,7 +187,6 @@ class ViewDialog extends ViewRecord
      *     isVisible:bool,
      *     canReply:bool,
      *     blockedReason:?string,
-     *     canClaim:bool,
      *     autoReplyEnabled:bool,
      *     replyTextModel:string,
      *     replyErrorModel:string,
@@ -202,7 +201,6 @@ class ViewDialog extends ViewRecord
             'isVisible' => $this->canCurrentUserManageDialogReplies(),
             'canReply' => $this->canCurrentUserReplyToDialog(),
             'blockedReason' => $this->getDialogReplyBlockedReason(),
-            'canClaim' => $this->canCurrentUserClaimDialog(),
             'autoReplyEnabled' => $replyOwner?->isAutoReplyEnabled() ?? false,
             'replyTextModel' => 'dialogReplyText',
             'replyErrorModel' => 'dialogReplyText',
@@ -326,17 +324,7 @@ class ViewDialog extends ViewRecord
             return false;
         }
 
-        return in_array($this->getDialogOwnershipState(), ['mine', 'unassigned'], true)
-            && $this->getDialogRouteBlockedReason() === null;
-    }
-
-    protected function canCurrentUserClaimDialog(): bool
-    {
-        if (! $this->canCurrentUserManageDialogReplies()) {
-            return false;
-        }
-
-        return $this->getDialogOwnershipState() === 'unassigned';
+        return $this->getDialogRouteBlockedReason() === null;
     }
 
     protected function canCurrentUserManageDialogReplies(): bool
@@ -344,40 +332,12 @@ class ViewDialog extends ViewRecord
         $employee = auth()->user();
 
         return $employee instanceof User
-            && $employee->canManageContactWorkspaceMutations();
+            && $employee->canReplyInDialogs();
     }
 
     protected function getDialogReplyBlockedReason(): ?string
     {
-        return match ($this->getDialogOwnershipState()) {
-            'other' => filled($this->resolveReplyOwnerContact()?->assignedUser?->name)
-                ? 'Контакт уже назначен сотруднику '.$this->resolveReplyOwnerContact()->assignedUser->name.'.'
-                : 'Контакт уже назначен другому сотруднику.',
-            default => $this->getDialogRouteBlockedReason(),
-        };
-    }
-
-    protected function getDialogOwnershipState(): string
-    {
-        $contact = $this->resolveReplyOwnerContact();
-
-        if (! $contact instanceof Contact) {
-            return 'other';
-        }
-
-        $contact->loadMissing('assignedUser');
-
-        if (! $contact->isAssigned()) {
-            return 'unassigned';
-        }
-
-        $currentUserId = auth()->user()?->id;
-
-        if (($currentUserId !== null) && ((int) $contact->assigned_user_id === (int) $currentUserId)) {
-            return 'mine';
-        }
-
-        return 'other';
+        return $this->getDialogRouteBlockedReason();
     }
 
     protected function getDialogRouteBlockedReason(): ?string

@@ -8,7 +8,6 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
-use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
@@ -21,7 +20,6 @@ class SendManualDialogReplyAction
 {
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
-        protected ClaimContactAction $claimContactAction,
         protected ResolveRootContactAction $resolveRootContactAction,
         protected MessageChronology $messageChronology,
         protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
@@ -32,7 +30,7 @@ class SendManualDialogReplyAction
 
     public function handle(Dialog $dialog, User $employee, string $text): Message
     {
-        if (! $employee->is_active || ! $employee->is_admin) {
+        if (! $employee->canReplyInDialogs()) {
             throw new AuthorizationException();
         }
 
@@ -56,18 +54,6 @@ class SendManualDialogReplyAction
 
         if ($blockedReason !== null) {
             throw new InvalidArgumentException($blockedReason);
-        }
-
-        if (! $effectiveContact->isAssigned()) {
-            $effectiveContact = $this->claimContactAction->handle($effectiveContact, $employee);
-        }
-
-        if (! $effectiveContact->isAssignedTo($employee)) {
-            throw new InvalidArgumentException(
-                filled($effectiveContact->assignedUser?->name)
-                    ? 'Контакт уже назначен сотруднику '.$effectiveContact->assignedUser->name.'.'
-                    : 'Контакт уже назначен другому сотруднику.',
-            );
         }
 
         $channel = $dialog->channel;

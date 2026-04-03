@@ -56,7 +56,7 @@
                     <span wire:loading wire:target="openAssignContactDialog,saveMountedContactAssignee">Открываем...</span>
                 </button>
 
-                @if ($autoReplyEnabled)
+                @if ($canManageAutoReply && $autoReplyEnabled)
                     <button
                         data-role="contact-disable-auto-reply"
                         type="button"
@@ -67,7 +67,7 @@
                     >
                         Отключить автоответы
                     </button>
-                @else
+                @elseif ($canManageAutoReply)
                     <button
                         data-role="contact-enable-auto-reply"
                         type="button"
@@ -169,7 +169,7 @@
         </div>
     @endif
 
-    @if ($canManageOwnership && $this->showDeleteContactDialog)
+    @if ($canDeleteContact && $this->showDeleteContactDialog)
         <div data-role="contact-delete-dialog-backdrop" class="ac-modal-backdrop">
             <div data-role="contact-delete-dialog" class="ac-modal ac-modal--sm">
                 <div class="ac-modal__body">

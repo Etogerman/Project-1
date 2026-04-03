@@ -239,7 +239,7 @@ class SendManualDialogReplyActionTest extends TestCase
         $this->assertNotSame($olderInbound->id, $outboundMessage->reply_to_message_id);
     }
 
-    public function test_send_manual_dialog_reply_auto_claims_unassigned_contact(): void
+    public function test_send_manual_dialog_reply_keeps_unassigned_contact_without_auto_claim(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -259,17 +259,24 @@ class SendManualDialogReplyActionTest extends TestCase
         app(SendManualDialogReplyAction::class)->handle(
             $dialog,
             $employee,
-            'Автозахват перед ответом',
+            'Ответ без автозахвата',
         );
 
         $dialog->contact->refresh();
 
-        $this->assertSame($employee->id, $dialog->contact->assigned_user_id);
+        $this->assertNull($dialog->contact->assigned_user_id);
     }
 
-    public function test_send_manual_dialog_reply_blocks_foreign_assignee(): void
+    public function test_send_manual_dialog_reply_allows_employee_for_foreign_assignee_without_reassigning_contact(): void
     {
-        Http::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 99103,
+                ],
+            ]),
+        ]);
 
         $owner = User::factory()->create([
             'is_active' => true,
@@ -278,18 +285,18 @@ class SendManualDialogReplyActionTest extends TestCase
         ]);
         $employee = User::factory()->create([
             'is_active' => true,
-            'is_admin' => true,
+            'is_admin' => false,
         ]);
         $dialog = $this->createTelegramDialog(assignedUserId: $owner->id, externalChatId: 'chat-foreign');
 
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Контакт уже назначен сотруднику Другой сотрудник.');
-
-        app(SendManualDialogReplyAction::class)->handle(
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
             $dialog,
             $employee,
-            'Попытка чужого ответа',
+            'Ответ по чужому контакту',
         );
+
+        $this->assertSame($dialog->id, $outboundMessage->dialog_id);
+        $this->assertSame($owner->id, $dialog->contact->fresh()->assigned_user_id);
     }
 
     public function test_send_manual_dialog_reply_supports_max_user_route_without_chat_id(): void

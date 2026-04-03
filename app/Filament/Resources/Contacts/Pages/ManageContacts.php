@@ -75,7 +75,7 @@ class ManageContacts extends ManageRecords
 
     public function claimMountedContact(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось взять контакт в работу')) {
+        if ($this->abortIfContactOwnershipForbidden('Не удалось взять контакт в работу')) {
             return;
         }
 
@@ -101,7 +101,7 @@ class ManageContacts extends ManageRecords
             Notification::make()
                 ->success()
                 ->title('Контакт взят в работу')
-                ->body('Теперь ручной ответ доступен только вам.')
+                ->body('Теперь вы указаны ответственным за этот контакт.')
                 ->send();
         } catch (Throwable $throwable) {
             Notification::make()
@@ -114,7 +114,7 @@ class ManageContacts extends ManageRecords
 
     public function releaseMountedContact(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось снять контакт с работы')) {
+        if ($this->abortIfContactOwnershipForbidden('Не удалось снять контакт с работы')) {
             return;
         }
 
@@ -153,7 +153,7 @@ class ManageContacts extends ManageRecords
 
     public function openAssignContactDialog(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось открыть выбор ответственного')) {
+        if ($this->abortIfContactOwnershipForbidden('Не удалось открыть выбор ответственного')) {
             return;
         }
 
@@ -183,7 +183,7 @@ class ManageContacts extends ManageRecords
 
     public function saveMountedContactAssignee(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось сохранить ответственного')) {
+        if ($this->abortIfContactOwnershipForbidden('Не удалось сохранить ответственного')) {
             return;
         }
 
@@ -732,11 +732,34 @@ class ManageContacts extends ManageRecords
         return true;
     }
 
+    protected function abortIfContactOwnershipForbidden(string $title): bool
+    {
+        if ($this->canCurrentEmployeeManageContactOwnership()) {
+            return false;
+        }
+
+        Notification::make()
+            ->danger()
+            ->title($title)
+            ->body('Это действие недоступно текущему сотруднику.')
+            ->send();
+
+        return true;
+    }
+
     protected function canCurrentEmployeeManageContactMutations(): bool
     {
         $employee = auth()->user();
 
         return $employee instanceof User
             && $employee->canManageContactWorkspaceMutations();
+    }
+
+    protected function canCurrentEmployeeManageContactOwnership(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canManageContactOwnership();
     }
 }
