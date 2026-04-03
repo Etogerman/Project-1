@@ -227,7 +227,7 @@ class ManageContacts extends ManageRecords
 
     public function openEditPhoneDialog(int|string $phoneId): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось открыть редактирование номера')) {
+        if ($this->abortIfContactPhoneEditForbidden('Не удалось открыть редактирование номера')) {
             return;
         }
 
@@ -342,7 +342,7 @@ class ManageContacts extends ManageRecords
 
     public function saveMountedContactPhone(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось обновить номер')) {
+        if ($this->abortIfContactPhoneEditForbidden('Не удалось обновить номер')) {
             return;
         }
 
@@ -762,6 +762,21 @@ class ManageContacts extends ManageRecords
         return true;
     }
 
+    protected function abortIfContactPhoneEditForbidden(string $title): bool
+    {
+        if ($this->canCurrentEmployeeEditExistingContactPhones()) {
+            return false;
+        }
+
+        Notification::make()
+            ->danger()
+            ->title($title)
+            ->body('Это действие недоступно текущему сотруднику.')
+            ->send();
+
+        return true;
+    }
+
     protected function canCurrentEmployeeManageContactMutations(): bool
     {
         $employee = auth()->user();
@@ -784,5 +799,13 @@ class ManageContacts extends ManageRecords
 
         return $employee instanceof User
             && $employee->canManageContactOwnership();
+    }
+
+    protected function canCurrentEmployeeEditExistingContactPhones(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canEditExistingContactPhones();
     }
 }
