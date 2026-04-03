@@ -359,7 +359,6 @@ class Contact extends Model
             ->orderByDesc('assigned_at')
             ->orderByDesc('id');
     }
-
     public function tags(): BelongsToMany
     {
         return $this->belongsToMany(Tag::class)

@@ -4,11 +4,13 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessAutoReplyJob;
 use App\Models\AutoReplyRule;
+use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
+use App\Models\Tag;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -150,6 +152,291 @@ class ProcessAutoReplyJobTest extends TestCase
             'reply_to_message_id' => $message->id,
             'external_message_id' => 'max-out-9001',
         ]);
+    }
+
+    public function test_job_assigns_configured_tags_after_successful_auto_reply(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9201,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+        $assignedTag = Tag::factory()->create([
+            'name' => 'VIP',
+            'color' => Tag::COLOR_SUCCESS,
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Автоответ с тегом.',
+            'is_active' => true,
+        ]);
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $assignedTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-tag-assign',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $message->contact_id,
+            'tag_id' => $assignedTag->id,
+            'assigned_by_user_id' => null,
+        ]);
+    }
+
+    public function test_job_removes_configured_tags_after_successful_auto_reply(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9202,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+        $tagToRemove = Tag::factory()->create([
+            'name' => 'Новый',
+            'color' => Tag::COLOR_WARNING,
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Снимаем тег.',
+            'is_active' => true,
+        ]);
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $tagToRemove->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_REMOVE,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-tag-remove',
+        ]);
+        Contact::query()->findOrFail($message->contact_id)->tags()->attach($tagToRemove->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        $this->assertDatabaseMissing('contact_tag', [
+            'contact_id' => $message->contact_id,
+            'tag_id' => $tagToRemove->id,
+        ]);
+    }
+
+    public function test_job_can_replace_old_tag_with_new_one_after_successful_auto_reply(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9203,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+        $oldTag = Tag::factory()->create([
+            'name' => 'Новый клиент',
+            'color' => Tag::COLOR_WARNING,
+        ]);
+        $newTag = Tag::factory()->create([
+            'name' => 'Прогретый',
+            'color' => Tag::COLOR_SUCCESS,
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Меняем сегмент.',
+            'is_active' => true,
+        ]);
+        AutoReplyRuleTagEffect::query()->insert([
+            [
+                'auto_reply_rule_id' => $rule->id,
+                'tag_id' => $newTag->id,
+                'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'auto_reply_rule_id' => $rule->id,
+                'tag_id' => $oldTag->id,
+                'effect' => AutoReplyRuleTagEffect::EFFECT_REMOVE,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-tag-replace',
+        ]);
+        Contact::query()->findOrFail($message->contact_id)->tags()->attach($oldTag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        $this->assertDatabaseMissing('contact_tag', [
+            'contact_id' => $message->contact_id,
+            'tag_id' => $oldTag->id,
+        ]);
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $message->contact_id,
+            'tag_id' => $newTag->id,
+        ]);
+    }
+
+    public function test_job_does_not_duplicate_tag_effects_on_repeat_dispatch(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9204,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+        $assignedTag = Tag::factory()->create([
+            'name' => 'Повторный',
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Ретрай без дублей.',
+            'is_active' => true,
+        ]);
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $assignedTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-tag-repeat',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        $this->assertDatabaseCount('contact_tag', 1);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $message->contact_id,
+            'tag_id' => $assignedTag->id,
+        ]);
+    }
+
+    public function test_job_does_not_change_tags_when_delivery_fails(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => false,
+            ], 500),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+        $assignedTag = Tag::factory()->create([
+            'name' => 'Не должен назначиться',
+            'color' => Tag::COLOR_DANGER,
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Падение доставки.',
+            'is_active' => true,
+        ]);
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $assignedTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-tag-fail',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected auto reply job to throw on failed delivery.');
+        } catch (\Throwable) {
+        }
+
+        $message->refresh();
+
+        $this->assertNull($message->auto_reply_sent_at);
+        $this->assertDatabaseMissing('contact_tag', [
+            'contact_id' => $message->contact_id,
+            'tag_id' => $assignedTag->id,
+        ]);
+        $this->assertDatabaseCount('messages', 1);
     }
 
     public function test_job_does_not_send_when_auto_reply_was_already_sent(): void

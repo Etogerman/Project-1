@@ -16,9 +16,7 @@ class ManageAutoReplyRules extends ManageRecords
         return [
             CreateAction::make()
                 ->label('Добавить правило')
-                ->using(fn (array $data): AutoReplyRule => AutoReplyRule::query()->create(
-                    AutoReplyRuleResource::mutateAutoReplyRuleData($data)
-                ))
+                ->using(fn (array $data): AutoReplyRule => AutoReplyRuleResource::saveAutoReplyRule($data))
                 ->createAnother(false),
         ];
     }

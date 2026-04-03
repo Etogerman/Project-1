@@ -146,6 +146,10 @@ class MergeContactsAction
                 phones: $phones,
                 triggerPhone: $triggerPhone,
             );
+            $this->mergeTags(
+                primary: $lockedPrimary,
+                secondary: $lockedSecondary,
+            );
 
             $lockedPrimary->refresh();
 
@@ -355,6 +359,47 @@ class MergeContactsAction
         }
 
         return $phonesMovedCount;
+    }
+
+    private function mergeTags(Contact $primary, Contact $secondary): void
+    {
+        $secondaryTagRows = DB::table('contact_tag')
+            ->where('contact_id', $secondary->id)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+
+        if ($secondaryTagRows->isEmpty()) {
+            return;
+        }
+
+        $existingPrimaryTagIds = DB::table('contact_tag')
+            ->where('contact_id', $primary->id)
+            ->pluck('tag_id')
+            ->all();
+
+        $existingPrimaryTagIds = array_fill_keys(array_map('intval', $existingPrimaryTagIds), true);
+
+        foreach ($secondaryTagRows as $tagRow) {
+            $tagId = (int) $tagRow->tag_id;
+
+            if (array_key_exists($tagId, $existingPrimaryTagIds)) {
+                DB::table('contact_tag')
+                    ->where('id', $tagRow->id)
+                    ->delete();
+
+                continue;
+            }
+
+            DB::table('contact_tag')
+                ->where('id', $tagRow->id)
+                ->update([
+                    'contact_id' => $primary->id,
+                    'updated_at' => now(),
+                ]);
+
+            $existingPrimaryTagIds[$tagId] = true;
+        }
     }
 
     private function synchronizeDerivedLocationState(Contact $contact): void

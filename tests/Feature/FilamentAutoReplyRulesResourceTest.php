@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
 use App\Models\AutoReplyRule;
+use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
+use App\Models\Tag;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -156,6 +158,145 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame(AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE, $rule->contact_phone_condition);
         $this->assertNull($rule->keyword);
         $this->assertNull($rule->normalized_keyword);
+    }
+
+    public function test_admin_can_save_tag_effects_for_auto_reply_rule(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $assignTag = Tag::factory()->create([
+            'name' => 'VIP',
+            'color' => Tag::COLOR_SUCCESS,
+            'is_active' => true,
+        ]);
+        $removeTag = Tag::factory()->create([
+            'name' => 'Новый',
+            'color' => Tag::COLOR_WARNING,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'reply_text' => 'Подтверждаем тегирование',
+                'assign_tag_ids' => [$assignTag->id],
+                'remove_tag_ids' => [$removeTag->id],
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        $this->assertDatabaseHas('auto_reply_rule_tag_effects', [
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $assignTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+        $this->assertDatabaseHas('auto_reply_rule_tag_effects', [
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $removeTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_REMOVE,
+        ]);
+    }
+
+    public function test_admin_can_update_tag_effects_for_auto_reply_rule(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $oldAssignTag = Tag::factory()->create([
+            'name' => 'Старый assign',
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+        $newAssignTag = Tag::factory()->create([
+            'name' => 'Новый assign',
+            'color' => Tag::COLOR_SUCCESS,
+        ]);
+        $removeTag = Tag::factory()->create([
+            'name' => 'Снять метку',
+            'color' => Tag::COLOR_DANGER,
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+        ]);
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $oldAssignTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('edit', $rule, [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'contact_phone_condition' => null,
+                'reply_text' => 'Обновили эффекты',
+                'assign_tag_ids' => [$newAssignTag->id],
+                'remove_tag_ids' => [$removeTag->id],
+                'is_active' => true,
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $this->assertDatabaseMissing('auto_reply_rule_tag_effects', [
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $oldAssignTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+        $this->assertDatabaseHas('auto_reply_rule_tag_effects', [
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $newAssignTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+        $this->assertDatabaseHas('auto_reply_rule_tag_effects', [
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $removeTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_REMOVE,
+        ]);
+    }
+
+    public function test_same_tag_cannot_be_assigned_and_removed_in_same_rule(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => 'Конфликтный тег',
+            'color' => Tag::COLOR_WARNING,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'reply_text' => 'Конфликт',
+                'assign_tag_ids' => [$tag->id],
+                'remove_tag_ids' => [$tag->id],
+                'is_active' => true,
+            ]);
+
+        $this->assertDatabaseCount('auto_reply_rules', 0);
+        $this->assertDatabaseCount('auto_reply_rule_tag_effects', 0);
     }
 
     public function test_admin_can_create_contains_text_and_exact_parameter_rules(): void

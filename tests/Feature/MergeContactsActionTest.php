@@ -10,6 +10,7 @@ use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\MergeContactsAction;
 use Illuminate\Database\QueryException;
@@ -133,6 +134,47 @@ class MergeContactsActionTest extends TestCase
             'phone_normalized' => '+79991112233',
             'is_primary' => false,
         ]);
+        $primaryOnlyTag = Tag::factory()->create([
+            'name' => 'Primary only',
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+        $sharedTag = Tag::factory()->create([
+            'name' => 'Shared tag',
+            'color' => Tag::COLOR_SUCCESS,
+        ]);
+        $secondaryOnlyTag = Tag::factory()->create([
+            'name' => 'Secondary only',
+            'color' => Tag::COLOR_WARNING,
+        ]);
+
+        $primary->tags()->attach([
+            $primaryOnlyTag->id => [
+                'assigned_at' => now()->subHours(4),
+                'assigned_by_user_id' => $assignedUser->id,
+                'created_at' => now()->subHours(4),
+                'updated_at' => now()->subHours(4),
+            ],
+            $sharedTag->id => [
+                'assigned_at' => now()->subHours(3),
+                'assigned_by_user_id' => $assignedUser->id,
+                'created_at' => now()->subHours(3),
+                'updated_at' => now()->subHours(3),
+            ],
+        ]);
+        $secondary->tags()->attach([
+            $sharedTag->id => [
+                'assigned_at' => now()->subHours(2),
+                'assigned_by_user_id' => $assignedUser->id,
+                'created_at' => now()->subHours(2),
+                'updated_at' => now()->subHours(2),
+            ],
+            $secondaryOnlyTag->id => [
+                'assigned_at' => now()->subHour(),
+                'assigned_by_user_id' => $assignedUser->id,
+                'created_at' => now()->subHour(),
+                'updated_at' => now()->subHour(),
+            ],
+        ]);
 
         ContactDuplicateReview::factory()->create([
             'contact_id' => $primary->id,
@@ -231,6 +273,27 @@ class MergeContactsActionTest extends TestCase
         $this->assertSame($secondary->id, $duplicatePhone->contact_id);
         $this->assertSame($primary->id, $primaryPhone->contact_id);
         $this->assertTrue($primaryPhone->is_primary);
+        $this->assertDatabaseCount('contact_tag', 3);
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $primary->id,
+            'tag_id' => $primaryOnlyTag->id,
+        ]);
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $primary->id,
+            'tag_id' => $sharedTag->id,
+        ]);
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $primary->id,
+            'tag_id' => $secondaryOnlyTag->id,
+        ]);
+        $this->assertDatabaseMissing('contact_tag', [
+            'contact_id' => $secondary->id,
+            'tag_id' => $sharedTag->id,
+        ]);
+        $this->assertDatabaseMissing('contact_tag', [
+            'contact_id' => $secondary->id,
+            'tag_id' => $secondaryOnlyTag->id,
+        ]);
 
         $this->assertDatabaseHas('contact_merge_logs', [
             'id' => $result->mergeLogId,
