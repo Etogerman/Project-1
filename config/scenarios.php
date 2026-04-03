@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Channel;
+
 return [
     /*
     |--------------------------------------------------------------------------
@@ -10,5 +12,10 @@ return [
     | storage and future routing layers. Values are handler class names.
     |
     */
-    'warmup' => \App\Services\Scenarios\WarmupScenario::class,
+    'warmup' => [
+        'handler' => \App\Services\Scenarios\WarmupScenario::class,
+        'platforms' => [
+            Channel::PLATFORM_TELEGRAM,
+        ],
+    ],
 ];

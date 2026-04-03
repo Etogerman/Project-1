@@ -9,6 +9,7 @@ use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Message;
+use App\Models\ScenarioChannelBinding;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -334,6 +335,191 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertHasNoTableActionErrors();
 
         $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->fresh()->auto_reply_mode);
+    }
+
+    public function test_admin_can_open_manage_scenarios_modal_for_telegram_channel(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionVisible('manageScenarios', $channel)
+            ->mountTableAction('manageScenarios', $channel)
+            ->assertMountedActionModalSee('Сценарии канала')
+            ->assertMountedActionModalSee('Активные сценарии')
+            ->assertMountedActionModalSee('warmup')
+            ->assertTableActionDataSet([
+                'scenario_codes' => [],
+            ]);
+    }
+
+    public function test_manage_scenarios_modal_shows_empty_state_for_max_channel(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('manageScenarios', $channel)
+            ->assertMountedActionModalSee('Сценарии канала')
+            ->assertMountedActionModalSee('Для этого канала нет доступных сценариев');
+    }
+
+    public function test_admin_can_enable_warmup_scenario_for_telegram_channel(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('manageScenarios', $channel, [
+                'scenario_codes' => ['warmup'],
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_manage_scenarios_does_not_create_duplicate_bindings_and_can_reactivate_existing_one(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('manageScenarios', $channel, [
+                'scenario_codes' => ['warmup'],
+            ])
+            ->assertHasNoTableActionErrors()
+            ->callTableAction('manageScenarios', $channel, [
+                'scenario_codes' => ['warmup'],
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $this->assertSame(1, ScenarioChannelBinding::query()
+            ->where('channel_id', $channel->id)
+            ->where('scenario_code', 'warmup')
+            ->count());
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_admin_can_disable_existing_compatible_scenario_binding_without_deleting_it(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('manageScenarios', $channel, [
+                'scenario_codes' => [],
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $this->assertSame(1, ScenarioChannelBinding::query()
+            ->where('channel_id', $channel->id)
+            ->where('scenario_code', 'warmup')
+            ->count());
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => false,
+        ]);
+    }
+
+    public function test_admin_cannot_enable_incompatible_scenario_for_max_channel(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('manageScenarios', $channel, [
+                'scenario_codes' => ['warmup'],
+            ])
+            ->assertHasTableActionErrors();
+
+        $this->assertDatabaseCount('scenario_channel_bindings', 0);
+    }
+
+    public function test_manage_scenarios_deactivates_existing_incompatible_active_binding(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('manageScenarios', $channel, [
+                'scenario_codes' => [],
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => false,
+        ]);
     }
 
     public function test_admin_can_view_latest_messages_in_channel_view_modal(): void

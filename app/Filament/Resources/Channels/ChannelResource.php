@@ -9,10 +9,14 @@ use App\Models\Message;
 use App\Services\Bots\RegisterChannelWebhookAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
 use App\Services\Dialogs\MessageChronology;
+use App\Services\Scenarios\ScenarioRegistry;
+use App\Services\Scenarios\SyncChannelScenarioBindingsAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
+use Filament\Forms\Components\CheckboxList;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
@@ -420,6 +424,50 @@ class ChannelResource extends Resource
 
                             throw $throwable;
                         }
+                    }),
+                Action::make('manageScenarios')
+                    ->label('Сценарии')
+                    ->icon(Heroicon::OutlinedAdjustmentsHorizontal)
+                    ->color('gray')
+                    ->iconButton()
+                    ->tooltip('Сценарии')
+                    ->modalWidth(Width::Large)
+                    ->modalHeading('Сценарии канала')
+                    ->modalSubmitActionLabel('Сохранить')
+                    ->fillForm(function (Channel $record): array {
+                        $scenarioRegistry = app(ScenarioRegistry::class);
+                        $compatibleScenarioCodes = $scenarioRegistry->compatibleScenarioCodesForChannel($record);
+
+                        return [
+                            'scenario_codes' => $record->scenarioBindings()
+                                ->active()
+                                ->whereIn('scenario_code', $compatibleScenarioCodes)
+                                ->pluck('scenario_code')
+                                ->all(),
+                        ];
+                    })
+                    ->form([
+                        Placeholder::make('no_scenarios')
+                            ->hiddenLabel()
+                            ->content('Для этого канала нет доступных сценариев')
+                            ->visible(fn (Channel $record): bool => app(ScenarioRegistry::class)->optionsForChannel($record) === []),
+                        CheckboxList::make('scenario_codes')
+                            ->label('Активные сценарии')
+                            ->options(fn (Channel $record): array => app(ScenarioRegistry::class)->optionsForChannel($record))
+                            ->hidden(fn (Channel $record): bool => app(ScenarioRegistry::class)->optionsForChannel($record) === [])
+                            ->columns(1),
+                    ])
+                    ->action(function (Channel $record, array $data): void {
+                        app(SyncChannelScenarioBindingsAction::class)->handle(
+                            $record,
+                            (array) data_get($data, 'scenario_codes', []),
+                        );
+
+                        Notification::make()
+                            ->success()
+                            ->title('Сценарии обновлены')
+                            ->body('Настройки сценариев для канала сохранены.')
+                            ->send();
                     }),
                 ViewAction::make()
                     ->modalWidth(Width::SevenExtraLarge)
