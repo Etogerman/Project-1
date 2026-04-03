@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Users\Pages;
 use App\Filament\Resources\Users\UserResource;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ManageRecords;
+use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 
 class ManageUsers extends ManageRecords
@@ -17,6 +18,8 @@ class ManageUsers extends ManageRecords
             CreateAction::make()
                 ->label('Добавить пользователя')
                 ->modalWidth(Width::FourExtraLarge)
+                ->modalFooterActionsAlignment(Alignment::End)
+                ->extraModalWindowAttributes(['class' => 'ac-user-form-modal'])
                 ->createAnother(false),
         ];
     }

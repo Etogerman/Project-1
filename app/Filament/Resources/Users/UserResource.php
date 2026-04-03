@@ -13,6 +13,7 @@ use Filament\Infolists\Components\ViewEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
@@ -55,14 +56,17 @@ class UserResource extends Resource
             ->components([
                 Section::make('Основное')
                     ->description('Базовые данные сотрудника для входа и отображения в админке.')
+                    ->extraAttributes(['class' => 'ac-user-form-section ac-user-form-section--profile'])
                     ->schema([
                         TextInput::make('name')
                             ->label('Имя')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-user-form-field'])
                             ->required()
                             ->maxLength(255),
                         TextInput::make('email')
                             ->label('Email')
                             ->email()
+                            ->extraFieldWrapperAttributes(['class' => 'ac-user-form-field'])
                             ->required()
                             ->unique(ignoreRecord: true)
                             ->mutateStateForValidationUsing(fn (?string $state): ?string => static::normalizeEmail($state))
@@ -72,16 +76,19 @@ class UserResource extends Resource
                     ->columns(2),
                 Section::make('Доступ')
                     ->description('Управление активностью учётной записи и административными правами.')
+                    ->extraAttributes(['class' => 'ac-user-form-section ac-user-form-section--access'])
                     ->schema([
                         Toggle::make('is_active')
                             ->label('Активен')
                             ->default(true)
+                            ->extraFieldWrapperAttributes(['class' => 'ac-user-form-toggle'])
                             ->disabled(fn (?User $record, string $operation): bool => $operation === 'edit' && auth()->id() === $record?->id)
                             ->helperText('Отключённый сотрудник не сможет войти в панель.')
                             ->inline(false),
                         Toggle::make('is_admin')
                             ->label('Администратор')
                             ->default(false)
+                            ->extraFieldWrapperAttributes(['class' => 'ac-user-form-toggle'])
                             ->disabled(fn (?User $record, string $operation): bool => $operation === 'edit' && auth()->id() === $record?->id)
                             ->helperText('Администратор управляет сотрудниками и настройками панели.')
                             ->inline(false),
@@ -91,11 +98,14 @@ class UserResource extends Resource
                     ->description(fn (string $operation): string => $operation === 'create'
                         ? 'Укажите пароль для нового сотрудника.'
                         : 'Оставьте поля пустыми, если пароль менять не нужно.')
+                    ->extraAttributes(['class' => 'ac-user-form-section ac-user-form-section--password'])
+                    ->columnSpanFull()
                     ->schema([
                         TextInput::make('password')
                             ->label('Пароль')
                             ->password()
                             ->revealable()
+                            ->extraFieldWrapperAttributes(['class' => 'ac-user-form-field'])
                             ->required(fn (string $operation): bool => $operation === 'create')
                             ->dehydrated(fn (?string $state): bool => filled($state))
                             ->same('password_confirmation')
@@ -105,6 +115,7 @@ class UserResource extends Resource
                             ->label('Подтверждение пароля')
                             ->password()
                             ->revealable()
+                            ->extraFieldWrapperAttributes(['class' => 'ac-user-form-field'])
                             ->dehydrated(false)
                             ->required(fn (string $operation): bool => $operation === 'create'),
                     ])
@@ -150,12 +161,14 @@ class UserResource extends Resource
                 TextColumn::make('is_active')
                     ->label('Статус')
                     ->badge()
+                    ->extraAttributes(['class' => 'ac-user-table-badge'])
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключён')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
                     ->sortable(),
                 TextColumn::make('is_admin')
                     ->label('Роль')
                     ->badge()
+                    ->extraAttributes(['class' => 'ac-user-table-badge'])
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Администратор' : 'Сотрудник')
                     ->color(fn (bool $state): string => $state ? 'warning' : 'gray')
                     ->sortable(),
@@ -183,9 +196,13 @@ class UserResource extends Resource
             ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
                 ViewAction::make()
-                    ->modalWidth(Width::FourExtraLarge),
+                    ->modalWidth(Width::FourExtraLarge)
+                    ->extraAttributes(['class' => 'ac-user-table-action']),
                 EditAction::make()
                     ->modalWidth(Width::FourExtraLarge)
+                    ->extraAttributes(['class' => 'ac-user-table-action'])
+                    ->modalFooterActionsAlignment(Alignment::End)
+                    ->extraModalWindowAttributes(['class' => 'ac-user-form-modal'])
                     ->beforeFormValidated(function (EditAction $action): void {
                         $record = $action->getRecord();
 
