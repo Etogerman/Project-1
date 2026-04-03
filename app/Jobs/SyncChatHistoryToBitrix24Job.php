@@ -15,6 +15,8 @@ class SyncChatHistoryToBitrix24Job implements ShouldQueue
 {
     use Queueable;
 
+    public int $timeout = 75;
+
     public function __construct(
         public readonly int $contactId,
     ) {}

@@ -11,6 +11,8 @@ class DedupeBitrix24ContactPhonesJob implements ShouldQueue
 {
     use Queueable;
 
+    public int $timeout = 60;
+
     private const MAX_ATTEMPTS = 2;
 
     private const RETRY_DELAY_SECONDS = 30;

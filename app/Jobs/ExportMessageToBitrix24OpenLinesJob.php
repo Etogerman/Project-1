@@ -15,6 +15,8 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
 {
     use Queueable;
 
+    public int $timeout = 60;
+
     public function __construct(
         public readonly int $messageId,
         public readonly bool $retryAfterSync = false,
