@@ -48,8 +48,8 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->assertSee('Сохранить матрицу')
             ->assertSee('Сбросить несохранённые изменения')
             ->assertSee('не управляет реальным доступом')
-            ->assertSee('Включено')
-            ->assertSee('Выключено')
+            ->assertDontSee('Включено')
+            ->assertDontSee('Выключено')
             ->assertDontSee('contacts.phone.edit_existing');
     }
 
