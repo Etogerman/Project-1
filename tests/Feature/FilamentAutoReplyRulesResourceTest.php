@@ -10,6 +10,7 @@ use App\Models\Channel;
 use App\Models\Tag;
 use App\Models\User;
 use Filament\Facades\Filament;
+use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -177,6 +178,30 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->assertHasNoTableActionErrors();
 
         $this->assertModelMissing($rule);
+    }
+
+    public function test_auto_reply_rules_table_uses_live_column_manager_and_icon_only_edit_action(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $rule = AutoReplyRule::factory()->create();
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->assertTableActionHasIcon('edit', Heroicon::OutlinedPencilSquare, $rule)
+            ->assertTableActionDoesNotHaveLabel('edit', $rule)
+            ->tap(function ($component): void {
+                $table = $component->instance()->getTable();
+
+                $this->assertTrue($table->hasColumnManager());
+                $this->assertFalse($table->hasDeferredColumnManager());
+                $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertTrue($table->getColumn('match_scope')?->isToggleable());
+                $this->assertTrue($table->getColumn('contact_phone_condition')?->isToggleable());
+                $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
+            });
     }
 
     public function test_normalized_keyword_must_be_unique_within_channel(): void

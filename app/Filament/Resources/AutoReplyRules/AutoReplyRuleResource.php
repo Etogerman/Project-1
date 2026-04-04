@@ -9,6 +9,7 @@ use App\Models\Channel;
 use App\Models\Tag;
 use App\Services\Bots\SyncAutoReplyRuleTagEffectsAction;
 use BackedEnum;
+use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Select;
@@ -19,6 +20,8 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Alignment;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
@@ -58,6 +61,8 @@ class AutoReplyRuleResource extends Resource
         return $schema
             ->components([
                 Section::make('Правило автоответа')
+                    ->description('Канал, условия срабатывания и содержимое ответа.')
+                    ->extraAttributes(['class' => 'ac-auto-reply-form-section'])
                     ->schema([
                         Select::make('channel_id')
                             ->label('Канал')
@@ -108,10 +113,13 @@ class AutoReplyRuleResource extends Resource
                         Toggle::make('is_active')
                             ->label('Активно')
                             ->default(true)
-                            ->inline(false),
+                            ->inline(false)
+                            ->extraAttributes(['class' => 'ac-auto-reply-form-toggle']),
                     ])
                     ->columns(2),
                 Section::make('Теги')
+                    ->description('Эффекты применяются только после успешной отправки автоответа.')
+                    ->extraAttributes(['class' => 'ac-auto-reply-form-section'])
                     ->schema([
                         Select::make('assign_tag_ids')
                             ->label('Назначить теги')
@@ -219,11 +227,31 @@ class AutoReplyRuleResource extends Resource
                     ->trueLabel('Только активные')
                     ->falseLabel('Только отключённые'),
             ])
+            ->filtersTriggerAction(
+                fn (Action $action): Action => $action
+                    ->tooltip('Фильтры')
+                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+            )
+            ->columnManager()
+            ->deferColumnManager(false)
+            ->columnManagerWidth(Width::Medium)
+            ->columnManagerTriggerAction(
+                fn (Action $action): Action => $action
+                    ->tooltip('Столбцы')
+                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+            )
             ->defaultSort('created_at', 'desc')
             ->emptyStateHeading('Правила автоответа ещё не добавлены')
             ->emptyStateDescription('Создайте первое правило для точного совпадения текста.')
+            ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
                 EditAction::make()
+                    ->icon(Heroicon::OutlinedPencilSquare)
+                    ->iconButton()
+                    ->tooltip('Изменить правило')
+                    ->modalWidth(Width::FiveExtraLarge)
+                    ->modalFooterActionsAlignment(Alignment::End)
+                    ->extraModalWindowAttributes(['class' => 'ac-auto-reply-form-modal'])
                     ->using(function (array $data, AutoReplyRule $record): AutoReplyRule {
                         return static::saveAutoReplyRule($data, $record);
                     }),
