@@ -31,15 +31,16 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
             ->assertOk()
             ->assertSee('Матрица ролей и прав')
-            ->assertSee('Рабочий контур')
-            ->assertSee('Системные настройки')
+            ->assertSee('Контакты')
+            ->assertSee('Системные разделы')
             ->assertSee('Администратор')
             ->assertSee('Сотрудник')
             ->assertSee('contacts.view')
-            ->assertSee('contacts.phone.edit_existing')
-            ->assertSee('contacts.phone.delete_existing')
+            ->assertSee('contacts.edit')
+            ->assertSee('dialogs.delete')
+            ->assertSee('Подготовительное право')
             ->assertSee('bitrix24.view')
-            ->assertDontSee('contacts.phone.create');
+            ->assertDontSee('contacts.phone.edit_existing');
     }
 
     public function test_employee_cannot_access_role_permission_matrix_page(): void
