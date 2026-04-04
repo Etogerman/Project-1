@@ -482,10 +482,10 @@ class ContactResource extends Resource
             ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
                 ViewAction::make()
-                    ->label('Просмотр')
-                    ->icon(null)
-                    ->button()
-                    ->outlined()
+                    ->icon(Heroicon::OutlinedEye)
+                    ->iconButton()
+                    ->color('gray')
+                    ->tooltip('Просмотр')
                     ->modalWidth(Width::SevenExtraLarge)
                     ->mountUsing(function (Action $action, ?Schema $schema, ManageContacts $livewire): void {
                         $schema?->fill();
@@ -511,9 +511,10 @@ class ContactResource extends Resource
                         $livewire->deletingContactLabel = '';
                     }),
                 DeleteAction::make()
-                    ->label('Удалить')
-                    ->icon(null)
-                    ->button()
+                    ->icon(Heroicon::OutlinedTrash)
+                    ->iconButton()
+                    ->color('danger')
+                    ->tooltip('Удалить')
                     ->visible(fn (Contact $record): bool => static::canDeleteContactFromUi($record))
                     ->authorize(fn (): bool => static::canCurrentUserDeleteContact())
                     ->modalHeading(fn (Contact $record): string => static::resolveDeleteContactModalHeading($record))

@@ -18,6 +18,7 @@ use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
 use Filament\Facades\Filament;
+use Filament\Support\Icons\Heroicon;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -78,8 +79,7 @@ class FilamentContactsResourceTest extends TestCase
             ->get('/admin/contacts')
             ->assertOk()
             ->assertSee('Контакты')
-            ->assertSee('Кнопки')
-            ->assertSee('Просмотр');
+            ->assertSee('Кнопки');
 
         $this->assertSame('Контакты', ContactResource::getNavigationLabel());
 
@@ -97,7 +97,11 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableFilterExists('duplicate_review_pending')
             ->assertTableFilterExists('tags')
             ->assertTableActionExists('view', null, $contact)
+            ->assertTableActionHasIcon('view', Heroicon::OutlinedEye, $contact)
+            ->assertTableActionDoesNotHaveLabel('view', $contact)
             ->assertTableActionExists('delete', null, $contact)
+            ->assertTableActionHasIcon('delete', Heroicon::OutlinedTrash, $contact)
+            ->assertTableActionDoesNotHaveLabel('delete', $contact)
             ->assertTableActionDoesNotExist('edit', null, $contact)
             ->assertTableHeaderActionsExistInOrder([]);
     }

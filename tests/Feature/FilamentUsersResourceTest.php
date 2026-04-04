@@ -6,6 +6,7 @@ use App\Filament\Resources\Users\Pages\ManageUsers;
 use App\Filament\Resources\Users\UserResource;
 use App\Models\User;
 use Filament\Facades\Filament;
+use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -49,7 +50,13 @@ class FilamentUsersResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageUsers::class)
-            ->assertCanSeeTableRecords([$admin, $member]);
+            ->assertCanSeeTableRecords([$admin, $member])
+            ->assertTableActionExists('view', null, $member)
+            ->assertTableActionHasIcon('view', Heroicon::OutlinedEye, $member)
+            ->assertTableActionDoesNotHaveLabel('view', $member)
+            ->assertTableActionExists('edit', null, $member)
+            ->assertTableActionHasIcon('edit', Heroicon::OutlinedPencilSquare, $member)
+            ->assertTableActionDoesNotHaveLabel('edit', $member);
     }
 
     public function test_non_admin_user_cannot_access_users_resource(): void

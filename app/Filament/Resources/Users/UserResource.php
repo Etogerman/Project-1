@@ -202,9 +202,17 @@ class UserResource extends Resource
             ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
                 ViewAction::make()
+                    ->icon(Heroicon::OutlinedEye)
+                    ->iconButton()
+                    ->color('gray')
+                    ->tooltip('Просмотр')
                     ->modalWidth(Width::FourExtraLarge)
                     ->extraAttributes(['class' => 'ac-user-table-action']),
                 EditAction::make()
+                    ->icon(Heroicon::OutlinedPencilSquare)
+                    ->iconButton()
+                    ->color('gray')
+                    ->tooltip('Изменить')
                     ->modalWidth(Width::FourExtraLarge)
                     ->extraAttributes(['class' => 'ac-user-table-action'])
                     ->modalFooterActionsAlignment(Alignment::End)
