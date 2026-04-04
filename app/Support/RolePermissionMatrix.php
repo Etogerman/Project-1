@@ -62,6 +62,9 @@ class RolePermissionMatrix
      *     code:string,
      *     label:string,
      *     description:string,
+     *     isPreparatory: bool,
+     *     preparatoryLabel: ?string,
+     *     preparatoryDescription: ?string
      * }>  $actions
      * @param  array<string, array{key:string,label:string,tone:string,user:User}>  $roles
      * @param  array<string, \Closure(User): bool>  $runtimeResolvers
@@ -79,7 +82,7 @@ class RolePermissionMatrix
     {
         return array_map(function (array $action) use ($roles, $runtimeResolvers): array {
             $resolver = $runtimeResolvers[$action['code']] ?? null;
-            $isPreparatory = $resolver === null;
+            $isPreparatory = $action['isPreparatory'];
             $states = [];
 
             foreach ($roles as $role) {
@@ -103,10 +106,8 @@ class RolePermissionMatrix
                 'label' => $action['label'],
                 'description' => $action['description'],
                 'isPreparatory' => $isPreparatory,
-                'preparatoryLabel' => $isPreparatory ? 'Подготовительное право' : null,
-                'preparatoryDescription' => $isPreparatory
-                    ? 'Ключ уже зафиксирован в словаре будущей матрицы, но пока не подключён к рабочим проверкам доступа.'
-                    : null,
+                'preparatoryLabel' => $action['preparatoryLabel'],
+                'preparatoryDescription' => $action['preparatoryDescription'],
                 'states' => $states,
             ];
         }, $actions);
