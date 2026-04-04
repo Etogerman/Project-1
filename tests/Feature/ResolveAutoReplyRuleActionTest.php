@@ -3,9 +3,11 @@
 namespace Tests\Feature;
 
 use App\Models\AutoReplyRule;
+use App\Models\AutoReplyRuleTagCondition;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
+use App\Models\Tag;
 use App\Services\Bots\ResolveAutoReplyRuleAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -182,5 +184,144 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $this->assertTrue($resolver->handle($channel, $contactWithPhone, null, 'promo_123')?->is($rule) ?? false);
         $this->assertNull($resolver->handle($channel, $contactWithoutPhone, null, 'promo_123'));
+    }
+
+    public function test_it_matches_rule_when_contact_has_all_required_tags(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+        $vipTag = Tag::factory()->create(['name' => 'VIP']);
+        $warmTag = Tag::factory()->create(['name' => 'Прогретый']);
+
+        $contact->tags()->attach([$vipTag->id, $warmTag->id], [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Подходит только VIP.',
+        ]);
+
+        AutoReplyRuleTagCondition::query()->insert([
+            [
+                'auto_reply_rule_id' => $rule->id,
+                'tag_id' => $vipTag->id,
+                'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'auto_reply_rule_id' => $rule->id,
+                'tag_id' => $warmTag->id,
+                'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'Любое сообщение');
+
+        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
+        $this->assertTrue($resolved->is($rule));
+    }
+
+    public function test_it_does_not_match_rule_when_required_tag_is_missing(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+        $vipTag = Tag::factory()->create(['name' => 'VIP']);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Только VIP.',
+        ]);
+
+        AutoReplyRuleTagCondition::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $vipTag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'Любое сообщение');
+
+        $this->assertNull($resolved);
+    }
+
+    public function test_it_does_not_match_rule_when_contact_has_excluded_tag(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+        $blockedTag = Tag::factory()->create(['name' => 'Стоп']);
+
+        $contact->tags()->attach($blockedTag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Не должен сработать.',
+        ]);
+
+        AutoReplyRuleTagCondition::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $blockedTag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_EXCLUDED,
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'Любое сообщение');
+
+        $this->assertNull($resolved);
+    }
+
+    public function test_it_resolves_tag_conditions_by_root_contact_after_merge(): void
+    {
+        $channel = Channel::factory()->create();
+        $rootContact = Contact::factory()->create();
+        $mergedContact = Contact::factory()->create([
+            'merged_into_contact_id' => $rootContact->id,
+            'merged_at' => now(),
+        ]);
+        $vipTag = Tag::factory()->create(['name' => 'VIP']);
+
+        $rootContact->tags()->attach($vipTag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Сработал по корневому тегу.',
+        ]);
+
+        AutoReplyRuleTagCondition::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $vipTag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $mergedContact, 'Любое сообщение');
+
+        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
+        $this->assertTrue($resolved->is($rule));
     }
 }

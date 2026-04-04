@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
 use App\Models\AutoReplyRule;
+use App\Models\AutoReplyRuleTagCondition;
 use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
 use App\Models\Tag;
@@ -343,6 +344,81 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             'keyword' => 'TEXT_1',
             'normalized_keyword' => 'text_1',
         ]);
+    }
+
+    public function test_admin_can_save_tag_conditions_for_auto_reply_rule(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $requiredTag = Tag::factory()->create([
+            'name' => 'VIP',
+            'color' => Tag::COLOR_SUCCESS,
+            'is_active' => true,
+        ]);
+        $excludedTag = Tag::factory()->create([
+            'name' => 'Стоп',
+            'color' => Tag::COLOR_DANGER,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'reply_text' => 'Условие по тегам',
+                'required_tag_ids' => [$requiredTag->id],
+                'excluded_tag_ids' => [$excludedTag->id],
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        $this->assertDatabaseHas('auto_reply_rule_tag_conditions', [
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $requiredTag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
+        ]);
+        $this->assertDatabaseHas('auto_reply_rule_tag_conditions', [
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $excludedTag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_EXCLUDED,
+        ]);
+    }
+
+    public function test_same_tag_cannot_be_required_and_excluded_in_same_rule(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => 'Конфликтный тег условия',
+            'color' => Tag::COLOR_WARNING,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'reply_text' => 'Конфликт условий',
+                'required_tag_ids' => [$tag->id],
+                'excluded_tag_ids' => [$tag->id],
+                'is_active' => true,
+            ]);
+
+        $this->assertDatabaseCount('auto_reply_rules', 0);
+        $this->assertDatabaseCount('auto_reply_rule_tag_conditions', 0);
     }
 
     public function test_same_keyword_is_allowed_when_match_scope_differs(): void

@@ -109,6 +109,13 @@ class AutoReplyRule extends Model
             ->orderBy('id');
     }
 
+    public function tagConditions(): HasMany
+    {
+        return $this->hasMany(AutoReplyRuleTagCondition::class)
+            ->orderBy('condition')
+            ->orderBy('id');
+    }
+
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('is_active', true);
