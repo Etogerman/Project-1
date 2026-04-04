@@ -11,6 +11,8 @@ use App\Models\Bitrix24WebhookEvent;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -57,6 +59,36 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->actingAs($user)
             ->get(Bitrix24ConnectionResource::getUrl('view', ['record' => $connection]))
             ->assertForbidden();
+    }
+
+    public function test_employee_bitrix24_access_is_controlled_by_role_permission_matrix(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $connection = $this->makeConnection([
+            'portal_domain' => 'crm.employee.test',
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+
+        $this->actingAs($employee)
+            ->get(Bitrix24ConnectionResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Bitrix24')
+            ->assertSee('crm.employee.test');
+
+        $this->actingAs($employee)
+            ->get(Bitrix24ConnectionResource::getUrl('view', ['record' => $connection]))
+            ->assertOk()
+            ->assertSee('crm.employee.test');
+
+        $this->assertTrue(Gate::forUser($employee)->allows('viewAny', Bitrix24Connection::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('view', $connection));
+        $this->assertFalse(Gate::forUser($employee)->allows('create', Bitrix24Connection::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('update', $connection));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $connection));
     }
 
     public function test_admin_can_open_bitrix24_connection_view_and_see_diagnostics(): void
@@ -210,5 +242,13 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'error_message' => null,
             'fingerprint' => sha1((string) str()->uuid()),
         ], $overrides));
+    }
+
+    private function setRolePermission(string $role, string $permissionKey, bool $granted): void
+    {
+        DB::table('role_permissions')
+            ->where('role', $role)
+            ->where('permission_key', $permissionKey)
+            ->update(['granted' => $granted]);
     }
 }

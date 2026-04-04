@@ -9,11 +9,17 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\DB;
 
 class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable;
+
+    /**
+     * @var array<string, bool>|null
+     */
+    protected ?array $cachedRolePermissions = null;
 
     public const ROLE_ADMIN = 'admin';
 
@@ -126,6 +132,35 @@ class User extends Authenticatable implements FilamentUser
     public function canBeAssignedToContacts(): bool
     {
         return $this->canViewWorkspaces();
+    }
+
+    public function hasRolePermission(string $permissionKey): bool
+    {
+        if (! $this->is_active) {
+            return false;
+        }
+
+        return $this->rolePermissions()[$permissionKey] ?? false;
+    }
+
+    /**
+     * @return array<string, bool>
+     */
+    protected function rolePermissions(): array
+    {
+        if ($this->cachedRolePermissions !== null) {
+            return $this->cachedRolePermissions;
+        }
+
+        $this->cachedRolePermissions = DB::table('role_permissions')
+            ->where('role', $this->resolvedRole())
+            ->pluck('granted', 'permission_key')
+            ->mapWithKeys(static fn (mixed $granted, mixed $permissionKey): array => [
+                (string) $permissionKey => (bool) $granted,
+            ])
+            ->all();
+
+        return $this->cachedRolePermissions;
     }
 
     protected function email(): Attribute

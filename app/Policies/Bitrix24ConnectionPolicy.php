@@ -9,12 +9,12 @@ class Bitrix24ConnectionPolicy
 {
     public function viewAny(User $user): bool
     {
-        return $this->canViewDiagnostics($user);
+        return $user->hasRolePermission('bitrix24.view');
     }
 
     public function view(User $user, Bitrix24Connection $connection): bool
     {
-        return $this->canViewDiagnostics($user);
+        return $user->hasRolePermission('bitrix24.view');
     }
 
     public function create(User $user): bool
@@ -35,10 +35,5 @@ class Bitrix24ConnectionPolicy
     public function deleteAny(User $user): bool
     {
         return false;
-    }
-
-    protected function canViewDiagnostics(User $user): bool
-    {
-        return $user->canManageSystem();
     }
 }
