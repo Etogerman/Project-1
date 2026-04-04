@@ -41,7 +41,9 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(AutoReplyRuleResource::getUrl())
             ->assertOk()
-            ->assertSee('Правила автоответа');
+            ->assertSee('Правила автоответа')
+            ->assertSee('ac-inline-list-page', false)
+            ->assertSee('ac-list-page-header-toolbar', false);
     }
 
     public function test_employee_auto_reply_rule_access_is_controlled_by_role_permission_matrix(): void
@@ -192,10 +194,13 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
             ->assertTableActionHasIcon('edit', Heroicon::OutlinedPencilSquare, $rule)
+            ->assertTableActionHasIcon('delete', Heroicon::OutlinedTrash, $rule)
             ->assertTableActionDoesNotHaveLabel('edit', $rule)
+            ->assertTableActionDoesNotHaveLabel('delete', $rule)
             ->tap(function ($component): void {
                 $table = $component->instance()->getTable();
 
+                $this->assertContains('ac-inline-list-page', $component->instance()->getPageClasses());
                 $this->assertTrue($table->hasColumnManager());
                 $this->assertFalse($table->hasDeferredColumnManager());
                 $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());

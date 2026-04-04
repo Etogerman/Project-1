@@ -2,6 +2,9 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
+use App\Filament\Resources\Channels\Pages\ManageChannels;
+use App\Filament\Resources\Tags\Pages\ManageTags;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -42,6 +45,15 @@ class AdminPanelProvider extends PanelProvider
                 fn (): string => view('filament.components.environment-indicator', [
                     'centered' => true,
                 ])->render(),
+            )
+            ->renderHook(
+                PanelsRenderHook::PAGE_HEADER_ACTIONS_BEFORE,
+                fn (): string => view('filament.components.list-page-header-toolbar')->render(),
+                scopes: [
+                    ManageAutoReplyRules::class,
+                    ManageChannels::class,
+                    ManageTags::class,
+                ],
             )
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')

@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Tags;
 use App\Filament\Resources\Tags\Pages\ManageTags;
 use App\Models\Tag;
 use BackedEnum;
+use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\TextInput;
@@ -128,15 +129,36 @@ class TagResource extends Resource
                     ->trueLabel('Только активные')
                     ->falseLabel('Только отключённые'),
             ])
+            ->filtersTriggerAction(
+                fn (Action $action): Action => $action
+                    ->tooltip('Фильтры')
+                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+            )
+            ->recordActionsColumnLabel('Кнопки')
+            ->columnManager()
+            ->deferColumnManager(false)
+            ->columnManagerWidth(Width::Medium)
+            ->columnManagerTriggerAction(
+                fn (Action $action): Action => $action
+                    ->tooltip('Столбцы')
+                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+            )
             ->defaultSort('created_at', 'desc')
             ->emptyStateHeading('Теги ещё не добавлены')
             ->emptyStateDescription('Создайте первый тег для сегментации контактов.')
             ->recordActions([
                 EditAction::make()
+                    ->icon(Heroicon::OutlinedPencilSquare)
+                    ->iconButton()
+                    ->tooltip('Изменить тег')
                     ->modalWidth(Width::Medium)
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->extraModalWindowAttributes(['class' => 'ac-tag-form-modal']),
                 DeleteAction::make()
+                    ->icon(Heroicon::OutlinedTrash)
+                    ->iconButton()
+                    ->color('danger')
+                    ->tooltip('Удалить тег')
                     ->visible(fn (Tag $record): bool => (int) ($record->contacts_count ?? 0) === 0)
                     ->before(function (Tag $record): void {
                         if ($record->contacts()->exists()) {

@@ -393,9 +393,19 @@ class ChannelResource extends Resource
                     ->trueLabel('Только активные')
                     ->falseLabel('Только отключённые'),
             ])
+            ->filtersTriggerAction(
+                fn (Action $action): Action => $action
+                    ->tooltip('Фильтры')
+                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+            )
             ->recordActionsColumnLabel('Кнопки')
             ->columnManager()
             ->deferColumnManager(false)
+            ->columnManagerTriggerAction(
+                fn (Action $action): Action => $action
+                    ->tooltip('Столбцы')
+                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+            )
             ->reorderableColumns()
             ->defaultSort('created_at', 'desc')
             ->emptyStateHeading('Каналы связи ещё не добавлены')

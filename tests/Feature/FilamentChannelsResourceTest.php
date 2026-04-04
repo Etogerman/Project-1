@@ -14,6 +14,7 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -48,7 +49,9 @@ class FilamentChannelsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get('/admin/channels')
             ->assertOk()
-            ->assertSee('Каналы связи');
+            ->assertSee('Каналы связи')
+            ->assertSee('ac-inline-list-page', false)
+            ->assertSee('ac-list-page-header-toolbar', false);
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
@@ -166,6 +169,29 @@ class FilamentChannelsResourceTest extends TestCase
             fn (Section $section): string => (string) $section->getHeading(),
             $sections,
         ));
+    }
+
+    public function test_channels_table_uses_inline_list_page_standard(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create();
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionHasIcon('edit', Heroicon::OutlinedPencilSquare, $channel)
+            ->assertTableActionDoesNotHaveLabel('edit', $channel)
+            ->tap(function ($component): void {
+                $table = $component->instance()->getTable();
+
+                $this->assertContains('ac-inline-list-page', $component->instance()->getPageClasses());
+                $this->assertTrue($table->hasColumnManager());
+                $this->assertFalse($table->hasDeferredColumnManager());
+                $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
+            });
     }
 
     public function test_admin_can_create_max_bot_channel(): void

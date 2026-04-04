@@ -12,6 +12,14 @@ class ManageTags extends ManageRecords
 {
     protected static string $resource = TagResource::class;
 
+    public function getPageClasses(): array
+    {
+        return [
+            ...parent::getPageClasses(),
+            'ac-inline-list-page',
+        ];
+    }
+
     protected function getHeaderActions(): array
     {
         return [

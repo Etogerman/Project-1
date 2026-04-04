@@ -295,7 +295,11 @@ class AutoReplyRuleResource extends Resource
                     ->using(function (array $data, AutoReplyRule $record): AutoReplyRule {
                         return static::saveAutoReplyRule($data, $record);
                     }),
-                DeleteAction::make(),
+                DeleteAction::make()
+                    ->icon(Heroicon::OutlinedTrash)
+                    ->iconButton()
+                    ->color('danger')
+                    ->tooltip('Удалить правило'),
             ])
             ->toolbarActions([]);
     }
