@@ -7,12 +7,14 @@ use App\Models\Tag;
 use BackedEnum;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
-use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\ToggleButtons;
 use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Alignment;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
@@ -49,23 +51,34 @@ class TagResource extends Resource
         return $schema
             ->components([
                 Section::make('Тег')
+                    ->description('Название и цветовая метка для сегментации контактов.')
+                    ->extraAttributes(['class' => 'ac-tag-form-section'])
                     ->schema([
                         TextInput::make('name')
                             ->label('Название')
                             ->required()
                             ->maxLength(255)
                             ->unique(ignoreRecord: true),
-                        Select::make('color')
+                        ToggleButtons::make('color')
                             ->label('Цвет')
                             ->options(Tag::colorOptions())
+                            ->colors([
+                                Tag::COLOR_GRAY => 'gray',
+                                Tag::COLOR_PRIMARY => 'primary',
+                                Tag::COLOR_SUCCESS => 'success',
+                                Tag::COLOR_WARNING => 'warning',
+                                Tag::COLOR_DANGER => 'danger',
+                            ])
                             ->required()
-                            ->native(false),
+                            ->inline()
+                            ->extraAttributes(['class' => 'ac-tag-color-picker']),
                         Toggle::make('is_active')
                             ->label('Активен')
                             ->default(true)
-                            ->inline(false),
+                            ->inline(false)
+                            ->extraAttributes(['class' => 'ac-tag-form-toggle']),
                     ])
-                    ->columns(2),
+                    ->columns(1),
             ]);
     }
 
@@ -119,7 +132,10 @@ class TagResource extends Resource
             ->emptyStateHeading('Теги ещё не добавлены')
             ->emptyStateDescription('Создайте первый тег для сегментации контактов.')
             ->recordActions([
-                EditAction::make(),
+                EditAction::make()
+                    ->modalWidth(Width::Medium)
+                    ->modalFooterActionsAlignment(Alignment::End)
+                    ->extraModalWindowAttributes(['class' => 'ac-tag-form-modal']),
                 DeleteAction::make()
                     ->visible(fn (Tag $record): bool => (int) ($record->contacts_count ?? 0) === 0)
                     ->before(function (Tag $record): void {
