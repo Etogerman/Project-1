@@ -59,6 +59,19 @@ class Bitrix24ProbeControllerTest extends TestCase
 
         Storage::disk('local')->assertExists('bitrix24-probe/latest-auth.json');
         Storage::disk('local')->assertMissing('bitrix24-probe/non-existent.json');
+
+        $storedPayload = json_decode(
+            Storage::disk('local')->get('bitrix24-probe/latest-auth.json'),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+
+        $this->assertSame('ONCRMCONTACTUPDATE', $storedPayload['event']);
+        $this->assertSame('crm.alexlesley.biz', $storedPayload['auth']['domain']);
+        $this->assertSame('test-token', $storedPayload['auth']['application_token']);
+        $this->assertArrayNotHasKey('access_token', $storedPayload['auth']);
+        $this->assertArrayNotHasKey('refresh_token', $storedPayload['auth']);
     }
 
     public function test_probe_endpoint_accepts_get_callbacks(): void
