@@ -8,6 +8,7 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\Dialog;
+use App\Models\ContactStartTag;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\Tag;
@@ -258,6 +259,10 @@ class ContactResource extends Resource
                             ->label('Username')
                             ->placeholder('—')
                             ->formatStateUsing(fn (?string $state): string => filled($state) ? '@'.ltrim($state, '@') : '—'),
+                        TextEntry::make('start_parameters')
+                            ->label('Параметры перехода')
+                            ->placeholder('—')
+                            ->state(fn (Contact $record): ?string => static::formatContactStartParameters($record)),
                         TextEntry::make('messages_count')
                             ->label('Сообщений')
                             ->state(fn (Contact $record): int => $record->messages_count ?? $record->messages()->count()),
@@ -1225,6 +1230,20 @@ class ContactResource extends Resource
                 ->all(),
             'availableTags' => static::getAvailableTagOptions($assignedTagIds),
         ];
+    }
+
+    protected static function formatContactStartParameters(Contact $record): ?string
+    {
+        $record->loadMissing('startTags');
+
+        $codes = $record->startTags
+            ->filter(fn (ContactStartTag $tag): bool => $tag->category === ContactStartTag::CATEGORY_START_PAYLOAD)
+            ->pluck('code')
+            ->filter(fn (mixed $code): bool => is_string($code) && $code !== '')
+            ->values()
+            ->all();
+
+        return $codes !== [] ? implode(', ', $codes) : null;
     }
 
     /**
