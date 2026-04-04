@@ -25,6 +25,8 @@ class User extends Authenticatable implements FilamentUser
 
     public const ROLE_EMPLOYEE = 'employee';
 
+    public const ROLE_SUPERADMIN = 'superadmin';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -61,7 +63,10 @@ class User extends Authenticatable implements FilamentUser
     {
         static::saving(function (self $user): void {
             if ($user->isDirty('role')) {
-                $user->is_admin = $user->resolvedRole() === self::ROLE_ADMIN;
+                $user->is_admin = in_array($user->resolvedRole(), [
+                    self::ROLE_SUPERADMIN,
+                    self::ROLE_ADMIN,
+                ], true);
 
                 return;
             }
@@ -81,19 +86,35 @@ class User extends Authenticatable implements FilamentUser
 
     public function resolvedRole(): string
     {
-        return $this->role === self::ROLE_ADMIN
-            ? self::ROLE_ADMIN
-            : self::ROLE_EMPLOYEE;
+        return match ($this->role) {
+            self::ROLE_SUPERADMIN => self::ROLE_SUPERADMIN,
+            self::ROLE_ADMIN => self::ROLE_ADMIN,
+            default => self::ROLE_EMPLOYEE,
+        };
+    }
+
+    public function isSuperadmin(): bool
+    {
+        return $this->resolvedRole() === self::ROLE_SUPERADMIN;
+    }
+
+    public function canManageRolePermissionRecovery(): bool
+    {
+        return $this->is_active && $this->isSuperadmin();
     }
 
     public function canManageSystem(): bool
     {
-        return $this->is_active && $this->resolvedRole() === self::ROLE_ADMIN;
+        return $this->is_active && in_array($this->resolvedRole(), [
+            self::ROLE_SUPERADMIN,
+            self::ROLE_ADMIN,
+        ], true);
     }
 
     public function canViewWorkspaces(): bool
     {
         return $this->is_active && in_array($this->resolvedRole(), [
+            self::ROLE_SUPERADMIN,
             self::ROLE_ADMIN,
             self::ROLE_EMPLOYEE,
         ], true);
@@ -138,6 +159,10 @@ class User extends Authenticatable implements FilamentUser
     {
         if (! $this->is_active) {
             return false;
+        }
+
+        if ($this->isSuperadmin()) {
+            return true;
         }
 
         return $this->rolePermissions()[$permissionKey] ?? false;

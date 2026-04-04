@@ -299,6 +299,66 @@ class FilamentUsersResourceTest extends TestCase
             ->assertMountedActionModalSee('Обновлён');
     }
 
+    public function test_superadmin_role_is_displayed_in_users_table_and_overview(): void
+    {
+        $admin = User::factory()->create([
+            'email' => 'admin@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $superadmin = User::factory()->create([
+            'name' => 'Admin',
+            'email' => 'admin@abrikosoff.local',
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+            'is_admin' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->get('/admin/users')
+            ->assertOk()
+            ->assertSee('Суперадминистратор');
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->mountTableAction('view', $superadmin)
+            ->assertMountedActionModalSee('Суперадминистратор');
+    }
+
+    public function test_editing_superadmin_preserves_protected_role(): void
+    {
+        $admin = User::factory()->create([
+            'email' => 'admin@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $superadmin = User::factory()->create([
+            'name' => 'Admin',
+            'email' => 'admin@abrikosoff.local',
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->callTableAction('edit', $superadmin, [
+                'name' => 'Admin Updated',
+                'email' => 'admin@abrikosoff.local',
+                'is_active' => true,
+                'is_admin' => false,
+                'password' => '',
+                'password_confirmation' => '',
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $superadmin->refresh();
+
+        $this->assertSame('Admin Updated', $superadmin->name);
+        $this->assertTrue($superadmin->is_admin);
+        $this->assertSame(User::ROLE_SUPERADMIN, $superadmin->role);
+    }
+
     public function test_admin_cannot_deactivate_self(): void
     {
         $admin = User::factory()->create([

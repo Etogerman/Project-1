@@ -42,7 +42,7 @@ class RolePermissionMatrix extends Page
         $user = auth()->user();
 
         return $user instanceof User
-            && $user->canManageSystem();
+            && $user->canManageRolePermissionRecovery();
     }
 
     public static function shouldRegisterNavigation(): bool
@@ -52,7 +52,7 @@ class RolePermissionMatrix extends Page
 
     public function getSubheading(): ?string
     {
-        return 'Страница позволяет редактировать конфигурацию крупной матрицы прав в базе, но эти значения пока не управляют реальным доступом в системе.';
+        return 'Страница recovery-доступа для суперадминистратора. Она управляет конфигурацией матрицы прав и остаётся доступной вне обычного role_permissions rollout.';
     }
 
     public function savePermissionMatrix(): void
