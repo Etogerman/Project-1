@@ -11,6 +11,7 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
@@ -166,6 +167,19 @@ class Bitrix24DealSyncTriggerTest extends TestCase
         $this->assertTrue($result->ready);
 
         Queue::assertNotPushed(EnsureBitrix24DealJob::class);
+    }
+
+    public function test_ensure_deal_job_uses_without_overlapping_middleware_per_contact(): void
+    {
+        $job = new EnsureBitrix24DealJob(321);
+
+        $middleware = $job->middleware();
+
+        $this->assertCount(1, $middleware);
+        $this->assertInstanceOf(WithoutOverlapping::class, $middleware[0]);
+        $this->assertSame('bitrix24:deal-sync:321', $middleware[0]->key);
+        $this->assertSame(10, $middleware[0]->releaseAfter);
+        $this->assertSame(180, $middleware[0]->expiresAfter);
     }
 
     public function test_queue_action_preserves_pending_review_status(): void

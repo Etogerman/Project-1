@@ -13,6 +13,7 @@ use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\UpdateContactPhoneAction;
 use App\Services\Contacts\UpdateContactProfileAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
@@ -131,6 +132,19 @@ class Bitrix24ContactSyncTriggerTest extends TestCase
         $this->assertTrue($result->ready);
 
         Queue::assertNotPushed(SyncContactToBitrix24Job::class);
+    }
+
+    public function test_sync_contact_job_uses_without_overlapping_middleware_per_contact(): void
+    {
+        $job = new SyncContactToBitrix24Job(123);
+
+        $middleware = $job->middleware();
+
+        $this->assertCount(1, $middleware);
+        $this->assertInstanceOf(WithoutOverlapping::class, $middleware[0]);
+        $this->assertSame('bitrix24:contact-sync:123', $middleware[0]->key);
+        $this->assertSame(10, $middleware[0]->releaseAfter);
+        $this->assertSame(180, $middleware[0]->expiresAfter);
     }
 
     public function test_queue_action_preserves_pending_review_status(): void

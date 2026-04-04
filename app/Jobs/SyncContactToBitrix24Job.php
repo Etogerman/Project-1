@@ -14,6 +14,7 @@ use App\Services\Bitrix24\SyncContactToBitrix24Action;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -26,6 +27,18 @@ class SyncContactToBitrix24Job implements ShouldQueue
     public function __construct(
         public readonly int $contactId,
     ) {}
+
+    /**
+     * @return array<int, object>
+     */
+    public function middleware(): array
+    {
+        return [
+            (new WithoutOverlapping("bitrix24:contact-sync:{$this->contactId}"))
+                ->releaseAfter(10)
+                ->expireAfter(180),
+        ];
+    }
 
     public function handle(
         ResolveRootContactAction $resolveRootContactAction,
