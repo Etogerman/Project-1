@@ -38,7 +38,7 @@ class RolePermissionMatrix extends Page
 
     public function getSubheading(): ?string
     {
-        return 'Страница показывает будущую форму крупной матрицы прав и отдельно отмечает строки, которые пока не подключены к реальным проверкам доступа.';
+        return 'Страница читает конфигурацию крупной матрицы прав из базы и отдельно показывает, что эти значения пока не управляют реальным доступом в системе.';
     }
 
     /**
@@ -55,7 +55,7 @@ class RolePermissionMatrix extends Page
      *             isPreparatory: bool,
      *             preparatoryLabel: ?string,
      *             preparatoryDescription: ?string,
-     *             states: array<string, array{allowed:bool,label:string,tone:string}>
+     *             states: array<string, array{allowed:bool,label:string,tone:string,status:string}>
      *         }>
      *     }>
      * }
