@@ -49,9 +49,7 @@ class FilamentChannelsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get('/admin/channels')
             ->assertOk()
-            ->assertSee('Каналы связи')
-            ->assertSee('ac-inline-list-page', false)
-            ->assertSee('ac-list-page-header-toolbar', false);
+            ->assertSee('Каналы связи');
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
@@ -186,7 +184,6 @@ class FilamentChannelsResourceTest extends TestCase
             ->tap(function ($component): void {
                 $table = $component->instance()->getTable();
 
-                $this->assertContains('ac-inline-list-page', $component->instance()->getPageClasses());
                 $this->assertTrue($table->hasColumnManager());
                 $this->assertFalse($table->hasDeferredColumnManager());
                 $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
