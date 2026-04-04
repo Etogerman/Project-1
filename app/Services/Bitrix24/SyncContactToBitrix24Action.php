@@ -12,6 +12,7 @@ class SyncContactToBitrix24Action
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly Bitrix24ContactPayloadNormalizer $bitrix24ContactPayloadNormalizer,
         private readonly CollectBitrix24ContactPhonesAction $collectContactPhonesAction,
         private readonly ResolveBitrix24ContactSourceAction $resolveContactSourceAction,
         private readonly BuildBitrix24ContactPayloadAction $buildContactPayloadAction,
@@ -293,24 +294,24 @@ class SyncContactToBitrix24Action
         $botNameField = config('bitrix24.fields.bot_name');
 
         return $this->computeBitrix24ContactSyncFingerprintAction->handle([
-            'name' => $this->normalizeScalarValue($payload['NAME'] ?? null),
-            'last_name' => $this->normalizeScalarValue($payload['LAST_NAME'] ?? null),
-            'name_source_id' => $this->normalizeScalarValue($payload[$nameSourceField] ?? null),
-            'age_exact' => $this->normalizeScalarValue($payload[$ageExactField] ?? null),
-            'age_range' => $this->normalizeScalarValue($payload[$ageRangeField] ?? null),
-            'gender_id' => $this->normalizeScalarValue($payload[$genderField] ?? null),
-            'address_city' => $this->normalizeScalarValue($payload['ADDRESS_CITY'] ?? null),
-            'address_country' => $this->normalizeScalarValue($payload['ADDRESS_COUNTRY'] ?? null),
-            'source_id' => $this->normalizeScalarValue($payload['SOURCE_ID'] ?? null),
-            'contact_id' => $this->normalizeScalarValue($payload[$contactIdField] ?? null),
-            'channel_id' => $this->normalizeScalarValue($payload[$channelIdField] ?? null),
-            'channel_name' => $this->normalizeScalarValue($payload[$channelNameField] ?? null),
-            'platform' => $this->normalizeScalarValue($payload[$platformField] ?? null),
-            'bot_code' => $this->normalizeScalarValue($payload[$botCodeField] ?? null),
-            'bot_name' => $this->normalizeScalarValue($payload[$botNameField] ?? null),
+            'name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['NAME'] ?? null),
+            'last_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['LAST_NAME'] ?? null),
+            'name_source_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$nameSourceField] ?? null),
+            'age_exact' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$ageExactField] ?? null),
+            'age_range' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$ageRangeField] ?? null),
+            'gender_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$genderField] ?? null),
+            'address_city' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['ADDRESS_CITY'] ?? null),
+            'address_country' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['ADDRESS_COUNTRY'] ?? null),
+            'source_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['SOURCE_ID'] ?? null),
+            'contact_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$contactIdField] ?? null),
+            'channel_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$channelIdField] ?? null),
+            'channel_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$channelNameField] ?? null),
+            'platform' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$platformField] ?? null),
+            'bot_code' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$botCodeField] ?? null),
+            'bot_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$botNameField] ?? null),
             'alt_first_name' => null,
             'alt_last_name' => null,
-            'phones' => $this->normalizePhonePayload($payload['PHONE'] ?? []),
+            'phones' => $this->bitrix24ContactPayloadNormalizer->normalizePhonePayload($payload['PHONE'] ?? []),
         ]);
     }
 
@@ -369,48 +370,5 @@ class SyncContactToBitrix24Action
         );
 
         return $remoteSnapshot;
-    }
-
-    /**
-     * @param  list<array{VALUE: string, VALUE_TYPE: string}>  $phones
-     * @return list<array{VALUE: string, VALUE_TYPE: string}>
-     */
-    private function normalizePhonePayload(array $phones): array
-    {
-        $normalizedPhones = [];
-
-        foreach ($phones as $phone) {
-            $value = $this->normalizeScalarValue($phone['VALUE'] ?? null);
-
-            if ($value === null) {
-                continue;
-            }
-
-            $normalizedPhones[] = [
-                'VALUE' => $value,
-                'VALUE_TYPE' => $this->normalizeScalarValue($phone['VALUE_TYPE'] ?? null) ?? 'OTHER',
-            ];
-        }
-
-        return $normalizedPhones;
-    }
-
-    private function normalizeScalarValue(mixed $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        if (is_bool($value)) {
-            return $value ? '1' : '0';
-        }
-
-        if (! is_scalar($value)) {
-            return null;
-        }
-
-        $trimmed = trim((string) $value);
-
-        return $trimmed === '' ? null : $trimmed;
     }
 }

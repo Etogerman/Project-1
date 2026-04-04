@@ -12,6 +12,7 @@ class BuildBitrix24ContactUpdatePayloadAction
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly BuildBitrix24ContactPayloadAction $buildContactPayloadAction,
         private readonly NormalizeBitrix24ContactSnapshotAction $normalizeBitrix24ContactSnapshotAction,
+        private readonly Bitrix24ContactPayloadNormalizer $bitrix24ContactPayloadNormalizer,
         private readonly ResolveBitrix24ContactNameUpdateAction $resolveBitrix24ContactNameUpdateAction,
         private readonly ResolveBitrix24ContactGenderUpdateAction $resolveBitrix24ContactGenderUpdateAction,
         private readonly CollectBitrix24ContactPhonesAction $collectContactPhonesAction,
@@ -87,7 +88,10 @@ class BuildBitrix24ContactUpdatePayloadAction
             $normalizedRemoteSnapshot['phones'],
         );
 
-        if ($this->normalizePhonePayload($mergedPhones) !== $this->normalizePhonePayload($normalizedRemoteSnapshot['phones'])) {
+        if (
+            $this->bitrix24ContactPayloadNormalizer->normalizePhonePayload($mergedPhones)
+            !== $this->bitrix24ContactPayloadNormalizer->normalizePhonePayload($normalizedRemoteSnapshot['phones'])
+        ) {
             $payload['PHONE'] = $mergedPhones;
         }
 
@@ -97,21 +101,21 @@ class BuildBitrix24ContactUpdatePayloadAction
             'name_source_id' => isset($nameResolution['fields'][config('bitrix24.fields.name_source')])
                 ? (string) $nameResolution['fields'][config('bitrix24.fields.name_source')]
                 : ($normalizedRemoteSnapshot['name_source_id'] ?? null),
-            'age_exact' => $this->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.age_exact')] ?? null),
-            'age_range' => $this->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.age_range')] ?? null),
+            'age_exact' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.age_exact')] ?? null),
+            'age_range' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.age_range')] ?? null),
             'gender_id' => $genderResolution['resolved_gender_id'],
-            'address_city' => $this->normalizeScalarValue($desiredBasePayload['ADDRESS_CITY'] ?? null),
-            'address_country' => $this->normalizeScalarValue($desiredBasePayload['ADDRESS_COUNTRY'] ?? null),
-            'source_id' => $this->normalizeScalarValue($desiredBasePayload['SOURCE_ID'] ?? null),
-            'contact_id' => $this->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.contact_id')] ?? null),
-            'channel_id' => $this->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.channel_id')] ?? null),
-            'channel_name' => $this->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.channel_name')] ?? null),
-            'platform' => $this->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.platform')] ?? null),
-            'bot_code' => $this->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.bot_code')] ?? null),
-            'bot_name' => $this->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.bot_name')] ?? null),
+            'address_city' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload['ADDRESS_CITY'] ?? null),
+            'address_country' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload['ADDRESS_COUNTRY'] ?? null),
+            'source_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload['SOURCE_ID'] ?? null),
+            'contact_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.contact_id')] ?? null),
+            'channel_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.channel_id')] ?? null),
+            'channel_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.channel_name')] ?? null),
+            'platform' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.platform')] ?? null),
+            'bot_code' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.bot_code')] ?? null),
+            'bot_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.bot_name')] ?? null),
             'alt_first_name' => $nameResolution['alt_first_name'],
             'alt_last_name' => $nameResolution['alt_last_name'],
-            'phones' => $this->normalizePhonePayload($mergedPhones),
+            'phones' => $this->bitrix24ContactPayloadNormalizer->normalizePhonePayload($mergedPhones),
         ]);
 
         return new Bitrix24ContactUpdatePlanData(
@@ -135,8 +139,8 @@ class BuildBitrix24ContactUpdatePayloadAction
             $remoteKey = $mapping[$fieldKey] ?? null;
             $normalizedRemoteValue = $remoteKey === null
                 ? null
-                : $this->normalizeScalarValue($remoteSnapshot[$remoteKey] ?? null);
-            $normalizedLocalValue = $this->normalizeScalarValue($value);
+                : $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($remoteSnapshot[$remoteKey] ?? null);
+            $normalizedLocalValue = $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($value);
 
             if ($normalizedLocalValue === null) {
                 continue;
@@ -150,50 +154,5 @@ class BuildBitrix24ContactUpdatePayloadAction
         }
 
         return $changedFields;
-    }
-
-    /**
-     * @param  list<array{VALUE: string, VALUE_TYPE: string}|array{value: string, normalized: string, value_type: string}>  $phones
-     * @return list<array{VALUE: string, VALUE_TYPE: string}>
-     */
-    private function normalizePhonePayload(array $phones): array
-    {
-        $normalizedPhones = [];
-
-        foreach ($phones as $phone) {
-            $value = $phone['VALUE'] ?? $phone['value'] ?? null;
-            $valueType = $phone['VALUE_TYPE'] ?? $phone['value_type'] ?? 'OTHER';
-            $normalizedValue = $this->normalizeScalarValue($value);
-
-            if ($normalizedValue === null) {
-                continue;
-            }
-
-            $normalizedPhones[] = [
-                'VALUE' => $normalizedValue,
-                'VALUE_TYPE' => $this->normalizeScalarValue($valueType) ?? 'OTHER',
-            ];
-        }
-
-        return $normalizedPhones;
-    }
-
-    private function normalizeScalarValue(mixed $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        if (is_bool($value)) {
-            return $value ? '1' : '0';
-        }
-
-        if (! is_scalar($value)) {
-            return null;
-        }
-
-        $trimmed = trim((string) $value);
-
-        return $trimmed === '' ? null : $trimmed;
     }
 }
