@@ -60,6 +60,22 @@ class RolePermissionMatrixDatabaseTest extends TestCase
         $this->assertNotNull($editState['lockReason']);
     }
 
+    public function test_matrix_exposes_runtime_rollout_status_per_action(): void
+    {
+        $matrix = app(RolePermissionMatrix::class)->build();
+
+        $runtimeActiveAction = $this->actionFor($matrix, 'users.view');
+        $configOnlyAction = $this->actionFor($matrix, 'contacts.view');
+
+        $this->assertTrue($runtimeActiveAction['isRuntimeActive']);
+        $this->assertSame('runtime-active', $runtimeActiveAction['runtimeStatus']);
+        $this->assertSame('Уже влияет на доступ', $runtimeActiveAction['runtimeLabel']);
+
+        $this->assertFalse($configOnlyAction['isRuntimeActive']);
+        $this->assertSame('config-only', $configOnlyAction['runtimeStatus']);
+        $this->assertSame('Пока только конфигурация', $configOnlyAction['runtimeLabel']);
+    }
+
     public function test_matrix_marks_missing_database_rows_as_configuration_issue(): void
     {
         DB::table('role_permissions')
@@ -81,7 +97,10 @@ class RolePermissionMatrixDatabaseTest extends TestCase
      *     groups: list<array{
      *         actions:list<array{
      *             code:string,
-     *             states: array<string, array{
+     *             isRuntimeActive: bool,
+     *             runtimeStatus: string,
+     *             runtimeLabel: string,
+             *             states: array<string, array{
      *                 allowed:bool,
      *                 label:string,
      *                 tone:string,
@@ -96,6 +115,47 @@ class RolePermissionMatrixDatabaseTest extends TestCase
      */
     private function stateFor(array $matrix, string $code, string $role): array
     {
+        $action = $this->actionFor($matrix, $code);
+
+        return $action['states'][$role];
+    }
+
+    /**
+     * @param  array{
+     *     groups: list<array{
+     *         actions:list<array{
+     *             code:string,
+     *             isRuntimeActive: bool,
+     *             runtimeStatus: string,
+     *             runtimeLabel: string,
+     *             states: array<string, array{
+     *                 allowed:bool,
+     *                 label:string,
+     *                 tone:string,
+     *                 status:string,
+     *                 editable:bool,
+     *                 lockReason:?string
+     *             }>
+     *         }>
+     *     }>
+     * }  $matrix
+     * @return array{
+     *     code:string,
+     *     isRuntimeActive: bool,
+     *     runtimeStatus: string,
+     *     runtimeLabel: string,
+     *     states: array<string, array{
+     *         allowed:bool,
+     *         label:string,
+     *         tone:string,
+     *         status:string,
+     *         editable:bool,
+     *         lockReason:?string
+     *     }>
+     * }
+     */
+    private function actionFor(array $matrix, string $code): array
+    {
         $action = collect($matrix['groups'])
             ->pluck('actions')
             ->flatten(1)
@@ -103,6 +163,6 @@ class RolePermissionMatrixDatabaseTest extends TestCase
 
         $this->assertIsArray($action);
 
-        return $action['states'][$role];
+        return $action;
     }
 }

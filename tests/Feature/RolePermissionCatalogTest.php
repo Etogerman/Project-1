@@ -76,4 +76,28 @@ class RolePermissionCatalogTest extends TestCase
             'bitrix24.delete',
         ], $preparatoryCodes);
     }
+
+    public function test_catalog_marks_runtime_active_rows_explicitly(): void
+    {
+        $catalog = app(RolePermissionCatalog::class)->groups();
+
+        $runtimeActiveCodes = collect($catalog)
+            ->pluck('actions')
+            ->flatten(1)
+            ->filter(fn (array $action): bool => $action['isRuntimeActive'])
+            ->pluck('code')
+            ->values()
+            ->all();
+
+        $this->assertSame([
+            'users.view',
+            'users.edit',
+            'channels.view',
+            'channels.edit',
+            'auto_reply_rules.view',
+            'auto_reply_rules.edit',
+            'auto_reply_rules.delete',
+            'bitrix24.view',
+        ], $runtimeActiveCodes);
+    }
 }
