@@ -12,6 +12,7 @@ use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactStartTag;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Tag;
@@ -191,6 +192,22 @@ class FilamentContactsResourceTest extends TestCase
             'received_at' => now(),
         ]);
 
+        ContactStartTag::query()->create([
+            'contact_id' => $contact->id,
+            'category' => ContactStartTag::CATEGORY_START_PAYLOAD,
+            'code' => 'TEXT_2',
+            'source' => ContactStartTag::SOURCE_MAX_START,
+            'assigned_at' => now()->subMinute(),
+        ]);
+
+        ContactStartTag::query()->create([
+            'contact_id' => $contact->id,
+            'category' => ContactStartTag::CATEGORY_START_PAYLOAD,
+            'code' => 'TEXT_1',
+            'source' => ContactStartTag::SOURCE_TELEGRAM_START,
+            'assigned_at' => now(),
+        ]);
+
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->mountTableAction('view', $contact)
@@ -207,6 +224,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Изменить')
             ->assertMountedActionModalSee('@max_customer')
             ->assertMountedActionModalSee('max-200')
+            ->assertMountedActionModalSee('Параметры перехода')
+            ->assertMountedActionModalSee('TEXT_1, TEXT_2')
             ->assertMountedActionModalSee('MAX Support')
             ->assertMountedActionModalSee('msg-700')
             ->assertMountedActionModalSee('max-debug')
@@ -2004,6 +2023,18 @@ class FilamentContactsResourceTest extends TestCase
             ->searchTable('Контакт по телефону')
             ->assertCanSeeTableRecords([$contact])
             ->assertCanNotSeeTableRecords([$otherContact]);
+    }
+
+    public function test_contact_start_parameters_format_returns_null_without_start_tags(): void
+    {
+        $contact = Contact::factory()->create([
+            'name' => 'Без параметров перехода',
+        ]);
+
+        $formatter = new ReflectionMethod(ContactResource::class, 'formatContactStartParameters');
+        $formatter->setAccessible(true);
+
+        $this->assertNull($formatter->invoke(null, $contact));
     }
 
     public function test_contact_diagnostics_show_latest_message_even_with_same_received_at_second(): void
