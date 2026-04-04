@@ -97,6 +97,26 @@ class FilamentTagsResourceTest extends TestCase
         $this->assertModelMissing($tag);
     }
 
+    public function test_admin_can_open_create_tag_modal_with_visible_color_choices(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageTags::class)
+            ->mountAction('create')
+            ->assertMountedActionModalSee('Название')
+            ->assertMountedActionModalSee('Цвет')
+            ->assertMountedActionModalSee('Серый')
+            ->assertMountedActionModalSee('Синий')
+            ->assertMountedActionModalSee('Зелёный')
+            ->assertMountedActionModalSee('Жёлтый')
+            ->assertMountedActionModalSee('Красный')
+            ->assertMountedActionModalSee('Активен');
+    }
+
     public function test_used_tag_cannot_be_deleted_from_resource_table(): void
     {
         $admin = User::factory()->create([

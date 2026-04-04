@@ -241,9 +241,17 @@
         box-shadow:
             inset 0 1px 0 rgba(255, 255, 255, 0.78),
             0 1px 2px rgba(15, 23, 42, 0.08);
+        transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    }
+
+    .fi-input-wrp:not(.fi-fo-select) {
         overflow: hidden;
         isolation: isolate;
-        transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    }
+
+    .fi-fo-select.fi-input-wrp {
+        overflow: visible;
+        isolation: auto;
     }
 
     .fi-input,
@@ -444,23 +452,23 @@
         box-shadow: none;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) {
         border: 1px solid color-mix(in srgb, var(--ac-border-strong) 88%, white 12%);
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-strong) 96%, white 4%) 0%, var(--ac-surface) 100%);
         box-shadow: 0 40px 90px -42px rgba(15, 23, 42, 0.42);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-modal-header {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-modal-header {
         border-bottom: 1px solid color-mix(in srgb, var(--ac-border) 88%, transparent);
         padding-bottom: 1rem;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-modal-footer {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-modal-footer {
         border-top: 1px solid color-mix(in srgb, var(--ac-border) 88%, transparent);
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 78%, transparent) 0%, transparent 100%);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-modal-footer-actions {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-modal-footer-actions {
         display: flex;
         align-items: center;
         justify-content: flex-end;
@@ -469,39 +477,39 @@
         width: 100%;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-modal-content {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-modal-content {
         display: grid;
         gap: 1rem;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-section-content {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-section-content {
         display: grid;
         gap: 1rem;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-fo-field {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-fo-field {
         gap: 0.45rem;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-fo-field-label {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-fo-field-label {
         color: var(--ac-text);
         font-weight: 650;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-fo-field-label-content {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-fo-field-label-content {
         letter-spacing: -0.01em;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-fo-field-content-col {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-fo-field-content-col {
         gap: 0.45rem;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-fo-field-wrp-error-message,
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-fo-field-wrp-error-list {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-fo-field-wrp-error-message,
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-fo-field-wrp-error-list {
         color: var(--ac-danger);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp {
         border-color: color-mix(in srgb, var(--ac-border-strong) 84%, var(--ac-text));
         background: linear-gradient(
             180deg,
@@ -514,28 +522,28 @@
         transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input::placeholder {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input::placeholder {
         color: color-mix(in srgb, var(--ac-text-soft) 76%, var(--ac-text));
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-prefix,
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-suffix {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp-prefix,
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp-suffix {
         background: color-mix(in srgb, var(--ac-input-surface-alt) 74%, var(--ac-input-surface) 26%);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-prefix {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp-prefix {
         border-inline-end: 1px solid color-mix(in srgb, var(--ac-border-strong) 78%, var(--ac-text-soft));
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-suffix {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp-suffix {
         border-inline-start: 1px solid color-mix(in srgb, var(--ac-border-strong) 78%, var(--ac-text-soft));
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp-actions {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp-actions {
         color: color-mix(in srgb, var(--ac-text-soft) 78%, var(--ac-text));
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:hover {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp:hover {
         border-color: color-mix(in srgb, var(--ac-border-strong) 66%, var(--ac-primary));
         box-shadow:
             inset 0 1px 0 rgba(255, 255, 255, 0.86),
@@ -543,7 +551,7 @@
             0 4px 12px rgba(15, 23, 42, 0.06);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:has(textarea.fi-input) {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp:has(textarea.fi-input) {
         border-color: color-mix(in srgb, var(--ac-border-strong) 72%, var(--ac-text));
         background: linear-gradient(
             180deg,
@@ -556,7 +564,7 @@
             0 2px 10px rgba(15, 23, 42, 0.08);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:has(textarea.fi-input):hover {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp:has(textarea.fi-input):hover {
         border-color: color-mix(in srgb, var(--ac-border-strong) 58%, var(--ac-primary));
         box-shadow:
             inset 0 1px 0 rgba(255, 255, 255, 0.88),
@@ -565,7 +573,7 @@
             0 4px 14px rgba(15, 23, 42, 0.08);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:focus-within {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp:focus-within {
         border-color: color-mix(in srgb, var(--ac-primary) 72%, white 28%);
         background: color-mix(in srgb, var(--ac-surface-strong) 84%, var(--ac-primary-soft));
         box-shadow:
@@ -578,50 +586,50 @@
         line-height: 1.6;
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-input-wrp:has([aria-invalid='true']) {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-input-wrp:has([aria-invalid='true']) {
         border-color: color-mix(in srgb, var(--ac-danger) 70%, var(--ac-border-strong));
         box-shadow:
             inset 0 1px 2px rgba(15, 23, 42, 0.05),
             0 0 0 1px color-mix(in srgb, var(--ac-danger-soft) 60%, transparent);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-toggle {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-toggle {
         box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ac-border-strong) 88%, transparent);
     }
 
-    :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-fo-toggle {
+    :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-fo-toggle {
         display: flex;
         align-items: flex-start;
         gap: 0.8rem;
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section) {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section) {
         border: 1px solid color-mix(in srgb, var(--ac-border-strong) 86%, white 14%);
         border-radius: 22px;
         overflow: hidden;
         box-shadow: 0 16px 34px -28px rgba(15, 23, 42, 0.24);
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section) .fi-section-header {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section) .fi-section-header {
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 95%, white 5%) 0%, color-mix(in srgb, var(--ac-surface-strong) 98%, white 2%) 100%);
         border-bottom: 1px solid color-mix(in srgb, var(--ac-border) 92%, transparent);
         padding-bottom: 1rem;
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section) .fi-section-header-description {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section) .fi-section-header-description {
         max-width: 34rem;
         color: var(--ac-text-soft);
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section) .fi-section-content-ctn {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section) .fi-section-content-ctn {
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-strong) 95%, white 5%) 0%, var(--ac-surface) 100%);
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section) .fi-section-content {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section) .fi-section-content {
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-strong) 95%, white 5%) 0%, var(--ac-surface) 100%);
     }
 
-    :is(.ac-user-form-field, .ac-channel-form-field) .fi-input-wrp {
+    :is(.ac-user-form-field, .ac-channel-form-field, .ac-tag-form-field) .fi-input-wrp {
         background: linear-gradient(
             180deg,
             color-mix(in srgb, var(--ac-surface-strong) 86%, var(--ac-page-bg-alt) 14%) 0%,
@@ -629,7 +637,7 @@
         );
     }
 
-    :is(.ac-user-form-toggle, .ac-channel-form-toggle) {
+    :is(.ac-user-form-toggle, .ac-channel-form-toggle, .ac-tag-form-toggle) {
         border: 1px solid color-mix(in srgb, var(--ac-border) 90%, transparent);
         border-radius: 18px;
         padding: 0.95rem 1rem;
@@ -637,24 +645,44 @@
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
     }
 
-    :is(.ac-user-form-toggle, .ac-channel-form-toggle) .fi-fo-field-label {
+    :is(.ac-user-form-toggle, .ac-channel-form-toggle, .ac-tag-form-toggle) .fi-fo-field-label {
         font-size: 0.98rem;
     }
 
-    :is(.ac-user-form-toggle, .ac-channel-form-toggle) .fi-fo-field-content-col {
+    :is(.ac-user-form-toggle, .ac-channel-form-toggle, .ac-tag-form-toggle) .fi-fo-field-content-col {
         gap: 0.6rem;
     }
 
-    :is(.ac-user-form-toggle, .ac-channel-form-toggle) .fi-toggle {
+    :is(.ac-user-form-toggle, .ac-channel-form-toggle, .ac-tag-form-toggle) .fi-toggle {
         margin-top: 0.15rem;
         flex-shrink: 0;
     }
 
-    :is(.ac-user-form-toggle, .ac-channel-form-toggle) .fi-fo-field-content-col > p,
-    :is(.ac-user-form-toggle, .ac-channel-form-toggle) .fi-fo-field-content-col > div {
+    :is(.ac-user-form-toggle, .ac-channel-form-toggle, .ac-tag-form-toggle) .fi-fo-field-content-col > p,
+    :is(.ac-user-form-toggle, .ac-channel-form-toggle, .ac-tag-form-toggle) .fi-fo-field-content-col > div {
         color: var(--ac-text-soft);
         font-size: 0.88rem;
         line-height: 1.5;
+    }
+
+    .ac-tag-color-picker.fi-fo-toggle-buttons {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(8.75rem, 1fr));
+        gap: 0.65rem;
+    }
+
+    .ac-tag-color-picker .fi-fo-toggle-buttons-btn-ctn {
+        min-width: 0;
+    }
+
+    .ac-tag-color-picker .fi-btn {
+        width: 100%;
+        justify-content: center;
+        font-weight: 650;
+    }
+
+    .ac-tag-color-picker .fi-btn.fi-color-gray {
+        color: var(--ac-text);
     }
 
     .ac-channel-form-section--token .fi-section-header-description {
@@ -676,11 +704,11 @@
     }
 
     @media (max-width: 900px) {
-        :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-modal-footer-actions {
+        :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-modal-footer-actions {
             justify-content: stretch;
         }
 
-        :is(.ac-user-form-modal, .ac-channel-form-modal) .fi-modal-footer-actions > * {
+        :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal) .fi-modal-footer-actions > * {
             width: 100%;
         }
     }
