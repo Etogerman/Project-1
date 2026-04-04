@@ -9,6 +9,13 @@ use Tests\TestCase;
 
 class Bitrix24ProbeControllerTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        $this->restoreEnvironment('testing');
+
+        parent::tearDown();
+    }
+
     public function test_probe_endpoint_accepts_post_callbacks_and_logs_sanitized_context(): void
     {
         Storage::fake('local');
@@ -99,5 +106,34 @@ class Bitrix24ProbeControllerTest extends TestCase
             ->assertJsonPath('method', 'GET');
 
         Storage::disk('local')->assertMissing('bitrix24-probe/latest-auth.json');
+    }
+
+    public function test_probe_route_is_unavailable_outside_local_and_testing(): void
+    {
+        $this->switchEnvironment('production');
+
+        $this->assertFalse(app('router')->has('callbacks.bitrix24.probe'));
+
+        $this->postJson('/callbacks/bitrix24/probe', [
+            'event' => 'ONCRMCONTACTUPDATE',
+        ])->assertNotFound();
+    }
+
+    private function switchEnvironment(string $environment): void
+    {
+        putenv("APP_ENV={$environment}");
+        $_ENV['APP_ENV'] = $environment;
+        $_SERVER['APP_ENV'] = $environment;
+
+        $this->refreshApplication();
+    }
+
+    private function restoreEnvironment(string $environment): void
+    {
+        putenv("APP_ENV={$environment}");
+        $_ENV['APP_ENV'] = $environment;
+        $_SERVER['APP_ENV'] = $environment;
+
+        $this->refreshApplication();
     }
 }
