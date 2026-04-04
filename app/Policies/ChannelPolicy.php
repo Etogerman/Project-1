@@ -9,22 +9,22 @@ class ChannelPolicy
 {
     public function viewAny(User $user): bool
     {
-        return $this->canManageChannels($user);
+        return $user->hasRolePermission('channels.view');
     }
 
     public function view(User $user, Channel $channel): bool
     {
-        return $this->canManageChannels($user);
+        return $user->hasRolePermission('channels.view');
     }
 
     public function create(User $user): bool
     {
-        return $this->canManageChannels($user);
+        return $user->hasRolePermission('channels.edit');
     }
 
     public function update(User $user, Channel $channel): bool
     {
-        return $this->canManageChannels($user);
+        return $user->hasRolePermission('channels.edit');
     }
 
     public function delete(User $user, Channel $channel): bool
@@ -35,10 +35,5 @@ class ChannelPolicy
     public function deleteAny(User $user): bool
     {
         return false;
-    }
-
-    protected function canManageChannels(User $user): bool
-    {
-        return $user->canManageSystem();
     }
 }

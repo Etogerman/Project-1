@@ -7,6 +7,7 @@ use App\Filament\Resources\Users\UserResource;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -57,6 +58,26 @@ class FilamentUsersResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => false,
         ]);
+
+        $this->actingAs($user)
+            ->get('/admin/users')
+            ->assertForbidden();
+    }
+
+    public function test_employee_with_granted_system_permissions_still_cannot_access_users_resource(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'member@example.com',
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.edit', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.delete', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
 
         $this->actingAs($user)
             ->get('/admin/users')
@@ -283,5 +304,13 @@ class FilamentUsersResourceTest extends TestCase
             sprintf('#%d %s', $user->id, $user->name),
             UserResource::getRecordTitle($user),
         );
+    }
+
+    private function setRolePermission(string $role, string $permissionKey, bool $granted): void
+    {
+        DB::table('role_permissions')
+            ->where('role', $role)
+            ->where('permission_key', $permissionKey)
+            ->update(['granted' => $granted]);
     }
 }

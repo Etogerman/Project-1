@@ -67,6 +67,58 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_employee_channel_access_is_controlled_by_role_permission_matrix(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $channel = Channel::factory()->create();
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', false);
+
+        $this->actingAs($employee)
+            ->get('/admin/channels')
+            ->assertOk()
+            ->assertSee('Каналы связи');
+
+        $this->assertTrue(Gate::forUser($employee)->allows('viewAny', Channel::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('view', $channel));
+        $this->assertFalse(Gate::forUser($employee)->allows('create', Channel::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('update', $channel));
+    }
+
+    public function test_employee_can_create_channel_when_channels_edit_is_enabled_in_matrix(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+
+        Livewire::actingAs($employee)
+            ->test(ManageChannels::class)
+            ->callAction('create', [
+                'name' => 'Employee Telegram Bot',
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                'credentials' => [
+                    'token' => 'employee-secret-token',
+                ],
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $this->assertDatabaseHas('channels', [
+            'name' => 'Employee Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+    }
+
     public function test_admin_can_create_telegram_bot_channel(): void
     {
         $admin = User::factory()->create([
@@ -992,5 +1044,13 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('Лимит: 1/мин', $recentActivityHtml);
         $this->assertStringContainsString('Route: webhooks.telegram.handle', $recentActivityHtml);
         $this->assertStringContainsString('IP: 127.0.0.1', $recentActivityHtml);
+    }
+
+    private function setRolePermission(string $role, string $permissionKey, bool $granted): void
+    {
+        DB::table('role_permissions')
+            ->where('role', $role)
+            ->where('permission_key', $permissionKey)
+            ->update(['granted' => $granted]);
     }
 }

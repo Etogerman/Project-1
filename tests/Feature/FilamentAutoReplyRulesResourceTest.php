@@ -11,6 +11,8 @@ use App\Models\Tag;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -38,6 +40,81 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->get(AutoReplyRuleResource::getUrl())
             ->assertOk()
             ->assertSee('Правила автоответа');
+    }
+
+    public function test_employee_auto_reply_rule_access_is_controlled_by_role_permission_matrix(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $rule = AutoReplyRule::factory()->create();
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.edit', false);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.delete', false);
+
+        $this->actingAs($employee)
+            ->get(AutoReplyRuleResource::getUrl())
+            ->assertOk()
+            ->assertSee('Правила автоответа');
+
+        $this->assertTrue(Gate::forUser($employee)->allows('viewAny', AutoReplyRule::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('view', $rule));
+        $this->assertFalse(Gate::forUser($employee)->allows('create', AutoReplyRule::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('update', $rule));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $rule));
+    }
+
+    public function test_employee_can_manage_auto_reply_rules_when_edit_and_delete_are_enabled_in_matrix(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.edit', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.delete', true);
+
+        Livewire::actingAs($employee)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'contact_phone_condition' => null,
+                'reply_text' => 'Employee managed rule',
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        Livewire::actingAs($employee)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('edit', $rule, [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'contact_phone_condition' => null,
+                'reply_text' => 'Employee updated rule',
+                'is_active' => false,
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $rule->refresh();
+
+        $this->assertSame('Employee updated rule', $rule->reply_text);
+        $this->assertFalse($rule->is_active);
+
+        Livewire::actingAs($employee)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('delete', $rule)
+            ->assertHasNoTableActionErrors();
+
+        $this->assertModelMissing($rule);
     }
 
     public function test_admin_can_create_edit_and_delete_auto_reply_rule(): void
@@ -467,5 +544,13 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             'max_button_type' => AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE,
             'is_active' => true,
         ]);
+    }
+
+    private function setRolePermission(string $role, string $permissionKey, bool $granted): void
+    {
+        DB::table('role_permissions')
+            ->where('role', $role)
+            ->where('permission_key', $permissionKey)
+            ->update(['granted' => $granted]);
     }
 }

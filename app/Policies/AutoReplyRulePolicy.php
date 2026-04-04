@@ -9,36 +9,31 @@ class AutoReplyRulePolicy
 {
     public function viewAny(User $user): bool
     {
-        return $this->canManageRules($user);
+        return $user->hasRolePermission('auto_reply_rules.view');
     }
 
     public function view(User $user, AutoReplyRule $autoReplyRule): bool
     {
-        return $this->canManageRules($user);
+        return $user->hasRolePermission('auto_reply_rules.view');
     }
 
     public function create(User $user): bool
     {
-        return $this->canManageRules($user);
+        return $user->hasRolePermission('auto_reply_rules.edit');
     }
 
     public function update(User $user, AutoReplyRule $autoReplyRule): bool
     {
-        return $this->canManageRules($user);
+        return $user->hasRolePermission('auto_reply_rules.edit');
     }
 
     public function delete(User $user, AutoReplyRule $autoReplyRule): bool
     {
-        return $this->canManageRules($user);
+        return $user->hasRolePermission('auto_reply_rules.delete');
     }
 
     public function deleteAny(User $user): bool
     {
         return false;
-    }
-
-    protected function canManageRules(User $user): bool
-    {
-        return $user->canManageSystem();
     }
 }

@@ -134,4 +134,31 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
             ->assertForbidden();
     }
+
+    public function test_employee_with_granted_system_permissions_still_cannot_access_role_permission_matrix_page(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.edit', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.delete', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+
+        $this->actingAs($employee)
+            ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
+            ->assertForbidden();
+    }
+
+    private function setRolePermission(string $role, string $permissionKey, bool $granted): void
+    {
+        DB::table('role_permissions')
+            ->where('role', $role)
+            ->where('permission_key', $permissionKey)
+            ->update(['granted' => $granted]);
+    }
 }
