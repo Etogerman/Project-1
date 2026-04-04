@@ -55,4 +55,25 @@ class RolePermissionCatalogTest extends TestCase
         $this->assertNotContains('contacts.assignee.assign', $codes);
         $this->assertNotContains('tags.view', $codes);
     }
+
+    public function test_catalog_marks_preparatory_rows_explicitly(): void
+    {
+        $catalog = app(RolePermissionCatalog::class)->groups();
+
+        $preparatoryCodes = collect($catalog)
+            ->pluck('actions')
+            ->flatten(1)
+            ->filter(fn (array $action): bool => $action['isPreparatory'])
+            ->pluck('code')
+            ->values()
+            ->all();
+
+        $this->assertSame([
+            'dialogs.delete',
+            'users.delete',
+            'channels.delete',
+            'bitrix24.edit',
+            'bitrix24.delete',
+        ], $preparatoryCodes);
+    }
 }
