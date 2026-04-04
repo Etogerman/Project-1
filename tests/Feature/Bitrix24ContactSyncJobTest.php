@@ -13,9 +13,15 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bitrix24\IsContactReadyForBitrix24SyncAction;
+use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
+use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
+use App\Services\Bitrix24\QueueMissedBitrix24OpenLinesRetryAction;
+use App\Services\Bitrix24\SyncContactToBitrix24Action;
 use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\TestCase;
@@ -889,6 +895,134 @@ class Bitrix24ContactSyncJobTest extends TestCase
         ]);
 
         Http::fake();
+
+        $this->runSyncJob($contact);
+
+        $contact->refresh();
+
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_FAILED, $contact->bitrix24_sync_status);
+        $this->assertFalse($contact->bitrix24_sync_pending);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'contact_sync_failed',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+    }
+
+    public function test_successful_job_calls_follow_up_actions_after_contact_becomes_linked(): void
+    {
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_linked_at' => null,
+        ]);
+
+        $readyAction = Mockery::mock(IsContactReadyForBitrix24SyncAction::class);
+        $readyAction->shouldReceive('handle')
+            ->once()
+            ->andReturn(true);
+        $this->app->instance(IsContactReadyForBitrix24SyncAction::class, $readyAction);
+
+        $syncAction = Mockery::mock(SyncContactToBitrix24Action::class);
+        $syncAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(function (Contact $rootContact) use ($contact): bool {
+                $rootContact->forceFill([
+                    'bitrix24_contact_id' => '501',
+                    'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+                    'bitrix24_linked_at' => now(),
+                    'bitrix24_last_synced_at' => now(),
+                ])->save();
+
+                return $rootContact->id === $contact->id;
+            });
+        $this->app->instance(SyncContactToBitrix24Action::class, $syncAction);
+
+        $rawSnapshotAction = Mockery::mock(LogBitrix24RawContactPhoneSnapshotAction::class);
+        $rawSnapshotAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact, string $stage): bool => $rootContact->id === $contact->id && $stage === 'after_contact_sync');
+        $this->app->instance(LogBitrix24RawContactPhoneSnapshotAction::class, $rawSnapshotAction);
+
+        $retryAction = Mockery::mock(QueueMissedBitrix24OpenLinesRetryAction::class);
+        $retryAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id)
+            ->andReturn(true);
+        $this->app->instance(QueueMissedBitrix24OpenLinesRetryAction::class, $retryAction);
+
+        $dealAction = Mockery::mock(QueueBitrix24DealSyncAction::class);
+        $dealAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id);
+        $this->app->instance(QueueBitrix24DealSyncAction::class, $dealAction);
+
+        $historyAction = Mockery::mock(QueueBitrix24HistoryExportAction::class);
+        $historyAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id);
+        $this->app->instance(QueueBitrix24HistoryExportAction::class, $historyAction);
+
+        $this->runSyncJob($contact);
+
+        $contact->refresh();
+
+        $this->assertSame('501', $contact->bitrix24_contact_id);
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_SYNCED, $contact->bitrix24_sync_status);
+        $this->assertFalse($contact->bitrix24_sync_pending);
+    }
+
+    public function test_job_logs_critical_and_skips_follow_up_actions_when_sync_throws(): void
+    {
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_linked_at' => null,
+        ]);
+
+        $readyAction = Mockery::mock(IsContactReadyForBitrix24SyncAction::class);
+        $readyAction->shouldReceive('handle')
+            ->once()
+            ->andReturn(true);
+        $this->app->instance(IsContactReadyForBitrix24SyncAction::class, $readyAction);
+
+        $syncAction = Mockery::mock(SyncContactToBitrix24Action::class);
+        $syncAction->shouldReceive('handle')
+            ->once()
+            ->andThrow(new \RuntimeException('Bitrix sync exploded'));
+        $this->app->instance(SyncContactToBitrix24Action::class, $syncAction);
+
+        $rawSnapshotAction = Mockery::mock(LogBitrix24RawContactPhoneSnapshotAction::class);
+        $rawSnapshotAction->shouldNotReceive('handle');
+        $this->app->instance(LogBitrix24RawContactPhoneSnapshotAction::class, $rawSnapshotAction);
+
+        $retryAction = Mockery::mock(QueueMissedBitrix24OpenLinesRetryAction::class);
+        $retryAction->shouldNotReceive('handle');
+        $this->app->instance(QueueMissedBitrix24OpenLinesRetryAction::class, $retryAction);
+
+        $dealAction = Mockery::mock(QueueBitrix24DealSyncAction::class);
+        $dealAction->shouldNotReceive('handle');
+        $this->app->instance(QueueBitrix24DealSyncAction::class, $dealAction);
+
+        $historyAction = Mockery::mock(QueueBitrix24HistoryExportAction::class);
+        $historyAction->shouldNotReceive('handle');
+        $this->app->instance(QueueBitrix24HistoryExportAction::class, $historyAction);
+
+        Log::shouldReceive('critical')
+            ->once()
+            ->with('Bitrix24 contact sync job failed.', Mockery::on(function (array $context) use ($contact): bool {
+                return $context['job'] === SyncContactToBitrix24Job::class
+                    && $context['contact_id'] === $contact->id
+                    && $context['root_contact_id'] === $contact->id
+                    && $context['bitrix24_contact_id'] === null
+                    && $context['exception_class'] === \RuntimeException::class
+                    && $context['exception_message'] === 'Bitrix sync exploded';
+            }));
 
         $this->runSyncJob($contact);
 
