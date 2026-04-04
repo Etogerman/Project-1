@@ -241,12 +241,24 @@
         box-shadow:
             inset 0 1px 0 rgba(255, 255, 255, 0.78),
             0 1px 2px rgba(15, 23, 42, 0.08);
+        overflow: hidden;
+        isolation: isolate;
         transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
     }
 
     .fi-input,
     .fi-select-input {
         color: var(--ac-text);
+    }
+
+    .fi-input-wrp-content-ctn,
+    .fi-input-wrp-prefix,
+    .fi-input-wrp-suffix,
+    .fi-select-input-btn,
+    .fi-input,
+    .fi-select-input {
+        border-radius: inherit;
+        background-clip: padding-box;
     }
 
     .fi-input-wrp-prefix,
@@ -268,6 +280,53 @@
 
     .fi-input::placeholder {
         color: color-mix(in srgb, var(--ac-text-soft) 86%, var(--ac-text-muted));
+    }
+
+    .fi-global-search-field .fi-input-wrp,
+    .fi-ta-search-field .fi-input-wrp,
+    .fi-pagination-records-per-page-select .fi-input-wrp {
+        min-height: 2.9rem;
+        border-color: color-mix(in srgb, var(--ac-warning) 16%, var(--ac-border-strong));
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--ac-surface-emphasis) 78%, var(--ac-surface-strong)) 0%,
+            var(--ac-surface-strong) 100%
+        );
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.72),
+            0 12px 28px -26px rgba(15, 23, 42, 0.42);
+    }
+
+    .fi-global-search-field .fi-input,
+    .fi-ta-search-field .fi-input,
+    .fi-pagination-records-per-page-select .fi-select-input,
+    .fi-pagination-records-per-page-select .fi-select-input-btn {
+        min-height: 2.9rem;
+    }
+
+    .fi-global-search-field .fi-input-wrp-prefix,
+    .fi-ta-search-field .fi-input-wrp-prefix,
+    .fi-pagination-records-per-page-select .fi-input-wrp-prefix,
+    .fi-global-search-field .fi-input-wrp-suffix,
+    .fi-pagination-records-per-page-select .fi-input-wrp-suffix {
+        color: var(--ac-text-soft);
+        border-color: color-mix(in srgb, var(--ac-warning) 18%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-surface-emphasis) 42%, transparent);
+    }
+
+    .fi-global-search-field .fi-input::placeholder,
+    .fi-ta-search-field .fi-input::placeholder,
+    .fi-pagination-records-per-page-select .fi-input-wrp-label {
+        color: var(--ac-text-soft);
+    }
+
+    .fi-ta-header-toolbar .fi-ta-search-field {
+        min-width: min(100%, 17rem);
+    }
+
+    .fi-ta-header-toolbar .fi-btn,
+    .fi-ta-header-toolbar .fi-icon-btn {
+        min-height: 2.9rem;
     }
 
     .fi-input-wrp:hover {
@@ -666,6 +725,31 @@
     .fi-ta-row:hover td,
     .fi-ta-record:hover {
         background: color-mix(in srgb, var(--ac-primary-soft) 34%, var(--ac-surface-strong));
+    }
+
+    .fi-resource-contacts .fi-ta-text:not(.fi-inline) {
+        padding-top: 0.8rem;
+        padding-bottom: 0.8rem;
+    }
+
+    .fi-resource-contacts .fi-ta-text.fi-ta-text-has-descriptions,
+    .fi-resource-contacts .fi-ta-text.fi-ta-text-list-limited {
+        gap: 0.2rem;
+    }
+
+    .fi-resource-contacts .fi-ta-text-item {
+        line-height: 1.35;
+    }
+
+    .fi-resource-contacts .fi-ta-text-item.fi-size-sm {
+        font-size: 0.92rem;
+    }
+
+    .fi-resource-contacts .fi-ta-text > .fi-ta-text-description,
+    .fi-resource-contacts .fi-ta-text > .fi-ta-text-list-limited-message {
+        font-size: 0.76rem;
+        line-height: 1.35;
+        color: color-mix(in srgb, var(--ac-text-soft) 88%, transparent);
     }
 
     .fi-ta-group-header,
