@@ -105,7 +105,7 @@ class ContactResource extends Resource
                 'primaryIdentity.channel',
                 'latestConversationMessage.channel',
                 'latestInboundMessage.channel',
-                'openDuplicateReviews' => fn (Builder $query): Builder => $query
+                'openDuplicateReviews' => fn ($query) => $query
                     ->select([
                         'id',
                         'contact_id',
@@ -114,7 +114,7 @@ class ContactResource extends Resource
                         'candidate_root_contact_ids',
                         'created_at',
                     ]),
-                'recentMergedChildren' => fn (Builder $query): Builder => $query
+                'recentMergedChildren' => fn ($query) => $query
                     ->select([
                         'id',
                         'merged_into_contact_id',
