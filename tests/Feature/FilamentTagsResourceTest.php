@@ -8,6 +8,7 @@ use App\Models\Contact;
 use App\Models\Tag;
 use App\Models\User;
 use Filament\Facades\Filament;
+use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -34,7 +35,9 @@ class FilamentTagsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(TagResource::getUrl())
             ->assertOk()
-            ->assertSee('Теги');
+            ->assertSee('Теги')
+            ->assertSee('ac-inline-list-page', false)
+            ->assertSee('ac-list-page-header-toolbar', false);
     }
 
     public function test_employee_cannot_open_tags_page(): void
@@ -115,6 +118,33 @@ class FilamentTagsResourceTest extends TestCase
             ->assertMountedActionModalSee('Жёлтый')
             ->assertMountedActionModalSee('Красный')
             ->assertMountedActionModalSee('Активен');
+    }
+
+    public function test_tags_table_uses_inline_list_page_standard(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $tag = Tag::factory()->create();
+
+        Livewire::actingAs($admin)
+            ->test(ManageTags::class)
+            ->assertTableActionHasIcon('edit', Heroicon::OutlinedPencilSquare, $tag)
+            ->assertTableActionHasIcon('delete', Heroicon::OutlinedTrash, $tag)
+            ->assertTableActionDoesNotHaveLabel('edit', $tag)
+            ->assertTableActionDoesNotHaveLabel('delete', $tag)
+            ->tap(function ($component): void {
+                $table = $component->instance()->getTable();
+
+                $this->assertContains('ac-inline-list-page', $component->instance()->getPageClasses());
+                $this->assertTrue($table->hasColumnManager());
+                $this->assertFalse($table->hasDeferredColumnManager());
+                $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertTrue($table->getColumn('id')?->isToggleable());
+                $this->assertTrue($table->getColumn('slug')?->isToggleable());
+                $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
+            });
     }
 
     public function test_used_tag_cannot_be_deleted_from_resource_table(): void

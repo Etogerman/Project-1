@@ -13,6 +13,14 @@ class ManageAutoReplyRules extends ManageRecords
 {
     protected static string $resource = AutoReplyRuleResource::class;
 
+    public function getPageClasses(): array
+    {
+        return [
+            ...parent::getPageClasses(),
+            'ac-inline-list-page',
+        ];
+    }
+
     protected function getHeaderActions(): array
     {
         return [
