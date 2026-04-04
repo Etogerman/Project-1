@@ -38,7 +38,7 @@ class RolePermissionMatrix extends Page
 
     public function getSubheading(): ?string
     {
-        return 'Текущая модель доступа из кода без редактирования прав в интерфейсе.';
+        return 'Страница показывает будущую форму крупной матрицы прав и отдельно отмечает строки, которые пока не подключены к реальным проверкам доступа.';
     }
 
     /**
@@ -52,6 +52,9 @@ class RolePermissionMatrix extends Page
      *             code:string,
      *             label:string,
      *             description:string,
+     *             isPreparatory: bool,
+     *             preparatoryLabel: ?string,
+     *             preparatoryDescription: ?string,
      *             states: array<string, array{allowed:bool,label:string,tone:string}>
      *         }>
      *     }>

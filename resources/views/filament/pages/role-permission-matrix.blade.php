@@ -34,10 +34,23 @@
             gap: 0.55rem;
         }
 
+        .ac-role-permission-row--preparatory {
+            background: linear-gradient(180deg, color-mix(in srgb, var(--ac-warning-50) 72%, white) 0%, var(--ac-surface-strong) 100%);
+        }
+
         .ac-role-permission-code {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
             font-size: 0.78rem;
             color: var(--ac-text-soft);
+        }
+
+        .ac-role-permission-note {
+            display: grid;
+            gap: 0.45rem;
+            padding: 0.8rem;
+            border: 1px dashed color-mix(in srgb, var(--ac-warning-500) 45%, var(--ac-border));
+            border-radius: var(--ac-radius-sm);
+            background: color-mix(in srgb, var(--ac-warning-50) 78%, white);
         }
 
         .ac-role-permission-row__states {
@@ -75,8 +88,9 @@
                     <p class="ac-surface__eyebrow">Команда</p>
                     <h3 class="ac-surface__title">Матрица ролей и прав</h3>
                     <p class="ac-surface__subtitle">
-                        Страница показывает только текущие права, которые уже существуют в рабочем контуре панели.
-                        Изменение прав через интерфейс на этом шаге не поддерживается.
+                        Страница показывает форму будущей крупной матрицы прав. Для уже подключённых строк используются
+                        текущие проверки доступа из кода, а подготовительные строки отмечены отдельно и пока не влияют
+                        на рабочий контур панели.
                     </p>
                 </div>
 
@@ -107,13 +121,25 @@
                             <article
                                 data-role="permission-row"
                                 data-code="{{ $action['code'] }}"
-                                class="ac-role-permission-row"
+                                data-runtime="{{ $action['isPreparatory'] ? 'preparatory' : 'active' }}"
+                                class="ac-role-permission-row{{ $action['isPreparatory'] ? ' ac-role-permission-row--preparatory' : '' }}"
                             >
                                 <div class="ac-role-permission-row__header">
                                     <p class="ac-role-permission-code">{{ $action['code'] }}</p>
                                     <p class="ac-list-card__title">{{ $action['label'] }}</p>
                                     <p class="ac-list-card__body">{{ $action['description'] }}</p>
                                 </div>
+
+                                @if ($action['isPreparatory'])
+                                    <div class="ac-role-permission-note" data-role="permission-row-note">
+                                        <div class="ac-button-group">
+                                            <span class="ac-pill" data-tone="warning">
+                                                {{ $action['preparatoryLabel'] }}
+                                            </span>
+                                        </div>
+                                        <p class="ac-list-card__body">{{ $action['preparatoryDescription'] }}</p>
+                                    </div>
+                                @endif
 
                                 <div class="ac-role-permission-row__states">
                                     @foreach ($roles as $role)
