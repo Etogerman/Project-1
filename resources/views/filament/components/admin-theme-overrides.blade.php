@@ -151,37 +151,6 @@
         flex-wrap: wrap;
     }
 
-    .ac-inline-list-page .fi-header {
-        align-items: center;
-    }
-
-    .ac-inline-list-page .fi-header-actions-ctn {
-        flex: 1 1 32rem;
-        justify-content: flex-end;
-    }
-
-    .ac-list-page-header-toolbar {
-        flex: 1 1 24rem;
-        min-width: min(100%, 24rem);
-    }
-
-    .ac-list-page-header-toolbar:empty {
-        display: none;
-    }
-
-    .ac-list-page-header-toolbar > .ac-list-page-header-toolbar-items {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 0.65rem;
-        flex-wrap: wrap;
-        width: 100%;
-    }
-
-    .ac-inline-list-page .ac-list-page-header-toolbar .fi-ta-search-field {
-        min-width: min(100%, 17rem);
-    }
-
     .fi-breadcrumbs-list {
         display: flex;
         align-items: center;
@@ -481,14 +450,6 @@
 
     .ac-table-toolbar-trigger {
         min-height: 2.9rem;
-    }
-
-    .ac-inline-list-page .fi-ta-header-ctn {
-        display: none;
-    }
-
-    .ac-inline-list-page .fi-ta-content-ctn {
-        margin-top: 0;
     }
 
     .fi-ta-filter-indicators {
@@ -840,29 +801,6 @@
     }
 
     @media (max-width: 900px) {
-        .ac-inline-list-page .fi-header {
-            align-items: flex-start;
-        }
-
-        .ac-inline-list-page .fi-header-actions-ctn {
-            width: 100%;
-            justify-content: stretch;
-        }
-
-        .ac-list-page-header-toolbar,
-        .ac-list-page-header-toolbar > .ac-list-page-header-toolbar-items {
-            width: 100%;
-        }
-
-        .ac-list-page-header-toolbar > .ac-list-page-header-toolbar-items {
-            justify-content: flex-start;
-        }
-
-        .ac-inline-list-page .ac-list-page-header-toolbar .fi-ta-search-field {
-            flex: 1 1 100%;
-            min-width: 100%;
-        }
-
         :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal, .ac-auto-reply-form-modal) .fi-modal-footer-actions {
             justify-content: stretch;
         }
