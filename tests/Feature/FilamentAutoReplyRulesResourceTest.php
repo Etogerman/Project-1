@@ -450,6 +450,38 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         ]);
     }
 
+    public function test_admin_can_create_exact_text_or_parameter_rule(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+                'keyword' => '  TEXT_OR_PARAM  ',
+                'reply_text' => 'Combined',
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        $this->assertSame(AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER, $rule->match_scope);
+        $this->assertSame('TEXT_OR_PARAM', $rule->keyword);
+        $this->assertSame('text_or_param', $rule->normalized_keyword);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->assertSee('Текст или параметр: TEXT_OR_PARAM');
+    }
+
     public function test_admin_can_save_tag_conditions_for_auto_reply_rule(): void
     {
         $admin = User::factory()->create([
@@ -553,7 +585,48 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ])
             ->assertHasNoFormErrors();
 
-        $this->assertSame(2, AutoReplyRule::query()->count());
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+                'keyword' => 'TEXT_1',
+                'reply_text' => 'Combined',
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $this->assertSame(3, AutoReplyRule::query()->count());
+    }
+
+    public function test_exact_text_or_parameter_rule_must_be_unique_within_same_scope(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+            'keyword' => 'TEXT_1',
+            'normalized_keyword' => 'text_1',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', [
+                'channel_id' => $channel->id,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+                'keyword' => ' text_1 ',
+                'reply_text' => 'Duplicate combined',
+                'is_active' => true,
+            ]);
+
+        $this->assertSame(1, AutoReplyRule::query()->count());
     }
 
     public function test_any_inbound_rule_must_be_unique_per_channel_and_phone_condition(): void

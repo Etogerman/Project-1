@@ -542,6 +542,7 @@ class AutoReplyRuleResource extends Resource
             ? $matchScope
             : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD) {
             AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER => 'Параметр для срабатывания',
+            AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER => 'Текст или параметр для срабатывания',
             default => 'Текст для срабатывания',
         };
     }
@@ -554,6 +555,10 @@ class AutoReplyRuleResource extends Resource
 
         if ($record->usesExactParameterScope()) {
             return sprintf('Параметр: %s', (string) $record->keyword);
+        }
+
+        if ($record->usesExactTextOrParameterScope()) {
+            return sprintf('Текст или параметр: %s', (string) $record->keyword);
         }
 
         if ($record->usesContainsTextScope()) {
