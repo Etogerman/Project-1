@@ -117,6 +117,13 @@
             margin-top: 0.3rem;
         }
 
+        .ac-role-permission-action__badges {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }
+
         .ac-role-permission-action__title {
             margin: 0;
             font-size: 0.98rem;
@@ -215,9 +222,9 @@
                     <p class="ac-surface__eyebrow">Команда</p>
                     <h3 class="ac-surface__title">Матрица ролей и прав</h3>
                     <p class="ac-surface__subtitle">
-                        Страница показывает конфигурацию крупной матрицы прав из базы данных. На текущем этапе эти
-                        значения ещё не управляют реальным доступом: рабочие проверки доступа по-прежнему определяются
-                        кодом приложения.
+                        Страница показывает управляемую матрицу прав из базы данных. Часть строк уже влияет на
+                        реальный доступ, часть пока остаётся только конфигурацией в <code>role_permissions</code>.
+                        Суперадминистратор остаётся отдельным recovery-контуром вне этой таблицы.
                     </p>
                 </div>
 
@@ -239,13 +246,15 @@
 
         <section class="ac-role-permission-note" data-role="database-readonly-note">
             <div class="ac-button-group">
-                <span class="ac-pill" data-tone="info">Конфигурация из базы</span>
-                <span class="ac-pill" data-tone="warning">Runtime не переключён</span>
+                <span class="ac-pill" data-role="runtime-active-badge" data-tone="success">Уже влияет на доступ</span>
+                <span class="ac-pill" data-role="config-only-badge" data-tone="gray">Пока только конфигурация</span>
+                <span class="ac-pill" data-role="superadmin-recovery-badge" data-tone="danger">Суперадминистратор вне матрицы</span>
             </div>
             <p class="ac-list-card__body">
-                Матрица читает и сохраняет значения в таблицу <code>role_permissions</code>, но пока не применяет их
-                к реальной авторизации. Подготовительные строки отмечены отдельно и могут иметь значения в базе,
-                даже если runtime ещё не умеет их использовать.
+                Матрица читает и сохраняет значения в таблицу <code>role_permissions</code> в смешанном режиме rollout:
+                строки со статусом runtime-active уже управляют доступом в системе, а config-only строки пока
+                остаются подготовленной конфигурацией. Подготовительные права отмечены отдельно, а recovery-доступ
+                суперадминистратора не зависит от этой таблицы.
             </p>
         </section>
 
@@ -280,15 +289,29 @@
                                 <tr
                                     data-role="permission-row"
                                     data-code="{{ $action['code'] }}"
-                                    data-runtime="{{ $action['isPreparatory'] ? 'preparatory' : 'active' }}"
+                                    data-runtime="{{ $action['runtimeStatus'] }}"
                                 >
                                     <td class="ac-role-permission-action{{ $action['isPreparatory'] ? ' ac-role-permission-action--preparatory' : '' }}">
                                         <p class="ac-role-permission-code">{{ $action['code'] }}</p>
                                         <div class="ac-role-permission-action__topline">
                                             <p class="ac-role-permission-action__title">{{ $action['label'] }}</p>
 
+                                            <span
+                                                class="ac-pill"
+                                                data-role="permission-runtime-status"
+                                                data-tone="{{ $action['runtimeTone'] }}"
+                                                title="{{ $action['runtimeDescription'] }}"
+                                            >
+                                                {{ $action['runtimeLabel'] }}
+                                            </span>
+
                                             @if ($action['isPreparatory'])
-                                                <span class="ac-pill" data-tone="warning" data-role="permission-row-note">
+                                                <span
+                                                    class="ac-pill"
+                                                    data-tone="warning"
+                                                    data-role="permission-row-note"
+                                                    title="{{ $action['preparatoryDescription'] }}"
+                                                >
                                                     {{ $action['preparatoryLabel'] }}
                                                 </span>
                                             @endif
