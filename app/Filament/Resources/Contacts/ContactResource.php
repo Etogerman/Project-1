@@ -330,7 +330,6 @@ class ContactResource extends Resource
                 TextColumn::make('display_name')
                     ->label('Контакт')
                     ->toggleable()
-                    ->description(fn (Contact $record): ?string => static::formatContactTableIdentitySummary($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search)),
                 TextColumn::make('inbox_status')
                     ->label('Статус')
