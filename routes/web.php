@@ -27,5 +27,7 @@ Route::match(['GET', 'POST'], '/callbacks/bitrix24/openlines', [Bitrix24Callback
     ->middleware('throttle:bitrix24-openlines')
     ->name('callbacks.bitrix24.openlines');
 
-Route::match(['GET', 'POST'], '/callbacks/bitrix24/probe', Bitrix24ProbeController::class)
-    ->name('callbacks.bitrix24.probe');
+if (app()->environment(['local', 'testing'])) {
+    Route::match(['GET', 'POST'], '/callbacks/bitrix24/probe', Bitrix24ProbeController::class)
+        ->name('callbacks.bitrix24.probe');
+}
