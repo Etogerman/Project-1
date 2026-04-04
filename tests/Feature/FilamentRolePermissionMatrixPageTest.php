@@ -6,6 +6,7 @@ use App\Filament\Pages\RolePermissionMatrix;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class FilamentRolePermissionMatrixPageTest extends TestCase
@@ -40,7 +41,30 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->assertSee('dialogs.delete')
             ->assertSee('Подготовительное право')
             ->assertSee('bitrix24.view')
+            ->assertSee('Конфигурация из базы')
+            ->assertSee('role_permissions')
+            ->assertSee('не управляют реальным доступом')
+            ->assertSee('Включено')
+            ->assertSee('Выключено')
             ->assertDontSee('contacts.phone.edit_existing');
+    }
+
+    public function test_page_reflects_database_matrix_values(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'contacts.view')
+            ->update(['granted' => false]);
+
+        $this->actingAs($admin)
+            ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
+            ->assertOk()
+            ->assertSee('data-state-key="contacts.view:employee:disabled"', false);
     }
 
     public function test_employee_cannot_access_role_permission_matrix_page(): void

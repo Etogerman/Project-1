@@ -88,9 +88,9 @@
                     <p class="ac-surface__eyebrow">Команда</p>
                     <h3 class="ac-surface__title">Матрица ролей и прав</h3>
                     <p class="ac-surface__subtitle">
-                        Страница показывает форму будущей крупной матрицы прав. Для уже подключённых строк используются
-                        текущие проверки доступа из кода, а подготовительные строки отмечены отдельно и пока не влияют
-                        на рабочий контур панели.
+                        Страница показывает конфигурацию крупной матрицы прав из базы данных. На текущем этапе эти
+                        значения ещё не управляют реальным доступом: рабочие проверки доступа по-прежнему определяются
+                        кодом приложения.
                     </p>
                 </div>
 
@@ -102,6 +102,18 @@
                     @endforeach
                 </div>
             </div>
+        </section>
+
+        <section class="ac-role-permission-note" data-role="database-readonly-note">
+            <div class="ac-button-group">
+                <span class="ac-pill" data-tone="info">Конфигурация из базы</span>
+                <span class="ac-pill" data-tone="warning">Read-only режим</span>
+            </div>
+            <p class="ac-list-card__body">
+                Матрица читает значения из таблицы <code>role_permissions</code>, но пока не применяет их к
+                реальной авторизации. Подготовительные строки отмечены отдельно и могут иметь значения в базе,
+                даже если runtime ещё не умеет их использовать.
+            </p>
         </section>
 
         <div class="ac-role-permission-grid">
@@ -145,7 +157,14 @@
                                     @foreach ($roles as $role)
                                         @php($state = $action['states'][$role['key']])
 
-                                        <div class="ac-role-permission-state">
+                                        <div
+                                            class="ac-role-permission-state"
+                                            data-role="permission-state"
+                                            data-code="{{ $action['code'] }}"
+                                            data-role-key="{{ $role['key'] }}"
+                                            data-status="{{ $state['status'] }}"
+                                            data-state-key="{{ $action['code'] }}:{{ $role['key'] }}:{{ $state['status'] }}"
+                                        >
                                             <p class="ac-meta__label">{{ $role['label'] }}</p>
                                             <div class="ac-button-group">
                                                 <span class="ac-pill" data-tone="{{ $state['tone'] }}">
