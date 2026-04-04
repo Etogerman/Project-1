@@ -68,6 +68,24 @@
             background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 92%, var(--ac-surface-strong)) 0%, var(--ac-surface-strong) 100%);
         }
 
+        .ac-role-permission-state__toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            flex-wrap: wrap;
+        }
+
+        .ac-role-permission-checkbox {
+            width: 1rem;
+            height: 1rem;
+            accent-color: color-mix(in srgb, var(--ac-success-500) 80%, white);
+        }
+
+        .ac-role-permission-lock {
+            font-size: 0.78rem;
+            color: var(--ac-text-soft);
+        }
+
         @media (min-width: 1100px) {
             .ac-role-permission-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -95,6 +113,12 @@
                 </div>
 
                 <div class="ac-button-group">
+                    <x-filament::button type="button" wire:click="reloadPermissionMatrix" color="gray">
+                        Сбросить несохранённые изменения
+                    </x-filament::button>
+                    <x-filament::button type="button" wire:click="savePermissionMatrix">
+                        Сохранить матрицу
+                    </x-filament::button>
                     @foreach ($roles as $role)
                         <span class="ac-pill" data-tone="{{ $role['tone'] }}">
                             {{ $role['label'] }}
@@ -107,11 +131,11 @@
         <section class="ac-role-permission-note" data-role="database-readonly-note">
             <div class="ac-button-group">
                 <span class="ac-pill" data-tone="info">Конфигурация из базы</span>
-                <span class="ac-pill" data-tone="warning">Read-only режим</span>
+                <span class="ac-pill" data-tone="warning">Runtime не переключён</span>
             </div>
             <p class="ac-list-card__body">
-                Матрица читает значения из таблицы <code>role_permissions</code>, но пока не применяет их к
-                реальной авторизации. Подготовительные строки отмечены отдельно и могут иметь значения в базе,
+                Матрица читает и сохраняет значения в таблицу <code>role_permissions</code>, но пока не применяет их
+                к реальной авторизации. Подготовительные строки отмечены отдельно и могут иметь значения в базе,
                 даже если runtime ещё не умеет их использовать.
             </p>
         </section>
@@ -163,14 +187,26 @@
                                             data-code="{{ $action['code'] }}"
                                             data-role-key="{{ $role['key'] }}"
                                             data-status="{{ $state['status'] }}"
+                                            data-editable="{{ $state['editable'] ? 'true' : 'false' }}"
                                             data-state-key="{{ $action['code'] }}:{{ $role['key'] }}:{{ $state['status'] }}"
                                         >
                                             <p class="ac-meta__label">{{ $role['label'] }}</p>
-                                            <div class="ac-button-group">
+                                            <label class="ac-role-permission-state__toggle">
+                                                <input
+                                                    type="checkbox"
+                                                    class="ac-role-permission-checkbox"
+                                                    data-role="permission-checkbox"
+                                                    wire:model.live="permissionState.{{ $role['key'] }}.{{ $action['code'] }}"
+                                                    @disabled(! $state['editable'])
+                                                >
                                                 <span class="ac-pill" data-tone="{{ $state['tone'] }}">
                                                     {{ $state['label'] }}
                                                 </span>
-                                            </div>
+                                            </label>
+
+                                            @if (filled($state['lockReason']))
+                                                <p class="ac-role-permission-lock">{{ $state['lockReason'] }}</p>
+                                            @endif
                                         </div>
                                     @endforeach
                                 </div>
