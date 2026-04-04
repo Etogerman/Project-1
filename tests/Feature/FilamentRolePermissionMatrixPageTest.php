@@ -33,6 +33,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
             ->assertOk()
             ->assertSee('Матрица ролей и прав')
+            ->assertSee('data-role="role-permission-matrix-table"', false)
             ->assertSee('Контакты')
             ->assertSee('Системные разделы')
             ->assertSee('Администратор')
