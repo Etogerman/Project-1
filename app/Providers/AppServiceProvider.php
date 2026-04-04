@@ -7,12 +7,14 @@ use App\Models\Bitrix24Connection;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
+use App\Models\Scenario;
 use App\Models\User;
 use App\Policies\AutoReplyRulePolicy;
 use App\Policies\Bitrix24ConnectionPolicy;
 use App\Policies\ChannelPolicy;
 use App\Policies\ContactPolicy;
 use App\Policies\DialogPolicy;
+use App\Policies\ScenarioPolicy;
 use App\Policies\UserPolicy;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -39,6 +41,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Contact::class, ContactPolicy::class);
         Gate::policy(Dialog::class, DialogPolicy::class);
         Gate::policy(User::class, UserPolicy::class);
+        Gate::policy(Scenario::class, ScenarioPolicy::class);
         Gate::policy(AutoReplyRule::class, AutoReplyRulePolicy::class);
         Gate::policy(Bitrix24Connection::class, Bitrix24ConnectionPolicy::class);
 
