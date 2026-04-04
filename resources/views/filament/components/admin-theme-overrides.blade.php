@@ -440,8 +440,17 @@
         align-items: center;
         justify-content: flex-end;
         gap: 0.65rem;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         margin-inline-start: auto;
+    }
+
+    .fi-ta-header-toolbar > :last-child > .fi-ta-search-field {
+        flex: 0 1 17rem;
+        min-width: 17rem;
+    }
+
+    .fi-ta-header-toolbar > :last-child > :not(.fi-ta-search-field) {
+        flex: 0 0 auto;
     }
 
     .fi-ta-actions {
@@ -801,6 +810,17 @@
     }
 
     @media (max-width: 900px) {
+        .fi-ta-header-toolbar > :last-child {
+            width: 100%;
+            justify-content: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .fi-ta-header-toolbar > :last-child > .fi-ta-search-field {
+            flex: 1 1 100%;
+            min-width: 100%;
+        }
+
         :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal, .ac-auto-reply-form-modal) .fi-modal-footer-actions {
             justify-content: stretch;
         }
