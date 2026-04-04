@@ -261,6 +261,22 @@ class AutoReplyRuleResource extends Resource
                 SelectFilter::make('channel_id')
                     ->label('Канал')
                     ->options(static::getChannelOptions()),
+                SelectFilter::make('tag')
+                    ->label('Тег')
+                    ->options(static::getTagFilterOptions())
+                    ->query(function (Builder $query, array $data): Builder {
+                        $tagId = (int) ($data['value'] ?? 0);
+
+                        if ($tagId <= 0) {
+                            return $query;
+                        }
+
+                        return $query->where(function (Builder $ruleQuery) use ($tagId): void {
+                            $ruleQuery
+                                ->whereHas('tagEffects', fn (Builder $effectsQuery): Builder => $effectsQuery->where('tag_id', $tagId))
+                                ->orWhereHas('tagConditions', fn (Builder $conditionsQuery): Builder => $conditionsQuery->where('tag_id', $tagId));
+                        });
+                    }),
                 TernaryFilter::make('is_active')
                     ->label('Статус')
                     ->placeholder('Все')
@@ -592,6 +608,20 @@ class AutoReplyRuleResource extends Resource
     {
         return Tag::query()
             ->where('is_active', true)
+            ->orderBy('name')
+            ->get()
+            ->mapWithKeys(fn (Tag $tag): array => [
+                $tag->id => $tag->name,
+            ])
+            ->all();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected static function getTagFilterOptions(): array
+    {
+        return Tag::query()
             ->orderBy('name')
             ->get()
             ->mapWithKeys(fn (Tag $tag): array => [

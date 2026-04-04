@@ -69,6 +69,22 @@ class ManageContacts extends ManageRecords
         return [];
     }
 
+    public function mount(): void
+    {
+        parent::mount();
+
+        $tagId = request()->integer('tag');
+
+        if ($tagId <= 0) {
+            return;
+        }
+
+        $this->tableFilters ??= [];
+        $this->tableFilters['tags'] = [
+            'values' => [(string) $tagId],
+        ];
+    }
+
     protected function resolveTableRecord(?string $key): Model | array | null
     {
         if ($key === null) {

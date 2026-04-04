@@ -13,6 +13,22 @@ class ManageAutoReplyRules extends ManageRecords
 {
     protected static string $resource = AutoReplyRuleResource::class;
 
+    public function mount(): void
+    {
+        parent::mount();
+
+        $tagId = request()->integer('tag');
+
+        if ($tagId <= 0) {
+            return;
+        }
+
+        $this->tableFilters ??= [];
+        $this->tableFilters['tag'] = [
+            'value' => (string) $tagId,
+        ];
+    }
+
     protected function getHeaderActions(): array
     {
         return [
