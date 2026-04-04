@@ -451,13 +451,23 @@ class ContactResource extends Resource
                     ->label('Теги')
                     ->multiple()
                     ->preload()
-                    ->relationship(
-                        'tags',
-                        'name',
-                        fn (Builder $query): Builder => $query
-                            ->where('is_active', true)
-                            ->orderBy('name'),
-                    ),
+                    ->options(fn (): array => static::getAvailableTagOptions())
+                    ->query(function (Builder $query, array $data): Builder {
+                        $tagIds = collect($data['values'] ?? [])
+                            ->filter(fn (mixed $value): bool => filled($value))
+                            ->map(fn (mixed $value): int => (int) $value)
+                            ->values()
+                            ->all();
+
+                        if ($tagIds === []) {
+                            return $query;
+                        }
+
+                        return $query->whereHas(
+                            'tags',
+                            fn (Builder $tagsQuery): Builder => $tagsQuery->whereKey($tagIds),
+                        );
+                    }),
             ])
             ->columnManager()
             ->deferColumnManager(false)
