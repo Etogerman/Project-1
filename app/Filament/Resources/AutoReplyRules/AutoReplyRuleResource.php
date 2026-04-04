@@ -115,10 +115,8 @@ class AutoReplyRuleResource extends Resource
                     ->schema([
                         Select::make('assign_tag_ids')
                             ->label('Назначить теги')
-                            ->options(fn (?AutoReplyRule $record): array => static::getTagOptions($record))
+                            ->options(static::getTagOptions())
                             ->multiple()
-                            ->searchable()
-                            ->preload()
                             ->native(false)
                             ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
                                 $record?->loadMissing('tagEffects');
@@ -134,10 +132,8 @@ class AutoReplyRuleResource extends Resource
                             ->helperText('Эти теги будут назначены контакту только после успешной отправки автоответа.'),
                         Select::make('remove_tag_ids')
                             ->label('Снять теги')
-                            ->options(fn (?AutoReplyRule $record): array => static::getTagOptions($record))
+                            ->options(static::getTagOptions())
                             ->multiple()
-                            ->searchable()
-                            ->preload()
                             ->native(false)
                             ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
                                 $record?->loadMissing('tagEffects');
@@ -502,27 +498,14 @@ class AutoReplyRuleResource extends Resource
     /**
      * @return array<int, string>
      */
-    protected static function getTagOptions(?AutoReplyRule $record = null): array
+    protected static function getTagOptions(): array
     {
-        $currentTagIds = $record?->tagEffects()
-            ->pluck('tag_id')
-            ->map(fn (mixed $tagId): int => (int) $tagId)
-            ->all() ?? [];
-
         return Tag::query()
-            ->where(function (Builder $query) use ($currentTagIds): void {
-                $query->where('is_active', true);
-
-                if ($currentTagIds !== []) {
-                    $query->orWhereIn('id', $currentTagIds);
-                }
-            })
+            ->where('is_active', true)
             ->orderBy('name')
             ->get()
             ->mapWithKeys(fn (Tag $tag): array => [
-                $tag->id => $tag->is_active
-                    ? $tag->name
-                    : $tag->name.' (отключён)',
+                $tag->id => $tag->name,
             ])
             ->all();
     }
