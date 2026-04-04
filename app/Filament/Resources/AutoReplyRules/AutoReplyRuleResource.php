@@ -4,9 +4,11 @@ namespace App\Filament\Resources\AutoReplyRules;
 
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
 use App\Models\AutoReplyRule;
+use App\Models\AutoReplyRuleTagCondition;
 use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
 use App\Models\Tag;
+use App\Services\Bots\SyncAutoReplyRuleTagConditionsAction;
 use App\Services\Bots\SyncAutoReplyRuleTagEffectsAction;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -53,7 +55,7 @@ class AutoReplyRuleResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->with(['channel', 'tagEffects.tag']);
+        return parent::getEloquentQuery()->with(['channel', 'tagEffects.tag', 'tagConditions.tag']);
     }
 
     public static function form(Schema $schema): Schema
@@ -155,6 +157,44 @@ class AutoReplyRuleResource extends Resource
                                 );
                             })
                             ->helperText('Эти теги будут сняты только после успешной отправки автоответа.'),
+                    ])
+                    ->columns(2),
+                Section::make('Условия по тегам')
+                    ->schema([
+                        Select::make('required_tag_ids')
+                            ->label('Обязательные теги')
+                            ->options(static::getTagOptions())
+                            ->multiple()
+                            ->native(false)
+                            ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                $record?->loadMissing('tagConditions');
+
+                                $component->state(
+                                    $record?->tagConditions
+                                        ->where('condition', AutoReplyRuleTagCondition::CONDITION_REQUIRED)
+                                        ->pluck('tag_id')
+                                        ->map(fn (mixed $tagId): int => (int) $tagId)
+                                        ->all() ?? [],
+                                );
+                            })
+                            ->helperText('Правило сработает только если у контакта есть все выбранные теги.'),
+                        Select::make('excluded_tag_ids')
+                            ->label('Исключающие теги')
+                            ->options(static::getTagOptions())
+                            ->multiple()
+                            ->native(false)
+                            ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                $record?->loadMissing('tagConditions');
+
+                                $component->state(
+                                    $record?->tagConditions
+                                        ->where('condition', AutoReplyRuleTagCondition::CONDITION_EXCLUDED)
+                                        ->pluck('tag_id')
+                                        ->map(fn (mixed $tagId): int => (int) $tagId)
+                                        ->all() ?? [],
+                                );
+                            })
+                            ->helperText('Правило не сработает, если у контакта есть хотя бы один из этих тегов.'),
                     ])
                     ->columns(2),
             ]);
@@ -304,13 +344,14 @@ class AutoReplyRuleResource extends Resource
     public static function saveAutoReplyRule(array $data, ?AutoReplyRule $record = null): AutoReplyRule
     {
         $tagEffects = static::extractTagEffectIds($data);
+        $tagConditions = static::extractTagConditionIds($data);
         $ruleData = static::mutateAutoReplyRuleData(
-            Arr::except($data, ['assign_tag_ids', 'remove_tag_ids']),
+            Arr::except($data, ['assign_tag_ids', 'remove_tag_ids', 'required_tag_ids', 'excluded_tag_ids']),
             $record,
         );
 
         /** @var AutoReplyRule $rule */
-        $rule = DB::transaction(function () use ($record, $ruleData, $tagEffects): AutoReplyRule {
+        $rule = DB::transaction(function () use ($record, $ruleData, $tagEffects, $tagConditions): AutoReplyRule {
             if ($record instanceof AutoReplyRule) {
                 $record->update($ruleData);
                 $rule = $record;
@@ -323,11 +364,16 @@ class AutoReplyRuleResource extends Resource
                 $tagEffects['assignTagIds'],
                 $tagEffects['removeTagIds'],
             );
+            app(SyncAutoReplyRuleTagConditionsAction::class)->handle(
+                $rule,
+                $tagConditions['requiredTagIds'],
+                $tagConditions['excludedTagIds'],
+            );
 
             return $rule;
         });
 
-        return $rule->fresh(['channel', 'tagEffects.tag']) ?? $rule;
+        return $rule->fresh(['channel', 'tagEffects.tag', 'tagConditions.tag']) ?? $rule;
     }
 
     /**
@@ -506,6 +552,18 @@ class AutoReplyRuleResource extends Resource
         return [
             'assignTagIds' => static::normalizeTagIds($data['assign_tag_ids'] ?? []),
             'removeTagIds' => static::normalizeTagIds($data['remove_tag_ids'] ?? []),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array{requiredTagIds:list<int>, excludedTagIds:list<int>}
+     */
+    protected static function extractTagConditionIds(array $data): array
+    {
+        return [
+            'requiredTagIds' => static::normalizeTagIds($data['required_tag_ids'] ?? []),
+            'excludedTagIds' => static::normalizeTagIds($data['excluded_tag_ids'] ?? []),
         ];
     }
 

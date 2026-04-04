@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessAutoReplyJob;
 use App\Models\AutoReplyRule;
+use App\Models\AutoReplyRuleTagCondition;
 use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -437,6 +438,105 @@ class ProcessAutoReplyJobTest extends TestCase
             'tag_id' => $assignedTag->id,
         ]);
         $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_job_can_use_tags_from_previous_auto_reply_to_match_next_rule(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9301,
+                    ],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9302,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+        $warmTag = Tag::factory()->create([
+            'name' => 'Прогретый',
+            'color' => Tag::COLOR_SUCCESS,
+        ]);
+
+        $firstRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'старт',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('старт'),
+            'reply_text' => 'Первый шаг.',
+            'is_active' => true,
+        ]);
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $firstRule->id,
+            'tag_id' => $warmTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+
+        $secondRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'продолжить',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('продолжить'),
+            'reply_text' => 'Второй шаг.',
+            'is_active' => true,
+        ]);
+        AutoReplyRuleTagCondition::query()->create([
+            'auto_reply_rule_id' => $secondRule->id,
+            'tag_id' => $warmTag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
+        ]);
+
+        $firstMessage = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-tag-chain-start',
+            'text' => 'старт',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($firstMessage->id);
+
+        $contact = Contact::query()->findOrFail($firstMessage->contact_id);
+        $identity = ContactIdentity::query()->findOrFail($firstMessage->contact_identity_id);
+
+        $secondMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'reply_to_message_id' => null,
+            'provider_event_key' => 'telegram-tag-chain-next',
+            'external_chat_id' => $firstMessage->external_chat_id,
+            'external_message_id' => '11',
+            'text' => 'продолжить',
+            'raw_payload' => ['message' => 'payload-2'],
+            'received_at' => now()->addSecond(),
+            'auto_reply_sent_at' => null,
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($secondMessage->id);
+
+        Http::assertSent(fn ($request): bool => $request['text'] === 'Первый шаг.');
+        Http::assertSent(fn ($request): bool => $request['text'] === 'Второй шаг.');
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $contact->id,
+            'tag_id' => $warmTag->id,
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'reply_to_message_id' => $secondMessage->id,
+            'text' => 'Второй шаг.',
+        ]);
     }
 
     public function test_job_does_not_send_when_auto_reply_was_already_sent(): void
