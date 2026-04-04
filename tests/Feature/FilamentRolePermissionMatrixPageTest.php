@@ -22,14 +22,15 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
         Filament::bootCurrentPanel();
     }
 
-    public function test_admin_can_open_role_permission_matrix_page(): void
+    public function test_superadmin_can_open_role_permission_matrix_page(): void
     {
-        $admin = User::factory()->create([
+        $superadmin = User::factory()->create([
             'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
             'is_admin' => true,
         ]);
 
-        $this->actingAs($admin)
+        $this->actingAs($superadmin)
             ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
             ->assertOk()
             ->assertSee('Матрица ролей и прав')
@@ -55,8 +56,9 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
 
     public function test_page_reflects_database_matrix_values(): void
     {
-        $admin = User::factory()->create([
+        $superadmin = User::factory()->create([
             'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
             'is_admin' => true,
         ]);
 
@@ -65,20 +67,21 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->where('permission_key', 'contacts.view')
             ->update(['granted' => false]);
 
-        $this->actingAs($admin)
+        $this->actingAs($superadmin)
             ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
             ->assertOk()
             ->assertSee('data-state-key="contacts.view:employee:disabled"', false);
     }
 
-    public function test_admin_can_save_role_permission_matrix_changes(): void
+    public function test_superadmin_can_save_role_permission_matrix_changes(): void
     {
-        $admin = User::factory()->create([
+        $superadmin = User::factory()->create([
             'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
             'is_admin' => true,
         ]);
 
-        $this->actingAs($admin);
+        $this->actingAs($superadmin);
 
         Livewire::test(RolePermissionMatrix::class)
             ->set('permissionState.employee.contacts.delete', true)
@@ -92,14 +95,15 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
         );
     }
 
-    public function test_critical_admin_rights_remain_enabled_after_save_attempt(): void
+    public function test_critical_admin_rights_remain_enabled_after_superadmin_save_attempt(): void
     {
-        $admin = User::factory()->create([
+        $superadmin = User::factory()->create([
             'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
             'is_admin' => true,
         ]);
 
-        $this->actingAs($admin);
+        $this->actingAs($superadmin);
 
         Livewire::test(RolePermissionMatrix::class)
             ->set('permissionState.admin.users.view', false)
@@ -131,6 +135,19 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
         ]);
 
         $this->actingAs($employee)
+            ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
+            ->assertForbidden();
+    }
+
+    public function test_admin_without_superadmin_role_cannot_access_role_permission_matrix_page(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_ADMIN,
+            'is_admin' => true,
+        ]);
+
+        $this->actingAs($admin)
             ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
             ->assertForbidden();
     }

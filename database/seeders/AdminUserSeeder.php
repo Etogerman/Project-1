@@ -18,7 +18,7 @@ class AdminUserSeeder extends Seeder
                 'name' => 'Admin',
                 'is_active' => true,
                 'is_admin' => true,
-                'role' => User::ROLE_ADMIN,
+                'role' => User::ROLE_SUPERADMIN,
                 'password' => 'admin12345',
             ],
         );

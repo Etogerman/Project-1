@@ -17,6 +17,7 @@ use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
@@ -89,8 +90,11 @@ class UserResource extends Resource
                             ->label('Администратор')
                             ->default(false)
                             ->extraFieldWrapperAttributes(['class' => 'ac-user-form-toggle'])
-                            ->disabled(fn (?User $record, string $operation): bool => $operation === 'edit' && auth()->id() === $record?->id)
-                            ->helperText('Администратор управляет сотрудниками и настройками панели.')
+                            ->disabled(fn (?User $record, string $operation): bool => ($operation === 'edit' && auth()->id() === $record?->id)
+                                || $record?->isSuperadmin() === true)
+                            ->helperText(fn (?User $record): string => $record?->isSuperadmin()
+                                ? 'Роль суперадминистратора закреплена отдельно и не меняется через обычную форму сотрудника.'
+                                : 'Администратор управляет сотрудниками и настройками панели.')
                             ->inline(false),
                     ])
                     ->columns(2),
@@ -165,12 +169,12 @@ class UserResource extends Resource
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключён')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
                     ->sortable(),
-                TextColumn::make('is_admin')
+                TextColumn::make('role')
                     ->label('Роль')
                     ->badge()
                     ->extraAttributes(['class' => 'ac-user-table-badge'])
-                    ->formatStateUsing(fn (bool $state): string => $state ? 'Администратор' : 'Сотрудник')
-                    ->color(fn (bool $state): string => $state ? 'warning' : 'gray')
+                    ->formatStateUsing(fn (string $state, User $record): string => static::roleLabel($record))
+                    ->color(fn (string $state, User $record): string => static::roleTone($record))
                     ->sortable(),
                 TextColumn::make('created_at')
                     ->label('Создан')
@@ -184,11 +188,13 @@ class UserResource extends Resource
                     ->placeholder('Все')
                     ->trueLabel('Только активные')
                     ->falseLabel('Только отключённые'),
-                TernaryFilter::make('is_admin')
+                SelectFilter::make('role')
                     ->label('Роль')
-                    ->placeholder('Все')
-                    ->trueLabel('Только администраторы')
-                    ->falseLabel('Только сотрудники'),
+                    ->options([
+                        User::ROLE_SUPERADMIN => 'Суперадминистратор',
+                        User::ROLE_ADMIN => 'Администратор',
+                        User::ROLE_EMPLOYEE => 'Сотрудник',
+                    ]),
             ])
             ->defaultSort('created_at', 'desc')
             ->emptyStateHeading('Сотрудники ещё не добавлены')
@@ -214,6 +220,7 @@ class UserResource extends Resource
                     })
                     ->using(function (array $data, User $record): void {
                         static::guardAgainstSelfLockout($record, $data);
+                        $data = static::preserveProtectedRole($record, $data);
 
                         $record->update($data);
                     }),
@@ -249,8 +256,8 @@ class UserResource extends Resource
             'idLabel' => (string) $record->id,
             'activeLabel' => $record->is_active ? 'Активен' : 'Отключён',
             'activeTone' => $record->is_active ? 'success' : 'danger',
-            'roleLabel' => $record->is_admin ? 'Администратор' : 'Сотрудник',
-            'roleTone' => $record->is_admin ? 'warning' : 'neutral',
+            'roleLabel' => static::roleLabel($record),
+            'roleTone' => static::roleTone($record),
             'createdAtLabel' => static::formatUserTimestamp($record->created_at),
             'updatedAtLabel' => static::formatUserTimestamp($record->updated_at),
         ];
@@ -284,6 +291,40 @@ class UserResource extends Resource
         if ($messages !== []) {
             throw ValidationException::withMessages($messages);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function preserveProtectedRole(User $record, array $data): array
+    {
+        if (! $record->isSuperadmin()) {
+            return $data;
+        }
+
+        $data['role'] = User::ROLE_SUPERADMIN;
+        $data['is_admin'] = true;
+
+        return $data;
+    }
+
+    protected static function roleLabel(User $record): string
+    {
+        return match ($record->resolvedRole()) {
+            User::ROLE_SUPERADMIN => 'Суперадминистратор',
+            User::ROLE_ADMIN => 'Администратор',
+            default => 'Сотрудник',
+        };
+    }
+
+    protected static function roleTone(User $record): string
+    {
+        return match ($record->resolvedRole()) {
+            User::ROLE_SUPERADMIN => 'danger',
+            User::ROLE_ADMIN => 'warning',
+            default => 'neutral',
+        };
     }
 
     protected static function formatUserTimestamp(mixed $timestamp): string
