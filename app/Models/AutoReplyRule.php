@@ -20,6 +20,8 @@ class AutoReplyRule extends Model
 
     public const MATCH_SCOPE_EXACT_PARAMETER = 'exact_parameter';
 
+    public const MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER = 'exact_text_or_parameter';
+
     public const MATCH_SCOPE_ANY_INBOUND = 'any_inbound';
 
     public const CONTACT_PHONE_CONDITION_HAS_PHONE = 'has_phone';
@@ -82,6 +84,7 @@ class AutoReplyRule extends Model
             self::MATCH_SCOPE_CONTAINS_TEXT => 'Содержит текст в сообщении',
             self::MATCH_SCOPE_EXACT_KEYWORD => 'Точное соответствие текста в сообщении',
             self::MATCH_SCOPE_EXACT_PARAMETER => 'Точное соответствие параметра сообщения',
+            self::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER => 'Точное соответствие текста или параметра сообщения',
             self::MATCH_SCOPE_ANY_INBOUND => 'Любое входящее',
         ];
     }
@@ -134,6 +137,11 @@ class AutoReplyRule extends Model
     public function usesExactParameterScope(): bool
     {
         return $this->match_scope === self::MATCH_SCOPE_EXACT_PARAMETER;
+    }
+
+    public function usesExactTextOrParameterScope(): bool
+    {
+        return $this->match_scope === self::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER;
     }
 
     public function usesAnyInboundScope(): bool

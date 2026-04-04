@@ -142,6 +142,80 @@ class ResolveAutoReplyRuleActionTest extends TestCase
         $this->assertTrue($resolved->is($parameterRule));
     }
 
+    public function test_it_matches_exact_text_or_parameter_rule_by_message_parameter(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+
+        $combinedRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+            'keyword' => 'PROMO_2026',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('PROMO_2026'),
+            'reply_text' => 'Combined parameter match',
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle(
+            $channel,
+            $contact,
+            '/start something',
+            'PROMO_2026',
+        );
+
+        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
+        $this->assertTrue($resolved->is($combinedRule));
+    }
+
+    public function test_it_matches_exact_text_or_parameter_rule_by_message_text(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+
+        $combinedRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+            'keyword' => 'Запись',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Запись'),
+            'reply_text' => 'Combined text match',
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle(
+            $channel,
+            $contact,
+            '  запись  ',
+            null,
+        );
+
+        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
+        $this->assertTrue($resolved->is($combinedRule));
+    }
+
+    public function test_it_respects_phone_condition_for_exact_text_or_parameter_rules(): void
+    {
+        $channel = Channel::factory()->create();
+        $contactWithPhone = Contact::factory()->create();
+        $contactWithoutPhone = Contact::factory()->create();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contactWithPhone->id,
+            'is_primary' => true,
+        ]);
+
+        $combinedRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+            'keyword' => 'promo_dual',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_dual'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'reply_text' => 'Combined gated match',
+        ]);
+
+        $resolver = app(ResolveAutoReplyRuleAction::class);
+
+        $this->assertTrue($resolver->handle($channel, $contactWithPhone, null, 'promo_dual')?->is($combinedRule) ?? false);
+        $this->assertNull($resolver->handle($channel, $contactWithoutPhone, 'promo_dual'));
+    }
+
     public function test_it_matches_contains_text_rule_by_substring(): void
     {
         $channel = Channel::factory()->create();

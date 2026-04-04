@@ -32,34 +32,54 @@ class ResolveAutoReplyRuleAction
         $normalizedParameter = AutoReplyRule::normalizeKeyword($messageParameter);
 
         if (filled($normalizedParameter)) {
-            $parameterRule = AutoReplyRule::query()
-                ->active()
-                ->where('channel_id', $channel->id)
-                ->where('match_scope', AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER)
-                ->where('normalized_keyword', $normalizedParameter)
-                ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
-                ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
-                ->orderBy('id')
-                ->first();
+            $parameterRule = $this->resolveExactRule(
+                $channel,
+                $contactHasPhone,
+                $rootContactTagIds,
+                $normalizedParameter,
+                AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            );
 
             if ($parameterRule instanceof AutoReplyRule) {
                 return $parameterRule;
             }
+
+            $combinedParameterRule = $this->resolveExactRule(
+                $channel,
+                $contactHasPhone,
+                $rootContactTagIds,
+                $normalizedParameter,
+                AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+            );
+
+            if ($combinedParameterRule instanceof AutoReplyRule) {
+                return $combinedParameterRule;
+            }
         }
 
         if (filled($normalizedText)) {
-            $exactRule = AutoReplyRule::query()
-                ->active()
-                ->where('channel_id', $channel->id)
-                ->where('match_scope', AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD)
-                ->where('normalized_keyword', $normalizedText)
-                ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
-                ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
-                ->orderBy('id')
-                ->first();
+            $exactRule = $this->resolveExactRule(
+                $channel,
+                $contactHasPhone,
+                $rootContactTagIds,
+                $normalizedText,
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            );
 
             if ($exactRule instanceof AutoReplyRule) {
                 return $exactRule;
+            }
+
+            $combinedTextRule = $this->resolveExactRule(
+                $channel,
+                $contactHasPhone,
+                $rootContactTagIds,
+                $normalizedText,
+                AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+            );
+
+            if ($combinedTextRule instanceof AutoReplyRule) {
+                return $combinedTextRule;
             }
 
             $containsRule = AutoReplyRule::query()
@@ -91,6 +111,27 @@ class ResolveAutoReplyRuleAction
                     ? AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
                     : AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE]
             )
+            ->orderBy('id')
+            ->first();
+    }
+
+    /**
+     * @param  list<int>  $rootContactTagIds
+     */
+    protected function resolveExactRule(
+        Channel $channel,
+        bool $contactHasPhone,
+        array $rootContactTagIds,
+        string $normalizedValue,
+        string $matchScope,
+    ): ?AutoReplyRule {
+        return AutoReplyRule::query()
+            ->active()
+            ->where('channel_id', $channel->id)
+            ->where('match_scope', $matchScope)
+            ->where('normalized_keyword', $normalizedValue)
+            ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
+            ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
             ->orderBy('id')
             ->first();
     }
