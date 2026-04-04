@@ -3,8 +3,10 @@
 namespace App\Filament\Pages;
 
 use App\Models\User;
+use App\Services\Users\UpdateRolePermissionMatrixAction;
 use App\Support\RolePermissionMatrix as RolePermissionMatrixSupport;
 use BackedEnum;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use UnitEnum;
@@ -23,6 +25,18 @@ class RolePermissionMatrix extends Page
 
     protected static ?string $title = 'Матрица ролей и прав';
 
+    /**
+     * @var array<string, array<string, array<string, bool>>>
+     */
+    public array $permissionState = [];
+
+    public function mount(): void
+    {
+        abort_unless(static::canAccess(), 403);
+
+        $this->reloadPermissionMatrix();
+    }
+
     public static function canAccess(): bool
     {
         $user = auth()->user();
@@ -38,7 +52,29 @@ class RolePermissionMatrix extends Page
 
     public function getSubheading(): ?string
     {
-        return 'Страница читает конфигурацию крупной матрицы прав из базы и отдельно показывает, что эти значения пока не управляют реальным доступом в системе.';
+        return 'Страница позволяет редактировать конфигурацию крупной матрицы прав в базе, но эти значения пока не управляют реальным доступом в системе.';
+    }
+
+    public function savePermissionMatrix(): void
+    {
+        $forcedAssignments = app(UpdateRolePermissionMatrixAction::class)->handle($this->permissionState);
+
+        $this->reloadPermissionMatrix();
+
+        Notification::make()
+            ->success()
+            ->title('Матрица прав сохранена')
+            ->body(
+                empty($forcedAssignments)
+                    ? 'Изменения записаны в таблицу role_permissions.'
+                    : 'Изменения записаны в таблицу role_permissions. Критичные права администратора сохранены включёнными.',
+            )
+            ->send();
+    }
+
+    public function reloadPermissionMatrix(): void
+    {
+        $this->permissionState = app(RolePermissionMatrixSupport::class)->editableState();
     }
 
     /**
@@ -55,13 +91,20 @@ class RolePermissionMatrix extends Page
      *             isPreparatory: bool,
      *             preparatoryLabel: ?string,
      *             preparatoryDescription: ?string,
-     *             states: array<string, array{allowed:bool,label:string,tone:string,status:string}>
+     *             states: array<string, array{
+     *                 allowed:bool,
+     *                 label:string,
+     *                 tone:string,
+     *                 status:string,
+     *                 editable:bool,
+     *                 lockReason:?string
+     *             }>
      *         }>
      *     }>
      * }
      */
     protected function getViewData(): array
     {
-        return app(RolePermissionMatrixSupport::class)->build();
+        return app(RolePermissionMatrixSupport::class)->build($this->permissionState);
     }
 }

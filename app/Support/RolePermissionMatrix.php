@@ -8,6 +8,16 @@ use Illuminate\Support\Facades\DB;
 class RolePermissionMatrix
 {
     /**
+     * @var array<string, array<string, string>>
+     */
+    private const PROTECTED_ASSIGNMENTS = [
+        User::ROLE_ADMIN => [
+            'users.view' => 'Это право остаётся включённым, чтобы администратор не потерял доступ к управлению сотрудниками.',
+            'users.edit' => 'Это право остаётся включённым, чтобы администратор мог восстановить конфигурацию прав из панели.',
+        ],
+    ];
+
+    /**
      * @return array{
      *     roles: list<array{key:string,label:string,tone:string}>,
      *     groups: list<array{
@@ -21,12 +31,19 @@ class RolePermissionMatrix
      *             isPreparatory: bool,
      *             preparatoryLabel: ?string,
      *             preparatoryDescription: ?string,
-     *             states: array<string, array{allowed:bool,label:string,tone:string,status:string}>
+     *             states: array<string, array{
+     *                 allowed:bool,
+     *                 label:string,
+     *                 tone:string,
+     *                 status:string,
+     *                 editable:bool,
+     *                 lockReason:?string
+     *             }>
      *         }>
      *     }>
      * }
      */
-    public function build(): array
+    public function build(?array $overrides = null): array
     {
         $roles = $this->roles();
         $databaseStates = $this->databaseStates(array_keys($roles));
@@ -41,11 +58,33 @@ class RolePermissionMatrix
                     'key' => $group['key'],
                     'label' => $group['label'],
                     'description' => $group['description'],
-                    'actions' => $this->buildActions($group['actions'], $roles, $databaseStates),
+                    'actions' => $this->buildActions($group['actions'], $roles, $databaseStates, $overrides),
                 ],
                 app(RolePermissionCatalog::class)->groups(),
             ),
         ];
+    }
+
+    /**
+     * @return array<string, array<string, bool>>
+     */
+    public function editableState(): array
+    {
+        $roles = array_keys($this->roles());
+        $databaseStates = $this->databaseStates($roles);
+        $state = [];
+
+        foreach (app(RolePermissionCatalog::class)->groups() as $group) {
+            foreach ($group['actions'] as $action) {
+                [$resource, $ability] = explode('.', $action['code'], 2);
+
+                foreach ($roles as $role) {
+                    $state[$role][$resource][$ability] = (bool) ($databaseStates[$role][$action['code']] ?? false);
+                }
+            }
+        }
+
+        return $state;
     }
 
     /**
@@ -59,6 +98,7 @@ class RolePermissionMatrix
      * }>  $actions
      * @param  array<string, array{key:string,label:string,tone:string}>  $roles
      * @param  array<string, array<string, bool>>  $databaseStates
+     * @param  array<string, mixed>|null  $overrides
      * @return list<array{
      *     code:string,
      *     label:string,
@@ -66,12 +106,19 @@ class RolePermissionMatrix
      *     isPreparatory: bool,
      *     preparatoryLabel: ?string,
      *     preparatoryDescription: ?string,
-     *     states: array<string, array{allowed:bool,label:string,tone:string,status:string}>
+     *     states: array<string, array{
+     *         allowed:bool,
+     *         label:string,
+     *         tone:string,
+     *         status:string,
+     *         editable:bool,
+     *         lockReason:?string
+     *     }>
      * }>
      */
-    protected function buildActions(array $actions, array $roles, array $databaseStates): array
+    protected function buildActions(array $actions, array $roles, array $databaseStates, ?array $overrides): array
     {
-        return array_map(function (array $action) use ($roles, $databaseStates): array {
+        return array_map(function (array $action) use ($roles, $databaseStates, $overrides): array {
             $states = [];
 
             foreach ($roles as $role) {
@@ -79,6 +126,7 @@ class RolePermissionMatrix
                     $role['key'],
                     $action['code'],
                     $databaseStates,
+                    $overrides,
                 );
             }
 
@@ -115,11 +163,19 @@ class RolePermissionMatrix
     }
 
     /**
-     * @return array{allowed:bool,label:string,tone:string,status:string}
+     * @param  array<string, mixed>|null  $overrides
+     * @return array{allowed:bool,label:string,tone:string,status:string,editable:bool,lockReason:?string}
      */
-    protected function resolveState(string $role, string $permissionKey, array $databaseStates): array
+    protected function resolveState(string $role, string $permissionKey, array $databaseStates, ?array $overrides): array
     {
-        $granted = $databaseStates[$role][$permissionKey] ?? null;
+        $granted = data_get($overrides, sprintf('%s.%s', $role, $permissionKey));
+
+        if ($granted === null) {
+            $granted = $databaseStates[$role][$permissionKey] ?? null;
+        }
+
+        $editable = ! $this->isProtectedAssignment($role, $permissionKey);
+        $lockReason = $this->protectedAssignmentReason($role, $permissionKey);
 
         if ($granted === null) {
             return [
@@ -127,15 +183,29 @@ class RolePermissionMatrix
                 'label' => 'Нет записи',
                 'tone' => 'warning',
                 'status' => 'missing',
+                'editable' => $editable,
+                'lockReason' => $lockReason,
             ];
         }
 
         return [
-            'allowed' => $granted,
+            'allowed' => (bool) $granted,
             'label' => $granted ? 'Включено' : 'Выключено',
             'tone' => $granted ? 'success' : 'gray',
             'status' => $granted ? 'enabled' : 'disabled',
+            'editable' => $editable,
+            'lockReason' => $lockReason,
         ];
+    }
+
+    public function isProtectedAssignment(string $role, string $permissionKey): bool
+    {
+        return array_key_exists($permissionKey, self::PROTECTED_ASSIGNMENTS[$role] ?? []);
+    }
+
+    public function protectedAssignmentReason(string $role, string $permissionKey): ?string
+    {
+        return self::PROTECTED_ASSIGNMENTS[$role][$permissionKey] ?? null;
     }
 
     /**

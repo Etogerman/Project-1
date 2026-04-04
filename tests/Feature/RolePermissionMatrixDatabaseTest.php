@@ -47,6 +47,19 @@ class RolePermissionMatrixDatabaseTest extends TestCase
         );
     }
 
+    public function test_matrix_marks_protected_admin_assignments_as_non_editable(): void
+    {
+        $matrix = app(RolePermissionMatrix::class)->build();
+
+        $viewState = $this->stateFor($matrix, 'users.view', User::ROLE_ADMIN);
+        $editState = $this->stateFor($matrix, 'users.edit', User::ROLE_ADMIN);
+
+        $this->assertFalse($viewState['editable']);
+        $this->assertFalse($editState['editable']);
+        $this->assertNotNull($viewState['lockReason']);
+        $this->assertNotNull($editState['lockReason']);
+    }
+
     public function test_matrix_marks_missing_database_rows_as_configuration_issue(): void
     {
         DB::table('role_permissions')
@@ -68,11 +81,18 @@ class RolePermissionMatrixDatabaseTest extends TestCase
      *     groups: list<array{
      *         actions:list<array{
      *             code:string,
-     *             states: array<string, array{allowed:bool,label:string,tone:string,status:string}>
+     *             states: array<string, array{
+     *                 allowed:bool,
+     *                 label:string,
+     *                 tone:string,
+     *                 status:string,
+     *                 editable:bool,
+     *                 lockReason:?string
+     *             }>
      *         }>
      *     }>
      * }  $matrix
-     * @return array{allowed:bool,label:string,tone:string,status:string}
+     * @return array{allowed:bool,label:string,tone:string,status:string,editable:bool,lockReason:?string}
      */
     private function stateFor(array $matrix, string $code, string $role): array
     {
