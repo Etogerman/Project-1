@@ -8,6 +8,7 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Hash;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -64,24 +65,83 @@ class FilamentUsersResourceTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_employee_with_granted_system_permissions_still_cannot_access_users_resource(): void
+    public function test_employee_user_access_is_controlled_by_role_permission_matrix(): void
     {
         $user = User::factory()->create([
             'email' => 'member@example.com',
             'is_active' => true,
             'is_admin' => false,
         ]);
+        $record = User::factory()->create([
+            'email' => 'visible-member@example.com',
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
 
-        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
-        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
-        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.view', true);
-        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.edit', true);
-        $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.delete', true);
-        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'users.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'users.edit', false);
 
         $this->actingAs($user)
             ->get('/admin/users')
-            ->assertForbidden();
+            ->assertOk()
+            ->assertSee('Сотрудники');
+
+        $this->assertTrue(Gate::forUser($user)->allows('viewAny', User::class));
+        $this->assertTrue(Gate::forUser($user)->allows('view', $record));
+        $this->assertFalse(Gate::forUser($user)->allows('create', User::class));
+        $this->assertFalse(Gate::forUser($user)->allows('update', $record));
+    }
+
+    public function test_employee_can_create_and_update_users_when_users_edit_is_enabled_in_matrix(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'member@example.com',
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $record = User::factory()->create([
+            'email' => 'editable@example.com',
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'users.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'users.edit', true);
+
+        Livewire::actingAs($user)
+            ->test(ManageUsers::class)
+            ->callAction('create', [
+                'name' => 'Operator Created',
+                'email' => 'operator-created@example.com',
+                'is_active' => true,
+                'is_admin' => false,
+                'password' => 'secret12345',
+                'password_confirmation' => 'secret12345',
+            ])
+            ->assertHasNoFormErrors();
+
+        $this->assertDatabaseHas(User::class, [
+            'email' => 'operator-created@example.com',
+            'name' => 'Operator Created',
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+
+        Livewire::actingAs($user)
+            ->test(ManageUsers::class)
+            ->callTableAction('edit', $record, [
+                'name' => 'Operator Updated',
+                'email' => 'editable@example.com',
+                'is_active' => false,
+                'is_admin' => false,
+                'password' => '',
+                'password_confirmation' => '',
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $record->refresh();
+
+        $this->assertSame('Operator Updated', $record->name);
+        $this->assertFalse($record->is_active);
     }
 
     public function test_active_user_can_create_a_user_from_filament_resource(): void

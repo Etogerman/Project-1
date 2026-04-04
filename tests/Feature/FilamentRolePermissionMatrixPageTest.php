@@ -148,6 +148,8 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.edit', true);
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.delete', true);
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'users.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'users.edit', true);
 
         $this->actingAs($employee)
             ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
