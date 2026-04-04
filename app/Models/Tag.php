@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Query\Builder as BaseQueryBuilder;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -49,12 +51,12 @@ class Tag extends Model
         });
 
         static::deleting(function (Tag $tag): void {
-            if (! $tag->contacts()->exists()) {
+            if (! $tag->contacts()->exists() && ! $tag->isUsedInAutoReplyRules()) {
                 return;
             }
 
             throw ValidationException::withMessages([
-                'tag' => 'Нельзя удалить тег, который уже назначен контактам. Сначала снимите назначения или деактивируйте тег.',
+                'tag' => 'Нельзя удалить тег, который назначен контактам или используется в правилах автоответа. Сначала уберите использования или деактивируйте тег.',
             ]);
         });
     }
@@ -78,6 +80,17 @@ class Tag extends Model
         return $query->where('is_active', true);
     }
 
+    public function scopeWithUsedInRulesCount(Builder $query): Builder
+    {
+        return $query->selectSub(
+            DB::query()
+                ->fromSub(static::makeAutoReplyRuleUsageQuery(), 'auto_reply_rule_tag_usage')
+                ->selectRaw('count(*)')
+                ->whereColumn('auto_reply_rule_tag_usage.tag_id', 'tags.id'),
+            'used_in_rules_count',
+        );
+    }
+
     public function contacts(): BelongsToMany
     {
         return $this->belongsToMany(Contact::class)
@@ -91,6 +104,28 @@ class Tag extends Model
     public function isActive(): bool
     {
         return (bool) $this->is_active;
+    }
+
+    public function isUsedInAutoReplyRules(): bool
+    {
+        if (! $this->exists) {
+            return false;
+        }
+
+        return DB::query()
+            ->fromSub(static::makeAutoReplyRuleUsageQuery(), 'auto_reply_rule_tag_usage')
+            ->where('auto_reply_rule_tag_usage.tag_id', $this->getKey())
+            ->exists();
+    }
+
+    protected static function makeAutoReplyRuleUsageQuery(): BaseQueryBuilder
+    {
+        return DB::table('auto_reply_rule_tag_effects')
+            ->select(['tag_id', 'auto_reply_rule_id'])
+            ->union(
+                DB::table('auto_reply_rule_tag_conditions')
+                    ->select(['tag_id', 'auto_reply_rule_id']),
+            );
     }
 
     protected function guardName(): void

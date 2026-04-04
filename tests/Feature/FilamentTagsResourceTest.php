@@ -2,13 +2,22 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
+use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
+use App\Filament\Resources\Contacts\ContactResource;
+use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Filament\Resources\Tags\Pages\ManageTags;
 use App\Filament\Resources\Tags\TagResource;
+use App\Models\AutoReplyRule;
+use App\Models\AutoReplyRuleTagCondition;
+use App\Models\AutoReplyRuleTagEffect;
+use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Tag;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\TextColumn;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -161,6 +170,186 @@ class FilamentTagsResourceTest extends TestCase
             'assigned_by_user_id' => $admin->id,
             'created_at' => now(),
             'updated_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageTags::class)
+            ->assertTableActionHidden('delete', $tag);
+
+        $this->assertDatabaseHas('tags', [
+            'id' => $tag->id,
+        ]);
+    }
+
+    public function test_tags_table_shows_contacts_and_unique_rules_usage_counts_with_links(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => 'VIP',
+            'color' => Tag::COLOR_SUCCESS,
+        ]);
+        $otherTag = Tag::factory()->create([
+            'name' => 'Другое',
+            'color' => Tag::COLOR_WARNING,
+        ]);
+        $firstContact = Contact::factory()->create();
+        $secondContact = Contact::factory()->create();
+
+        $firstContact->tags()->attach($tag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => $admin->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $secondContact->tags()->attach($tag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => $admin->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $firstRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+        ]);
+        $secondRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'VIP',
+            'normalized_keyword' => 'vip',
+        ]);
+
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $firstRule->id,
+            'tag_id' => $tag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+        AutoReplyRuleTagCondition::query()->create([
+            'auto_reply_rule_id' => $firstRule->id,
+            'tag_id' => $tag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
+        ]);
+        AutoReplyRuleTagCondition::query()->create([
+            'auto_reply_rule_id' => $secondRule->id,
+            'tag_id' => $tag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_EXCLUDED,
+        ]);
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $secondRule->id,
+            'tag_id' => $otherTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageTags::class)
+            ->assertTableColumnExists(
+                'contacts_count',
+                fn (TextColumn $column): bool => $column->getLabel() === 'Контакты'
+                    && $column->getUrl() === ContactResource::getUrl(parameters: ['tag' => $tag->id]),
+                $tag,
+            )
+            ->assertTableColumnExists(
+                'used_in_rules_count',
+                fn (TextColumn $column): bool => $column->getLabel() === 'Используют'
+                    && $column->getUrl() === AutoReplyRuleResource::getUrl(parameters: ['tag' => $tag->id]),
+                $tag,
+            )
+            ->assertTableColumnStateSet('contacts_count', 2, $tag)
+            ->assertTableColumnStateSet('used_in_rules_count', 2, $tag)
+            ->assertTableColumnStateSet('used_in_rules_count', 0, $otherTag);
+    }
+
+    public function test_tag_link_opens_filtered_contacts_list(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $tag = Tag::factory()->create();
+        $matchingContact = Contact::factory()->create();
+        $otherContact = Contact::factory()->create();
+
+        $matchingContact->tags()->attach($tag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => $admin->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        Livewire::withQueryParams(['tag' => $tag->id])
+            ->actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertSet('tableFilters.tags.values.0', (string) $tag->id)
+            ->assertCanSeeTableRecords([$matchingContact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+    }
+
+    public function test_tag_link_opens_filtered_auto_reply_rules_list(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $tag = Tag::factory()->create();
+        $matchingRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+        ]);
+        $otherRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+        ]);
+
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $matchingRule->id,
+            'tag_id' => $tag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
+        ]);
+
+        Livewire::withQueryParams(['tag' => $tag->id])
+            ->actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->assertSet('tableFilters.tag.value', (string) $tag->id)
+            ->assertCanSeeTableRecords([$matchingRule])
+            ->assertCanNotSeeTableRecords([$otherRule]);
+    }
+
+    public function test_tag_used_in_auto_reply_rules_cannot_be_deleted_from_resource_table(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => 'Используемый тег',
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+        ]);
+
+        AutoReplyRuleTagCondition::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $tag->id,
+            'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
         ]);
 
         Livewire::actingAs($admin)

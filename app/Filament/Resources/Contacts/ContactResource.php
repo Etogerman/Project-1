@@ -455,7 +455,7 @@ class ContactResource extends Resource
                     ->label('Теги')
                     ->multiple()
                     ->preload()
-                    ->options(fn (): array => static::getAvailableTagOptions())
+                    ->options(fn (): array => static::getTagFilterOptions())
                     ->query(function (Builder $query, array $data): Builder {
                         $tagIds = collect($data['values'] ?? [])
                             ->filter(fn (mixed $value): bool => filled($value))
@@ -1373,6 +1373,18 @@ class ContactResource extends Resource
                 $excludedTagIds !== [],
                 fn (Builder $query): Builder => $query->whereNotIn('id', $excludedTagIds),
             )
+            ->orderBy('name')
+            ->get()
+            ->mapWithKeys(fn (Tag $tag): array => [$tag->id => $tag->name])
+            ->all();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected static function getTagFilterOptions(): array
+    {
+        return Tag::query()
             ->orderBy('name')
             ->get()
             ->mapWithKeys(fn (Tag $tag): array => [$tag->id => $tag->name])

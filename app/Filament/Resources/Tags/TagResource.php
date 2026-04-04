@@ -2,6 +2,8 @@
 
 namespace App\Filament\Resources\Tags;
 
+use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
+use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Tags\Pages\ManageTags;
 use App\Models\Tag;
 use BackedEnum;
@@ -44,7 +46,9 @@ class TagResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->withCount('contacts');
+        return parent::getEloquentQuery()
+            ->withCount('contacts')
+            ->withUsedInRulesCount();
     }
 
     public static function form(Schema $schema): Schema
@@ -107,9 +111,22 @@ class TagResource extends Resource
                     ->formatStateUsing(fn (string $state): string => Tag::colorOptions()[$state] ?? $state)
                     ->color(fn (string $state): string => $state),
                 TextColumn::make('contacts_count')
-                    ->label('Назначений')
+                    ->label('Контакты')
                     ->badge()
-                    ->sortable(),
+                    ->sortable()
+                    ->color(fn (int $state): string => $state > 0 ? 'primary' : 'gray')
+                    ->url(fn (Tag $record): ?string => (int) ($record->contacts_count ?? 0) > 0
+                        ? ContactResource::getUrl(parameters: ['tag' => $record->getKey()])
+                        : null),
+                TextColumn::make('used_in_rules_count')
+                    ->label('Используют')
+                    ->badge()
+                    ->sortable()
+                    ->state(fn (Tag $record): int => (int) ($record->getAttribute('used_in_rules_count') ?? 0))
+                    ->color(fn (Tag $record): string => (int) ($record->getAttribute('used_in_rules_count') ?? 0) > 0 ? 'primary' : 'gray')
+                    ->url(fn (Tag $record): ?string => (int) ($record->getAttribute('used_in_rules_count') ?? 0) > 0
+                        ? AutoReplyRuleResource::getUrl(parameters: ['tag' => $record->getKey()])
+                        : null),
                 TextColumn::make('is_active')
                     ->label('Статус')
                     ->badge()
@@ -159,11 +176,11 @@ class TagResource extends Resource
                     ->iconButton()
                     ->color('danger')
                     ->tooltip('Удалить тег')
-                    ->visible(fn (Tag $record): bool => (int) ($record->contacts_count ?? 0) === 0)
+                    ->visible(fn (Tag $record): bool => (int) ($record->contacts_count ?? 0) === 0 && (int) ($record->getAttribute('used_in_rules_count') ?? 0) === 0)
                     ->before(function (Tag $record): void {
-                        if ($record->contacts()->exists()) {
+                        if ($record->contacts()->exists() || $record->isUsedInAutoReplyRules()) {
                             throw ValidationException::withMessages([
-                                'tag' => 'Нельзя удалить тег, который уже назначен контактам.',
+                                'tag' => 'Нельзя удалить тег, который назначен контактам или используется в правилах автоответа.',
                             ]);
                         }
                     }),
