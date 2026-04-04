@@ -79,9 +79,9 @@ class Bitrix24ProbeController extends Controller
      */
     protected function storeLatestBitrixAuth(array $payload): void
     {
-        $auth = $payload['auth'] ?? null;
+        $auth = $this->extractBitrixAuth($payload);
 
-        if (! is_array($auth) || empty($auth['access_token'])) {
+        if ($auth === []) {
             return;
         }
 
