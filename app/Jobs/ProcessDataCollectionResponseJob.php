@@ -6,6 +6,7 @@ use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Services\DataCollection\DataCollectionFallbackTransitionResolver;
 use App\Services\DataCollection\DataCollectionPromptHelper;
 use App\Services\DataCollection\ExtractCityAction;
 use App\Services\DataCollection\ExtractCountryAction;
@@ -778,76 +779,6 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $attempts = $this->incrementAttempts($contact);
 
         if ($attempts >= $this->maxAttempts($currentField)) {
-            if ($currentField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
-                $this->moveToResidenceCityStep(
-                    message: $message,
-                    channel: $channel,
-                    contact: $contact,
-                    telegramBotApiService: $telegramBotApiService,
-                    maxBotApiService: $maxBotApiService,
-                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                    channelActivityLogger: $channelActivityLogger,
-                );
-
-                return;
-            }
-
-            if ($currentField === Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY) {
-                $this->moveToAgeRangeStep(
-                    message: $message,
-                    channel: $channel,
-                    contact: $contact,
-                    telegramBotApiService: $telegramBotApiService,
-                    maxBotApiService: $maxBotApiService,
-                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                    channelActivityLogger: $channelActivityLogger,
-                );
-
-                return;
-            }
-
-            if ($currentField === Contact::DATA_COLLECTION_FIELD_COUNTRY) {
-                if (filled($contact->city)) {
-                    $this->moveToAgeRangeStep(
-                        message: $message,
-                        channel: $channel,
-                        contact: $contact,
-                        telegramBotApiService: $telegramBotApiService,
-                        maxBotApiService: $maxBotApiService,
-                        storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                        channelActivityLogger: $channelActivityLogger,
-                    );
-
-                    return;
-                }
-
-                $this->moveToCityStep(
-                    message: $message,
-                    channel: $channel,
-                    contact: $contact,
-                    telegramBotApiService: $telegramBotApiService,
-                    maxBotApiService: $maxBotApiService,
-                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                    channelActivityLogger: $channelActivityLogger,
-                );
-
-                return;
-            }
-
-            if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY) {
-                $this->moveToAgeRangeStep(
-                    message: $message,
-                    channel: $channel,
-                    contact: $contact,
-                    telegramBotApiService: $telegramBotApiService,
-                    maxBotApiService: $maxBotApiService,
-                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                    channelActivityLogger: $channelActivityLogger,
-                );
-
-                return;
-            }
-
             if ($currentField === Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM) {
                 $this->moveToCityAfterRussianRegionFailure(
                     message: $message,
@@ -862,7 +793,8 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 return;
             }
 
-            $this->sendTerminalSkip(
+            $this->applyResolvedFallbackTransition(
+                action: $this->fallbackTransitionResolver()->resolveAfterRetryLimit($currentField, filled($contact->city)),
                 message: $message,
                 channel: $channel,
                 contact: $contact,
@@ -947,76 +879,6 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
     ): void {
-        if ($currentField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME) {
-            $this->moveToResidenceCityStep(
-                message: $message,
-                channel: $channel,
-                contact: $contact,
-                telegramBotApiService: $telegramBotApiService,
-                maxBotApiService: $maxBotApiService,
-                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                channelActivityLogger: $channelActivityLogger,
-            );
-
-            return;
-        }
-
-        if ($currentField === Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY) {
-            $this->moveToAgeRangeStep(
-                message: $message,
-                channel: $channel,
-                contact: $contact,
-                telegramBotApiService: $telegramBotApiService,
-                maxBotApiService: $maxBotApiService,
-                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                channelActivityLogger: $channelActivityLogger,
-            );
-
-            return;
-        }
-
-        if ($currentField === Contact::DATA_COLLECTION_FIELD_COUNTRY) {
-            if (filled($contact->city)) {
-                $this->moveToAgeRangeStep(
-                    message: $message,
-                    channel: $channel,
-                    contact: $contact,
-                    telegramBotApiService: $telegramBotApiService,
-                    maxBotApiService: $maxBotApiService,
-                    storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                    channelActivityLogger: $channelActivityLogger,
-                );
-
-                return;
-            }
-
-            $this->moveToCityStep(
-                message: $message,
-                channel: $channel,
-                contact: $contact,
-                telegramBotApiService: $telegramBotApiService,
-                maxBotApiService: $maxBotApiService,
-                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                channelActivityLogger: $channelActivityLogger,
-            );
-
-            return;
-        }
-
-        if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY) {
-            $this->moveToAgeRangeStep(
-                message: $message,
-                channel: $channel,
-                contact: $contact,
-                telegramBotApiService: $telegramBotApiService,
-                maxBotApiService: $maxBotApiService,
-                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
-                channelActivityLogger: $channelActivityLogger,
-            );
-
-            return;
-        }
-
         if ($currentField === Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM) {
             $contact->forceFill([
                 'region' => null,
@@ -1039,7 +901,8 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
-        $this->sendTerminalSkip(
+        $this->applyResolvedFallbackTransition(
+            action: $this->fallbackTransitionResolver()->resolveAfterLocalSkip($currentField, filled($contact->city)),
             message: $message,
             channel: $channel,
             contact: $contact,
@@ -1049,6 +912,67 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
         );
+    }
+
+    protected function applyResolvedFallbackTransition(
+        ?string $action,
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        ?string $field,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        match ($action) {
+            DataCollectionFallbackTransitionResolver::ACTION_MOVE_TO_RESIDENCE_CITY => $this->moveToResidenceCityStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            ),
+            DataCollectionFallbackTransitionResolver::ACTION_MOVE_TO_COUNTRY => $this->moveToCountryStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            ),
+            DataCollectionFallbackTransitionResolver::ACTION_MOVE_TO_CITY => $this->moveToCityStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            ),
+            DataCollectionFallbackTransitionResolver::ACTION_MOVE_TO_AGE_RANGE => $this->moveToAgeRangeStep(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            ),
+            DataCollectionFallbackTransitionResolver::ACTION_TERMINAL_SKIP, null => $this->sendTerminalSkip(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                field: $field,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            ),
+        };
     }
 
     protected function moveToCountryStep(
@@ -1388,7 +1312,6 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
-        QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ): void {
         $this->sendReply(
             message: $message,
@@ -1405,7 +1328,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
 
         $contact->completeDataCollection();
-        $queueBitrix24ContactSyncAction->handle($contact);
+        app(QueueBitrix24ContactSyncAction::class)->handle($contact);
 
         $channelActivityLogger->info(
             $channel,
@@ -1812,5 +1735,10 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
     protected function promptHelper(): DataCollectionPromptHelper
     {
         return app(DataCollectionPromptHelper::class);
+    }
+
+    protected function fallbackTransitionResolver(): DataCollectionFallbackTransitionResolver
+    {
+        return app(DataCollectionFallbackTransitionResolver::class);
     }
 }
