@@ -70,6 +70,20 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
+        if (! $storedMessage->wasRecentlyCreated && $storedMessage->contact?->isInDataCollection()) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'webhook.duplicate_ignored',
+                'Повторный webhook с ответом анкеты проигнорирован, чтобы не переиграть уже сохранённый ответ.',
+                $duplicateContext + [
+                    'contact_id' => $storedMessage->contact_id,
+                    'current_field' => $storedMessage->contact?->data_collection_current_field,
+                ],
+            );
+
+            return;
+        }
+
         if ($storedMessage->contact?->isInDataCollection()) {
             ProcessDataCollectionResponseJob::dispatch($storedMessage->id)->afterCommit();
 
