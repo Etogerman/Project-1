@@ -144,6 +144,57 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
     }
 
+    public function test_openlines_callback_payload_key_case_is_deduped_by_fingerprint(): void
+    {
+        Queue::fake();
+
+        Bitrix24Connection::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'application_token' => 'app-token',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        $payloadWithLowercaseData = [
+            'event' => 'OnImConnectorMessageAdd',
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'MESSAGES' => [
+                    ['id' => 'm-1'],
+                ],
+            ],
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+            ],
+        ];
+
+        $payloadWithUppercaseData = [
+            'event' => 'OnImConnectorMessageAdd',
+            'DATA' => [
+                'connector' => 'abrikosoff_telegram',
+                'MESSAGES' => [
+                    ['ID' => 'm-1'],
+                ],
+            ],
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+            ],
+        ];
+
+        $firstResponse = $this->postJson('/callbacks/bitrix24/openlines', $payloadWithLowercaseData);
+        $secondResponse = $this->postJson('/callbacks/bitrix24/openlines', $payloadWithUppercaseData);
+
+        $firstResponse->assertOk();
+        $secondResponse->assertOk();
+
+        $this->assertSame(1, Bitrix24WebhookEvent::query()->count());
+        Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
+    }
+
     public function test_events_callback_with_invalid_application_token_is_saved_as_failed_and_not_dispatched(): void
     {
         Queue::fake();

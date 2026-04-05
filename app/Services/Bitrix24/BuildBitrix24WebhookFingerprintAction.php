@@ -28,7 +28,7 @@ class BuildBitrix24WebhookFingerprintAction
         $normalized = [];
 
         foreach ($value as $key => $item) {
-            $normalized[(string) $key] = $this->normalizeValue($item);
+            $normalized[mb_strtolower((string) $key)] = $this->normalizeValue($item);
         }
 
         ksort($normalized);
