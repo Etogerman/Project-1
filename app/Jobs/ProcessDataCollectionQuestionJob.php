@@ -250,8 +250,8 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                     });
             });
 
-        if ($contact->updated_at !== null) {
-            $query->where('received_at', '>=', $contact->updated_at);
+        if ($contact->data_collection_started_at !== null) {
+            $query->where('received_at', '>=', $contact->data_collection_started_at);
         }
 
         return $query->exists();

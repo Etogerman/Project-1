@@ -185,7 +185,7 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         $contact = $firstMessage->contact()->firstOrFail();
         $contact->forceFill([
             'data_collection_last_prompted_field' => null,
-            'updated_at' => now()->subMinutes(4),
+            'data_collection_started_at' => now()->subMinutes(5),
         ])->save();
 
         Message::factory()->create([
@@ -201,6 +201,10 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
             'message_parameter' => null,
             'received_at' => now()->subMinutes(2),
         ]);
+
+        $contact->forceFill([
+            'updated_at' => now()->subMinute(),
+        ])->save();
 
         $secondMessage = Message::factory()->create([
             'contact_id' => $contact->id,
