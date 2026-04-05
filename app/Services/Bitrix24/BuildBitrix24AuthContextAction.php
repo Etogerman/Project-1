@@ -11,19 +11,19 @@ class BuildBitrix24AuthContextAction
      */
     public function handle(array $payload): Bitrix24AuthContextData
     {
-        $auth = $payload['auth'] ?? [];
+        $auth = $this->caseInsensitiveValue($payload, 'auth');
 
         if (! is_array($auth)) {
             $auth = [];
         }
 
         return new Bitrix24AuthContextData(
-            portalDomain: $this->nullableString($auth['domain'] ?? null),
-            memberId: $this->nullableString($auth['member_id'] ?? null),
-            applicationToken: $this->nullableString($auth['application_token'] ?? null),
-            clientEndpoint: $this->nullableString($auth['client_endpoint'] ?? null),
-            serverEndpoint: $this->nullableString($auth['server_endpoint'] ?? null),
-            status: $this->nullableString($auth['status'] ?? null),
+            portalDomain: $this->nullableString($this->caseInsensitiveValue($auth, 'domain')),
+            memberId: $this->nullableString($this->caseInsensitiveValue($auth, 'member_id')),
+            applicationToken: $this->nullableString($this->caseInsensitiveValue($auth, 'application_token')),
+            clientEndpoint: $this->nullableString($this->caseInsensitiveValue($auth, 'client_endpoint')),
+            serverEndpoint: $this->nullableString($this->caseInsensitiveValue($auth, 'server_endpoint')),
+            status: $this->nullableString($this->caseInsensitiveValue($auth, 'status')),
         );
     }
 
@@ -36,5 +36,18 @@ class BuildBitrix24AuthContextAction
         $trimmed = trim((string) $value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    private function caseInsensitiveValue(array $values, string $needle): mixed
+    {
+        $normalizedNeedle = mb_strtolower((string) $needle);
+
+        foreach ($values as $key => $value) {
+            if (mb_strtolower((string) $key) === $normalizedNeedle) {
+                return $value;
+            }
+        }
+
+        return null;
     }
 }
