@@ -64,6 +64,12 @@ class DispatchStoredInboundBotMessageAction
 
         $storedMessage->loadMissing('contact');
 
+        if ($this->isAutoReplyOnlyMaxBotStartedEvent($channel, $storedMessage)) {
+            $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
+
+            return;
+        }
+
         if (! $storedMessage->wasRecentlyCreated && $storedMessage->contact?->isInDataCollection()) {
             $this->channelActivityLogger->info(
                 $channel,
@@ -74,12 +80,6 @@ class DispatchStoredInboundBotMessageAction
                     'current_field' => $storedMessage->contact?->data_collection_current_field,
                 ],
             );
-
-            return;
-        }
-
-        if ($this->isAutoReplyOnlyMaxBotStartedEvent($channel, $storedMessage)) {
-            $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
 
             return;
         }

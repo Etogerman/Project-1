@@ -303,6 +303,62 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertSame('bot_started', data_get($storedMessage->raw_payload, 'update_type'));
     }
 
+    public function test_repeated_max_bot_started_webhook_with_parameter_still_queues_auto_reply_for_contact_in_active_data_collection(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_MAX,
+            'external_user_id' => '500',
+            'external_username' => 'max_user',
+        ]);
+
+        $headers = [
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ];
+        $payload = $this->maxBotStartedPayload(payload: 'promo_123');
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $payload)
+            ->assertOk()
+            ->assertExactJson([
+                'ok' => true,
+            ]);
+
+        $storedMessage = $this->inboundMessages()->latest('id')->firstOrFail();
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $payload)
+            ->assertOk()
+            ->assertExactJson([
+                'ok' => true,
+            ]);
+
+        Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
+        Queue::assertPushed(ProcessAutoReplyJob::class, 2);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
     public function test_max_webhook_uses_real_payload_fields_for_contact_name_and_message_id(): void
     {
         Queue::fake();
