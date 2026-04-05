@@ -328,6 +328,120 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         ]);
     }
 
+    public function test_job_does_not_treat_legacy_residence_city_question_as_city_duplicate_across_channels(): void
+    {
+        config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
+        config()->set('bots.data_collection.city.question', 'В каком городе вы живёте?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9954,
+                ],
+            ]),
+        ]);
+
+        $channelA = $this->createTelegramChannel();
+        $channelB = $this->createTelegramChannel();
+        $contact = Contact::factory()->create([
+            'country' => 'Казахстан',
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_last_prompted_field' => null,
+            'data_collection_started_at' => now()->subMinutes(5),
+            'data_collection_current_field_started_at' => now()->subMinutes(2),
+        ]);
+
+        $identityA = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channelA->id,
+            'platform' => $channelA->platform,
+            'external_user_id' => 'legacy-user-a',
+        ]);
+        $identityB = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channelB->id,
+            'platform' => $channelB->platform,
+            'external_user_id' => 'legacy-user-b',
+        ]);
+
+        $legacyDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channelA->id,
+            'current_contact_identity_id' => $identityA->id,
+            'external_chat_id' => 'legacy-chat-a',
+            'last_message_at' => now()->subMinutes(4),
+            'last_inbound_at' => now()->subMinutes(4),
+        ]);
+        $currentDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channelB->id,
+            'current_contact_identity_id' => $identityB->id,
+            'external_chat_id' => 'current-chat-b',
+            'last_message_at' => now()->subMinute(),
+            'last_inbound_at' => now()->subMinute(),
+        ]);
+
+        $residenceSourceMessage = Message::factory()->create([
+            'dialog_id' => $legacyDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identityA->id,
+            'channel_id' => $channelA->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'legacy-chat-a',
+            'external_message_id' => 'collector-cross-channel-residence-source',
+            'provider_event_key' => 'collector-cross-channel-residence-source',
+            'received_at' => now()->subMinutes(4),
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $legacyDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identityA->id,
+            'channel_id' => $channelA->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $residenceSourceMessage->id,
+            'external_chat_id' => 'legacy-chat-a',
+            'external_message_id' => 'collector-cross-channel-residence-question',
+            'text' => 'В каком городе вы живёте?',
+            'message_parameter' => null,
+            'received_at' => now()->subMinutes(3),
+        ]);
+
+        $citySourceMessage = Message::factory()->create([
+            'dialog_id' => $currentDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identityB->id,
+            'channel_id' => $channelB->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'current-chat-b',
+            'external_message_id' => 'collector-cross-channel-city-source',
+            'provider_event_key' => 'collector-cross-channel-city-source',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        ProcessDataCollectionQuestionJob::dispatchSync($citySourceMessage->id, false, $contact->id, Contact::DATA_COLLECTION_FIELD_CITY);
+
+        Http::assertSentCount(1);
+        $contact->refresh();
+        $this->assertDatabaseHas('messages', [
+            'reply_to_message_id' => $citySourceMessage->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'message_parameter' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'text' => 'В каком городе вы живёте?',
+        ]);
+        $this->assertNotNull($contact->data_collection_current_field_started_at);
+        $this->assertSame(
+            $citySourceMessage->received_at?->toDateTimeString(),
+            $contact->data_collection_current_field_started_at?->toDateTimeString(),
+        );
+    }
+
     public function test_job_skips_legacy_city_duplicate_after_explicit_country_step(): void
     {
         config()->set('bots.data_collection.country.question', 'В какой стране вы живёте?');
@@ -392,6 +506,8 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
             'received_at' => now()->subMinutes(2),
         ]);
 
+        $loggedAt = now()->subMinutes(2);
+
         ChannelActivityLog::query()->create([
             'channel_id' => $channel->id,
             'level' => 'info',
@@ -403,7 +519,7 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
                 'message_id' => $cityQuestionSourceMessage->id,
                 'current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
             ],
-            'created_at' => now()->subMinutes(2),
+            'created_at' => $loggedAt,
         ]);
 
         $duplicateCitySourceMessage = Message::factory()->create([
@@ -507,6 +623,123 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         ]);
 
         ProcessDataCollectionQuestionJob::dispatchSync($duplicateCitySourceMessage->id);
+
+        Http::assertNothingSent();
+        $contact->refresh();
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $duplicateCitySourceMessage->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+        ]);
+        $this->assertSame(
+            $loggedAt->toDateTimeString(),
+            $contact->data_collection_current_field_started_at?->toDateTimeString(),
+        );
+    }
+
+    public function test_job_skips_legacy_city_duplicate_when_prompt_was_logged_on_another_channel(): void
+    {
+        config()->set('bots.data_collection.city.question', 'В каком городе вы живёте?');
+
+        Http::fake();
+
+        $channelA = $this->createTelegramChannel();
+        $channelB = $this->createTelegramChannel();
+        $contact = Contact::factory()->create([
+            'country' => 'Казахстан',
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_last_prompted_field' => null,
+            'data_collection_started_at' => now()->subMinutes(6),
+            'data_collection_current_field_started_at' => null,
+        ]);
+
+        $identityA = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channelA->id,
+            'platform' => $channelA->platform,
+            'external_user_id' => 'legacy-cross-user-a',
+        ]);
+        $identityB = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channelB->id,
+            'platform' => $channelB->platform,
+            'external_user_id' => 'legacy-cross-user-b',
+        ]);
+
+        $legacyDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channelA->id,
+            'current_contact_identity_id' => $identityA->id,
+            'external_chat_id' => 'legacy-city-chat-a',
+            'last_message_at' => now()->subMinutes(3),
+            'last_inbound_at' => now()->subMinutes(3),
+        ]);
+        $currentDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channelB->id,
+            'current_contact_identity_id' => $identityB->id,
+            'external_chat_id' => 'legacy-city-chat-b',
+            'last_message_at' => now()->subMinute(),
+            'last_inbound_at' => now()->subMinute(),
+        ]);
+
+        $cityQuestionSourceMessage = Message::factory()->create([
+            'dialog_id' => $legacyDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identityA->id,
+            'channel_id' => $channelA->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'legacy-city-chat-a',
+            'external_message_id' => 'collector-cross-channel-legacy-city-source',
+            'provider_event_key' => 'collector-cross-channel-legacy-city-source',
+            'received_at' => now()->subMinutes(3),
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $legacyDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identityA->id,
+            'channel_id' => $channelA->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $cityQuestionSourceMessage->id,
+            'external_chat_id' => 'legacy-city-chat-a',
+            'external_message_id' => 'collector-cross-channel-legacy-city-question',
+            'text' => 'В каком городе вы живёте?',
+            'message_parameter' => null,
+            'received_at' => now()->subMinutes(2),
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channelA->id,
+            'level' => 'info',
+            'event' => 'contact.data_collection_question_sent',
+            'message' => 'Отправлен вопрос сбора профиля.',
+            'context' => [
+                'contact_id' => $contact->id,
+                'channel_id' => $channelA->id,
+                'message_id' => $cityQuestionSourceMessage->id,
+                'current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            ],
+            'created_at' => now()->subMinutes(2),
+        ]);
+
+        $duplicateCitySourceMessage = Message::factory()->create([
+            'dialog_id' => $currentDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identityB->id,
+            'channel_id' => $channelB->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'legacy-city-chat-b',
+            'external_message_id' => 'collector-cross-channel-legacy-city-duplicate',
+            'provider_event_key' => 'collector-cross-channel-legacy-city-duplicate',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        ProcessDataCollectionQuestionJob::dispatchSync($duplicateCitySourceMessage->id, false, $contact->id, Contact::DATA_COLLECTION_FIELD_CITY);
 
         Http::assertNothingSent();
         $this->assertDatabaseMissing('messages', [

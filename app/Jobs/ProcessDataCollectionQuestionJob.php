@@ -108,6 +108,8 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
+        $this->maybeHydrateCurrentFieldStartedAt($contact, $currentField, $message);
+
         $questionText = $this->resolveQuestionText($contact, $channel->platform);
 
         if ($questionText === null) {
@@ -133,7 +135,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
 
             if (
                 ! filled($contact->data_collection_last_prompted_field)
-                && $this->contactAlreadyHasQuestionForCurrentField($contact, $channel, $currentField, $questionText)
+                && $this->contactAlreadyHasQuestionForCurrentField($contact, $currentField, $questionText)
             ) {
                 return;
             }
@@ -251,7 +253,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             ->exists();
     }
 
-    protected function contactAlreadyHasQuestionForCurrentField(Contact $contact, Channel $channel, string $currentField, string $questionText): bool
+    protected function contactAlreadyHasQuestionForCurrentField(Contact $contact, string $currentField, string $questionText): bool
     {
         $query = $contact->messages()
             ->where('direction', Message::DIRECTION_OUTBOUND)
@@ -267,7 +269,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return true;
         }
 
-        if ($this->legacyQuestionWasLoggedForCurrentField($contact, $channel, $currentField)) {
+        if ($this->legacyQuestionWasLoggedForCurrentField($contact, $currentField)) {
             return true;
         }
 
@@ -289,10 +291,9 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         return $legacyQuery->exists();
     }
 
-    protected function legacyQuestionWasLoggedForCurrentField(Contact $contact, Channel $channel, string $currentField): bool
+    protected function legacyQuestionWasLoggedForCurrentField(Contact $contact, string $currentField): bool
     {
         $query = ChannelActivityLog::query()
-            ->where('channel_id', $channel->id)
             ->where('event', 'contact.data_collection_question_sent')
             ->where('context->contact_id', $contact->id)
             ->where('context->current_field', $currentField);
@@ -303,6 +304,59 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         );
 
         return $query->exists();
+    }
+
+    protected function maybeHydrateCurrentFieldStartedAt(Contact $contact, ?string $currentField, Message $message): void
+    {
+        if (! filled($currentField) || $contact->data_collection_current_field_started_at !== null) {
+            return;
+        }
+
+        $boundary = $this->resolveCurrentFieldStartedAtBoundary($contact, $currentField, $message);
+
+        if ($boundary === null) {
+            return;
+        }
+
+        $contact->forceFill([
+            'data_collection_current_field_started_at' => $boundary,
+        ])->save();
+    }
+
+    protected function resolveCurrentFieldStartedAtBoundary(Contact $contact, string $currentField, Message $message)
+    {
+        $loggedQuestionAt = $this->resolveLoggedQuestionAtForCurrentField($contact, $currentField);
+
+        if ($loggedQuestionAt !== null) {
+            return $loggedQuestionAt;
+        }
+
+        if ($currentField !== Contact::DATA_COLLECTION_FIELD_CITY) {
+            return null;
+        }
+
+        if ($message->received_at !== null && $contact->data_collection_started_at !== null) {
+            return $message->received_at->lt($contact->data_collection_started_at)
+                ? $contact->data_collection_started_at
+                : $message->received_at;
+        }
+
+        return $message->received_at ?? $contact->data_collection_started_at;
+    }
+
+    protected function resolveLoggedQuestionAtForCurrentField(Contact $contact, string $currentField)
+    {
+        $query = ChannelActivityLog::query()
+            ->where('event', 'contact.data_collection_question_sent')
+            ->where('context->contact_id', $contact->id)
+            ->where('context->current_field', $currentField);
+
+        $this->applyCreatedAtBoundary($query, $contact->data_collection_started_at);
+
+        return $query
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->value('created_at');
     }
 
     protected function applyReceivedAtBoundary($query, $boundary): void
