@@ -42,7 +42,11 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
     public int $tries = 3;
 
-    public function __construct(public int $inboundMessageId) {}
+    public function __construct(
+        public int $inboundMessageId,
+        public ?int $contactId = null,
+        public ?string $expectedField = null,
+    ) {}
 
     /**
      * @return list<int>
@@ -57,8 +61,11 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
      */
     public function middleware(): array
     {
+        $lockKey = $this->contactId ?? $this->inboundMessageId;
+        $lockScope = $this->contactId !== null ? 'contact' : 'message';
+
         return [
-            (new WithoutOverlapping("data-collection-response:message:{$this->inboundMessageId}"))->expireAfter(180),
+            (new WithoutOverlapping("data-collection-response:{$lockScope}:{$lockKey}"))->expireAfter(180),
         ];
     }
 
@@ -99,6 +106,26 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         }
 
         if (! $contact->isInDataCollection()) {
+            $this->logStaleResponseSkipped(
+                $channelActivityLogger,
+                $channel,
+                $contact,
+                $message,
+                'collector_inactive',
+            );
+
+            return;
+        }
+
+        if ($this->expectedField !== null && $contact->data_collection_current_field !== $this->expectedField) {
+            $this->logStaleResponseSkipped(
+                $channelActivityLogger,
+                $channel,
+                $contact,
+                $message,
+                'field_mismatch',
+            );
+
             return;
         }
 
@@ -221,6 +248,33 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             ),
             default => null,
         };
+    }
+
+    protected function logStaleResponseSkipped(
+        ChannelActivityLogger $channelActivityLogger,
+        Channel $channel,
+        Contact $contact,
+        Message $message,
+        string $reason,
+    ): void {
+        if ($this->expectedField === null) {
+            return;
+        }
+
+        $channelActivityLogger->info(
+            $channel,
+            'contact.data_collection_response_stale_skipped',
+            'Устаревший ответ анкеты пропущен, потому что текущий шаг контакта уже изменился.',
+            [
+                'platform' => $channel->platform,
+                'message_id' => $message->id,
+                'contact_id' => $contact->id,
+                'expected_field' => $this->expectedField,
+                'current_field' => $contact->data_collection_current_field,
+                'current_status' => $contact->data_collection_status,
+                'reason' => $reason,
+            ],
+        );
     }
 
     protected function handleFirstNameReply(

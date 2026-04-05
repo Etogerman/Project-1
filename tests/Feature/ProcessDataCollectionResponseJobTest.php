@@ -104,6 +104,45 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         });
     }
 
+    public function test_job_skips_stale_first_name_reply_when_contact_has_already_moved_to_next_field(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
+        Http::fake();
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Николай',
+        ], contactOverrides: [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync(
+            $message->id,
+            $message->contact_id,
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+        );
+
+        Http::assertNothingSent();
+        Queue::assertNotPushed(InferContactGenderFromFirstNameJob::class);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertNull($contact->first_name);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
+        $this->assertDatabaseMissing('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_response_stale_skipped',
+        ]);
+    }
+
     public function test_job_saves_first_name_and_asks_residence_city(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
