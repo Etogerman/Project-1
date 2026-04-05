@@ -94,14 +94,6 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
-        if (! $this->forceSend && filled($currentField) && $contact->data_collection_last_prompted_field === $currentField) {
-            return;
-        }
-
-        if (! $this->forceSend && $this->questionAlreadyExists($message)) {
-            return;
-        }
-
         $questionText = $this->resolveQuestionText($contact, $channel->platform);
 
         if ($questionText === null) {
@@ -117,6 +109,23 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 ],
             );
 
+            return;
+        }
+
+        if (! $this->forceSend && filled($currentField)) {
+            if ($contact->data_collection_last_prompted_field === $currentField) {
+                return;
+            }
+
+            if (
+                ! filled($contact->data_collection_last_prompted_field)
+                && $this->contactAlreadyHasQuestionForCurrentField($contact, $currentField, $questionText)
+            ) {
+                return;
+            }
+        }
+
+        if (! $this->forceSend && $this->questionAlreadyExists($message)) {
             return;
         }
 
@@ -226,6 +235,26 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         return $message->replies()
             ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
             ->exists();
+    }
+
+    protected function contactAlreadyHasQuestionForCurrentField(Contact $contact, string $currentField, string $questionText): bool
+    {
+        $query = $contact->messages()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->where(function ($query) use ($currentField, $questionText): void {
+                $query->where('message_parameter', $currentField)
+                    ->orWhere(function ($query) use ($questionText): void {
+                        $query->whereNull('message_parameter')
+                            ->where('text', $questionText);
+                    });
+            });
+
+        if ($contact->updated_at !== null) {
+            $query->where('received_at', '>=', $contact->updated_at);
+        }
+
+        return $query->exists();
     }
 
     protected function resolveQuestionText(Contact $contact, string $platform): ?string

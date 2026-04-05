@@ -169,6 +169,64 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         ]);
     }
 
+    public function test_job_skips_duplicate_question_for_legacy_active_session_without_prompt_marker(): void
+    {
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake();
+
+        $channel = $this->createTelegramChannel();
+        $firstMessage = $this->createInboundUserMessage($channel, [
+            'external_message_id' => 'collector-legacy-source-1',
+            'provider_event_key' => 'collector-legacy-source-1',
+            'received_at' => now()->subMinutes(3),
+        ]);
+
+        $contact = $firstMessage->contact()->firstOrFail();
+        $contact->forceFill([
+            'data_collection_last_prompted_field' => null,
+            'updated_at' => now()->subMinutes(4),
+        ])->save();
+
+        Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $firstMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $firstMessage->id,
+            'external_chat_id' => $firstMessage->external_chat_id,
+            'external_message_id' => 'collector-legacy-question-1',
+            'text' => 'Как вас зовут?',
+            'message_parameter' => null,
+            'received_at' => now()->subMinutes(2),
+        ]);
+
+        $secondMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $firstMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $firstMessage->external_chat_id,
+            'external_message_id' => 'collector-legacy-source-2',
+            'provider_event_key' => 'collector-legacy-source-2',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        ProcessDataCollectionQuestionJob::dispatchSync($secondMessage->id);
+
+        Http::assertNothingSent();
+        $this->assertSame(1, Message::query()
+            ->where('contact_id', $contact->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->count());
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $secondMessage->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+        ]);
+    }
+
     public function test_job_can_fallback_to_legacy_message_route_source_when_dialog_is_missing(): void
     {
         config()->set('bots.data_collection.first_question', 'Как вас зовут?');
