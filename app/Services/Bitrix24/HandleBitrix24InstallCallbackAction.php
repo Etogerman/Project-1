@@ -115,13 +115,17 @@ class HandleBitrix24InstallCallbackAction
         array $sanitizedPayload,
         \App\Data\Bitrix24\Bitrix24AuthContextData $authContext,
     ): Bitrix24InstallPayloadData {
-        $auth = $rawPayload['auth'] ?? [];
+        $auth = $this->caseInsensitiveValue($rawPayload, 'auth');
 
         if (! is_array($auth)) {
             $auth = [];
         }
 
-        $scope = $auth['scope'] ?? $rawPayload['scope'] ?? [];
+        $scope = $this->caseInsensitiveValue($auth, 'scope');
+
+        if (! is_array($scope)) {
+            $scope = $this->caseInsensitiveValue($rawPayload, 'scope');
+        }
 
         if (! is_array($scope)) {
             $scope = [];
@@ -135,12 +139,28 @@ class HandleBitrix24InstallCallbackAction
             memberId: $authContext->memberId,
             clientEndpoint: $authContext->clientEndpoint,
             serverEndpoint: $authContext->serverEndpoint,
-            accessToken: $this->nullableString($auth['access_token'] ?? null),
-            refreshToken: $this->nullableString($auth['refresh_token'] ?? null),
-            expiresAt: $this->nullableString($auth['expires'] ?? $auth['expires_at'] ?? null),
+            accessToken: $this->nullableString($this->caseInsensitiveValue($auth, 'access_token')),
+            refreshToken: $this->nullableString($this->caseInsensitiveValue($auth, 'refresh_token')),
+            expiresAt: $this->nullableString($this->caseInsensitiveValue($auth, 'expires') ?? $this->caseInsensitiveValue($auth, 'expires_at')),
             scope: $scope,
             rawPayload: $sanitizedPayload,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     */
+    private function caseInsensitiveValue(array $values, string $needle): mixed
+    {
+        $normalizedNeedle = mb_strtolower((string) $needle);
+
+        foreach ($values as $key => $value) {
+            if (mb_strtolower((string) $key) === $normalizedNeedle) {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     /**

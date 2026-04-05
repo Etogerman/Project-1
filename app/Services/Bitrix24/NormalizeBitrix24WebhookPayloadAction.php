@@ -33,7 +33,7 @@ class NormalizeBitrix24WebhookPayloadAction
             'headers' => $this->sanitizeHeaders($request->headers->all()),
             'query' => $sanitizedQuery,
             'event_name' => $eventName,
-            'looks_like_bitrix' => $eventName !== '' || isset($payload['auth']),
+            'looks_like_bitrix' => $eventName !== '' || $this->hasCaseInsensitiveKey($payload, 'auth'),
         ];
     }
 
@@ -43,7 +43,11 @@ class NormalizeBitrix24WebhookPayloadAction
      */
     private function extractEventName(array $payload, array $query): string
     {
-        $event = $payload['event'] ?? $query['event'] ?? '';
+        $event = $this->caseInsensitiveValue($payload, 'event');
+
+        if ($event === null) {
+            $event = $this->caseInsensitiveValue($query, 'event');
+        }
 
         return is_scalar($event) ? trim((string) $event) : '';
     }
@@ -73,6 +77,32 @@ class NormalizeBitrix24WebhookPayloadAction
         }
 
         return $sanitized;
+    }
+
+    private function caseInsensitiveValue(array $values, string $needle): mixed
+    {
+        $normalizedNeedle = mb_strtolower((string) $needle);
+
+        foreach ($values as $key => $value) {
+            if (mb_strtolower((string) $key) === $normalizedNeedle) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function hasCaseInsensitiveKey(array $values, string $needle): bool
+    {
+        $normalizedNeedle = mb_strtolower((string) $needle);
+
+        foreach ($values as $key => $_) {
+            if (mb_strtolower((string) $key) === $normalizedNeedle) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
