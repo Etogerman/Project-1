@@ -195,6 +195,52 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
     }
 
+    public function test_openlines_callback_payload_with_conflicting_case_keys_is_not_deduped_against_single_key_payload(): void
+    {
+        Queue::fake();
+
+        Bitrix24Connection::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'application_token' => 'app-token',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        $payloadWithConflictingCaseKeys = [
+            'event' => 'OnImConnectorMessageAdd',
+            'data' => [
+                'id' => 'm-1',
+                'ID' => 'm-2',
+            ],
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+            ],
+        ];
+
+        $payloadWithSingleLowercaseKey = [
+            'event' => 'OnImConnectorMessageAdd',
+            'data' => [
+                'id' => 'm-2',
+            ],
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+            ],
+        ];
+
+        $firstResponse = $this->postJson('/callbacks/bitrix24/openlines', $payloadWithConflictingCaseKeys);
+        $secondResponse = $this->postJson('/callbacks/bitrix24/openlines', $payloadWithSingleLowercaseKey);
+
+        $firstResponse->assertOk();
+        $secondResponse->assertOk();
+
+        $this->assertSame(2, Bitrix24WebhookEvent::query()->count());
+        Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 2);
+    }
+
     public function test_openlines_callback_with_case_insensitive_event_and_auth_keys_is_accepted(): void
     {
         Queue::fake();

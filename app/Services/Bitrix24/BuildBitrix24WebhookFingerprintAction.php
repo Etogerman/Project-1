@@ -25,13 +25,35 @@ class BuildBitrix24WebhookFingerprintAction
             return array_map(fn (mixed $item): mixed => $this->normalizeValue($item), $value);
         }
 
-        $normalized = [];
+        $grouped = [];
 
         foreach ($value as $key => $item) {
-            $normalized[mb_strtolower((string) $key)] = $this->normalizeValue($item);
+            $normalizedKey = mb_strtolower((string) $key);
+
+            $grouped[$normalizedKey][] = [
+                'key' => (string) $key,
+                'value' => $this->normalizeValue($item),
+            ];
         }
 
-        ksort($normalized);
+        ksort($grouped);
+
+        $normalized = [];
+
+        foreach ($grouped as $normalizedKey => $entries) {
+            if (count($entries) === 1) {
+                $normalized[$normalizedKey] = $entries[0]['value'];
+
+                continue;
+            }
+
+            usort($entries, fn (array $left, array $right): int => strcmp($left['key'], $right['key']));
+
+            $normalized[$normalizedKey] = [
+                '__case_conflict__' => true,
+                'entries' => $entries,
+            ];
+        }
 
         return $normalized;
     }
