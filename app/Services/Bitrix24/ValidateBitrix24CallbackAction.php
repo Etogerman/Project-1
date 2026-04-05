@@ -70,10 +70,6 @@ class ValidateBitrix24CallbackAction
             return null;
         }
 
-        if (filled($authContext->applicationToken)) {
-            $query->orWhere('application_token', $authContext->applicationToken);
-        }
-
         return $query->first();
     }
 }
