@@ -1387,6 +1387,71 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_repeated_telegram_webhook_with_same_update_id_does_not_requeue_collector_reply(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_started_at' => now(),
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+
+        $headers = [
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ];
+        $payload = $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 902,
+            text: 'Герман',
+        );
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $payload)
+            ->assertOk()
+            ->assertExactJson([
+                'ok' => true,
+            ]);
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/telegram/{$channel->id}", $payload)
+            ->assertOk()
+            ->assertExactJson([
+                'ok' => true,
+            ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessDataCollectionResponseJob::class, function (ProcessDataCollectionResponseJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id;
+        });
+        Queue::assertPushed(ProcessDataCollectionResponseJob::class, 1);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'webhook.duplicate_ignored',
+        ]);
+    }
+
     public function test_active_age_range_callback_routes_to_collector_and_answers_callback(): void
     {
         Queue::fake();
