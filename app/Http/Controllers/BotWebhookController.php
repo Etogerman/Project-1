@@ -244,7 +244,11 @@ class BotWebhookController extends Controller
         $storedMessage->loadMissing('contact');
 
         if ($storedMessage->contact?->isInDataCollection()) {
-            ProcessDataCollectionResponseJob::dispatch($storedMessage->id)->afterCommit();
+            ProcessDataCollectionResponseJob::dispatch(
+                $storedMessage->id,
+                $storedMessage->contact_id,
+                $storedMessage->contact?->data_collection_current_field,
+            )->afterCommit();
 
             $channelActivityLogger->info(
                 $channel,
