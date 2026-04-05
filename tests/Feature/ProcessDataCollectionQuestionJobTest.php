@@ -231,6 +231,73 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         ]);
     }
 
+    public function test_job_does_not_treat_legacy_residence_city_question_as_city_duplicate(): void
+    {
+        config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
+        config()->set('bots.data_collection.city.question', 'В каком городе вы живёте?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9953,
+                ],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $residenceMessage = $this->createInboundUserMessage($channel, [
+            'external_message_id' => 'collector-legacy-residence-source',
+            'provider_event_key' => 'collector-legacy-residence-source',
+            'received_at' => now()->subMinutes(4),
+        ]);
+
+        $contact = $residenceMessage->contact()->firstOrFail();
+        $contact->forceFill([
+            'country' => 'Казахстан',
+            'city' => null,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_last_prompted_field' => null,
+            'data_collection_started_at' => now()->subMinutes(5),
+        ])->save();
+
+        Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $residenceMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $residenceMessage->id,
+            'external_chat_id' => $residenceMessage->external_chat_id,
+            'external_message_id' => 'collector-legacy-residence-question',
+            'text' => 'В каком городе вы живёте?',
+            'message_parameter' => null,
+            'received_at' => now()->subMinutes(3),
+        ]);
+
+        $citySourceMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $residenceMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $residenceMessage->external_chat_id,
+            'external_message_id' => 'collector-legacy-city-source',
+            'provider_event_key' => 'collector-legacy-city-source',
+            'received_at' => now()->subMinutes(2),
+        ]);
+
+        ProcessDataCollectionQuestionJob::dispatchSync($citySourceMessage->id);
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseHas('messages', [
+            'reply_to_message_id' => $citySourceMessage->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'message_parameter' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'text' => 'В каком городе вы живёте?',
+        ]);
+    }
+
     public function test_job_can_fallback_to_legacy_message_route_source_when_dialog_is_missing(): void
     {
         config()->set('bots.data_collection.first_question', 'Как вас зовут?');

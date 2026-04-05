@@ -242,19 +242,54 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         $query = $contact->messages()
             ->where('direction', Message::DIRECTION_OUTBOUND)
             ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
-            ->where(function ($query) use ($currentField, $questionText): void {
-                $query->where('message_parameter', $currentField)
-                    ->orWhere(function ($query) use ($questionText): void {
-                        $query->whereNull('message_parameter')
-                            ->where('text', $questionText);
-                    });
-            });
+            ->where('message_parameter', $currentField);
 
         if ($contact->data_collection_started_at !== null) {
             $query->where('received_at', '>=', $contact->data_collection_started_at);
         }
 
-        return $query->exists();
+        if ($query->exists()) {
+            return true;
+        }
+
+        $legacyQuery = $contact->messages()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->whereNull('message_parameter')
+            ->where('text', $questionText);
+
+        if ($contact->data_collection_started_at !== null) {
+            $legacyQuery->where('received_at', '>=', $contact->data_collection_started_at);
+        }
+
+        if ($currentField !== Contact::DATA_COLLECTION_FIELD_CITY) {
+            return $legacyQuery->exists();
+        }
+
+        $legacyQuestion = $legacyQuery
+            ->orderByDesc('received_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $legacyQuestion instanceof Message) {
+            return false;
+        }
+
+        $laterInboundQuery = $contact->messages()
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->where(function ($query) use ($legacyQuestion): void {
+                $query->where('received_at', '>', $legacyQuestion->received_at)
+                    ->orWhere(function ($query) use ($legacyQuestion): void {
+                        $query->where('received_at', $legacyQuestion->received_at)
+                            ->where('id', '>', $legacyQuestion->id);
+                    });
+            });
+
+        if ($contact->data_collection_started_at !== null) {
+            $laterInboundQuery->where('received_at', '>=', $contact->data_collection_started_at);
+        }
+
+        return ! $laterInboundQuery->exists();
     }
 
     protected function resolveQuestionText(Contact $contact, string $platform): ?string
