@@ -21,9 +21,10 @@ class StoreDataCollectionOutboundMessageAction
         AutoReplyDeliveryResult $deliveryResult,
         string $messageKind,
         ?Dialog $routeDialog = null,
+        ?string $messageParameter = null,
     ): Message
     {
-        return DB::transaction(function () use ($inboundMessage, $deliveryResult, $messageKind, $routeDialog): Message {
+        return DB::transaction(function () use ($inboundMessage, $deliveryResult, $messageKind, $routeDialog, $messageParameter): Message {
             $inboundMessage->forceFill([
                 'auto_reply_sent_at' => now(),
             ])->save();
@@ -31,11 +32,14 @@ class StoreDataCollectionOutboundMessageAction
             $routeDialog = $this->resolveRouteDialog($inboundMessage, $routeDialog);
             $routeDialog?->loadMissing(['contact', 'channel', 'currentContactIdentity']);
             $storedExternalChatId = $this->resolveStoredExternalChatId($routeDialog, $inboundMessage);
+            $contact = $routeDialog?->contact ?? $inboundMessage->contact()->firstOrFail();
+            $channel = $routeDialog?->channel ?? $inboundMessage->channel()->firstOrFail();
+            $collectorField = $this->resolveCollectorField($messageKind, $messageParameter, $contact);
 
             $outboundMessage = Message::query()->create([
-                'contact_id' => $routeDialog?->contact_id ?? $inboundMessage->contact_id,
+                'contact_id' => $contact->id,
                 'contact_identity_id' => $routeDialog?->current_contact_identity_id ?? $inboundMessage->contact_identity_id,
-                'channel_id' => $routeDialog?->channel_id ?? $inboundMessage->channel_id,
+                'channel_id' => $channel->id,
                 'direction' => Message::DIRECTION_OUTBOUND,
                 'message_kind' => $messageKind,
                 'reply_to_message_id' => $inboundMessage->id,
@@ -43,14 +47,15 @@ class StoreDataCollectionOutboundMessageAction
                 'external_chat_id' => $storedExternalChatId,
                 'external_message_id' => $deliveryResult->externalMessageId,
                 'text' => $deliveryResult->text,
+                'message_parameter' => $collectorField,
                 'raw_payload' => $deliveryResult->rawPayload,
                 'received_at' => now(),
             ]);
 
             $outboundMessage = $this->syncMessageDialogMetadataAction->handle(
                 $outboundMessage,
-                $routeDialog?->contact ?? $inboundMessage->contact()->firstOrFail(),
-                $routeDialog?->channel ?? $inboundMessage->channel()->firstOrFail(),
+                $contact,
+                $channel,
                 $routeDialog?->currentContactIdentity ?? $inboundMessage->contactIdentity,
                 $storedExternalChatId,
                 Message::SENT_BY_TYPE_COLLECTOR,
@@ -58,6 +63,7 @@ class StoreDataCollectionOutboundMessageAction
                 $this->resolveCollectorSystemCode($messageKind),
             );
 
+            $this->syncCollectorPromptMarker($contact, $messageKind, $collectorField);
             $this->queueBitrix24LiveMessageExportAction->handle($outboundMessage);
 
             return $outboundMessage;
@@ -95,5 +101,33 @@ class StoreDataCollectionOutboundMessageAction
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => Message::SENT_BY_SYSTEM_CODE_DATA_COLLECTION_COMPLETION,
             default => Message::SENT_BY_SYSTEM_CODE_DATA_COLLECTION_QUESTION,
         };
+    }
+
+    private function resolveCollectorField(string $messageKind, ?string $messageParameter, \App\Models\Contact $contact): ?string
+    {
+        if ($messageKind !== Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION) {
+            return $messageParameter;
+        }
+
+        return $messageParameter ?? $contact->data_collection_current_field;
+    }
+
+    private function syncCollectorPromptMarker(\App\Models\Contact $contact, string $messageKind, ?string $collectorField): void
+    {
+        if ($messageKind === Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION) {
+            $contact->forceFill([
+                'data_collection_last_prompted_field' => null,
+            ])->save();
+
+            return;
+        }
+
+        if ($messageKind !== Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION || ! filled($collectorField)) {
+            return;
+        }
+
+        $contact->forceFill([
+            'data_collection_last_prompted_field' => $collectorField,
+        ])->save();
     }
 }

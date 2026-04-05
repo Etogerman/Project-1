@@ -89,6 +89,86 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         ]);
     }
 
+    public function test_job_skips_duplicate_question_for_same_active_field_from_another_source_message(): void
+    {
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9951,
+                ],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $firstMessage = $this->createInboundUserMessage($channel, [
+            'external_message_id' => 'collector-question-source-1',
+            'provider_event_key' => 'collector-question-source-1',
+        ]);
+
+        $secondMessage = Message::factory()->create([
+            'contact_id' => $firstMessage->contact_id,
+            'contact_identity_id' => $firstMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $firstMessage->external_chat_id,
+            'external_message_id' => 'collector-question-source-2',
+            'provider_event_key' => 'collector-question-source-2',
+            'received_at' => now()->addSecond(),
+        ]);
+
+        ProcessDataCollectionQuestionJob::dispatchSync($firstMessage->id);
+        ProcessDataCollectionQuestionJob::dispatchSync($secondMessage->id);
+
+        Http::assertSentCount(1);
+
+        $contact = $firstMessage->contact()->firstOrFail()->fresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $contact->data_collection_last_prompted_field);
+        $this->assertSame(1, Message::query()
+            ->where('contact_id', $contact->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->count());
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $secondMessage->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+        ]);
+    }
+
+    public function test_force_send_can_repeat_question_for_same_active_field(): void
+    {
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9952,
+                ],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel);
+        $contact = $message->contact()->firstOrFail();
+
+        $contact->forceFill([
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+        ])->save();
+
+        ProcessDataCollectionQuestionJob::dispatchSync($message->id, true);
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseHas('messages', [
+            'reply_to_message_id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'text' => 'Как вас зовут?',
+        ]);
+    }
+
     public function test_job_can_fallback_to_legacy_message_route_source_when_dialog_is_missing(): void
     {
         config()->set('bots.data_collection.first_question', 'Как вас зовут?');

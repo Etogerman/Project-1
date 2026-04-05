@@ -441,6 +441,7 @@ class Contact extends Model
         $this->forceFill([
             'data_collection_status' => self::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => $field,
+            'data_collection_last_prompted_field' => null,
             'data_collection_started_at' => $this->data_collection_started_at ?? now(),
             'data_collection_completed_at' => null,
             'data_collection_attempts_count' => 0,
@@ -452,6 +453,7 @@ class Contact extends Model
         $this->forceFill([
             'data_collection_status' => self::DATA_COLLECTION_STATUS_COMPLETED,
             'data_collection_current_field' => null,
+            'data_collection_last_prompted_field' => null,
             'data_collection_completed_at' => now(),
             'data_collection_attempts_count' => 0,
         ])->save();

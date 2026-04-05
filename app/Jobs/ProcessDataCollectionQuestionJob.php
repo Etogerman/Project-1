@@ -88,7 +88,13 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return;
         }
 
+        $currentField = $contact->data_collection_current_field;
+
         if (! $contact->isInDataCollection()) {
+            return;
+        }
+
+        if (! $this->forceSend && filled($currentField) && $contact->data_collection_last_prompted_field === $currentField) {
             return;
         }
 
@@ -169,6 +175,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
                 $deliveryResult,
                 Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
                 $routeDialog,
+                $currentField,
             );
 
             $channel->markReplySent();

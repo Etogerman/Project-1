@@ -47,6 +47,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame('Николай', $contact->first_name);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_last_prompted_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);
         $this->assertDatabaseHas('messages', [
             'contact_id' => $contact->id,
