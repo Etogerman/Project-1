@@ -351,6 +351,51 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertNotPushed(ProcessBitrix24WebhookEventJob::class);
     }
 
+    public function test_events_callback_with_invalid_application_token_does_not_attach_error_to_foreign_connection(): void
+    {
+        Queue::fake();
+
+        $foreignConnection = Bitrix24Connection::query()->create([
+            'portal_domain' => 'crm.foreign.biz',
+            'member_id' => 'member-foreign',
+            'application_token' => 'wrong-token',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        $expectedConnection = Bitrix24Connection::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'application_token' => 'expected-token',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        $response = $this->postJson('/callbacks/bitrix24/events', [
+            'event' => 'ONCRMCONTACTUPDATE',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'wrong-token',
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'events')
+            ->assertJsonPath('method', 'POST');
+
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_FAILED, $event->processing_status);
+        $this->assertSame($expectedConnection->id, $event->connection_id);
+
+        $expectedConnection->refresh();
+        $foreignConnection->refresh();
+
+        $this->assertNotNull($expectedConnection->last_error_message);
+        $this->assertNull($foreignConnection->last_error_message);
+
+        Queue::assertNotPushed(ProcessBitrix24WebhookEventJob::class);
+    }
+
     public function test_openlines_callback_without_bitrix_auth_is_saved_as_ignored(): void
     {
         Queue::fake();
