@@ -138,6 +138,35 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         ]);
     }
 
+    public function test_job_skips_stale_queued_question_when_contact_moved_to_next_field(): void
+    {
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake();
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel);
+        $contact = $message->contact()->firstOrFail();
+
+        $contact->forceFill([
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            'data_collection_current_field_started_at' => now(),
+        ])->save();
+
+        ProcessDataCollectionQuestionJob::dispatchSync(
+            $message->id,
+            false,
+            $contact->id,
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+        );
+
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+        ]);
+    }
+
     public function test_force_send_can_repeat_question_for_same_active_field(): void
     {
         config()->set('bots.data_collection.first_question', 'Как вас зовут?');
@@ -295,6 +324,95 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'message_parameter' => Contact::DATA_COLLECTION_FIELD_CITY,
             'text' => 'В каком городе вы живёте?',
+        ]);
+    }
+
+    public function test_job_skips_legacy_city_duplicate_after_explicit_country_step(): void
+    {
+        config()->set('bots.data_collection.country.question', 'В какой стране вы живёте?');
+        config()->set('bots.data_collection.city.question', 'В каком городе вы живёте?');
+
+        Http::fake();
+
+        $channel = $this->createTelegramChannel();
+        $countrySourceMessage = $this->createInboundUserMessage($channel, [
+            'external_message_id' => 'collector-legacy-country-source',
+            'provider_event_key' => 'collector-legacy-country-source',
+            'received_at' => now()->subMinutes(5),
+        ]);
+
+        $contact = $countrySourceMessage->contact()->firstOrFail();
+        $contact->forceFill([
+            'country' => 'Казахстан',
+            'city' => null,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_last_prompted_field' => null,
+            'data_collection_started_at' => now()->subMinutes(6),
+            'data_collection_current_field_started_at' => null,
+        ])->save();
+
+        Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $countrySourceMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $countrySourceMessage->id,
+            'external_chat_id' => $countrySourceMessage->external_chat_id,
+            'external_message_id' => 'collector-legacy-country-question',
+            'text' => 'В какой стране вы живёте?',
+            'message_parameter' => null,
+            'received_at' => now()->subMinutes(4),
+        ]);
+
+        $cityQuestionSourceMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $countrySourceMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $countrySourceMessage->external_chat_id,
+            'external_message_id' => 'collector-legacy-city-question-source',
+            'provider_event_key' => 'collector-legacy-city-question-source',
+            'received_at' => now()->subMinutes(3),
+        ]);
+
+        Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $countrySourceMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $cityQuestionSourceMessage->id,
+            'external_chat_id' => $countrySourceMessage->external_chat_id,
+            'external_message_id' => 'collector-legacy-city-question',
+            'text' => 'В каком городе вы живёте?',
+            'message_parameter' => null,
+            'received_at' => now()->subMinutes(2),
+        ]);
+
+        $duplicateCitySourceMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $countrySourceMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $countrySourceMessage->external_chat_id,
+            'external_message_id' => 'collector-legacy-city-duplicate-source',
+            'provider_event_key' => 'collector-legacy-city-duplicate-source',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        ProcessDataCollectionQuestionJob::dispatchSync($duplicateCitySourceMessage->id);
+
+        Http::assertNothingSent();
+        $this->assertSame(2, Message::query()
+            ->where('contact_id', $contact->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->count());
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $duplicateCitySourceMessage->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
         ]);
     }
 

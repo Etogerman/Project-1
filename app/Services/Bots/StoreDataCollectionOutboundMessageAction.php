@@ -117,6 +117,7 @@ class StoreDataCollectionOutboundMessageAction
         if ($messageKind === Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION) {
             $contact->forceFill([
                 'data_collection_last_prompted_field' => null,
+                'data_collection_current_field_started_at' => null,
             ])->save();
 
             return;
@@ -126,8 +127,17 @@ class StoreDataCollectionOutboundMessageAction
             return;
         }
 
-        $contact->forceFill([
+        $payload = [
             'data_collection_last_prompted_field' => $collectorField,
-        ])->save();
+        ];
+
+        if (
+            $contact->data_collection_current_field === $collectorField
+            && $contact->data_collection_current_field_started_at === null
+        ) {
+            $payload['data_collection_current_field_started_at'] = now();
+        }
+
+        $contact->forceFill($payload)->save();
     }
 }

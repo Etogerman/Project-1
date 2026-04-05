@@ -10,13 +10,17 @@ return new class extends Migration
     {
         Schema::table('contacts', function (Blueprint $table): void {
             $table->string('data_collection_last_prompted_field')->nullable();
+            $table->timestamp('data_collection_current_field_started_at')->nullable();
         });
     }
 
     public function down(): void
     {
         Schema::table('contacts', function (Blueprint $table): void {
-            $table->dropColumn('data_collection_last_prompted_field');
+            $table->dropColumn([
+                'data_collection_last_prompted_field',
+                'data_collection_current_field_started_at',
+            ]);
         });
     }
 };
