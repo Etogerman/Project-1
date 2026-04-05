@@ -91,10 +91,6 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
-        if ($message->auto_reply_sent_at !== null) {
-            return;
-        }
-
         $channel = $message->channel;
         $contact = $message->contact;
 
