@@ -574,4 +574,38 @@ class MergeContactsActionTest extends TestCase
         $this->assertSame($secondaryIdentity->id, $primaryDialog->current_contact_identity_id);
         $this->assertNull($primaryDialog->external_chat_id);
     }
+
+    public function test_it_resets_collector_prompt_marker_when_merge_keeps_same_active_field(): void
+    {
+        $primary = Contact::factory()->create([
+            'first_name' => null,
+            'country' => null,
+            'city' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_started_at' => now()->subHour(),
+            'data_collection_current_field_started_at' => now()->subMinutes(30),
+        ]);
+        $secondary = Contact::factory()->create([
+            'first_name' => null,
+            'country' => null,
+            'city' => null,
+        ]);
+
+        $originalFieldStartedAt = $primary->data_collection_current_field_started_at;
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $primary->refresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $primary->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $primary->data_collection_current_field);
+        $this->assertNull($primary->data_collection_last_prompted_field);
+        $this->assertNotNull($primary->data_collection_current_field_started_at);
+        $this->assertNotSame(
+            $originalFieldStartedAt?->toDateTimeString(),
+            $primary->data_collection_current_field_started_at?->toDateTimeString(),
+        );
+    }
 }

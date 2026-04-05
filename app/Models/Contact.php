@@ -112,7 +112,9 @@ class Contact extends Model
         'pending_region_candidates',
         'data_collection_status',
         'data_collection_current_field',
+        'data_collection_last_prompted_field',
         'data_collection_started_at',
+        'data_collection_current_field_started_at',
         'data_collection_completed_at',
         'data_collection_attempts_count',
         'is_auto_reply_enabled',
@@ -146,6 +148,7 @@ class Contact extends Model
         'distance_to_moscow_km' => 'integer',
         'distance_to_moscow_calculated_at' => 'datetime',
         'data_collection_started_at' => 'datetime',
+        'data_collection_current_field_started_at' => 'datetime',
         'data_collection_completed_at' => 'datetime',
         'data_collection_attempts_count' => 'integer',
         'pending_region_candidates' => 'array',
@@ -438,10 +441,18 @@ class Contact extends Model
 
     public function startDataCollection(string $field): void
     {
+        $now = now();
+        $isActiveSession = $this->data_collection_status === self::DATA_COLLECTION_STATUS_ACTIVE
+            && filled($this->data_collection_current_field);
+
         $this->forceFill([
             'data_collection_status' => self::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => $field,
-            'data_collection_started_at' => $this->data_collection_started_at ?? now(),
+            'data_collection_last_prompted_field' => null,
+            'data_collection_started_at' => $isActiveSession
+                ? ($this->data_collection_started_at ?? $now)
+                : $now,
+            'data_collection_current_field_started_at' => $now,
             'data_collection_completed_at' => null,
             'data_collection_attempts_count' => 0,
         ])->save();
@@ -452,6 +463,8 @@ class Contact extends Model
         $this->forceFill([
             'data_collection_status' => self::DATA_COLLECTION_STATUS_COMPLETED,
             'data_collection_current_field' => null,
+            'data_collection_last_prompted_field' => null,
+            'data_collection_current_field_started_at' => null,
             'data_collection_completed_at' => now(),
             'data_collection_attempts_count' => 0,
         ])->save();

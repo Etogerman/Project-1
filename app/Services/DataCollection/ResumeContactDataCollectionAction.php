@@ -41,7 +41,7 @@ class ResumeContactDataCollectionAction
 
         $contact->startDataCollection($nextField);
 
-        ProcessDataCollectionQuestionJob::dispatch($sourceMessage->id, true);
+        ProcessDataCollectionQuestionJob::dispatch($sourceMessage->id, true, $contact->id, $nextField);
 
         return $nextField;
     }

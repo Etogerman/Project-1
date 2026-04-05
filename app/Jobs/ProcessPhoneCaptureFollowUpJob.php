@@ -261,7 +261,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             ],
         );
 
-        ProcessDataCollectionQuestionJob::dispatch($message->id);
+        ProcessDataCollectionQuestionJob::dispatch($message->id, false, $contact->id, $nextField);
     }
 
     protected function maybeContinueDataCollectionAfterMerge(
@@ -296,7 +296,12 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                 ],
             );
 
-            ProcessDataCollectionQuestionJob::dispatch($message->id);
+            ProcessDataCollectionQuestionJob::dispatch(
+                $message->id,
+                false,
+                $contact->id,
+                $contact->data_collection_current_field,
+            );
 
             return;
         }
@@ -325,7 +330,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             ],
         );
 
-        ProcessDataCollectionQuestionJob::dispatch($message->id);
+        ProcessDataCollectionQuestionJob::dispatch($message->id, false, $contact->id, $nextField);
     }
 
     protected function questionAlreadyExists(Message $message): bool

@@ -1,0 +1,26 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('contacts', function (Blueprint $table): void {
+            $table->string('data_collection_last_prompted_field')->nullable();
+            $table->timestamp('data_collection_current_field_started_at')->nullable();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('contacts', function (Blueprint $table): void {
+            $table->dropColumn([
+                'data_collection_last_prompted_field',
+                'data_collection_current_field_started_at',
+            ]);
+        });
+    }
+};

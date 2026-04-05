@@ -532,21 +532,22 @@ class MergeContactsAction
             return;
         }
 
-        $payload = [
-            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
-            'data_collection_current_field' => $nextField,
-            'data_collection_started_at' => $contact->data_collection_started_at ?? now(),
-            'data_collection_completed_at' => null,
-        ];
-
         if (
             $contact->data_collection_status !== Contact::DATA_COLLECTION_STATUS_ACTIVE
             || $contact->data_collection_current_field !== $nextField
         ) {
-            $payload['data_collection_attempts_count'] = 0;
+            $contact->startDataCollection($nextField);
+
+            return;
         }
 
-        $contact->forceFill($payload)->save();
+        $contact->forceFill([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => $nextField,
+            'data_collection_last_prompted_field' => null,
+            'data_collection_current_field_started_at' => now(),
+            'data_collection_completed_at' => null,
+        ])->save();
     }
 
     private function resolvePhoneDuplicateReviews(Contact $primary, Contact $secondary, ?string $triggerPhone): void
