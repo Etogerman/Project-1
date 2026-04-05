@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
@@ -132,7 +133,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
 
             if (
                 ! filled($contact->data_collection_last_prompted_field)
-                && $this->contactAlreadyHasQuestionForCurrentField($contact, $currentField, $questionText)
+                && $this->contactAlreadyHasQuestionForCurrentField($contact, $channel, $currentField, $questionText)
             ) {
                 return;
             }
@@ -250,7 +251,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             ->exists();
     }
 
-    protected function contactAlreadyHasQuestionForCurrentField(Contact $contact, string $currentField, string $questionText): bool
+    protected function contactAlreadyHasQuestionForCurrentField(Contact $contact, Channel $channel, string $currentField, string $questionText): bool
     {
         $query = $contact->messages()
             ->where('direction', Message::DIRECTION_OUTBOUND)
@@ -266,7 +267,11 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
             return true;
         }
 
-        if (! $this->canUseLegacyQuestionTextFallback($contact, $currentField)) {
+        if ($this->legacyQuestionWasLoggedForCurrentField($contact, $channel, $currentField)) {
+            return true;
+        }
+
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY) {
             return false;
         }
 
@@ -278,62 +283,26 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
 
         $this->applyReceivedAtBoundary(
             $legacyQuery,
-            $this->resolveLegacyQuestionBoundary($contact, $currentField),
+            $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at,
         );
 
         return $legacyQuery->exists();
     }
 
-    protected function canUseLegacyQuestionTextFallback(Contact $contact, string $currentField): bool
+    protected function legacyQuestionWasLoggedForCurrentField(Contact $contact, Channel $channel, string $currentField): bool
     {
-        if ($contact->data_collection_current_field_started_at !== null) {
-            return true;
-        }
+        $query = ChannelActivityLog::query()
+            ->where('channel_id', $channel->id)
+            ->where('event', 'contact.data_collection_question_sent')
+            ->where('context->contact_id', $contact->id)
+            ->where('context->current_field', $currentField);
 
-        if ($currentField !== Contact::DATA_COLLECTION_FIELD_CITY) {
-            return true;
-        }
-
-        return $this->resolveLegacyCityQuestionBoundary($contact) !== null;
-    }
-
-    protected function resolveLegacyQuestionBoundary(Contact $contact, string $currentField)
-    {
-        if ($contact->data_collection_current_field_started_at !== null) {
-            return $contact->data_collection_current_field_started_at;
-        }
-
-        if ($currentField !== Contact::DATA_COLLECTION_FIELD_CITY) {
-            return $contact->data_collection_started_at;
-        }
-
-        return $this->resolveLegacyCityQuestionBoundary($contact);
-    }
-
-    protected function resolveLegacyCityQuestionBoundary(Contact $contact)
-    {
-        $countryQuestion = (string) config(
-            'bots.data_collection.country.question',
-            'В какой стране вы живёте?'
+        $this->applyCreatedAtBoundary(
+            $query,
+            $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at,
         );
 
-        $query = $contact->messages()
-            ->where('direction', Message::DIRECTION_OUTBOUND)
-            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
-            ->where(function ($query) use ($countryQuestion): void {
-                $query->where('message_parameter', Contact::DATA_COLLECTION_FIELD_COUNTRY)
-                    ->orWhere(function ($query) use ($countryQuestion): void {
-                        $query->whereNull('message_parameter')
-                            ->where('text', $countryQuestion);
-                    });
-            });
-
-        $this->applyReceivedAtBoundary($query, $contact->data_collection_started_at);
-
-        return $query
-            ->orderByDesc('received_at')
-            ->orderByDesc('id')
-            ->value('received_at');
+        return $query->exists();
     }
 
     protected function applyReceivedAtBoundary($query, $boundary): void
@@ -343,6 +312,15 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         }
 
         $query->where('received_at', '>=', $boundary);
+    }
+
+    protected function applyCreatedAtBoundary($query, $boundary): void
+    {
+        if ($boundary === null) {
+            return;
+        }
+
+        $query->where('created_at', '>=', $boundary);
     }
 
     protected function resolveQuestionText(Contact $contact, string $platform): ?string
