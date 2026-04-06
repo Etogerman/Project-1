@@ -56,7 +56,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         $this->assertSame('member-1', $connection->member_id);
         $this->assertNull($connection->application_token);
         $this->assertSame(
-            hash_hmac('sha256', 'app-token-1', (string) config('app.key')),
+            hash('sha256', 'app-token-1'),
             $connection->application_token_hash,
         );
         $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);

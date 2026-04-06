@@ -60,7 +60,7 @@ class Bitrix24CallbackControllerTest extends TestCase
             ->assertJsonPath('method', 'POST');
 
         $connection = Bitrix24Connection::query()->firstOrFail();
-        $expectedTokenHash = hash_hmac('sha256', 'test-token', (string) config('app.key'));
+        $expectedTokenHash = hash('sha256', 'test-token');
 
         $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
         $this->assertSame('member-1', $connection->member_id);
@@ -117,7 +117,7 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $connection = Bitrix24Connection::query()->firstOrFail();
         $event = Bitrix24WebhookEvent::query()->firstOrFail();
-        $expectedTokenHash = hash_hmac('sha256', 'test-token-2', (string) config('app.key'));
+        $expectedTokenHash = hash('sha256', 'test-token-2');
 
         $this->assertSame('member-2', $connection->member_id);
         $this->assertNull($connection->application_token);
@@ -404,7 +404,7 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $connection = Bitrix24Connection::query()->firstOrFail();
         $event = Bitrix24WebhookEvent::query()->firstOrFail();
-        $expectedTokenHash = hash_hmac('sha256', 'app-token', (string) config('app.key'));
+        $expectedTokenHash = hash('sha256', 'app-token');
 
         $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
         $this->assertSame('member-1', $connection->member_id);

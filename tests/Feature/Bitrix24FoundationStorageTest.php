@@ -57,7 +57,7 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertStringNotContainsString('plain-refresh-token', $storedRefreshToken);
         $this->assertNull($storedApplicationToken);
         $this->assertSame(
-            hash_hmac('sha256', 'application-token', (string) config('app.key')),
+            hash('sha256', 'application-token'),
             $storedApplicationTokenHash,
         );
 
@@ -113,7 +113,7 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertTrue($event->connection()->is($connection));
         $this->assertSame('', $storedEventToken);
         $this->assertSame(
-            hash_hmac('sha256', 'application-token', (string) config('app.key')),
+            hash('sha256', 'application-token'),
             $storedEventTokenHash,
         );
 

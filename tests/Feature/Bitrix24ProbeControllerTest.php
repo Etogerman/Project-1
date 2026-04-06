@@ -28,7 +28,7 @@ class Bitrix24ProbeControllerTest extends TestCase
         Log::shouldReceive('info')
             ->once()
             ->with('bitrix24 probe callback received', Mockery::on(function (array $context): bool {
-                $expectedHash = hash_hmac('sha256', 'test-token', (string) config('app.key'));
+                $expectedHash = hash('sha256', 'test-token');
 
                 return $context['method'] === 'POST'
                     && $context['path'] === 'callbacks/bitrix24/probe'
@@ -83,7 +83,7 @@ class Bitrix24ProbeControllerTest extends TestCase
         $this->assertSame('ONCRMCONTACTUPDATE', $storedPayload['event']);
         $this->assertSame('crm.alexlesley.biz', $storedPayload['auth']['domain']);
         $this->assertSame(
-            hash_hmac('sha256', 'test-token', (string) config('app.key')),
+            hash('sha256', 'test-token'),
             $storedPayload['auth']['application_token_hash'],
         );
         $this->assertArrayNotHasKey('application_token', $storedPayload['auth']);

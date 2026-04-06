@@ -16,6 +16,6 @@ class HashBitrix24ApplicationTokenAction
             return null;
         }
 
-        return hash_hmac('sha256', $normalized, (string) config('app.key'));
+        return hash('sha256', $normalized);
     }
 }
