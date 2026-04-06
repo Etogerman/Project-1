@@ -25,6 +25,12 @@ class BuildBitrix24SetupReportAction
                 value: (string) data_get($config, 'application.client_secret', ''),
                 notes: 'Required for production local app OAuth.',
             ),
+            $this->buildAbsoluteHttpsUrlCheck(
+                key: 'oauth.server_url',
+                label: 'Bitrix24 OAuth server URL',
+                value: (string) data_get($config, 'oauth.server_url', ''),
+                notes: 'Required as the trusted OAuth refresh host for install and token refresh flows.',
+            ),
             $this->buildCallbackCheck(
                 key: 'callbacks.install_url',
                 label: 'Install callback URL',
@@ -194,6 +200,28 @@ class BuildBitrix24SetupReportAction
         }
 
         return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_OK, true, 'Production callback is frozen.');
+    }
+
+    /**
+     * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
+     */
+    private function buildAbsoluteHttpsUrlCheck(string $key, string $label, string $value, string $notes): array
+    {
+        $trimmed = trim($value);
+
+        if ($trimmed === '') {
+            return $this->check($key, $label, '—', Bitrix24SetupReportResult::STATUS_MISSING, true, $notes);
+        }
+
+        if (! filter_var($trimmed, FILTER_VALIDATE_URL)) {
+            return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_MISSING, true, 'Value must be a valid absolute URL. '.$notes);
+        }
+
+        if (parse_url($trimmed, PHP_URL_SCHEME) !== 'https') {
+            return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_MISSING, true, 'Value must use HTTPS. '.$notes);
+        }
+
+        return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_OK, true, $notes);
     }
 
     /**

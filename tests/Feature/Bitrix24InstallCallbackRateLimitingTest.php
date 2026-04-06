@@ -20,6 +20,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
 
         config()->set('bitrix24.portal_domain', 'install.example.test');
         config()->set('bitrix24.application.code', 'local.app.code');
+        config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
 
         Http::preventStrayRequests();
         Http::fake([

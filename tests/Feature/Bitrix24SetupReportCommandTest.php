@@ -13,6 +13,9 @@ class Bitrix24SetupReportCommandTest extends TestCase
                 'client_id' => null,
                 'client_secret' => null,
             ],
+            'oauth' => [
+                'server_url' => null,
+            ],
             'callbacks' => [
                 'install_url' => null,
                 'events_url' => null,
@@ -33,6 +36,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
         $this->artisan('bitrix24:setup-report')
             ->expectsOutput('Bitrix24 setup readiness check completed.')
             ->expectsOutputToContain('Bitrix24 client_id')
+            ->expectsOutputToContain('Bitrix24 OAuth server URL')
             ->expectsOutputToContain('Install callback URL')
             ->expectsOutputToContain('Bitrix24 setup is not ready for implementation. Resolve all missing required items first.')
             ->assertFailed();
@@ -44,6 +48,9 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'application' => [
                 'client_id' => 'client-id',
                 'client_secret' => 'client-secret',
+            ],
+            'oauth' => [
+                'server_url' => 'https://oauth.example',
             ],
             'callbacks' => [
                 'install_url' => 'https://project.example.com/callbacks/bitrix24/probe',
@@ -73,6 +80,9 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'application' => [
                 'client_id' => 'client-id',
                 'client_secret' => 'client-secret',
+            ],
+            'oauth' => [
+                'server_url' => 'https://oauth.example',
             ],
             'callbacks' => [
                 'install_url' => 'https://project.example.com/callbacks/bitrix24/install',

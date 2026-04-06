@@ -50,6 +50,10 @@ class ValidateBitrix24InstallCallbackAction
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install validation is missing expected app code configuration.'];
         }
 
+        if (! $this->isHttpsUrl(config('bitrix24.oauth.server_url'))) {
+            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install validation is missing trusted OAuth server configuration.'];
+        }
+
         if (! $this->matchesTrustedPortal($payload->clientEndpoint, $trustedPortal)) {
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Install callback `clientEndpoint` did not match trusted portal.'];
         }

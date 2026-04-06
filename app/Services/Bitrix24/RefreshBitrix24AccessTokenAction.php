@@ -161,27 +161,7 @@ class RefreshBitrix24AccessTokenAction
             return rtrim($configuredUrl, '/').'/oauth/token/';
         }
 
-        $baseUrl = trim((string) ($connection->server_endpoint ?: $connection->client_endpoint));
-
-        if ($baseUrl === '') {
-            return null;
-        }
-
-        $scheme = parse_url($baseUrl, PHP_URL_SCHEME);
-        $host = parse_url($baseUrl, PHP_URL_HOST);
-        $port = parse_url($baseUrl, PHP_URL_PORT);
-
-        if (! is_string($scheme) || ! is_string($host) || $scheme === '' || $host === '') {
-            return null;
-        }
-
-        $origin = $scheme.'://'.$host;
-
-        if (is_int($port)) {
-            $origin .= ':'.$port;
-        }
-
-        return $origin.'/oauth/token/';
+        return null;
     }
 
     /**

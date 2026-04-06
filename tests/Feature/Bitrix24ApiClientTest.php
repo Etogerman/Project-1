@@ -245,6 +245,29 @@ class Bitrix24ApiClientTest extends TestCase
         }
     }
 
+    public function test_refresh_does_not_fallback_to_connection_server_endpoint_when_oauth_server_url_is_missing(): void
+    {
+        config()->set('bitrix24.oauth.server_url', null);
+
+        $connection = $this->makeActiveConnection([
+            'client_endpoint' => 'https://client-endpoint.example/rest/',
+            'server_endpoint' => 'https://attacker.example/rest/',
+            'refresh_token_encrypted' => 'refresh-token',
+            'access_token_expires_at' => now()->subMinute(),
+        ]);
+
+        try {
+            app(RefreshBitrix24AccessTokenAction::class)->handle($connection);
+            $this->fail('Expected refresh failure exception was not thrown.');
+        } catch (Bitrix24AuthRefreshException) {
+            $connection->refresh();
+
+            $this->assertSame(Bitrix24Connection::STATUS_NEEDS_REINSTALL, $connection->status);
+        }
+
+        Http::assertNothingSent();
+    }
+
     public function test_non_auth_4xx_response_does_not_trigger_refresh(): void
     {
         config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
