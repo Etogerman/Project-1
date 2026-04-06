@@ -17,6 +17,7 @@ class HandleBitrix24InstallCallbackAction
         private readonly NormalizeBitrix24WebhookPayloadAction $normalizeWebhookPayload,
         private readonly BuildBitrix24AuthContextAction $buildAuthContext,
         private readonly BuildBitrix24WebhookFingerprintAction $buildFingerprint,
+        private readonly ValidateBitrix24InstallCallbackAction $validateInstallCallback,
         private readonly StoreBitrix24WebhookEventAction $storeWebhookEvent,
         private readonly UpsertBitrix24ConnectionFromInstallAction $upsertConnection,
         private readonly LogBitrix24CallbackOutcomeAction $logCallbackOutcome,
@@ -29,7 +30,7 @@ class HandleBitrix24InstallCallbackAction
         $fingerprint = $this->buildFingerprint->handle($normalized['payload']);
         $installPayload = $this->buildInstallPayloadData($request->all(), $normalized['payload'], $authContext);
 
-        [$status, $reason] = $this->determineInstallOutcome($normalized['looks_like_bitrix'], $installPayload);
+        [$status, $reason] = $this->validateInstallCallback->handle($normalized['looks_like_bitrix'], $installPayload);
 
         $connection = null;
 
@@ -161,31 +162,6 @@ class HandleBitrix24InstallCallbackAction
         }
 
         return null;
-    }
-
-    /**
-     * @return array{0: string, 1: ?string}
-     */
-    private function determineInstallOutcome(bool $looksLikeBitrix, Bitrix24InstallPayloadData $payload): array
-    {
-        if (! $looksLikeBitrix) {
-            return [Bitrix24WebhookEvent::STATUS_IGNORED, 'Payload does not look like a Bitrix24 install callback.'];
-        }
-
-        foreach ([
-            'memberId' => $payload->memberId,
-            'applicationToken' => $payload->applicationToken,
-            'clientEndpoint' => $payload->clientEndpoint,
-            'serverEndpoint' => $payload->serverEndpoint,
-            'accessToken' => $payload->accessToken,
-            'refreshToken' => $payload->refreshToken,
-        ] as $field => $value) {
-            if (! filled($value)) {
-                return [Bitrix24WebhookEvent::STATUS_FAILED, sprintf('Missing required install field `%s`.', $field)];
-            }
-        }
-
-        return [Bitrix24WebhookEvent::STATUS_PENDING, null];
     }
 
     private function findRelatedConnection(\App\Data\Bitrix24\Bitrix24AuthContextData $authContext): ?Bitrix24Connection
