@@ -342,6 +342,6 @@ class Bitrix24ApiClientTest extends TestCase
             'access_token_expires_at' => now()->addHour(),
         ], $overrides);
 
-        return Bitrix24Connection::query()->create($attributes);
+        return Bitrix24Connection::query()->forceCreate($attributes);
     }
 }

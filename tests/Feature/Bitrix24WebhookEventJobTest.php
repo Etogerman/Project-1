@@ -125,7 +125,7 @@ class Bitrix24WebhookEventJobTest extends TestCase
      */
     private function makeWebhookEvent(array $overrides = []): Bitrix24WebhookEvent
     {
-        $connection = Bitrix24Connection::query()->create([
+        $connection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'example.bitrix24.ru',
             'application_name' => 'Local App',
             'client_id' => 'local.app',

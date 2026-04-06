@@ -17,7 +17,7 @@ class Bitrix24FoundationStorageTest extends TestCase
 
     public function test_bitrix24_connection_encrypts_tokens_and_casts_json_and_datetimes(): void
     {
-        $connection = Bitrix24Connection::query()->create([
+        $connection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'application_name' => 'Abrikosoff Connector',
             'client_id' => 'local.test',
@@ -63,7 +63,7 @@ class Bitrix24FoundationStorageTest extends TestCase
 
     public function test_bitrix24_webhook_event_uses_dedupe_constraint_and_array_casts(): void
     {
-        $connection = Bitrix24Connection::query()->create([
+        $connection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'status' => Bitrix24Connection::STATUS_ACTIVE,
         ]);
@@ -112,7 +112,7 @@ class Bitrix24FoundationStorageTest extends TestCase
 
     public function test_bitrix24_sync_log_is_append_only_and_relates_to_connection(): void
     {
-        $connection = Bitrix24Connection::query()->create([
+        $connection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'status' => Bitrix24Connection::STATUS_ACTIVE,
         ]);
@@ -144,7 +144,7 @@ class Bitrix24FoundationStorageTest extends TestCase
 
     public function test_bitrix24_connection_relations_load_events_and_sync_logs(): void
     {
-        $connection = Bitrix24Connection::query()->create([
+        $connection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'status' => Bitrix24Connection::STATUS_ACTIVE,
         ]);

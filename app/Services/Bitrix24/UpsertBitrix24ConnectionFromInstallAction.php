@@ -18,10 +18,7 @@ class UpsertBitrix24ConnectionFromInstallAction
             'application_name' => (string) config('bitrix24.application.name'),
             'client_id' => (string) config('bitrix24.application.client_id'),
             'member_id' => $payload->memberId,
-            'application_token' => $payload->applicationToken,
             'status' => Bitrix24Connection::STATUS_ACTIVE,
-            'access_token_encrypted' => $payload->accessToken,
-            'refresh_token_encrypted' => $payload->refreshToken,
             'access_token_expires_at' => $this->resolveExpiresAt($payload->expiresAt),
             'scope' => $payload->scope,
             'client_endpoint' => $payload->clientEndpoint,
@@ -31,6 +28,12 @@ class UpsertBitrix24ConnectionFromInstallAction
             'last_install_callback_at' => now(),
             'last_error_at' => null,
             'last_error_message' => null,
+        ]);
+
+        $connection->forceFill([
+            'application_token' => $payload->applicationToken,
+            'access_token_encrypted' => $payload->accessToken,
+            'refresh_token_encrypted' => $payload->refreshToken,
         ]);
 
         $connection->save();
