@@ -36,13 +36,7 @@ class ResumeContactDataCollectionAction
             return null;
         }
 
-        $routeDialog = $this->resolveDialogRouteSourceAction->forContact($contact);
-
-        if (! $routeDialog instanceof Dialog) {
-            throw new RuntimeException('Не удалось определить маршрут для возобновления анкеты.');
-        }
-
-        $sourceMessage = $this->resolveSourceMessage($routeDialog);
+        $sourceMessage = $this->resolveResumeSourceMessage($contact);
 
         if (! $sourceMessage instanceof Message) {
             throw new RuntimeException('Не удалось определить сообщение для возобновления анкеты.');
@@ -71,5 +65,28 @@ class ResumeContactDataCollectionAction
             ->where('dialog_id', $dialog->id)
             ->orderByDesc('id')
             ->first();
+    }
+
+    protected function resolveResumeSourceMessage(Contact $contact): ?Message
+    {
+        $routeDialog = $this->resolveDialogRouteSourceAction->forContact($contact);
+
+        if ($routeDialog instanceof Dialog) {
+            $directSourceMessage = $this->resolveSourceMessage($routeDialog);
+
+            if ($directSourceMessage instanceof Message) {
+                return $directSourceMessage;
+            }
+        }
+
+        return $contact->messages()
+            ->whereNotNull('channel_id')
+            ->whereNotNull('contact_identity_id')
+            ->orderByDesc('id')
+            ->get()
+            ->first(function (Message $message): bool {
+                return $this->resolveDialogRouteSourceAction->forMessage($message) instanceof Dialog
+                    || $this->resolveDialogRouteSourceAction->fallbackFromLegacyMessage($message) instanceof Dialog;
+            });
     }
 }

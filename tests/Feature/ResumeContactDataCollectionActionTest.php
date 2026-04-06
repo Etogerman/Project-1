@@ -39,6 +39,7 @@ class ResumeContactDataCollectionActionTest extends TestCase
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => false,
         ]);
 
         $identity = ContactIdentity::factory()->create([
@@ -65,7 +66,7 @@ class ResumeContactDataCollectionActionTest extends TestCase
         ]);
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Не удалось определить маршрут для возобновления анкеты.');
+        $this->expectExceptionMessage('Не удалось определить сообщение для возобновления анкеты.');
 
         try {
             app(ResumeContactDataCollectionAction::class)->handle($contact);
@@ -223,7 +224,7 @@ class ResumeContactDataCollectionActionTest extends TestCase
         });
     }
 
-    public function test_action_does_not_activate_collector_when_sendable_dialog_has_no_messages(): void
+    public function test_action_uses_legacy_route_recovery_when_sendable_dialog_has_no_messages(): void
     {
         Queue::fake();
 
@@ -258,18 +259,47 @@ class ResumeContactDataCollectionActionTest extends TestCase
             'last_inbound_at' => now(),
         ]);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Не удалось определить сообщение для возобновления анкеты.');
+        $legacyChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $legacyIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $legacyChannel->id,
+            'platform' => $legacyChannel->platform,
+        ]);
+        $legacyDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $legacyChannel->id,
+            'current_contact_identity_id' => $legacyIdentity->id,
+            'external_chat_id' => null,
+            'last_message_at' => now()->subMinute(),
+            'last_inbound_at' => now()->subMinute(),
+        ]);
+        $legacyMessage = Message::factory()->create([
+            'dialog_id' => $legacyDialog->id,
+            'contact_id' => $contact->id,
+            'channel_id' => $legacyChannel->id,
+            'contact_identity_id' => $legacyIdentity->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'recoverable-chat-id',
+        ]);
 
-        try {
-            app(ResumeContactDataCollectionAction::class)->handle($contact);
-        } finally {
-            $freshContact = $contact->fresh();
+        $nextField = app(ResumeContactDataCollectionAction::class)->handle($contact);
 
-            $this->assertNotNull($freshContact);
-            $this->assertNotSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $freshContact->data_collection_status);
-            $this->assertNull($freshContact->data_collection_current_field);
-            Queue::assertNothingPushed();
-        }
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $nextField);
+
+        $freshContact = $contact->fresh();
+
+        $this->assertNotNull($freshContact);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $freshContact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $freshContact->data_collection_current_field);
+
+        Queue::assertPushed(ProcessDataCollectionQuestionJob::class, function (ProcessDataCollectionQuestionJob $job) use ($contact, $legacyMessage): bool {
+            return $job->sourceMessageId === $legacyMessage->id
+                && $job->forceSend === true
+                && $job->contactId === $contact->id
+                && $job->expectedField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
+        });
     }
 }
