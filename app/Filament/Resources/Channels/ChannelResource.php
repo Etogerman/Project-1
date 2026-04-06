@@ -297,25 +297,29 @@ class ChannelResource extends Resource
                     ->label('Канал')
                     ->description(fn (Channel $record): string => static::buildChannelTableSummary($record))
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('bot_name')
                     ->label('Имя бота')
                     ->state(fn (Channel $record): string => filled($record->bot_name) ? (string) $record->bot_name : '—')
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('bot_username')
                     ->label('Username')
                     ->state(fn (Channel $record): string => $record->getBotUsernameLabel() ?? '—')
                     ->url(fn (Channel $record): ?string => $record->getBotProfileUrl())
                     ->openUrlInNewTab()
                     ->searchable(['bot_username'])
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('health_status')
                     ->label('Состояние')
                     ->state(fn (Channel $record): string => $record->getHealthStatusLabel())
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->color(fn (Channel $record): string => $record->getHealthStatusColor()),
+                    ->color(fn (Channel $record): string => $record->getHealthStatusColor())
+                    ->toggleable(),
                 TextColumn::make('platform')
                     ->label('Платформа')
                     ->badge()
@@ -323,21 +327,24 @@ class ChannelResource extends Resource
                     ->formatStateUsing(fn (string $state): string => Channel::platformOptions()[$state] ?? $state)
                     ->color('info')
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('connection_type')
                     ->label('Тип')
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
                     ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state)
                     ->color('gray')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('auto_reply_mode')
                     ->label('Автоответ')
                     ->state(fn (Channel $record): string => $record->getAutoReplyModeLabel())
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
                     ->color(fn (Channel $record): string => static::getAutoReplyModeColor($record->auto_reply_mode))
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('is_active')
                     ->label('Активен')
                     ->badge()
@@ -351,7 +358,8 @@ class ChannelResource extends Resource
                     ->state(fn (Channel $record): string => $record->getWebhookStatusLabel())
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->color(fn (Channel $record): string => $record->getWebhookStatusColor()),
+                    ->color(fn (Channel $record): string => $record->getWebhookStatusColor())
+                    ->toggleable(),
                 TextColumn::make('bot_external_id')
                     ->label('Внешний ID')
                     ->toggleable(isToggledHiddenByDefault: true)

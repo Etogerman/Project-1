@@ -259,6 +259,121 @@
         color: var(--ac-text);
     }
 
+    .ac-auto-reply-status-inline--simple {
+        max-width: 26rem;
+    }
+
+    .ac-auto-reply-status-inline--simple .fi-fo-field-wrp {
+        margin: 0;
+    }
+
+    .ac-auto-reply-status-inline--simple .fi-fo-checkbox {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.9rem;
+        flex-direction: row-reverse;
+    }
+
+    .ac-auto-reply-status-inline--simple .fi-fo-checkbox-label {
+        margin: 0;
+        font-size: clamp(1.85rem, 1.55rem + 0.55vw, 2.25rem);
+        font-weight: 700;
+        line-height: 1.1;
+        color: #111827;
+    }
+
+    .ac-auto-reply-status-inline--simple .fi-fo-checkbox-state {
+        border-radius: 0.5rem;
+    }
+
+    .ac-auto-reply-form-section--flat,
+    .ac-auto-reply-form-section--flat .fi-section {
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .ac-auto-reply-form-section--flat .fi-section-header {
+        padding: 0 0 0.85rem;
+        border: 0;
+    }
+
+    .ac-auto-reply-form-section--flat .fi-section-content {
+        padding: 0;
+    }
+
+    .ac-auto-reply-form-section--flat .fi-section-heading {
+        font-size: clamp(1.85rem, 1.55rem + 0.5vw, 2.15rem);
+        font-weight: 700;
+        line-height: 1.1;
+        color: #111827;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-wrp {
+        display: grid;
+        grid-template-columns: minmax(13.5rem, 16rem) minmax(0, 1fr);
+        gap: 0.85rem 1.25rem;
+        align-items: start;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-wrp-label {
+        margin: 0;
+        padding-top: 0.45rem;
+        font-size: 1.15rem;
+        font-weight: 600;
+        line-height: 1.2;
+        color: #111827;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-wrp-helper-text,
+    .ac-auto-reply-form-section--minimal .fi-fo-field-wrp-hint {
+        grid-column: 2;
+        margin-top: 0.15rem;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-input-wrp {
+        border: 0;
+        border-radius: 0.375rem;
+        background: #e9edf3;
+        box-shadow: none;
+    }
+
+    .ac-auto-reply-form-section--minimal input.fi-input {
+        min-height: 2.95rem;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-text-input .fi-input-wrp {
+        border-radius: 0.375rem;
+    }
+
+    .ac-auto-reply-form-section--reply .fi-input-wrp {
+        border: 0;
+        border-radius: 0.375rem;
+        background: #e9edf3;
+        box-shadow: none;
+    }
+
+    .ac-auto-reply-form-section--reply textarea.fi-input {
+        min-height: 10.5rem;
+    }
+
+    .ac-auto-reply-form-section--effects {
+        max-width: 46rem;
+    }
+
+    @media (max-width: 900px) {
+        .ac-auto-reply-form-section--minimal .fi-fo-field-wrp {
+            grid-template-columns: 1fr;
+            gap: 0.55rem;
+        }
+
+        .ac-auto-reply-form-section--minimal .fi-fo-field-wrp-helper-text,
+        .ac-auto-reply-form-section--minimal .fi-fo-field-wrp-hint {
+            grid-column: auto;
+        }
+    }
+
     .fi-input-wrp-content-ctn,
     .fi-input-wrp-prefix,
     .fi-input-wrp-suffix,
@@ -502,8 +617,9 @@
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal, .ac-auto-reply-form-modal) .fi-modal-footer {
-        border-top: 1px solid color-mix(in srgb, var(--ac-border) 88%, transparent);
+        border-top: 0;
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 78%, transparent) 0%, transparent 100%);
+        padding-top: 1.25rem;
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal, .ac-auto-reply-form-modal) .fi-modal-footer-actions {
@@ -513,6 +629,7 @@
         gap: 0.75rem;
         flex-wrap: wrap;
         width: 100%;
+        padding-top: 0.25rem;
     }
 
     :is(.ac-user-form-modal, .ac-channel-form-modal, .ac-tag-form-modal, .ac-auto-reply-form-modal) .fi-modal-content {
@@ -703,10 +820,181 @@
         line-height: 1.5;
     }
 
+    .ac-auto-reply-status-inline .fi-fo-checkbox {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.85rem;
+        flex-direction: row-reverse;
+        justify-content: flex-end;
+    }
+
+    .ac-auto-reply-status-inline .fi-fo-field-label {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--ac-text);
+    }
+
+    .ac-auto-reply-form-section--minimal,
+    .ac-auto-reply-form-section--reply {
+        border: none;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-section-header,
+    .ac-auto-reply-form-section--reply .fi-section-header {
+        padding: 0 0 1rem;
+        background: transparent;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-section-content-ctn,
+    .ac-auto-reply-form-section--reply .fi-section-content-ctn {
+        border: none;
+        background: transparent;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-section-content,
+    .ac-auto-reply-form-section--reply .fi-section-content {
+        padding: 0;
+        background: transparent;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field {
+        display: grid;
+        grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+        align-items: start;
+        column-gap: 1.2rem;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-label {
+        padding-top: 0.45rem;
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--ac-text);
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-content-col {
+        gap: 0.45rem;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-content-col > p,
+    .ac-auto-reply-form-section--minimal .fi-fo-field-content-col > div {
+        font-size: 0.86rem;
+        line-height: 1.45;
+        color: var(--ac-text-soft);
+    }
+
+    .ac-auto-reply-form-section--reply .fi-fo-field-label {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--ac-text);
+    }
+
+    .ac-auto-reply-form-section {
+        border: 0;
+        border-radius: 0;
+        overflow: visible;
+        box-shadow: none;
+        background: transparent;
+    }
+
+    .ac-auto-reply-form-section .fi-section-header {
+        overflow: visible;
+        border-bottom: 0;
+        background: transparent;
+        padding: 0 0 0.9rem;
+    }
+
+    .ac-auto-reply-form-section .fi-section-content-ctn,
+    .ac-auto-reply-form-section .fi-section-content {
+        background: transparent;
+    }
+
+    .ac-auto-reply-form-section .fi-section-heading,
+    .ac-auto-reply-form-section .fi-section-header-heading {
+        overflow: visible;
+        margin-left: 0;
+        padding-left: 0.2rem;
+        border-radius: 0;
+        background: transparent;
+        line-height: 1.15;
+    }
+
+    .ac-auto-reply-form-modal .fi-modal-footer {
+        border-top: 0;
+        padding-top: 1.25rem;
+    }
+
+    .ac-auto-reply-form-modal .fi-modal-footer-actions {
+        padding-top: 0.25rem;
+    }
+
+    .ac-auto-reply-sections-grid {
+        column-gap: 2rem;
+        row-gap: 2rem;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field {
+        display: grid;
+        grid-template-columns: 10rem minmax(0, 1fr);
+        column-gap: 0.55rem;
+        align-items: center;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-label-col {
+        min-width: 0;
+        margin: 0;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-label-ctn {
+        justify-content: flex-start;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-label {
+        margin: 0;
+        text-align: left;
+    }
+
+    .ac-auto-reply-form-section--minimal .fi-fo-field-content-col {
+        min-width: 0;
+    }
+
+    @media (max-width: 900px) {
+        .ac-auto-reply-form-section--minimal .fi-fo-field {
+            grid-template-columns: 1fr;
+            row-gap: 0.55rem;
+        }
+    }
+
+    .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-panel,
+    .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-list,
+    .ac-auto-reply-form-modal .fi-select-input .fi-select-input-search-ctn,
+    .ac-auto-reply-form-modal .fi-select-input .fi-select-input-options-ctn,
+    .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-header {
+        border-radius: 0 !important;
+    }
+
+    .ac-auto-reply-form-modal .fi-select-input .fi-select-input-search-ctn .fi-input-wrp,
+    .ac-auto-reply-form-modal .fi-select-input .fi-select-input-option {
+        border-radius: 0 !important;
+    }
+
+    .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-panel {
+        overflow: hidden !important;
+    }
+
+    .ac-auto-reply-form-modal .fi-modal-footer .fi-btn.fi-color-primary {
+        border: 1px solid #b45309;
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.14),
+            0 12px 28px -22px rgba(180, 83, 9, 0.45);
+    }
+
     .ac-tag-color-picker.fi-fo-toggle-buttons {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(8.75rem, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 0.65rem;
+        width: 100%;
     }
 
     .ac-tag-color-picker .fi-fo-toggle-buttons-btn-ctn {
@@ -718,6 +1006,7 @@
         justify-content: center;
         font-weight: 650;
         min-height: 2.85rem;
+        border-radius: 0.75rem;
         transition:
             transform 140ms ease,
             box-shadow 140ms ease,
@@ -789,6 +1078,42 @@
         box-shadow:
             0 0 0 3px color-mix(in srgb, var(--ac-warning) 22%, transparent),
             0 18px 36px -26px rgba(15, 23, 42, 0.42);
+    }
+
+    .ac-tag-form-section,
+    .ac-tag-form-section .fi-section,
+    .ac-tag-form-section .fi-section-content-ctn,
+    .ac-tag-form-section .fi-section-content {
+        width: 100%;
+        max-width: none;
+    }
+
+    .ac-tag-form-modal .fi-modal-content > * {
+        width: 100%;
+    }
+
+    .ac-tag-form-checkbox .fi-fo-field-wrp {
+        margin-top: 0.25rem;
+    }
+
+    .ac-tag-form-checkbox .fi-fo-checkbox {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-direction: row-reverse;
+        justify-content: flex-end;
+    }
+
+    .ac-tag-form-checkbox .fi-fo-checkbox-label {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--ac-text);
+    }
+
+    @media (min-width: 900px) {
+        .ac-tag-color-picker.fi-fo-toggle-buttons {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
     }
 
     .ac-channel-form-section--token .fi-section-header-description {
