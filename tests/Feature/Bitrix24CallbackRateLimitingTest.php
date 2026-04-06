@@ -200,7 +200,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
 
     private function createActiveConnection(string $memberId, string $applicationToken): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->create([
+        return Bitrix24Connection::query()->forceCreate([
             'portal_domain' => $memberId.'.example.test',
             'member_id' => $memberId,
             'application_token' => $applicationToken,

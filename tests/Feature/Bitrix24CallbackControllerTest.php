@@ -66,7 +66,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $connection = Bitrix24Connection::query()->create([
+        $connection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'application_token' => 'app-token',
@@ -111,7 +111,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->create([
+        Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'application_token' => 'app-token',
@@ -148,7 +148,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->create([
+        Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'application_token' => 'app-token',
@@ -199,7 +199,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->create([
+        Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'application_token' => 'app-token',
@@ -245,7 +245,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->create([
+        Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'application_token' => 'app-token',
@@ -323,7 +323,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->create([
+        Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'application_token' => 'expected-token',
@@ -355,14 +355,14 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $foreignConnection = Bitrix24Connection::query()->create([
+        $foreignConnection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.foreign.biz',
             'member_id' => 'member-foreign',
             'application_token' => 'wrong-token',
             'status' => Bitrix24Connection::STATUS_ACTIVE,
         ]);
 
-        $expectedConnection = Bitrix24Connection::query()->create([
+        $expectedConnection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'application_token' => 'expected-token',
@@ -419,7 +419,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $connection = Bitrix24Connection::query()->create([
+        $connection = Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'application_token' => 'app-token',

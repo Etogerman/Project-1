@@ -176,7 +176,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
      */
     private function makeConnection(array $overrides = []): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->create(array_merge([
+        return Bitrix24Connection::query()->forceCreate(array_merge([
             'portal_domain' => 'crm.default.test',
             'application_name' => 'Abrikosoff Connector',
             'client_id' => 'local.app',

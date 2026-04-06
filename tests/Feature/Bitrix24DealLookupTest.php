@@ -489,7 +489,7 @@ class Bitrix24DealLookupTest extends TestCase
      */
     private function makeActiveConnection(array $overrides = []): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->create(array_merge([
+        return Bitrix24Connection::query()->forceCreate(array_merge([
             'portal_domain' => 'crm.alexlesley.biz',
             'application_name' => 'Abrikosoff Connector',
             'client_id' => 'local.app',

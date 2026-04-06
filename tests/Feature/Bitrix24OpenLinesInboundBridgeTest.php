@@ -741,7 +741,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
     private function makeActiveConnection(): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->create([
+        return Bitrix24Connection::query()->forceCreate([
             'portal_domain' => 'crm.alexlesley.biz',
             'application_name' => 'Abrikosoff Connector',
             'client_id' => 'local.app',
