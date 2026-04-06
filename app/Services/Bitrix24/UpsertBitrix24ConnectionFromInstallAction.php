@@ -22,7 +22,7 @@ class UpsertBitrix24ConnectionFromInstallAction
             'access_token_expires_at' => $this->resolveExpiresAt($payload->expiresAt),
             'scope' => $payload->scope,
             'client_endpoint' => $payload->clientEndpoint,
-            'server_endpoint' => $payload->serverEndpoint,
+            'server_endpoint' => $this->resolveTrustedOauthServerUrl(),
             'install_payload' => $payload->rawPayload,
             'installed_at' => now(),
             'last_install_callback_at' => now(),
@@ -56,5 +56,18 @@ class UpsertBitrix24ConnectionFromInstallAction
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    private function resolveTrustedOauthServerUrl(): ?string
+    {
+        $value = config('bitrix24.oauth.server_url');
+
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed === '' ? null : $trimmed;
     }
 }

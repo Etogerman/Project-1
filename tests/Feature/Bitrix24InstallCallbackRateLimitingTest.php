@@ -6,12 +6,32 @@ use App\Jobs\ProcessBitrix24InstallCallbackJob;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class Bitrix24InstallCallbackRateLimitingTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('bitrix24.portal_domain', 'install.example.test');
+        config()->set('bitrix24.application.code', 'local.app.code');
+        config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://install.example.test/rest/app.info.json' => Http::response([
+                'result' => [
+                    'CODE' => 'local.app.code',
+                    'INSTALLED' => true,
+                ],
+            ]),
+        ]);
+    }
 
     public function test_install_callback_below_limit_still_upserts_connection_stores_event_and_dispatches_job(): void
     {
@@ -25,8 +45,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             refreshToken: 'refresh-token-1',
             expires: (string) now()->addHour()->timestamp,
             scope: ['crm', 'tasks'],
-            clientEndpoint: 'https://client-endpoint-1.example/rest/',
-            serverEndpoint: 'https://server-endpoint-1.example/rest/',
         ));
 
         $response->assertOk()
@@ -56,8 +74,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             refreshToken: 'refresh-token-1',
             expires: (string) now()->addHour()->timestamp,
             scope: ['crm', 'tasks'],
-            clientEndpoint: 'https://client-endpoint-1.example/rest/',
-            serverEndpoint: 'https://server-endpoint-1.example/rest/',
         ))->assertOk();
 
         $response = $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
@@ -67,8 +83,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             refreshToken: 'refresh-token-2',
             expires: (string) now()->addHours(2)->timestamp,
             scope: ['crm', 'task'],
-            clientEndpoint: 'https://client-endpoint-2.example/rest/',
-            serverEndpoint: 'https://server-endpoint-2.example/rest/',
         ));
 
         $response->assertStatus(429);
@@ -89,8 +103,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             refreshToken: 'refresh-token-1',
             expires: (string) now()->addHour()->timestamp,
             scope: ['crm', 'tasks'],
-            clientEndpoint: 'https://client-endpoint-1.example/rest/',
-            serverEndpoint: 'https://server-endpoint-1.example/rest/',
         ))->assertOk();
 
         $connection = Bitrix24Connection::query()->firstOrFail();
@@ -109,8 +121,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             refreshToken: 'refresh-token-2',
             expires: (string) now()->addHours(2)->timestamp,
             scope: ['crm', 'task'],
-            clientEndpoint: 'https://client-endpoint-2.example/rest/',
-            serverEndpoint: 'https://server-endpoint-2.example/rest/',
         ))->assertStatus(429);
 
         $connection->refresh();
@@ -137,8 +147,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             refreshToken: 'refresh-token-1',
             expires: (string) now()->addHour()->timestamp,
             scope: ['crm', 'tasks'],
-            clientEndpoint: 'https://client-endpoint-1.example/rest/',
-            serverEndpoint: 'https://server-endpoint-1.example/rest/',
         ))->assertOk();
 
         $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
@@ -148,9 +156,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             refreshToken: 'refresh-token-2',
             expires: (string) now()->addHours(2)->timestamp,
             scope: ['crm', 'task'],
-            clientEndpoint: 'https://client-endpoint-2.example/rest/',
-            serverEndpoint: 'https://server-endpoint-2.example/rest/',
-            domain: 'second.example.test',
         ))->assertOk();
 
         $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
@@ -160,8 +165,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             refreshToken: 'refresh-token-3',
             expires: (string) now()->addHours(3)->timestamp,
             scope: ['crm'],
-            clientEndpoint: 'https://client-endpoint-3.example/rest/',
-            serverEndpoint: 'https://server-endpoint-3.example/rest/',
         ))->assertStatus(429);
 
         $this->assertSame(2, Bitrix24Connection::query()->count());
@@ -202,8 +205,6 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         string $refreshToken,
         string $expires,
         array $scope,
-        string $clientEndpoint,
-        string $serverEndpoint,
         string $domain = 'install.example.test',
     ): array {
         return [
@@ -212,8 +213,8 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
                 'domain' => $domain,
                 'member_id' => $memberId,
                 'application_token' => $applicationToken,
-                'client_endpoint' => $clientEndpoint,
-                'server_endpoint' => $serverEndpoint,
+                'client_endpoint' => 'https://'.$domain.'/rest/',
+                'server_endpoint' => 'https://'.$domain.'/rest/',
                 'scope' => $scope,
                 'access_token' => $accessToken,
                 'refresh_token' => $refreshToken,

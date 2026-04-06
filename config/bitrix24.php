@@ -6,6 +6,7 @@ return [
     'application' => [
         'name' => env('BITRIX24_APP_NAME', 'Abrikosoff Connector'),
         'client_id' => env('BITRIX24_CLIENT_ID'),
+        'code' => env('BITRIX24_APP_CODE'),
         'client_secret' => env('BITRIX24_CLIENT_SECRET'),
         'scopes' => [
             'crm',
