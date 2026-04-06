@@ -21,6 +21,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Arr;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -227,13 +228,33 @@ class UserResource extends Resource
                         static::guardAgainstSelfLockout($record, $action->getRawData());
                     })
                     ->using(function (array $data, User $record): void {
-                        static::guardAgainstSelfLockout($record, $data);
-                        $data = static::preserveProtectedRole($record, $data);
-
-                        $record->update($data);
+                        static::updateUserFromFormData($record, $data);
                     }),
             ])
             ->toolbarActions([]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public static function createUserFromFormData(array $data): User
+    {
+        $user = new User();
+
+        static::persistUserFromFormData($user, $data);
+
+        return $user;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public static function updateUserFromFormData(User $record, array $data): void
+    {
+        static::guardAgainstSelfLockout($record, $data);
+        $data = static::preserveProtectedRole($record, $data);
+
+        static::persistUserFromFormData($record, $data);
     }
 
     public static function getPages(): array
@@ -315,6 +336,23 @@ class UserResource extends Resource
         $data['is_admin'] = true;
 
         return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected static function persistUserFromFormData(User $user, array $data): void
+    {
+        $protectedData = Arr::only($data, ['is_admin', 'role']);
+        $regularData = Arr::except($data, ['is_admin', 'role']);
+
+        $user->fill($regularData);
+
+        if ($protectedData !== []) {
+            $user->forceFill($protectedData);
+        }
+
+        $user->save();
     }
 
     protected static function roleLabel(User $record): string

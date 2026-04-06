@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Filament\Resources\Users\Pages\ManageUsers;
 use App\Filament\Resources\Users\UserResource;
 use App\Models\User;
+use Database\Seeders\AdminUserSeeder;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -184,6 +185,32 @@ class FilamentUsersResourceTest extends TestCase
         $this->assertTrue(Hash::check('secret12345', $createdUser->password));
     }
 
+    public function test_active_user_can_create_admin_user_from_filament_resource(): void
+    {
+        $admin = User::factory()->create([
+            'email' => 'admin@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->callAction('create', [
+                'name' => 'Admin Manager',
+                'email' => 'admin-manager@example.com',
+                'is_active' => true,
+                'is_admin' => true,
+                'password' => 'secret12345',
+                'password_confirmation' => 'secret12345',
+            ])
+            ->assertHasNoFormErrors();
+
+        $createdUser = User::where('email', 'admin-manager@example.com')->firstOrFail();
+
+        $this->assertTrue($createdUser->is_admin);
+        $this->assertSame(User::ROLE_ADMIN, $createdUser->role);
+    }
+
     public function test_admin_can_open_create_user_modal_with_polished_sections(): void
     {
         $admin = User::factory()->create([
@@ -274,6 +301,37 @@ class FilamentUsersResourceTest extends TestCase
 
         $this->assertNotSame($previousPasswordHash, $user->password);
         $this->assertTrue(Hash::check('new-secret123', $user->password));
+    }
+
+    public function test_user_model_does_not_mass_assign_role_and_is_admin(): void
+    {
+        $user = new User();
+
+        $user->fill([
+            'name' => 'Mass Assignment Test',
+            'email' => 'mass-assignment@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+            'role' => User::ROLE_SUPERADMIN,
+            'password' => 'secret12345',
+        ]);
+
+        $this->assertSame('Mass Assignment Test', $user->name);
+        $this->assertSame('mass-assignment@example.com', $user->email);
+        $this->assertArrayNotHasKey('is_admin', $user->getAttributes());
+        $this->assertArrayNotHasKey('role', $user->getAttributes());
+    }
+
+    public function test_admin_user_seeder_creates_or_updates_superadmin_with_explicit_assignment(): void
+    {
+        $this->seed(AdminUserSeeder::class);
+
+        $user = User::query()->where('email', 'admin@abrikosoff.local')->firstOrFail();
+
+        $this->assertTrue($user->is_active);
+        $this->assertTrue($user->is_admin);
+        $this->assertSame(User::ROLE_SUPERADMIN, $user->role);
+        $this->assertTrue(Hash::check('admin12345', $user->password));
     }
 
     public function test_admin_can_view_user_in_polished_overview_modal(): void

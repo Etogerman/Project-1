@@ -12,15 +12,21 @@ class AdminUserSeeder extends Seeder
      */
     public function run(): void
     {
-        User::query()->updateOrCreate(
-            ['email' => 'admin@abrikosoff.local'],
-            [
-                'name' => 'Admin',
-                'is_active' => true,
-                'is_admin' => true,
-                'role' => User::ROLE_SUPERADMIN,
-                'password' => 'admin12345',
-            ],
-        );
+        $user = User::query()->firstOrNew([
+            'email' => 'admin@abrikosoff.local',
+        ]);
+
+        $user->fill([
+            'name' => 'Admin',
+            'is_active' => true,
+            'password' => 'admin12345',
+        ]);
+
+        $user->forceFill([
+            'is_admin' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+
+        $user->save();
     }
 }

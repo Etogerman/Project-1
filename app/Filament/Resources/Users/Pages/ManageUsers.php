@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Users\Pages;
 
 use App\Filament\Resources\Users\UserResource;
+use App\Models\User;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ManageRecords;
 use Filament\Support\Enums\Alignment;
@@ -20,6 +21,7 @@ class ManageUsers extends ManageRecords
                 ->modalWidth(Width::FourExtraLarge)
                 ->modalFooterActionsAlignment(Alignment::End)
                 ->extraModalWindowAttributes(['class' => 'ac-user-form-modal'])
+                ->using(fn (array $data): User => UserResource::createUserFromFormData($data))
                 ->createAnother(false),
         ];
     }
