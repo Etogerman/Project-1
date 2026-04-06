@@ -5,6 +5,7 @@ namespace App\Services\Contacts;
 use App\Jobs\CalculateDistanceToMoscowJob;
 use App\Models\Contact;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use Illuminate\Support\Carbon;
 
 class UpdateContactProfileAction
@@ -13,6 +14,7 @@ class UpdateContactProfileAction
         private readonly SyncContactRussianRegionAction $syncContactRussianRegionAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        private readonly ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
     ) {}
 
     /**
@@ -21,6 +23,7 @@ class UpdateContactProfileAction
     public function handle(Contact $contact, array $attributes): Contact
     {
         $contact = $this->resolveRootContactAction->handle($contact);
+        $collectorWasActive = $contact->isInDataCollection();
 
         $firstName = $this->normalizeNullableString($attributes['first_name'] ?? null);
         $lastName = $this->normalizeNullableString($attributes['last_name'] ?? null);
@@ -60,6 +63,7 @@ class UpdateContactProfileAction
                 $this->dispatchDistanceToMoscowCalculation($contact);
             }
 
+            $this->reconcileActiveDataCollectionState($contact, $collectorWasActive);
             $this->queueBitrix24ContactSyncAction->handle($contact);
 
             return $contact->fresh();
@@ -77,6 +81,7 @@ class UpdateContactProfileAction
                 $this->dispatchDistanceToMoscowCalculation($contact);
             }
 
+            $this->reconcileActiveDataCollectionState($contact, $collectorWasActive);
             $this->queueBitrix24ContactSyncAction->handle($contact);
 
             return $contact->fresh();
@@ -92,6 +97,7 @@ class UpdateContactProfileAction
             $this->dispatchDistanceToMoscowCalculation($contact);
         }
 
+        $this->reconcileActiveDataCollectionState($contact, $collectorWasActive);
         $this->queueBitrix24ContactSyncAction->handle($contact);
 
         return $contact->fresh();
@@ -187,5 +193,24 @@ class UpdateContactProfileAction
         $normalized = mb_strtolower(trim($country));
 
         return in_array($normalized, ['россия', 'российская федерация', 'рф', 'russia'], true);
+    }
+
+    private function reconcileActiveDataCollectionState(Contact $contact, bool $collectorWasActive): void
+    {
+        if (! $collectorWasActive) {
+            return;
+        }
+
+        $nextField = $this->resolveNextDataCollectionFieldAction->handle($contact);
+
+        if ($nextField === null) {
+            $contact->completeDataCollection();
+
+            return;
+        }
+
+        if ($nextField !== $contact->data_collection_current_field) {
+            $contact->startDataCollection($nextField);
+        }
     }
 }

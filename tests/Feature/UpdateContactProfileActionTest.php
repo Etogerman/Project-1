@@ -91,4 +91,108 @@ class UpdateContactProfileActionTest extends TestCase
             return $job->contactId === $root->id;
         });
     }
+
+    public function test_action_advances_active_collector_when_manual_edit_fills_current_field(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $contact = Contact::factory()->create([
+            'first_name' => null,
+            'country' => null,
+            'city' => null,
+            'age_range' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_attempts_count' => 2,
+        ]);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($contact, [
+            'first_name' => 'Герман',
+            'last_name' => null,
+            'gender' => null,
+            'birth_date' => null,
+            'age_years' => null,
+            'age_range' => null,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+        ]);
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $updated->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $updated->data_collection_current_field);
+        $this->assertSame(0, $updated->data_collection_attempts_count);
+        $this->assertNull($updated->data_collection_last_prompted_field);
+        $this->assertNotNull($updated->data_collection_current_field_started_at);
+    }
+
+    public function test_action_completes_active_collector_when_manual_edit_finishes_last_missing_field(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Германия',
+            'city' => 'Берлин',
+            'region' => null,
+            'region_status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
+            'age_range' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_attempts_count' => 1,
+        ]);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($contact, [
+            'first_name' => 'Герман',
+            'last_name' => null,
+            'gender' => null,
+            'birth_date' => null,
+            'age_years' => null,
+            'age_range' => '30_39',
+            'country' => 'Германия',
+            'city' => 'Берлин',
+            'region' => null,
+        ]);
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $updated->data_collection_status);
+        $this->assertNull($updated->data_collection_current_field);
+        $this->assertNull($updated->data_collection_last_prompted_field);
+        $this->assertNull($updated->data_collection_current_field_started_at);
+        $this->assertNotNull($updated->data_collection_completed_at);
+    }
+
+    public function test_action_keeps_active_collector_field_when_manual_edit_does_not_change_progression(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'last_name' => null,
+            'country' => 'Россия',
+            'city' => null,
+            'age_range' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_attempts_count' => 2,
+        ]);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($contact, [
+            'first_name' => 'Герман',
+            'last_name' => 'Абрикосов',
+            'gender' => null,
+            'birth_date' => null,
+            'age_years' => null,
+            'age_range' => null,
+            'country' => 'Россия',
+            'city' => null,
+            'region' => null,
+        ]);
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $updated->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_CITY, $updated->data_collection_current_field);
+        $this->assertSame(2, $updated->data_collection_attempts_count);
+        $this->assertSame('Абрикосов', $updated->last_name);
+    }
 }
