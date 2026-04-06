@@ -109,7 +109,7 @@ class AutoReplyRuleResource extends Resource
                                     ->native(false),
                                 Select::make('required_tag_ids')
                                     ->label('Обязательные теги')
-                                    ->options(static::getTagOptions())
+                                    ->options(fn (?AutoReplyRule $record): array => static::getTagConditionOptions($record))
                                     ->multiple()
                                     ->allowHtml()
                                     ->noOptionsMessage('Все доступные теги уже выбраны')
@@ -127,7 +127,7 @@ class AutoReplyRuleResource extends Resource
                                     }),
                                 Select::make('excluded_tag_ids')
                                     ->label('Исключающие теги')
-                                    ->options(static::getTagOptions())
+                                    ->options(fn (?AutoReplyRule $record): array => static::getTagConditionOptions($record))
                                     ->multiple()
                                     ->allowHtml()
                                     ->noOptionsMessage('Все доступные теги уже выбраны')
@@ -173,7 +173,7 @@ class AutoReplyRuleResource extends Resource
                             ->schema([
                                 Select::make('assign_tag_ids')
                                     ->label('Назначить теги')
-                                    ->options(static::getTagOptions())
+                                    ->options(fn (?AutoReplyRule $record): array => static::getTagEffectOptions($record))
                                     ->multiple()
                                     ->allowHtml()
                                     ->noOptionsMessage('Все доступные теги уже выбраны')
@@ -191,7 +191,7 @@ class AutoReplyRuleResource extends Resource
                                     }),
                                 Select::make('remove_tag_ids')
                                     ->label('Снять теги')
-                                    ->options(static::getTagOptions())
+                                    ->options(fn (?AutoReplyRule $record): array => static::getTagEffectOptions($record))
                                     ->multiple()
                                     ->allowHtml()
                                     ->noOptionsMessage('Все доступные теги уже выбраны')
@@ -901,6 +901,54 @@ class AutoReplyRuleResource extends Resource
     {
         return Tag::query()
             ->where('is_active', true)
+            ->orderBy('name')
+            ->get()
+            ->mapWithKeys(fn (Tag $tag): array => [
+                $tag->id => static::formatTagOptionLabel($tag),
+            ])
+            ->all();
+    }
+
+    protected static function getTagConditionOptions(?AutoReplyRule $record = null): array
+    {
+        $tagIds = $record instanceof AutoReplyRule
+            ? $record->tagConditions()
+                ->pluck('tag_id')
+                ->map(fn (mixed $tagId): int => (int) $tagId)
+                ->all()
+            : [];
+
+        return static::getTagOptionsIncludingIds($tagIds);
+    }
+
+    protected static function getTagEffectOptions(?AutoReplyRule $record = null): array
+    {
+        $tagIds = $record instanceof AutoReplyRule
+            ? $record->tagEffects()
+                ->pluck('tag_id')
+                ->map(fn (mixed $tagId): int => (int) $tagId)
+                ->all()
+            : [];
+
+        return static::getTagOptionsIncludingIds($tagIds);
+    }
+
+    /**
+     * @param  list<int>  $tagIds
+     * @return array<int, string>
+     */
+    protected static function getTagOptionsIncludingIds(array $tagIds): array
+    {
+        $tagIds = array_values(array_filter(array_unique($tagIds), fn (int $tagId): bool => $tagId > 0));
+
+        return Tag::query()
+            ->where(function (Builder $query) use ($tagIds): void {
+                $query->where('is_active', true);
+
+                if ($tagIds !== []) {
+                    $query->orWhereIn('id', $tagIds);
+                }
+            })
             ->orderBy('name')
             ->get()
             ->mapWithKeys(fn (Tag $tag): array => [
