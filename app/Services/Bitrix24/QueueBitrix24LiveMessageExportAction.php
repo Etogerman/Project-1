@@ -37,6 +37,16 @@ class QueueBitrix24LiveMessageExportAction
             ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
             ->first();
 
+        if ($existingExport?->export_status === Bitrix24MessageExport::STATUS_EXPORTED) {
+            return new Bitrix24LiveMessageExportQueueResultData(
+                queued: false,
+                alreadyPending: false,
+                ready: true,
+                messageId: $message->id,
+                rootContactId: $rootContact->id,
+            );
+        }
+
         if ($existingExport?->export_status === Bitrix24MessageExport::STATUS_PENDING) {
             return new Bitrix24LiveMessageExportQueueResultData(
                 queued: false,
