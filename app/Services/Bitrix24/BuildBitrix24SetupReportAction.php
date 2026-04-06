@@ -25,6 +25,12 @@ class BuildBitrix24SetupReportAction
                 value: (string) data_get($config, 'application.client_secret', ''),
                 notes: 'Required for production local app OAuth.',
             ),
+            $this->buildRequiredValueCheck(
+                key: 'application.code',
+                label: 'Bitrix24 application code',
+                value: (string) data_get($config, 'application.code', ''),
+                notes: 'Required to verify install callbacks via app.info before activating the connection.',
+            ),
             $this->buildAbsoluteHttpsUrlCheck(
                 key: 'oauth.server_url',
                 label: 'Bitrix24 OAuth server URL',
