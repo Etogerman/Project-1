@@ -86,6 +86,39 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertPushed(ProcessBitrix24InstallCallbackJob::class, 1);
     }
 
+    public function test_install_callback_accepts_oauth_style_server_endpoint_when_probe_succeeds(): void
+    {
+        Queue::fake();
+
+        $response = $this->postJson('/callbacks/bitrix24/install', [
+            'event' => 'ONAPPINSTALL',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-2',
+                'application_token' => 'test-token-2',
+                'client_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'server_endpoint' => 'https://oauth.bitrix24.tech/rest/',
+                'scope' => ['crm', 'tasks'],
+                'access_token' => 'secret-access-token-2',
+                'refresh_token' => 'secret-refresh-token-2',
+                'expires' => (string) now()->addHour()->timestamp,
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'install');
+
+        $connection = Bitrix24Connection::query()->firstOrFail();
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+
+        $this->assertSame('member-2', $connection->member_id);
+        $this->assertSame('test-token-2', $connection->application_token);
+        $this->assertSame('https://oauth.bitrix24.tech/rest/', $connection->server_endpoint);
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
+
+        Queue::assertPushed(ProcessBitrix24InstallCallbackJob::class, 1);
+    }
+
     public function test_events_callback_with_valid_auth_creates_pending_inbox_event_and_dispatches_job(): void
     {
         Queue::fake();

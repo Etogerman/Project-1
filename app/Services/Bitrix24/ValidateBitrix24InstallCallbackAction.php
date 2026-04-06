@@ -50,13 +50,12 @@ class ValidateBitrix24InstallCallbackAction
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install validation is missing expected app code configuration.'];
         }
 
-        foreach ([
-            'clientEndpoint' => $payload->clientEndpoint,
-            'serverEndpoint' => $payload->serverEndpoint,
-        ] as $field => $endpoint) {
-            if (! $this->matchesTrustedPortal($endpoint, $trustedPortal)) {
-                return [Bitrix24WebhookEvent::STATUS_FAILED, sprintf('Install callback `%s` did not match trusted portal.', $field)];
-            }
+        if (! $this->matchesTrustedPortal($payload->clientEndpoint, $trustedPortal)) {
+            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Install callback `clientEndpoint` did not match trusted portal.'];
+        }
+
+        if (! $this->isHttpsUrl($payload->serverEndpoint)) {
+            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Install callback `serverEndpoint` must be a valid https URL.'];
         }
 
         try {
@@ -129,6 +128,21 @@ class ValidateBitrix24InstallCallbackAction
 
         return mb_strtolower($scheme) === 'https'
             && mb_strtolower($host) === $trustedPortal;
+    }
+
+    private function isHttpsUrl(?string $endpoint): bool
+    {
+        if (! filled($endpoint)) {
+            return false;
+        }
+
+        $scheme = parse_url($endpoint, PHP_URL_SCHEME);
+        $host = parse_url($endpoint, PHP_URL_HOST);
+
+        return is_string($scheme)
+            && is_string($host)
+            && mb_strtolower($scheme) === 'https'
+            && trim($host) !== '';
     }
 
     private function normalizePortalDomain(?string $value): ?string
