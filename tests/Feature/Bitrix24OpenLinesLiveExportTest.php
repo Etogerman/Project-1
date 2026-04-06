@@ -529,6 +529,40 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_queue_action_does_not_requeue_already_live_exported_message(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Уже в live export',
+        ]);
+
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'exported_at' => now()->subMinute(),
+        ]);
+
+        $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
+
+        $this->assertFalse($result->queued);
+        $this->assertFalse($result->alreadyPending);
+        $this->assertTrue($result->ready);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+        ]);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+    }
+
     public function test_closed_dialog_recovers_to_active_after_successful_live_export(): void
     {
         $this->makeActiveConnection();
