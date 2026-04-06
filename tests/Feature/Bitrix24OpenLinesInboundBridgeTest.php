@@ -728,7 +728,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'callback_type' => Bitrix24WebhookEvent::TYPE_OPENLINES,
             'event_name' => $eventName,
             'member_id' => $connection->member_id,
-            'application_token' => $connection->application_token,
+            'application_token' => 'app-token',
             'portal_domain' => $connection->portal_domain,
             'payload_hash' => hash('sha256', json_encode([$eventName, $payload], JSON_THROW_ON_ERROR)),
             'payload' => $payload,

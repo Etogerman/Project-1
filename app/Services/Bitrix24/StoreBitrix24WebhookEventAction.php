@@ -8,6 +8,11 @@ use App\Models\Bitrix24WebhookEvent;
 
 class StoreBitrix24WebhookEventAction
 {
+    public function __construct(
+        private readonly HashBitrix24ApplicationTokenAction $hashApplicationToken,
+        private readonly SanitizeBitrix24ApplicationTokenPayloadAction $sanitizePayload,
+    ) {}
+
     /**
      * @return array{event: Bitrix24WebhookEvent, duplicate: bool}
      */
@@ -17,6 +22,8 @@ class StoreBitrix24WebhookEventAction
         ?string $failureReason = null,
         ?Bitrix24Connection $connection = null,
     ): array {
+        $applicationTokenHash = $this->hashApplicationToken->handle($eventData->authContext->applicationToken);
+
         $event = Bitrix24WebhookEvent::query()->firstOrCreate(
             [
                 'callback_type' => $eventData->callbackType,
@@ -26,9 +33,9 @@ class StoreBitrix24WebhookEventAction
             ],
             [
                 'connection_id' => $connection?->id,
-                'application_token' => $eventData->authContext->applicationToken ?? '',
+                'application_token_hash' => $applicationTokenHash,
                 'portal_domain' => $eventData->authContext->portalDomain,
-                'payload' => $eventData->payload,
+                'payload' => $this->sanitizePayload->handle($eventData->payload),
                 'headers' => $eventData->headers,
                 'query' => $eventData->query,
                 'processing_status' => $processingStatus,

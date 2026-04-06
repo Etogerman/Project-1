@@ -44,14 +44,26 @@ class Bitrix24FoundationStorageTest extends TestCase
         $storedRefreshToken = DB::table('bitrix24_connections')
             ->where('id', $connection->id)
             ->value('refresh_token_encrypted');
+        $storedApplicationToken = DB::table('bitrix24_connections')
+            ->where('id', $connection->id)
+            ->value('application_token');
+        $storedApplicationTokenHash = DB::table('bitrix24_connections')
+            ->where('id', $connection->id)
+            ->value('application_token_hash');
 
         $this->assertIsString($storedAccessToken);
         $this->assertIsString($storedRefreshToken);
         $this->assertStringNotContainsString('plain-access-token', $storedAccessToken);
         $this->assertStringNotContainsString('plain-refresh-token', $storedRefreshToken);
+        $this->assertNull($storedApplicationToken);
+        $this->assertSame(
+            hash('sha256', 'application-token'),
+            $storedApplicationTokenHash,
+        );
 
         $connection->refresh();
 
+        $this->assertNull($connection->application_token);
         $this->assertSame('plain-access-token', $connection->access_token_encrypted);
         $this->assertSame('plain-refresh-token', $connection->refresh_token_encrypted);
         $this->assertIsArray($connection->scope);
@@ -88,10 +100,22 @@ class Bitrix24FoundationStorageTest extends TestCase
             'processing_status' => Bitrix24WebhookEvent::STATUS_PENDING,
         ]);
 
+        $storedEventToken = DB::table('bitrix24_webhook_events')
+            ->where('id', $event->id)
+            ->value('application_token');
+        $storedEventTokenHash = DB::table('bitrix24_webhook_events')
+            ->where('id', $event->id)
+            ->value('application_token_hash');
+
         $this->assertIsArray($event->payload);
         $this->assertIsArray($event->headers);
         $this->assertIsArray($event->query);
         $this->assertTrue($event->connection()->is($connection));
+        $this->assertSame('', $storedEventToken);
+        $this->assertSame(
+            hash('sha256', 'application-token'),
+            $storedEventTokenHash,
+        );
 
         $this->expectException(QueryException::class);
 

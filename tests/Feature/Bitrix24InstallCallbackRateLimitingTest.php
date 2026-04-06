@@ -54,7 +54,11 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         $event = Bitrix24WebhookEvent::query()->firstOrFail();
 
         $this->assertSame('member-1', $connection->member_id);
-        $this->assertSame('app-token-1', $connection->application_token);
+        $this->assertNull($connection->application_token);
+        $this->assertSame(
+            hash('sha256', 'app-token-1'),
+            $connection->application_token_hash,
+        );
         $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
         $this->assertSame(Bitrix24WebhookEvent::TYPE_INSTALL, $event->callback_type);
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
