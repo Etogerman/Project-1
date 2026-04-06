@@ -142,22 +142,26 @@ class Bitrix24ConnectionResource extends Resource
             ->columns([
                 TextColumn::make('id')
                     ->label('ID')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('portal_domain')
                     ->label('Портал')
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('status')
                     ->label('Статус')
                     ->badge()
                     ->formatStateUsing(fn (?string $state): string => static::formatConnectionStatus($state))
                     ->color(fn (?string $state): string => static::getConnectionStatusColor($state))
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('installed_at')
                     ->label('Установлено')
                     ->placeholder('—')
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('last_refreshed_at')
                     ->label('Последний refresh')
                     ->placeholder('—')
@@ -168,27 +172,32 @@ class Bitrix24ConnectionResource extends Resource
                     ->label('Install')
                     ->placeholder('—')
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('last_events_callback_at')
                     ->label('Events')
                     ->placeholder('—')
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('last_openlines_callback_at')
                     ->label('Open Lines')
                     ->placeholder('—')
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('last_error_at')
                     ->label('Последняя ошибка')
                     ->placeholder('—')
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('last_error_message')
                     ->label('Текст ошибки')
                     ->state(fn (Bitrix24Connection $record): string => filled($record->last_error_message) ? (string) $record->last_error_message : '—')
                     ->limit(60)
-                    ->tooltip(fn (Bitrix24Connection $record): ?string => filled($record->last_error_message) ? (string) $record->last_error_message : null),
+                    ->tooltip(fn (Bitrix24Connection $record): ?string => filled($record->last_error_message) ? (string) $record->last_error_message : null)
+                    ->toggleable(),
             ])
             ->filters([
                 SelectFilter::make('status')
@@ -205,6 +214,14 @@ class Bitrix24ConnectionResource extends Resource
                         blank: fn ($query) => $query,
                     ),
             ])
+            ->columnManager()
+            ->deferColumnManager(false)
+            ->columnManagerWidth(\Filament\Support\Enums\Width::Medium)
+            ->columnManagerTriggerAction(
+                fn (\Filament\Actions\Action $action): \Filament\Actions\Action => $action
+                    ->tooltip('Столбцы')
+                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+            )
             ->recordUrl(fn (Bitrix24Connection $record): string => static::getUrl('view', ['record' => $record]))
             ->defaultSort('id', 'desc')
             ->emptyStateHeading('Подключения Bitrix24 ещё не появились')

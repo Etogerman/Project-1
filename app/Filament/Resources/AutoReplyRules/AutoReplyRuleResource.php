@@ -14,13 +14,17 @@ use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
+use Filament\Forms\Components\Checkbox;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
-use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
@@ -31,6 +35,7 @@ use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
+use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
@@ -62,142 +67,393 @@ class AutoReplyRuleResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Правило автоответа')
-                    ->description('Канал, условия срабатывания и содержимое ответа.')
-                    ->extraAttributes(['class' => 'ac-auto-reply-form-section'])
+                Grid::make(1)
                     ->schema([
-                        Select::make('channel_id')
-                            ->label('Канал')
-                            ->options(static::getChannelOptions())
-                            ->required()
-                            ->searchable()
-                            ->preload()
-                            ->live()
-                            ->native(false),
-                        Select::make('match_scope')
-                            ->label('Область срабатывания')
-                            ->options(AutoReplyRule::matchScopeOptions())
-                            ->default(AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD)
-                            ->required()
-                            ->live()
-                            ->native(false),
-                        TextInput::make('keyword')
-                            ->label(fn (Get $get): string => static::keywordFieldLabel($get('match_scope')))
-                            ->required(fn (Get $get): bool => static::usesKeywordScope($get('match_scope')))
-                            ->hidden(fn (Get $get): bool => ! static::usesKeywordScope($get('match_scope')))
-                            ->maxLength(255),
-                        Select::make('contact_phone_condition')
-                            ->label('Условие по телефону')
-                            ->options(AutoReplyRule::phoneConditionOptions())
-                            ->placeholder('Неважно')
-                            ->helperText('Правило сработает только для контактов, соответствующих условию.')
-                            ->native(false),
-                        Textarea::make('reply_text')
-                            ->label('Текст ответа')
-                            ->required()
-                            ->rows(6)
-                            ->maxLength(2000)
-                            ->columnSpanFull(),
-                        Select::make('telegram_button_type')
-                            ->label('Кнопка')
-                            ->options(AutoReplyRule::telegramButtonTypeOptions())
-                            ->placeholder('Без кнопки')
-                            ->native(false)
-                            ->helperText('Доступно только для Telegram-каналов.')
-                            ->hidden(fn (Get $get): bool => ! static::channelSupportsTelegram((int) $get('channel_id'))),
-                        Select::make('max_button_type')
-                            ->label('Кнопка')
-                            ->options(AutoReplyRule::maxButtonTypeOptions())
-                            ->placeholder('Без кнопки')
-                            ->native(false)
-                            ->helperText('Доступно только для MAX-каналов.')
-                            ->hidden(fn (Get $get): bool => ! static::channelSupportsMax((int) $get('channel_id'))),
-                        Toggle::make('is_active')
-                            ->label('Активно')
+                        Checkbox::make('is_active')
+                            ->label('Автоответ активен')
                             ->default(true)
-                            ->inline(false)
-                            ->extraAttributes(['class' => 'ac-auto-reply-form-toggle']),
+                            ->live()
+                            ->extraAttributes(['class' => 'ac-auto-reply-status-inline ac-auto-reply-status-inline--simple']),
                     ])
-                    ->columns(2),
-                Section::make('Теги')
-                    ->description('Эффекты применяются только после успешной отправки автоответа.')
-                    ->extraAttributes(['class' => 'ac-auto-reply-form-section'])
+                    ->columnSpanFull(),
+                Grid::make(['default' => 1, 'xl' => 2])
+                    ->extraAttributes(['class' => 'ac-auto-reply-sections-grid'])
                     ->schema([
-                        Select::make('assign_tag_ids')
-                            ->label('Назначить теги')
-                            ->options(static::getTagOptions())
-                            ->multiple()
-                            ->native(false)
-                            ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
-                                $record?->loadMissing('tagEffects');
+                        Section::make('Триггеры и условия')
+                            ->extraAttributes(['class' => 'ac-auto-reply-form-section ac-auto-reply-form-section--flat ac-auto-reply-form-section--minimal ac-auto-reply-form-section--triggers'])
+                            ->schema([
+                                Select::make('channel_id')
+                                    ->label('Канал')
+                                    ->options(static::getChannelOptions())
+                                    ->required()
+                                    ->searchable()
+                                    ->preload()
+                                    ->live()
+                                    ->native(false),
+                                Select::make('match_scope')
+                                    ->label('Область срабатывания')
+                                    ->options(AutoReplyRule::matchScopeOptions())
+                                    ->default(AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD)
+                                    ->required()
+                                    ->live()
+                                    ->native(false),
+                                TextInput::make('keyword')
+                                    ->label('Текст для срабатывания')
+                                    ->required(fn (Get $get): bool => static::usesKeywordScope($get('match_scope')))
+                                    ->hidden(fn (Get $get): bool => ! static::usesKeywordScope($get('match_scope')))
+                                    ->maxLength(255),
+                                Select::make('contact_phone_condition')
+                                    ->label('Условие по телефону')
+                                    ->options(AutoReplyRule::phoneConditionOptions())
+                                    ->placeholder('Неважно')
+                                    ->native(false),
+                                Select::make('required_tag_ids')
+                                    ->label('Обязательные теги')
+                                    ->options(fn (?AutoReplyRule $record): array => static::getTagConditionOptions($record))
+                                    ->multiple()
+                                    ->allowHtml()
+                                    ->noOptionsMessage('Все доступные теги уже выбраны')
+                                    ->native(false)
+                                    ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                        $record?->loadMissing('tagConditions');
 
-                                $component->state(
-                                    $record?->tagEffects
-                                        ->where('effect', AutoReplyRuleTagEffect::EFFECT_ASSIGN)
-                                        ->pluck('tag_id')
-                                        ->map(fn (mixed $tagId): int => (int) $tagId)
-                                        ->all() ?? [],
-                                );
-                            })
-                            ->helperText('Эти теги будут назначены контакту только после успешной отправки автоответа.'),
-                        Select::make('remove_tag_ids')
-                            ->label('Снять теги')
-                            ->options(static::getTagOptions())
-                            ->multiple()
-                            ->native(false)
-                            ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
-                                $record?->loadMissing('tagEffects');
+                                        $component->state(
+                                            $record?->tagConditions
+                                                ->where('condition', AutoReplyRuleTagCondition::CONDITION_REQUIRED)
+                                                ->pluck('tag_id')
+                                                ->map(fn (mixed $tagId): int => (int) $tagId)
+                                                ->all() ?? [],
+                                        );
+                                    }),
+                                Select::make('excluded_tag_ids')
+                                    ->label('Исключающие теги')
+                                    ->options(fn (?AutoReplyRule $record): array => static::getTagConditionOptions($record))
+                                    ->multiple()
+                                    ->allowHtml()
+                                    ->noOptionsMessage('Все доступные теги уже выбраны')
+                                    ->native(false)
+                                    ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                        $record?->loadMissing('tagConditions');
 
-                                $component->state(
-                                    $record?->tagEffects
-                                        ->where('effect', AutoReplyRuleTagEffect::EFFECT_REMOVE)
-                                        ->pluck('tag_id')
-                                        ->map(fn (mixed $tagId): int => (int) $tagId)
-                                        ->all() ?? [],
-                                );
-                            })
-                            ->helperText('Эти теги будут сняты только после успешной отправки автоответа.'),
+                                        $component->state(
+                                            $record?->tagConditions
+                                                ->where('condition', AutoReplyRuleTagCondition::CONDITION_EXCLUDED)
+                                                ->pluck('tag_id')
+                                                ->map(fn (mixed $tagId): int => (int) $tagId)
+                                                ->all() ?? [],
+                                        );
+                                    }),
+                            ])
+                            ->columns(1),
+                        Section::make('Текст ответа')
+                            ->extraAttributes(['class' => 'ac-auto-reply-form-section ac-auto-reply-form-section--flat ac-auto-reply-form-section--reply'])
+                            ->schema([
+                                Textarea::make('reply_text')
+                                    ->hiddenLabel()
+                                    ->required()
+                                    ->rows(8)
+                                    ->maxLength(2000)
+                                    ->columnSpanFull(),
+                                Select::make('telegram_button_type')
+                                    ->label('Кнопка')
+                                    ->options(AutoReplyRule::telegramButtonTypeOptions())
+                                    ->placeholder('Без кнопки')
+                                    ->native(false)
+                                    ->hidden(fn (Get $get): bool => ! static::channelSupportsTelegram((int) $get('channel_id'))),
+                                Select::make('max_button_type')
+                                    ->label('Кнопка')
+                                    ->options(AutoReplyRule::maxButtonTypeOptions())
+                                    ->placeholder('Без кнопки')
+                                    ->native(false)
+                                    ->hidden(fn (Get $get): bool => ! static::channelSupportsMax((int) $get('channel_id'))),
+                            ])
+                            ->columns(1),
+                        Section::make('Дополнительные действия')
+                            ->extraAttributes(['class' => 'ac-auto-reply-form-section ac-auto-reply-form-section--flat ac-auto-reply-form-section--minimal ac-auto-reply-form-section--effects'])
+                            ->schema([
+                                Select::make('assign_tag_ids')
+                                    ->label('Назначить теги')
+                                    ->options(fn (?AutoReplyRule $record): array => static::getTagEffectOptions($record))
+                                    ->multiple()
+                                    ->allowHtml()
+                                    ->noOptionsMessage('Все доступные теги уже выбраны')
+                                    ->native(false)
+                                    ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                        $record?->loadMissing('tagEffects');
+
+                                        $component->state(
+                                            $record?->tagEffects
+                                                ->where('effect', AutoReplyRuleTagEffect::EFFECT_ASSIGN)
+                                                ->pluck('tag_id')
+                                                ->map(fn (mixed $tagId): int => (int) $tagId)
+                                                ->all() ?? [],
+                                        );
+                                    }),
+                                Select::make('remove_tag_ids')
+                                    ->label('Снять теги')
+                                    ->options(fn (?AutoReplyRule $record): array => static::getTagEffectOptions($record))
+                                    ->multiple()
+                                    ->allowHtml()
+                                    ->noOptionsMessage('Все доступные теги уже выбраны')
+                                    ->native(false)
+                                    ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                        $record?->loadMissing('tagEffects');
+
+                                        $component->state(
+                                            $record?->tagEffects
+                                                ->where('effect', AutoReplyRuleTagEffect::EFFECT_REMOVE)
+                                                ->pluck('tag_id')
+                                                ->map(fn (mixed $tagId): int => (int) $tagId)
+                                                ->all() ?? [],
+                                        );
+                                    }),
+                            ])
+                            ->columns(1),
                     ])
-                    ->columns(2),
-                Section::make('Условия по тегам')
-                    ->schema([
-                        Select::make('required_tag_ids')
-                            ->label('Обязательные теги')
-                            ->options(static::getTagOptions())
-                            ->multiple()
-                            ->native(false)
-                            ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
-                                $record?->loadMissing('tagConditions');
-
-                                $component->state(
-                                    $record?->tagConditions
-                                        ->where('condition', AutoReplyRuleTagCondition::CONDITION_REQUIRED)
-                                        ->pluck('tag_id')
-                                        ->map(fn (mixed $tagId): int => (int) $tagId)
-                                        ->all() ?? [],
-                                );
-                            })
-                            ->helperText('Правило сработает только если у контакта есть все выбранные теги.'),
-                        Select::make('excluded_tag_ids')
-                            ->label('Исключающие теги')
-                            ->options(static::getTagOptions())
-                            ->multiple()
-                            ->native(false)
-                            ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
-                                $record?->loadMissing('tagConditions');
-
-                                $component->state(
-                                    $record?->tagConditions
-                                        ->where('condition', AutoReplyRuleTagCondition::CONDITION_EXCLUDED)
-                                        ->pluck('tag_id')
-                                        ->map(fn (mixed $tagId): int => (int) $tagId)
-                                        ->all() ?? [],
-                                );
-                            })
-                            ->helperText('Правило не сработает, если у контакта есть хотя бы один из этих тегов.'),
-                    ])
-                    ->columns(2),
+                    ->columnSpanFull(),
             ]);
+    }
+
+    protected static function buildRuleBuilderHeader(Get $get): HtmlString
+    {
+        $highlights = implode('', array_map(
+            fn (string $item): string => '<span class="ac-auto-reply-summary-pill">'.e($item).'</span>',
+            static::buildHeaderHighlights($get),
+        ));
+
+        return new HtmlString(
+            '<div class="ac-auto-reply-hero">'
+                .'<div class="ac-auto-reply-hero-eyebrow">Конструктор правила</div>'
+                .'<div class="ac-auto-reply-hero-title">Изменить правило</div>'
+                .'<p class="ac-auto-reply-hero-description">Сначала задайте условия срабатывания, затем текст ответа и действия, которые выполнятся после успешной отправки.</p>'
+                .'<div class="ac-auto-reply-hero-summary">'
+                    .'<div class="ac-auto-reply-hero-summary-label">Ключевые параметры</div>'
+                    .'<div class="ac-auto-reply-hero-pills">'.$highlights.'</div>'
+                .'</div>'
+            .'</div>'
+        );
+    }
+
+    protected static function buildTriggerSummary(Get $get): HtmlString
+    {
+        $lines = static::buildTriggerSummaryLines($get);
+
+        $items = implode('', array_map(
+            fn (string $line): string => '<li class="flex items-start gap-2"><span class="mt-1 h-1.5 w-1.5 rounded-full bg-gray-400"></span><span>'.e($line).'</span></li>',
+            $lines,
+        ));
+
+        return new HtmlString(
+            '<div class="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">'
+                .'<div class="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">Логика срабатывания</div>'
+                .'<ul class="space-y-2">'.$items.'</ul>'
+            .'</div>'
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected static function buildRulePreviewViewData(Get $get): array
+    {
+        return [
+            'channelLabel' => static::resolveChannelLabel($get('channel_id')),
+            'isActive' => (bool) $get('is_active'),
+            'summaryLines' => static::buildTriggerSummaryLines($get),
+            'replyText' => trim((string) ($get('reply_text') ?? '')),
+            'buttonLabel' => static::resolveButtonLabel($get),
+            'assignTags' => static::resolveTagLabels(static::normalizeSelectedIds($get('assign_tag_ids'))),
+            'removeTags' => static::resolveTagLabels(static::normalizeSelectedIds($get('remove_tag_ids'))),
+        ];
+    }
+
+    protected static function buildHeaderSummaryLine(Get $get): string
+    {
+        $parts = array_filter([
+            static::resolveChannelLabel($get('channel_id')),
+            static::resolveScopeSummary($get),
+            static::resolvePhoneConditionSummary($get('contact_phone_condition')),
+            (bool) $get('is_active') ? 'активно' : 'выключено',
+        ], fn (?string $value): bool => filled($value));
+
+        return implode(' · ', $parts);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected static function buildHeaderHighlights(Get $get): array
+    {
+        return array_values(array_filter([
+            static::resolveChannelLabel($get('channel_id')) ?? 'Канал не выбран',
+            'Триггер: '.static::resolveScopeSummary($get),
+            'Телефон: '.static::resolvePhoneConditionSummary($get('contact_phone_condition')),
+            (bool) $get('is_active') ? 'Активно' : 'Выключено',
+        ], fn (?string $value): bool => filled($value)));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected static function buildTriggerSummaryLines(Get $get): array
+    {
+        $lines = [];
+
+        if (filled($channelLabel = static::resolveChannelLabel($get('channel_id')))) {
+            $lines[] = 'Канал: '.$channelLabel;
+        }
+
+        $lines[] = static::resolveScopeLine($get);
+
+        if (filled($phoneSummary = static::resolvePhoneConditionSummary($get('contact_phone_condition')))) {
+            $lines[] = 'Условие по телефону: '.$phoneSummary;
+        }
+
+        $requiredTags = static::resolveTagLabels(static::normalizeSelectedIds($get('required_tag_ids')));
+
+        if ($requiredTags !== []) {
+            $lines[] = 'Обязательные теги: '.implode(', ', $requiredTags);
+        }
+
+        $excludedTags = static::resolveTagLabels(static::normalizeSelectedIds($get('excluded_tag_ids')));
+
+        if ($excludedTags !== []) {
+            $lines[] = 'Исключающие теги: '.implode(', ', $excludedTags);
+        }
+
+        return $lines;
+    }
+
+    protected static function resolveScopeSummary(Get $get): string
+    {
+        $matchScope = (string) ($get('match_scope') ?? '');
+
+        if ($matchScope === '') {
+            return 'условие не выбрано';
+        }
+
+        if (! static::usesKeywordScope($matchScope)) {
+            return mb_strtolower(AutoReplyRule::matchScopeOptions()[$matchScope] ?? $matchScope);
+        }
+
+        $keyword = trim((string) ($get('keyword') ?? ''));
+
+        if ($keyword === '') {
+            return 'параметр не задан';
+        }
+
+        return $keyword;
+    }
+
+    protected static function resolveKeywordFieldLabel(mixed $matchScope): string
+    {
+        return static::usesKeywordScope($matchScope)
+            ? 'Параметр для срабатывания'
+            : 'Параметр';
+    }
+
+    protected static function resolveScopeLine(Get $get): string
+    {
+        $matchScope = (string) ($get('match_scope') ?? AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD);
+        $scopeLabel = AutoReplyRule::matchScopeOptions()[$matchScope] ?? $matchScope;
+
+        if (! static::usesKeywordScope($matchScope)) {
+            return 'Срабатывание: '.$scopeLabel.'.';
+        }
+
+        $keyword = trim((string) ($get('keyword') ?? ''));
+
+        if ($keyword === '') {
+            return 'Срабатывание: '.$scopeLabel.', параметр пока не заполнен.';
+        }
+
+        return 'Срабатывание: '.$scopeLabel.' — '.$keyword.'.';
+    }
+
+    protected static function resolvePhoneConditionSummary(mixed $state): string
+    {
+        if (! filled($state)) {
+            return 'без ограничения';
+        }
+
+        return mb_strtolower(AutoReplyRule::phoneConditionOptions()[(string) $state] ?? (string) $state);
+    }
+
+    protected static function resolveChannelLabel(mixed $channelId): ?string
+    {
+        $channelId = (int) $channelId;
+
+        if ($channelId <= 0) {
+            return null;
+        }
+
+        return static::getChannelOptions()[$channelId] ?? null;
+    }
+
+    protected static function resolveButtonLabel(Get $get): ?string
+    {
+        $channelId = (int) ($get('channel_id') ?? 0);
+
+        if (static::channelSupportsTelegram($channelId)) {
+            $buttonType = (string) ($get('telegram_button_type') ?? '');
+
+            return filled($buttonType)
+                ? (AutoReplyRule::telegramButtonTypeOptions()[$buttonType] ?? $buttonType)
+                : null;
+        }
+
+        if (static::channelSupportsMax($channelId)) {
+            $buttonType = (string) ($get('max_button_type') ?? '');
+
+            return filled($buttonType)
+                ? (AutoReplyRule::maxButtonTypeOptions()[$buttonType] ?? $buttonType)
+                : null;
+        }
+
+        $telegramButtonType = (string) ($get('telegram_button_type') ?? '');
+
+        if (filled($telegramButtonType)) {
+            return AutoReplyRule::telegramButtonTypeOptions()[$telegramButtonType] ?? $telegramButtonType;
+        }
+
+        $maxButtonType = (string) ($get('max_button_type') ?? '');
+
+        return filled($maxButtonType)
+            ? (AutoReplyRule::maxButtonTypeOptions()[$maxButtonType] ?? $maxButtonType)
+            : null;
+    }
+
+    /**
+     * @param  array<int, int>  $tagIds
+     * @return array<int, string>
+     */
+    protected static function resolveTagLabels(array $tagIds): array
+    {
+        if ($tagIds === []) {
+            return [];
+        }
+
+        $options = static::getTagOptions();
+
+        return array_values(array_filter(array_map(
+            fn (int $tagId): ?string => $options[$tagId] ?? null,
+            $tagIds,
+        )));
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    protected static function normalizeSelectedIds(mixed $state): array
+    {
+        if (! is_array($state)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(
+            fn (mixed $value): int => (int) $value,
+            $state,
+        ), fn (int $value): bool => $value > 0));
     }
 
     public static function table(Table $table): Table
@@ -206,12 +462,14 @@ class AutoReplyRuleResource extends Resource
             ->columns([
                 TextColumn::make('channel_display')
                     ->label('Канал')
-                    ->state(fn (AutoReplyRule $record): string => static::formatChannelLabel($record->channel)),
+                    ->state(fn (AutoReplyRule $record): string => static::formatChannelLabel($record->channel))
+                    ->toggleable(),
                 TextColumn::make('keyword')
                     ->label('Условие')
                     ->state(fn (AutoReplyRule $record): string => static::formatRuleCondition($record))
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('match_scope')
                     ->label('Область')
                     ->badge()
@@ -229,7 +487,8 @@ class AutoReplyRuleResource extends Resource
                     ->label('Текст ответа')
                     ->limit(60)
                     ->wrap()
-                    ->tooltip(fn (AutoReplyRule $record): string => (string) $record->reply_text),
+                    ->tooltip(fn (AutoReplyRule $record): string => (string) $record->reply_text)
+                    ->toggleable(),
                 TextColumn::make('button_type')
                     ->label('Кнопка')
                     ->placeholder('—')
@@ -238,24 +497,28 @@ class AutoReplyRuleResource extends Resource
                         ? (AutoReplyRule::telegramButtonTypeOptions()[$state]
                             ?? AutoReplyRule::maxButtonTypeOptions()[$state]
                             ?? $state)
-                        : '—'),
+                        : '—')
+                    ->toggleable(),
                 TextColumn::make('tag_effects_summary')
                     ->label('Теги')
                     ->state(fn (AutoReplyRule $record): string => static::formatTagEffectsSummary($record))
                     ->placeholder('—')
                     ->wrap()
                     ->limit(80)
-                    ->tooltip(fn (AutoReplyRule $record): string => static::formatTagEffectsSummary($record)),
+                    ->tooltip(fn (AutoReplyRule $record): string => static::formatTagEffectsSummary($record))
+                    ->toggleable(),
                 TextColumn::make('is_active')
                     ->label('Активно')
                     ->badge()
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Да' : 'Нет')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('created_at')
                     ->label('Создано')
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
             ])
             ->filters([
                 SelectFilter::make('channel_id')
@@ -307,9 +570,18 @@ class AutoReplyRuleResource extends Resource
                     ->tooltip('Изменить правило')
                     ->modalWidth(Width::FiveExtraLarge)
                     ->modalFooterActionsAlignment(Alignment::End)
-                    ->extraModalWindowAttributes(['class' => 'ac-auto-reply-form-modal'])
+                    ->extraModalWindowAttributes([
+                        'class' => 'ac-auto-reply-form-modal',
+                        'style' => 'width: 90vw; max-width: 90vw;',
+                    ])
                     ->using(function (array $data, AutoReplyRule $record): AutoReplyRule {
-                        return static::saveAutoReplyRule($data, $record);
+                        try {
+                            return static::saveAutoReplyRule($data, $record);
+                        } catch (\Illuminate\Validation\ValidationException $exception) {
+                            static::notifyValidationFailure($exception);
+
+                            throw $exception;
+                        }
                     }),
                 DeleteAction::make()
                     ->icon(Heroicon::OutlinedTrash)
@@ -394,6 +666,22 @@ class AutoReplyRuleResource extends Resource
         });
 
         return $rule->fresh(['channel', 'tagEffects.tag', 'tagConditions.tag']) ?? $rule;
+    }
+
+    public static function notifyValidationFailure(\Illuminate\Validation\ValidationException $exception): void
+    {
+        $message = collect($exception->errors())
+            ->flatten()
+            ->map(fn (mixed $value): string => is_string($value) ? trim($value) : '')
+            ->first(fn (string $value): bool => $value !== '');
+
+        \Filament\Notifications\Notification::make()
+            ->title('Правило не сохранено')
+            ->body($message !== null && $message !== ''
+                ? $message
+                : 'Проверьте данные формы и попробуйте ещё раз.')
+            ->danger()
+            ->send();
     }
 
     /**
@@ -616,9 +904,104 @@ class AutoReplyRuleResource extends Resource
             ->orderBy('name')
             ->get()
             ->mapWithKeys(fn (Tag $tag): array => [
-                $tag->id => $tag->name,
+                $tag->id => static::formatTagOptionLabel($tag),
             ])
             ->all();
+    }
+
+    protected static function getTagConditionOptions(?AutoReplyRule $record = null): array
+    {
+        $tagIds = $record instanceof AutoReplyRule
+            ? $record->tagConditions()
+                ->pluck('tag_id')
+                ->map(fn (mixed $tagId): int => (int) $tagId)
+                ->all()
+            : [];
+
+        return static::getTagOptionsIncludingIds($tagIds);
+    }
+
+    protected static function getTagEffectOptions(?AutoReplyRule $record = null): array
+    {
+        $tagIds = $record instanceof AutoReplyRule
+            ? $record->tagEffects()
+                ->pluck('tag_id')
+                ->map(fn (mixed $tagId): int => (int) $tagId)
+                ->all()
+            : [];
+
+        return static::getTagOptionsIncludingIds($tagIds);
+    }
+
+    /**
+     * @param  list<int>  $tagIds
+     * @return array<int, string>
+     */
+    protected static function getTagOptionsIncludingIds(array $tagIds): array
+    {
+        $tagIds = array_values(array_filter(array_unique($tagIds), fn (int $tagId): bool => $tagId > 0));
+
+        return Tag::query()
+            ->where(function (Builder $query) use ($tagIds): void {
+                $query->where('is_active', true);
+
+                if ($tagIds !== []) {
+                    $query->orWhereIn('id', $tagIds);
+                }
+            })
+            ->orderBy('name')
+            ->get()
+            ->mapWithKeys(fn (Tag $tag): array => [
+                $tag->id => static::formatTagOptionLabel($tag),
+            ])
+            ->all();
+    }
+
+    protected static function formatTagOptionLabel(Tag $tag): string
+    {
+        $palette = static::getTagOptionPalette($tag->color);
+
+        return sprintf(
+            '<span style="display:inline-flex;align-items:center;padding:0.18rem 0.58rem;border-radius:999px;background:%s;color:%s;border:1px solid %s;font-weight:600;line-height:1.2;">%s</span>',
+            $palette['bg'],
+            $palette['text'],
+            $palette['border'],
+            e($tag->name),
+        );
+    }
+
+    /**
+     * @return array{bg:string,text:string,border:string}
+     */
+    protected static function getTagOptionPalette(string $color): array
+    {
+        return match ($color) {
+            Tag::COLOR_PRIMARY => [
+                'bg' => '#dbeafe',
+                'text' => '#1d4ed8',
+                'border' => '#93c5fd',
+            ],
+            Tag::COLOR_SUCCESS => [
+                'bg' => '#dcfce7',
+                'text' => '#15803d',
+                'border' => '#86efac',
+            ],
+            Tag::COLOR_WARNING => [
+                'bg' => '#fef3c7',
+                'text' => '#b45309',
+                'border' => '#fcd34d',
+            ],
+            Tag::COLOR_DANGER => [
+                'bg' => '#fee2e2',
+                'text' => '#b91c1c',
+                'border' => '#fca5a5',
+            ],
+            default => [
+                'bg' => '#e5e7eb',
+                'text' => '#374151',
+                'border' => '#cbd5e1',
+            ],
+        };
     }
 
     /**

@@ -10,9 +10,9 @@ use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
+use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\ToggleButtons;
-use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -56,7 +56,6 @@ class TagResource extends Resource
         return $schema
             ->components([
                 Section::make('Тег')
-                    ->description('Название и цветовая метка для сегментации контактов.')
                     ->extraAttributes(['class' => 'ac-tag-form-section'])
                     ->schema([
                         TextInput::make('name')
@@ -69,7 +68,7 @@ class TagResource extends Resource
                             ->options(Tag::colorOptions())
                             ->colors([
                                 Tag::COLOR_GRAY => 'gray',
-                                Tag::COLOR_PRIMARY => 'primary',
+                                Tag::COLOR_PRIMARY => 'info',
                                 Tag::COLOR_SUCCESS => 'success',
                                 Tag::COLOR_WARNING => 'warning',
                                 Tag::COLOR_DANGER => 'danger',
@@ -77,12 +76,12 @@ class TagResource extends Resource
                             ->required()
                             ->inline()
                             ->extraAttributes(['class' => 'ac-tag-color-picker']),
-                        Toggle::make('is_active')
-                            ->label('Активен')
+                        Checkbox::make('is_active')
+                            ->label('Тег активный')
                             ->default(true)
-                            ->inline(false)
-                            ->extraAttributes(['class' => 'ac-tag-form-toggle']),
+                            ->extraAttributes(['class' => 'ac-tag-form-checkbox']),
                     ])
+                    ->columnSpanFull()
                     ->columns(1),
             ]);
     }
@@ -99,7 +98,8 @@ class TagResource extends Resource
                 TextColumn::make('name')
                     ->label('Название')
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('slug')
                     ->label('Код')
                     ->searchable()
@@ -109,7 +109,15 @@ class TagResource extends Resource
                     ->label('Цвет')
                     ->badge()
                     ->formatStateUsing(fn (string $state): string => Tag::colorOptions()[$state] ?? $state)
-                    ->color(fn (string $state): string => $state),
+                    ->color(fn (string $state): string => match ($state) {
+                        Tag::COLOR_GRAY => 'gray',
+                        Tag::COLOR_PRIMARY => 'info',
+                        Tag::COLOR_SUCCESS => 'success',
+                        Tag::COLOR_WARNING => 'warning',
+                        Tag::COLOR_DANGER => 'danger',
+                        default => 'gray',
+                    })
+                    ->toggleable(),
                 TextColumn::make('contacts_count')
                     ->label('Контакты')
                     ->badge()
@@ -117,7 +125,8 @@ class TagResource extends Resource
                     ->color(fn (int $state): string => $state > 0 ? 'primary' : 'gray')
                     ->url(fn (Tag $record): ?string => (int) ($record->contacts_count ?? 0) > 0
                         ? ContactResource::getUrl(parameters: ['tag' => $record->getKey()])
-                        : null),
+                        : null)
+                    ->toggleable(),
                 TextColumn::make('used_in_rules_count')
                     ->label('Используют')
                     ->badge()
@@ -126,13 +135,15 @@ class TagResource extends Resource
                     ->color(fn (Tag $record): string => (int) ($record->getAttribute('used_in_rules_count') ?? 0) > 0 ? 'primary' : 'gray')
                     ->url(fn (Tag $record): ?string => (int) ($record->getAttribute('used_in_rules_count') ?? 0) > 0
                         ? AutoReplyRuleResource::getUrl(parameters: ['tag' => $record->getKey()])
-                        : null),
+                        : null)
+                    ->toggleable(),
                 TextColumn::make('is_active')
                     ->label('Статус')
                     ->badge()
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключён')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('created_at')
                     ->label('Создан')
                     ->dateTime('d.m.Y H:i')
@@ -168,9 +179,12 @@ class TagResource extends Resource
                     ->icon(Heroicon::OutlinedPencilSquare)
                     ->iconButton()
                     ->tooltip('Изменить тег')
-                    ->modalWidth(Width::Medium)
+                    ->modalWidth(Width::ThreeExtraLarge)
                     ->modalFooterActionsAlignment(Alignment::End)
-                    ->extraModalWindowAttributes(['class' => 'ac-tag-form-modal']),
+                    ->extraModalWindowAttributes([
+                        'class' => 'ac-tag-form-modal',
+                        'style' => 'width: min(56rem, 92vw); max-width: min(56rem, 92vw);',
+                    ]),
                 DeleteAction::make()
                     ->icon(Heroicon::OutlinedTrash)
                     ->iconButton()

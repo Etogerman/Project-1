@@ -17,9 +17,12 @@ class ManageTags extends ManageRecords
         return [
             CreateAction::make()
                 ->label('Добавить тег')
-                ->modalWidth(Width::Medium)
+                ->modalWidth(Width::ThreeExtraLarge)
                 ->modalFooterActionsAlignment(Alignment::End)
-                ->extraModalWindowAttributes(['class' => 'ac-tag-form-modal'])
+                ->extraModalWindowAttributes([
+                    'class' => 'ac-tag-form-modal',
+                    'style' => 'width: min(56rem, 92vw); max-width: min(56rem, 92vw);',
+                ])
                 ->createAnother(false),
         ];
     }
