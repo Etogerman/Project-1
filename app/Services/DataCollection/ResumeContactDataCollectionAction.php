@@ -4,8 +4,10 @@ namespace App\Services\DataCollection;
 
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Models\Contact;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Dialogs\ResolveDialogRouteSourceAction;
 use RuntimeException;
 
 class ResumeContactDataCollectionAction
@@ -13,6 +15,7 @@ class ResumeContactDataCollectionAction
     public function __construct(
         protected ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
         protected ResolveRootContactAction $resolveRootContactAction,
+        protected ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
     ) {}
 
     public function handle(Contact $contact): ?string
@@ -33,7 +36,13 @@ class ResumeContactDataCollectionAction
             return null;
         }
 
-        $sourceMessage = $this->resolveSourceMessage($contact);
+        $routeDialog = $this->resolveDialogRouteSourceAction->forContact($contact);
+
+        if (! $routeDialog instanceof Dialog) {
+            throw new RuntimeException('Не удалось определить маршрут для возобновления анкеты.');
+        }
+
+        $sourceMessage = $this->resolveSourceMessage($routeDialog);
 
         if (! $sourceMessage instanceof Message) {
             throw new RuntimeException('Не удалось определить сообщение для возобновления анкеты.');
@@ -46,12 +55,20 @@ class ResumeContactDataCollectionAction
         return $nextField;
     }
 
-    protected function resolveSourceMessage(Contact $contact): ?Message
+    protected function resolveSourceMessage(Dialog $dialog): ?Message
     {
-        return $contact->messages()
-            ->whereNotNull('channel_id')
-            ->whereNotNull('contact_identity_id')
-            ->whereNotNull('external_chat_id')
+        $inboundMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($inboundMessage instanceof Message) {
+            return $inboundMessage;
+        }
+
+        return Message::query()
+            ->where('dialog_id', $dialog->id)
             ->orderByDesc('id')
             ->first();
     }
