@@ -211,6 +211,33 @@ class FilamentUsersResourceTest extends TestCase
         $this->assertSame(User::ROLE_ADMIN, $createdUser->role);
     }
 
+    public function test_create_user_ignores_injected_role_from_payload(): void
+    {
+        $admin = User::factory()->create([
+            'email' => 'admin@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->callAction('create', [
+                'name' => 'Injected Role User',
+                'email' => 'injected-role@example.com',
+                'is_active' => true,
+                'is_admin' => true,
+                'role' => User::ROLE_SUPERADMIN,
+                'password' => 'secret12345',
+                'password_confirmation' => 'secret12345',
+            ])
+            ->assertHasNoFormErrors();
+
+        $createdUser = User::where('email', 'injected-role@example.com')->firstOrFail();
+
+        $this->assertTrue($createdUser->is_admin);
+        $this->assertSame(User::ROLE_ADMIN, $createdUser->role);
+    }
+
     public function test_admin_can_open_create_user_modal_with_polished_sections(): void
     {
         $admin = User::factory()->create([
@@ -301,6 +328,39 @@ class FilamentUsersResourceTest extends TestCase
 
         $this->assertNotSame($previousPasswordHash, $user->password);
         $this->assertTrue(Hash::check('new-secret123', $user->password));
+    }
+
+    public function test_edit_user_ignores_injected_role_from_payload(): void
+    {
+        $admin = User::factory()->create([
+            'email' => 'admin@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $user = User::factory()->create([
+            'email' => 'role-injection@example.com',
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->callTableAction('edit', $user, [
+                'name' => 'Role Injection Updated',
+                'email' => 'role-injection@example.com',
+                'is_active' => true,
+                'is_admin' => false,
+                'role' => User::ROLE_SUPERADMIN,
+                'password' => '',
+                'password_confirmation' => '',
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $user->refresh();
+
+        $this->assertFalse($user->is_admin);
+        $this->assertSame(User::ROLE_EMPLOYEE, $user->role);
     }
 
     public function test_user_model_does_not_mass_assign_role_and_is_admin(): void

@@ -343,7 +343,7 @@ class UserResource extends Resource
      */
     protected static function persistUserFromFormData(User $user, array $data): void
     {
-        $protectedData = Arr::only($data, ['is_admin', 'role']);
+        $protectedData = Arr::only($data, ['is_admin']);
         $regularData = Arr::except($data, ['is_admin', 'role']);
 
         $user->fill($regularData);
