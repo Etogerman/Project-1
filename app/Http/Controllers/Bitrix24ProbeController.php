@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\Bitrix24\HashBitrix24ApplicationTokenAction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -10,6 +11,10 @@ use Illuminate\Support\Facades\Storage;
 
 class Bitrix24ProbeController extends Controller
 {
+    public function __construct(
+        private readonly HashBitrix24ApplicationTokenAction $hashApplicationToken,
+    ) {}
+
     public function __invoke(Request $request): JsonResponse
     {
         $payload = $request->all();
@@ -47,7 +52,7 @@ class Bitrix24ProbeController extends Controller
             return [];
         }
 
-        return collect($auth)
+        $sanitized = collect($auth)
             ->only([
                 'domain',
                 'application_token',
@@ -57,6 +62,16 @@ class Bitrix24ProbeController extends Controller
                 'status',
             ])
             ->all();
+
+        $applicationTokenHash = $this->hashApplicationToken->handle($sanitized['application_token'] ?? null);
+
+        unset($sanitized['application_token']);
+
+        if ($applicationTokenHash !== null) {
+            $sanitized['application_token_hash'] = $applicationTokenHash;
+        }
+
+        return $sanitized;
     }
 
     /**

@@ -9,6 +9,10 @@ use App\Models\Bitrix24WebhookEvent;
 
 class ValidateBitrix24CallbackAction
 {
+    public function __construct(
+        private readonly HashBitrix24ApplicationTokenAction $hashApplicationToken,
+    ) {}
+
     public function handle(
         string $callbackType,
         Bitrix24AuthContextData $authContext,
@@ -32,10 +36,21 @@ class ValidateBitrix24CallbackAction
             );
         }
 
+        $applicationTokenHash = $this->hashApplicationToken->handle($authContext->applicationToken);
+
+        if ($applicationTokenHash === null) {
+            return new Bitrix24CallbackValidationResultData(
+                accepted: false,
+                processingStatus: Bitrix24WebhookEvent::STATUS_FAILED,
+                reason: 'Missing member_id or application_token in callback auth context.',
+                connection: $this->findRelatedConnection($authContext),
+            );
+        }
+
         $connection = Bitrix24Connection::query()
             ->where('status', Bitrix24Connection::STATUS_ACTIVE)
             ->where('member_id', $authContext->memberId)
-            ->where('application_token', $authContext->applicationToken)
+            ->where('application_token_hash', $applicationTokenHash)
             ->first();
 
         if (! $connection) {

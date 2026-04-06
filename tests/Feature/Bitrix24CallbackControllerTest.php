@@ -60,14 +60,18 @@ class Bitrix24CallbackControllerTest extends TestCase
             ->assertJsonPath('method', 'POST');
 
         $connection = Bitrix24Connection::query()->firstOrFail();
+        $expectedTokenHash = hash_hmac('sha256', 'test-token', (string) config('app.key'));
 
         $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
         $this->assertSame('member-1', $connection->member_id);
-        $this->assertSame('test-token', $connection->application_token);
+        $this->assertNull($connection->application_token);
+        $this->assertSame($expectedTokenHash, $connection->application_token_hash);
         $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
         $this->assertSame('secret-access-token', $connection->access_token_encrypted);
         $this->assertSame('secret-refresh-token', $connection->refresh_token_encrypted);
         $this->assertIsArray($connection->install_payload);
+        $this->assertArrayNotHasKey('application_token', $connection->install_payload['auth']);
+        $this->assertSame($expectedTokenHash, $connection->install_payload['auth']['application_token_hash']);
         $this->assertArrayNotHasKey('access_token', $connection->install_payload['auth']);
         $this->assertArrayNotHasKey('refresh_token', $connection->install_payload['auth']);
 
@@ -76,6 +80,8 @@ class Bitrix24CallbackControllerTest extends TestCase
         $this->assertSame(Bitrix24WebhookEvent::TYPE_INSTALL, $event->callback_type);
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
         $this->assertSame($connection->id, $event->connection_id);
+        $this->assertArrayNotHasKey('application_token', $event->payload['auth']);
+        $this->assertSame($expectedTokenHash, $event->payload['auth']['application_token_hash']);
         $this->assertArrayNotHasKey('access_token', $event->payload['auth']);
         $this->assertArrayNotHasKey('refresh_token', $event->payload['auth']);
 
@@ -111,9 +117,11 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $connection = Bitrix24Connection::query()->firstOrFail();
         $event = Bitrix24WebhookEvent::query()->firstOrFail();
+        $expectedTokenHash = hash_hmac('sha256', 'test-token-2', (string) config('app.key'));
 
         $this->assertSame('member-2', $connection->member_id);
-        $this->assertSame('test-token-2', $connection->application_token);
+        $this->assertNull($connection->application_token);
+        $this->assertSame($expectedTokenHash, $connection->application_token_hash);
         $this->assertSame('https://oauth.example', $connection->server_endpoint);
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
 
@@ -396,10 +404,12 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $connection = Bitrix24Connection::query()->firstOrFail();
         $event = Bitrix24WebhookEvent::query()->firstOrFail();
+        $expectedTokenHash = hash_hmac('sha256', 'app-token', (string) config('app.key'));
 
         $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
         $this->assertSame('member-1', $connection->member_id);
-        $this->assertSame('app-token', $connection->application_token);
+        $this->assertNull($connection->application_token);
+        $this->assertSame($expectedTokenHash, $connection->application_token_hash);
         $this->assertSame(Bitrix24WebhookEvent::TYPE_INSTALL, $event->callback_type);
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
         $this->assertNull($event->failure_reason);

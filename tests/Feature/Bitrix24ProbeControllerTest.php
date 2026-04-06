@@ -28,14 +28,20 @@ class Bitrix24ProbeControllerTest extends TestCase
         Log::shouldReceive('info')
             ->once()
             ->with('bitrix24 probe callback received', Mockery::on(function (array $context): bool {
+                $expectedHash = hash_hmac('sha256', 'test-token', (string) config('app.key'));
+
                 return $context['method'] === 'POST'
                     && $context['path'] === 'callbacks/bitrix24/probe'
                     && $context['bitrix_event'] === 'ONCRMCONTACTUPDATE'
                     && $context['bitrix_auth']['domain'] === 'crm.alexlesley.biz'
+                    && $context['bitrix_auth']['application_token_hash'] === $expectedHash
                     && ! array_key_exists('authorization', $context['headers'])
                     && ! array_key_exists('cookie', $context['headers'])
                     && $context['payload']['data']['FIELDS']['ID'] === 123
                     && $context['payload']['auth']['domain'] === 'crm.alexlesley.biz'
+                    && $context['payload']['auth']['application_token_hash'] === $expectedHash
+                    && ! array_key_exists('application_token', $context['bitrix_auth'])
+                    && ! array_key_exists('application_token', $context['payload']['auth'])
                     && ! array_key_exists('access_token', $context['payload']['auth'])
                     && ! array_key_exists('refresh_token', $context['payload']['auth']);
             }));
@@ -76,7 +82,11 @@ class Bitrix24ProbeControllerTest extends TestCase
 
         $this->assertSame('ONCRMCONTACTUPDATE', $storedPayload['event']);
         $this->assertSame('crm.alexlesley.biz', $storedPayload['auth']['domain']);
-        $this->assertSame('test-token', $storedPayload['auth']['application_token']);
+        $this->assertSame(
+            hash_hmac('sha256', 'test-token', (string) config('app.key')),
+            $storedPayload['auth']['application_token_hash'],
+        );
+        $this->assertArrayNotHasKey('application_token', $storedPayload['auth']);
         $this->assertArrayNotHasKey('access_token', $storedPayload['auth']);
         $this->assertArrayNotHasKey('refresh_token', $storedPayload['auth']);
     }
