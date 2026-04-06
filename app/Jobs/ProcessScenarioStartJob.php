@@ -7,6 +7,7 @@ use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Services\Scenarios\ScenarioHandler;
 use App\Services\Scenarios\ScenarioRegistry;
+use Illuminate\Database\QueryException;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -26,6 +27,7 @@ class ProcessScenarioStartJob implements ShouldQueue
 
     public function __construct(
         public int $inboundMessageId,
+        public ?int $dialogId,
         public string $scenarioCode,
     ) {}
 
@@ -43,7 +45,7 @@ class ProcessScenarioStartJob implements ShouldQueue
     public function middleware(): array
     {
         return [
-            (new WithoutOverlapping("scenario-start:message:{$this->inboundMessageId}"))->expireAfter(180),
+            (new WithoutOverlapping($this->overlapKey()))->expireAfter(180),
         ];
     }
 
@@ -54,6 +56,13 @@ class ProcessScenarioStartJob implements ShouldQueue
             ->find($this->inboundMessageId);
 
         if (! $message instanceof Message || $message->message_kind !== Message::KIND_INBOUND_USER || $message->dialog_id === null) {
+            return;
+        }
+
+        $snapshotDialogId = $this->snapshotDialogId();
+        $effectiveDialogId = $snapshotDialogId ?? (int) $message->dialog_id;
+
+        if ($snapshotDialogId !== null && (int) $message->dialog_id !== $snapshotDialogId) {
             return;
         }
 
@@ -77,18 +86,26 @@ class ProcessScenarioStartJob implements ShouldQueue
             return;
         }
 
-        if (ScenarioRun::query()->active()->where('dialog_id', $message->dialog_id)->exists()) {
+        if ($this->activeRunExists($effectiveDialogId)) {
             return;
         }
 
-        $run = ScenarioRun::query()->create([
-            'dialog_id' => $message->dialog_id,
-            'scenario_code' => $binding->scenario_code,
-            'status' => ScenarioRun::STATUS_ACTIVE,
-            'current_step' => null,
-            'state_payload' => [],
-            'started_at' => now(),
-        ]);
+        try {
+            $run = ScenarioRun::query()->create([
+                'dialog_id' => $effectiveDialogId,
+                'scenario_code' => $binding->scenario_code,
+                'status' => ScenarioRun::STATUS_ACTIVE,
+                'current_step' => null,
+                'state_payload' => [],
+                'started_at' => now(),
+            ]);
+        } catch (QueryException $exception) {
+            if ($this->wasUniqueConstraintViolation($exception) && $this->activeRunExists($effectiveDialogId)) {
+                return;
+            }
+
+            throw $exception;
+        }
 
         try {
             $handler->start($run, $message);
@@ -104,5 +121,34 @@ class ProcessScenarioStartJob implements ShouldQueue
 
             throw $throwable;
         }
+    }
+
+    protected function activeRunExists(int $dialogId): bool
+    {
+        return ScenarioRun::query()
+            ->active()
+            ->where('dialog_id', $dialogId)
+            ->exists();
+    }
+
+    protected function wasUniqueConstraintViolation(QueryException $exception): bool
+    {
+        return ($exception->errorInfo[0] ?? null) === '23505';
+    }
+
+    protected function overlapKey(): string
+    {
+        $dialogId = $this->snapshotDialogId();
+
+        if ($dialogId !== null) {
+            return "scenario-start:dialog:{$dialogId}";
+        }
+
+        return "scenario-start:message:{$this->inboundMessageId}";
+    }
+
+    protected function snapshotDialogId(): ?int
+    {
+        return isset($this->dialogId) ? $this->dialogId : null;
     }
 }

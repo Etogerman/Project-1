@@ -50,7 +50,11 @@ class DispatchStoredInboundScenarioAction
                 continue;
             }
 
-            ProcessScenarioStartJob::dispatch($storedMessage->id, $binding->scenario_code)->afterCommit();
+            ProcessScenarioStartJob::dispatch(
+                $storedMessage->id,
+                $storedMessage->dialog_id,
+                $binding->scenario_code,
+            )->afterCommit();
 
             return true;
         }
