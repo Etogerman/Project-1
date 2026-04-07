@@ -39,7 +39,7 @@ class ProcessAutoReplyJobTest extends TestCase
             ],
         ]);
 
-        AutoReplyRule::factory()->create([
+        $rule = AutoReplyRule::factory()->create([
             'channel_id' => $channel->id,
             'keyword' => null,
             'normalized_keyword' => null,
@@ -97,6 +97,11 @@ class ProcessAutoReplyJobTest extends TestCase
             'event' => 'bot.reply_sent',
             'level' => 'info',
         ]);
+        $matchedLog = $channel->activityLogs()->where('event', 'bot.reply_rule_matched')->latest('id')->firstOrFail();
+        $sentLog = $channel->activityLogs()->where('event', 'bot.reply_sent')->latest('id')->firstOrFail();
+
+        $this->assertSame($rule->display_name, $matchedLog->context['rule_name']);
+        $this->assertSame($rule->display_name, $sentLog->context['rule_name']);
     }
 
     public function test_job_sends_max_auto_reply_and_creates_outbound_message(): void
@@ -203,6 +208,47 @@ class ProcessAutoReplyJobTest extends TestCase
             'tag_id' => $assignedTag->id,
             'assigned_by_user_id' => null,
         ]);
+    }
+
+    public function test_job_logs_custom_rule_name_in_failure_context(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => false,
+            ], 500),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $rule = AutoReplyRule::factory()->create([
+            'name' => 'VIP fallback',
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Ответ, который сломается на отправке',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-failure-rule-name',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected auto reply job to throw on failed delivery.');
+        } catch (\Throwable) {
+        }
+
+        $failedLog = $channel->activityLogs()->where('event', 'bot.reply_failed')->latest('id')->firstOrFail();
+
+        $this->assertSame($rule->id, $failedLog->context['rule_id']);
+        $this->assertSame('VIP fallback', $failedLog->context['rule_name']);
     }
 
     public function test_job_removes_configured_tags_after_successful_auto_reply(): void

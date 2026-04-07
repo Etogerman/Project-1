@@ -103,6 +103,7 @@ class BotAutoReplyService
                         'auto_reply_source' => $autoReplySource,
                         'button_type' => $buttonType,
                         'rule_id' => $matchedRule->id,
+                        'rule_name' => $matchedRule->display_name,
                         'match_scope' => $matchedRule->match_scope,
                         'contact_phone_condition' => $matchedRule->contact_phone_condition,
                         'keyword' => $matchedRule->keyword,
@@ -119,6 +120,7 @@ class BotAutoReplyService
                         'auto_reply_source' => $autoReplySource,
                         'button_type' => $buttonType,
                         'rule_id' => $matchedRule->id,
+                        'rule_name' => $matchedRule->display_name,
                         'match_scope' => $matchedRule->match_scope,
                         'contact_phone_condition' => $matchedRule->contact_phone_condition,
                         'contact_has_phone' => $contactHasPhone,
@@ -160,6 +162,7 @@ class BotAutoReplyService
                     'contact_has_phone' => $contactHasPhone,
                     'outbound_external_message_id' => $deliveryResult->externalMessageId,
                     'rule_id' => $matchedRule->id,
+                    'rule_name' => $matchedRule->display_name,
                 ]);
                 $this->channelActivityLogger->info(
                     $channel,
@@ -174,6 +177,7 @@ class BotAutoReplyService
                         'external_user_id' => $externalUserId,
                         'outbound_external_message_id' => $deliveryResult->externalMessageId,
                         'rule_id' => $matchedRule->id,
+                        'rule_name' => $matchedRule->display_name,
                     ],
                 );
             } catch (Throwable $throwable) {

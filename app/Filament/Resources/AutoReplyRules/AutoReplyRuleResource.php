@@ -79,6 +79,11 @@ class AutoReplyRuleResource extends Resource
                             ->default(true)
                             ->live()
                             ->extraAttributes(['class' => 'ac-auto-reply-status-inline ac-auto-reply-status-inline--simple']),
+                        TextInput::make('name')
+                            ->label('Название')
+                            ->placeholder('Например: Старт Telegram')
+                            ->helperText('Если оставить пустым, будет отображаться как «Автоответ #ID».')
+                            ->maxLength(255),
                     ])
                     ->columnSpanFull(),
                 Grid::make(['default' => 1, 'xl' => 2])
@@ -534,6 +539,13 @@ class AutoReplyRuleResource extends Resource
     {
         return $table
             ->columns([
+                TextColumn::make('display_name')
+                    ->label('Название')
+                    ->state(fn (AutoReplyRule $record): string => $record->display_name)
+                    ->searchable(query: function (Builder $query, string $search): Builder {
+                        return $query->where('name', 'like', "%{$search}%");
+                    })
+                    ->toggleable(),
                 TextColumn::make('channels_display')
                     ->label('Каналы')
                     ->state(fn (AutoReplyRule $record): string => static::formatChannelsLabel($record))
@@ -689,6 +701,9 @@ class AutoReplyRuleResource extends Resource
      */
     public static function mutateAutoReplyRuleData(array $data, ?AutoReplyRule $record = null): array
     {
+        $data['name'] = filled($data['name'] ?? null)
+            ? trim((string) $data['name'])
+            : null;
         $data['channel_id'] = filled($data['channel_id'] ?? null)
             ? (int) $data['channel_id']
             : null;
@@ -716,6 +731,7 @@ class AutoReplyRuleResource extends Resource
             : null;
 
         return Arr::only($data, [
+            'name',
             'channel_id',
             'keyword',
             'normalized_keyword',
