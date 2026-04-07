@@ -123,29 +123,34 @@ class User extends Authenticatable implements FilamentUser
         return $this->is_active && (bool) $this->is_admin;
     }
 
+    public function canDeleteContacts(): bool
+    {
+        return $this->hasRolePermission('contacts.delete');
+    }
+
     public function canManageContactProfile(): bool
     {
-        return $this->canViewWorkspaces();
+        return $this->hasRolePermission('contacts.edit');
     }
 
     public function canManageContactOwnership(): bool
     {
-        return $this->canViewWorkspaces();
+        return $this->hasRolePermission('contacts.edit');
     }
 
     public function canEditExistingContactPhones(): bool
     {
-        return $this->canViewWorkspaces();
+        return $this->hasRolePermission('contacts.edit');
     }
 
     public function canDeleteExistingContactPhones(): bool
     {
-        return $this->canViewWorkspaces();
+        return $this->hasRolePermission('contacts.delete');
     }
 
     public function canReplyInDialogs(): bool
     {
-        return $this->canViewWorkspaces();
+        return $this->hasRolePermission('dialogs.edit');
     }
 
     public function canBeAssignedToContacts(): bool

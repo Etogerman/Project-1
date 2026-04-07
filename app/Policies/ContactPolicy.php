@@ -9,12 +9,12 @@ class ContactPolicy
 {
     public function viewAny(User $user): bool
     {
-        return $this->canViewContacts($user);
+        return $user->hasRolePermission('contacts.view');
     }
 
     public function view(User $user, Contact $contact): bool
     {
-        return $this->canViewContacts($user);
+        return $user->hasRolePermission('contacts.view');
     }
 
     public function create(User $user): bool
@@ -24,21 +24,16 @@ class ContactPolicy
 
     public function update(User $user, Contact $contact): bool
     {
-        return false;
+        return $user->hasRolePermission('contacts.edit');
     }
 
     public function delete(User $user, Contact $contact): bool
     {
-        return false;
+        return $user->hasRolePermission('contacts.delete');
     }
 
     public function deleteAny(User $user): bool
     {
         return false;
-    }
-
-    protected function canViewContacts(User $user): bool
-    {
-        return $user->canViewWorkspaces();
     }
 }

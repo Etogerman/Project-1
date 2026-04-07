@@ -9,12 +9,12 @@ class DialogPolicy
 {
     public function viewAny(User $user): bool
     {
-        return $this->canViewDialogs($user);
+        return $user->hasRolePermission('dialogs.view');
     }
 
     public function view(User $user, Dialog $dialog): bool
     {
-        return $this->canViewDialogs($user);
+        return $user->hasRolePermission('dialogs.view');
     }
 
     public function create(User $user): bool
@@ -24,7 +24,7 @@ class DialogPolicy
 
     public function update(User $user, Dialog $dialog): bool
     {
-        return false;
+        return $user->hasRolePermission('dialogs.edit');
     }
 
     public function delete(User $user, Dialog $dialog): bool
@@ -35,10 +35,5 @@ class DialogPolicy
     public function deleteAny(User $user): bool
     {
         return false;
-    }
-
-    protected function canViewDialogs(User $user): bool
-    {
-        return $user->canViewWorkspaces();
     }
 }

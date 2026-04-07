@@ -829,7 +829,7 @@ class ContactResource extends Resource
                 ? (string) ((int) $record->data_collection_attempts_count)
                 : '—',
             'canResume' => static::canResumeDataCollection($record),
-            'canResumeAction' => static::canCurrentUserManageContactMutations(),
+            'canResumeAction' => static::canCurrentUserManageContactProfile(),
             'firstName' => $record->first_name ?: '—',
             'country' => $record->country ?: '—',
             'city' => $record->city ?: '—',
@@ -1193,7 +1193,7 @@ class ContactResource extends Resource
             'autoReplyEnabled' => $record->isAutoReplyEnabled(),
             'autoReplyStatusLabel' => $record->isAutoReplyEnabled() ? 'Включены' : 'Отключены',
             'canManageOwnership' => static::canCurrentUserManageContactOwnership(),
-            'canManageAutoReply' => static::canCurrentUserManageContactMutations(),
+            'canManageAutoReply' => static::canCurrentUserManageContactProfile(),
             'canDeleteContact' => static::canDeleteContactFromUi($record),
             'deleteBlockedReason' => static::canCurrentUserManageContactMutations()
                 ? static::getDeleteBlockedReason($record)
@@ -1430,12 +1430,12 @@ class ContactResource extends Resource
     {
         return static::canCurrentUserDeleteContact()
             ? null
-            : 'Удаление доступно только активному администратору.';
+            : 'Удаление контакта недоступно по текущим правам.';
     }
 
     protected static function canCurrentUserDeleteContact(): bool
     {
-        return static::currentUser()?->canManageContactWorkspaceMutations() ?? false;
+        return static::currentUser()?->canDeleteContacts() ?? false;
     }
 
     protected static function canCurrentUserManageContactProfile(): bool
