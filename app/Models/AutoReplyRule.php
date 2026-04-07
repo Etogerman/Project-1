@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Validation\ValidationException;
 
@@ -45,6 +46,7 @@ class AutoReplyRule extends Model
         'telegram_button_type',
         'max_button_type',
         'is_active',
+        'priority',
     ];
 
     /**
@@ -52,6 +54,7 @@ class AutoReplyRule extends Model
      */
     protected $casts = [
         'is_active' => 'boolean',
+        'priority' => 'integer',
     ];
 
     protected static function booted(): void
@@ -103,6 +106,13 @@ class AutoReplyRule extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    public function channels(): BelongsToMany
+    {
+        return $this->belongsToMany(Channel::class, 'auto_reply_rule_channels')
+            ->withPivot(['button_type', 'button_text', 'button_url'])
+            ->withTimestamps();
     }
 
     public function tagEffects(): HasMany
