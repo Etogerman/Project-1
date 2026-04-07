@@ -84,7 +84,7 @@ class ResolveAutoReplyRuleAction
 
             $containsRule = AutoReplyRule::query()
                 ->active()
-                ->where('channel_id', $channel->id)
+                ->forChannel($channel)
                 ->where('match_scope', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT)
                 ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
                 ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
@@ -101,7 +101,7 @@ class ResolveAutoReplyRuleAction
 
         return AutoReplyRule::query()
             ->active()
-            ->where('channel_id', $channel->id)
+            ->forChannel($channel)
             ->where('match_scope', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND)
             ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
             ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
@@ -127,7 +127,7 @@ class ResolveAutoReplyRuleAction
     ): ?AutoReplyRule {
         return AutoReplyRule::query()
             ->active()
-            ->where('channel_id', $channel->id)
+            ->forChannel($channel)
             ->where('match_scope', $matchScope)
             ->where('normalized_keyword', $normalizedValue)
             ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))

@@ -16,6 +16,10 @@ class AutoReplyRule extends Model
 {
     use HasFactory;
 
+    public const BUTTON_TYPE_SHARE_CONTACT = 'share_contact';
+
+    public const BUTTON_TYPE_INLINE_KEYBOARD = 'inline_keyboard';
+
     public const MATCH_SCOPE_EXACT_KEYWORD = 'exact_keyword';
 
     public const MATCH_SCOPE_CONTAINS_TEXT = 'contains_text';
@@ -139,6 +143,21 @@ class AutoReplyRule extends Model
         return $query->where('is_active', true);
     }
 
+    public function scopeForChannel(Builder $query, Channel|int $channel): Builder
+    {
+        $channelId = $channel instanceof Channel
+            ? (int) $channel->getKey()
+            : (int) $channel;
+
+        if ($channelId <= 0) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->whereHas('channels', function (Builder $channelQuery) use ($channelId): void {
+            $channelQuery->whereKey($channelId);
+        });
+    }
+
     public function usesExactKeywordScope(): bool
     {
         return ($this->match_scope ?? self::MATCH_SCOPE_EXACT_KEYWORD) === self::MATCH_SCOPE_EXACT_KEYWORD;
@@ -187,6 +206,42 @@ class AutoReplyRule extends Model
         return [
             self::MAX_BUTTON_TYPE_REQUEST_PHONE => 'Поделиться номером телефона',
         ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function telegramChannelButtonTypeOptions(): array
+    {
+        return [
+            self::BUTTON_TYPE_SHARE_CONTACT => 'Поделиться номером телефона',
+            self::BUTTON_TYPE_INLINE_KEYBOARD => 'Inline-кнопка',
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function maxChannelButtonTypeOptions(): array
+    {
+        return [
+            self::BUTTON_TYPE_SHARE_CONTACT => 'Поделиться номером телефона',
+        ];
+    }
+
+    public function getButtonTypeForChannel(Channel|int $channel): ?string
+    {
+        return $this->resolveChannelPivotValue($channel, 'button_type');
+    }
+
+    public function getButtonTextForChannel(Channel|int $channel): ?string
+    {
+        return $this->resolveChannelPivotValue($channel, 'button_text');
+    }
+
+    public function getButtonUrlForChannel(Channel|int $channel): ?string
+    {
+        return $this->resolveChannelPivotValue($channel, 'button_url');
     }
 
     protected function keyword(): Attribute
@@ -355,5 +410,30 @@ class AutoReplyRule extends Model
                 'button_url' => null,
             ],
         ]);
+    }
+
+    protected function resolveChannelPivotValue(Channel|int $channel, string $attribute): ?string
+    {
+        $channelId = $channel instanceof Channel
+            ? (int) $channel->getKey()
+            : (int) $channel;
+
+        if ($channelId <= 0) {
+            return null;
+        }
+
+        $channelModel = $this->relationLoaded('channels')
+            ? $this->channels->firstWhere('id', $channelId)
+            : $this->channels()->whereKey($channelId)->first();
+
+        if (! $channelModel instanceof Channel) {
+            return null;
+        }
+
+        $value = $channelModel->pivot?->{$attribute};
+
+        return filled($value)
+            ? trim((string) $value)
+            : null;
     }
 }

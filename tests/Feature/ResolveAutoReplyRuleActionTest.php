@@ -398,4 +398,26 @@ class ResolveAutoReplyRuleActionTest extends TestCase
         $this->assertInstanceOf(AutoReplyRule::class, $resolved);
         $this->assertTrue($resolved->is($rule));
     }
+
+    public function test_it_matches_rule_through_pivot_channel_binding(): void
+    {
+        $primaryChannel = Channel::factory()->create();
+        $secondaryChannel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+
+        $rule = AutoReplyRule::factory()
+            ->forChannels([$primaryChannel, $secondaryChannel])
+            ->create([
+                'channel_id' => $primaryChannel->id,
+                'keyword' => 'MULTI_CHANNEL',
+                'normalized_keyword' => AutoReplyRule::normalizeKeyword('MULTI_CHANNEL'),
+                'reply_text' => 'Matched through pivot',
+                'is_active' => true,
+            ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle($secondaryChannel, $contact, 'multi_channel');
+
+        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
+        $this->assertTrue($resolved->is($rule));
+    }
 }
