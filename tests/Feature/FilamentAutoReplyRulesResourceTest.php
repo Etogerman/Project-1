@@ -240,6 +240,49 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame('Старт Telegram', $rule->display_name);
     }
 
+    public function test_admin_can_create_rule_with_category(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData($channel, [
+                'name' => 'Старт Telegram',
+                'category' => '  Старт  ',
+                'keyword' => 'Тест1',
+                'reply_text' => 'Шаблон 1',
+            ]))
+            ->assertHasNoFormErrors()
+            ->assertSee('Категория')
+            ->assertSee('Старт');
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        $this->assertSame('Старт', $rule->category);
+    }
+
+    public function test_rule_category_is_trimmed_to_null_when_it_is_blank(): void
+    {
+        $rule = AutoReplyRule::query()->create([
+            'category' => '   ',
+            'channel_id' => Channel::factory()->create()->id,
+            'keyword' => 'Тест1',
+            'normalized_keyword' => 'тест1',
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'reply_text' => 'Шаблон 1',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+
+        $this->assertNull($rule->fresh()->category);
+    }
+
     public function test_table_search_can_find_rule_by_name(): void
     {
         $admin = User::factory()->create([
@@ -257,6 +300,46 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->test(ManageAutoReplyRules::class)
             ->searchTable('VIP fallback')
             ->assertCanSeeTableRecords([$namedRule])
+            ->assertCanNotSeeTableRecords([$otherRule]);
+    }
+
+    public function test_table_search_can_find_rule_by_category(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $matchingRule = AutoReplyRule::factory()->create([
+            'category' => 'VIP',
+        ]);
+        $otherRule = AutoReplyRule::factory()->create([
+            'category' => 'Fallback',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->searchTable('VIP')
+            ->assertCanSeeTableRecords([$matchingRule])
+            ->assertCanNotSeeTableRecords([$otherRule]);
+    }
+
+    public function test_table_filter_can_filter_rules_by_category(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $matchingRule = AutoReplyRule::factory()->create([
+            'category' => 'Старт',
+        ]);
+        $otherRule = AutoReplyRule::factory()->create([
+            'category' => 'Fallback',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->filterTable('category', 'Старт')
+            ->assertCanSeeTableRecords([$matchingRule])
             ->assertCanNotSeeTableRecords([$otherRule]);
     }
 
@@ -1038,6 +1121,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
 
         return array_merge([
             'name' => null,
+            'category' => null,
             'channel_ids' => array_map(
                 fn (Channel $channel): int => (int) $channel->id,
                 $channelList,

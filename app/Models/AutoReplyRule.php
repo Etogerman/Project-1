@@ -43,6 +43,7 @@ class AutoReplyRule extends Model
      */
     protected $fillable = [
         'name',
+        'category',
         'channel_id',
         'keyword',
         'normalized_keyword',
@@ -255,6 +256,15 @@ class AutoReplyRule extends Model
     }
 
     protected function name(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value): ?string => filled($value)
+                ? trim((string) $value)
+                : null,
+        );
+    }
+
+    protected function category(): Attribute
     {
         return Attribute::make(
             set: fn (?string $value): ?string => filled($value)
