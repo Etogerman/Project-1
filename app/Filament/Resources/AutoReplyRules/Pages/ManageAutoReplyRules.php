@@ -96,8 +96,8 @@ class ManageAutoReplyRules extends ManageRecords
                         $this->storeWorkbookImportPreview($preview);
 
                         $notification = Notification::make()
-                            ->title('Предпросмотр импорта готов')
-                            ->body($this->buildWorkbookImportSummary($preview));
+                            ->title('Файл проверен. Импорт ещё не применён.')
+                            ->body($this->buildWorkbookImportSummary($preview).PHP_EOL.'Чтобы сохранить изменения, нажмите «Применить импорт».');
 
                         if ($preview->hasErrors()) {
                             $notification->warning();
@@ -157,7 +157,7 @@ class ManageAutoReplyRules extends ManageRecords
 
                     Notification::make()
                         ->title('Импорт применён')
-                        ->body($summary)
+                        ->body($this->buildWorkbookImportAppliedSummary($preview))
                         ->success()
                         ->send();
                 }),
@@ -236,7 +236,17 @@ class ManageAutoReplyRules extends ManageRecords
         }
 
         return sprintf(
-            'Создать: %d · Обновить: %d · Ошибок: %d',
+            'Будет создано: %d · Будет обновлено: %d · Ошибок: %d',
+            $preview->createCount(),
+            $preview->updateCount(),
+            $preview->errorCount(),
+        );
+    }
+
+    private function buildWorkbookImportAppliedSummary(AutoReplyRuleWorkbookPreviewData $preview): string
+    {
+        return sprintf(
+            'Создано: %d · Обновлено: %d · Ошибок: %d',
             $preview->createCount(),
             $preview->updateCount(),
             $preview->errorCount(),
