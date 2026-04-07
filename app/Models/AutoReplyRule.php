@@ -43,7 +43,7 @@ class AutoReplyRule extends Model
      */
     protected $fillable = [
         'name',
-        'category',
+        'auto_reply_category_id',
         'channel_id',
         'keyword',
         'normalized_keyword',
@@ -116,6 +116,11 @@ class AutoReplyRule extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(AutoReplyCategory::class, 'auto_reply_category_id');
     }
 
     public function channels(): BelongsToMany
@@ -256,15 +261,6 @@ class AutoReplyRule extends Model
     }
 
     protected function name(): Attribute
-    {
-        return Attribute::make(
-            set: fn (?string $value): ?string => filled($value)
-                ? trim((string) $value)
-                : null,
-        );
-    }
-
-    protected function category(): Attribute
     {
         return Attribute::make(
             set: fn (?string $value): ?string => filled($value)

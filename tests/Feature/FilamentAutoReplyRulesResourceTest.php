@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
+use App\Models\AutoReplyCategory;
 use App\Models\AutoReplyRule;
 use App\Models\AutoReplyRuleTagCondition;
 use App\Models\AutoReplyRuleTagEffect;
@@ -249,38 +250,59 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $channel = Channel::factory()->create([
             'is_active' => true,
         ]);
+        $category = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
             ->callAction('create', $this->buildRuleFormData($channel, [
                 'name' => 'Старт Telegram',
-                'category' => '  Старт  ',
+                'auto_reply_category_id' => $category->id,
                 'keyword' => 'Тест1',
                 'reply_text' => 'Шаблон 1',
             ]))
             ->assertHasNoFormErrors()
-            ->assertSee('Категория')
             ->assertSee('Старт');
 
         $rule = AutoReplyRule::query()->firstOrFail();
 
-        $this->assertSame('Старт', $rule->category);
+        $this->assertSame($category->id, $rule->auto_reply_category_id);
     }
 
-    public function test_rule_category_is_trimmed_to_null_when_it_is_blank(): void
+    public function test_admin_can_edit_rule_category(): void
     {
-        $rule = AutoReplyRule::query()->create([
-            'category' => '   ',
-            'channel_id' => Channel::factory()->create()->id,
-            'keyword' => 'Тест1',
-            'normalized_keyword' => 'тест1',
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-            'reply_text' => 'Шаблон 1',
+        $admin = User::factory()->create([
             'is_active' => true,
-            'priority' => 10,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $firstCategory = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
+        $secondCategory = AutoReplyCategory::query()->create([
+            'name' => 'Fallback',
+            'sort_order' => 20,
+        ]);
+        $rule = AutoReplyRule::factory()->create([
+            'auto_reply_category_id' => $firstCategory->id,
         ]);
 
-        $this->assertNull($rule->fresh()->category);
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('edit', $rule, $this->buildRuleFormData($channel, [
+                'name' => 'Старт Telegram',
+                'auto_reply_category_id' => $secondCategory->id,
+                'keyword' => 'Тест2',
+                'reply_text' => 'Шаблон 2',
+            ]))
+            ->assertHasNoTableActionErrors();
+
+        $this->assertSame($secondCategory->id, $rule->fresh()->auto_reply_category_id);
     }
 
     public function test_table_search_can_find_rule_by_name(): void
@@ -303,42 +325,30 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$otherRule]);
     }
 
-    public function test_table_search_can_find_rule_by_category(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $matchingRule = AutoReplyRule::factory()->create([
-            'category' => 'VIP',
-        ]);
-        $otherRule = AutoReplyRule::factory()->create([
-            'category' => 'Fallback',
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->searchTable('VIP')
-            ->assertCanSeeTableRecords([$matchingRule])
-            ->assertCanNotSeeTableRecords([$otherRule]);
-    }
-
     public function test_table_filter_can_filter_rules_by_category(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
+        $matchingCategory = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
+        $otherCategory = AutoReplyCategory::query()->create([
+            'name' => 'Fallback',
+            'sort_order' => 20,
+        ]);
         $matchingRule = AutoReplyRule::factory()->create([
-            'category' => 'Старт',
+            'auto_reply_category_id' => $matchingCategory->id,
         ]);
         $otherRule = AutoReplyRule::factory()->create([
-            'category' => 'Fallback',
+            'auto_reply_category_id' => $otherCategory->id,
         ]);
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
-            ->filterTable('category', 'Старт')
+            ->filterTable('auto_reply_category_id', $matchingCategory->id)
             ->assertCanSeeTableRecords([$matchingRule])
             ->assertCanNotSeeTableRecords([$otherRule]);
     }
@@ -517,6 +527,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 $this->assertTrue($table->hasColumnManager());
                 $this->assertFalse($table->hasDeferredColumnManager());
                 $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertTrue($table->getColumn('id')?->isToggleable());
                 $this->assertTrue($table->getColumn('match_scope')?->isToggleable());
                 $this->assertTrue($table->getColumn('contact_phone_condition')?->isToggleable());
                 $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
@@ -1121,7 +1132,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
 
         return array_merge([
             'name' => null,
-            'category' => null,
+            'auto_reply_category_id' => null,
             'channel_ids' => array_map(
                 fn (Channel $channel): int => (int) $channel->id,
                 $channelList,

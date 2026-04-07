@@ -8,15 +8,17 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (! Schema::hasColumn('auto_reply_rules', 'category')) {
+            return;
+        }
+
         Schema::table('auto_reply_rules', function (Blueprint $table): void {
-            $table->string('category')->nullable();
+            $table->dropColumn('category');
         });
     }
 
     public function down(): void
     {
-        Schema::table('auto_reply_rules', function (Blueprint $table): void {
-            $table->dropColumn('category');
-        });
+        //
     }
 };
