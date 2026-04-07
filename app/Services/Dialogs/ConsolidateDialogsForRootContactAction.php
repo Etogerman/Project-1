@@ -315,12 +315,12 @@ class ConsolidateDialogsForRootContactAction
         }
 
         $latestTimestamp = $dialogsWithPhone
-            ->map(fn (Dialog $dialog): string => $this->timestampSortKey($dialog->phone_confirmed_at))
+            ->map(fn (Dialog $dialog): string => $this->messageChronology->timestampSortKey($dialog->phone_confirmed_at))
             ->sortDesc()
             ->first();
 
         $latestDialogs = $dialogsWithPhone
-            ->filter(fn (Dialog $dialog): bool => $this->timestampSortKey($dialog->phone_confirmed_at) === $latestTimestamp)
+            ->filter(fn (Dialog $dialog): bool => $this->messageChronology->timestampSortKey($dialog->phone_confirmed_at) === $latestTimestamp)
             ->values();
 
         /** @var ?Dialog $survivingDialogMatch */
