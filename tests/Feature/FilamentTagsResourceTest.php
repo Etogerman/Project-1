@@ -18,6 +18,8 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -57,6 +59,59 @@ class FilamentTagsResourceTest extends TestCase
         $this->actingAs($employee)
             ->get(TagResource::getUrl())
             ->assertForbidden();
+    }
+
+    public function test_employee_with_tags_view_can_open_tags_page(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+
+        $this->actingAs($employee)
+            ->get(TagResource::getUrl())
+            ->assertOk()
+            ->assertSee('Теги');
+    }
+
+    public function test_tag_policy_for_employee_uses_role_permission_matrix(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $tag = Tag::factory()->create();
+
+        $this->assertTrue(Gate::forUser($employee)->allows('viewAny', Tag::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('view', $tag));
+        $this->assertTrue(Gate::forUser($employee)->allows('create', Tag::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('update', $tag));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $tag));
+    }
+
+    public function test_tags_permissions_respect_disabled_employee_matrix_values(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $tag = Tag::factory()->create();
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->whereIn('permission_key', ['tags.view', 'tags.edit', 'tags.delete'])
+            ->update(['granted' => false]);
+
+        $employee = User::query()->findOrFail($employee->id);
+
+        $this->assertFalse(Gate::forUser($employee)->allows('viewAny', Tag::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('view', $tag));
+        $this->assertFalse(Gate::forUser($employee)->allows('create', Tag::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('update', $tag));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $tag));
     }
 
     public function test_admin_can_create_edit_and_delete_unused_tag(): void
