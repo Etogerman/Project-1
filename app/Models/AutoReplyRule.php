@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class AutoReplyRule extends Model
@@ -66,6 +67,10 @@ class AutoReplyRule extends Model
             $rule->guardAnyInboundUniqueness();
             $rule->guardTelegramButtonType();
             $rule->guardMaxButtonType();
+        });
+
+        static::saved(function (AutoReplyRule $rule): void {
+            $rule->syncLegacyChannelBridge();
         });
     }
 
@@ -311,5 +316,44 @@ class AutoReplyRule extends Model
                 'max_button_type' => 'Кнопка "Поделиться номером телефона" доступна только для MAX-каналов.',
             ]);
         }
+    }
+
+    protected function syncLegacyChannelBridge(): void
+    {
+        if (! Schema::hasTable('auto_reply_rule_channels')) {
+            return;
+        }
+
+        if (! filled($this->channel_id)) {
+            $this->channels()->detach();
+
+            return;
+        }
+
+        $channel = $this->relationLoaded('channel')
+            ? $this->channel
+            : Channel::query()->find($this->channel_id);
+
+        if (! $channel instanceof Channel) {
+            return;
+        }
+
+        $buttonType = match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => $this->telegram_button_type === self::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE
+                ? 'share_contact'
+                : null,
+            Channel::PLATFORM_MAX => $this->max_button_type === self::MAX_BUTTON_TYPE_REQUEST_PHONE
+                ? 'share_contact'
+                : null,
+            default => null,
+        };
+
+        $this->channels()->sync([
+            (int) $channel->getKey() => [
+                'button_type' => $buttonType,
+                'button_text' => null,
+                'button_url' => null,
+            ],
+        ]);
     }
 }

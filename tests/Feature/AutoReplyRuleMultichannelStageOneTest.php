@@ -131,4 +131,51 @@ class AutoReplyRuleMultichannelStageOneTest extends TestCase
             'channel_id' => $secondChannel->id,
         ]);
     }
+
+    public function test_stage_one_keeps_pivot_in_sync_for_rules_saved_after_migration(): void
+    {
+        $telegramChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        $rule = AutoReplyRule::query()->create([
+            'channel_id' => $telegramChannel->id,
+            'keyword' => 'TEXT_1',
+            'normalized_keyword' => 'text_1',
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'contact_phone_condition' => null,
+            'reply_text' => 'Reply text',
+            'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
+            'max_button_type' => null,
+            'is_active' => true,
+        ]);
+
+        $this->assertDatabaseHas('auto_reply_rule_channels', [
+            'auto_reply_rule_id' => $rule->id,
+            'channel_id' => $telegramChannel->id,
+            'button_type' => 'share_contact',
+        ]);
+
+        $rule->forceFill([
+            'channel_id' => $maxChannel->id,
+            'telegram_button_type' => null,
+            'max_button_type' => AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE,
+        ])->save();
+
+        $this->assertDatabaseMissing('auto_reply_rule_channels', [
+            'auto_reply_rule_id' => $rule->id,
+            'channel_id' => $telegramChannel->id,
+        ]);
+
+        $this->assertDatabaseHas('auto_reply_rule_channels', [
+            'auto_reply_rule_id' => $rule->id,
+            'channel_id' => $maxChannel->id,
+            'button_type' => 'share_contact',
+        ]);
+    }
 }
