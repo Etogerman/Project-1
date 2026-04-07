@@ -25,6 +25,9 @@ class RolePermissionCatalogTest extends TestCase
             'dialogs.view',
             'dialogs.edit',
             'dialogs.delete',
+            'tags.view',
+            'tags.edit',
+            'tags.delete',
             'users.view',
             'users.edit',
             'users.delete',
@@ -53,7 +56,6 @@ class RolePermissionCatalogTest extends TestCase
 
         $this->assertNotContains('contacts.phone.edit_existing', $codes);
         $this->assertNotContains('contacts.assignee.assign', $codes);
-        $this->assertNotContains('tags.view', $codes);
     }
 
     public function test_catalog_marks_preparatory_rows_explicitly(): void
@@ -95,6 +97,9 @@ class RolePermissionCatalogTest extends TestCase
             'contacts.delete',
             'dialogs.view',
             'dialogs.edit',
+            'tags.view',
+            'tags.edit',
+            'tags.delete',
             'users.view',
             'users.edit',
             'channels.view',
