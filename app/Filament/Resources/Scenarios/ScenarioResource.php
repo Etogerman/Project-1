@@ -135,43 +135,51 @@ class ScenarioResource extends Resource
                     ->label('Код')
                     ->searchable()
                     ->sortable()
-                    ->copyable(),
+                    ->copyable()
+                    ->toggleable(),
                 TextColumn::make('name')
                     ->label('Название')
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('published_version')
                     ->label('Опубликована')
                     ->state(fn (Scenario $record): string => static::formatVersionLabel($record->publishedVersion))
                     ->badge()
-                    ->color(fn (Scenario $record): string => $record->publishedVersion instanceof ScenarioVersion ? 'success' : 'gray'),
+                    ->color(fn (Scenario $record): string => $record->publishedVersion instanceof ScenarioVersion ? 'success' : 'gray')
+                    ->toggleable(),
                 TextColumn::make('draft_version')
                     ->label('Черновик')
                     ->state(fn (Scenario $record): string => static::formatVersionLabel($record->draftVersion))
                     ->badge()
-                    ->color(fn (Scenario $record): string => $record->draftVersion instanceof ScenarioVersion ? 'warning' : 'gray'),
+                    ->color(fn (Scenario $record): string => $record->draftVersion instanceof ScenarioVersion ? 'warning' : 'gray')
+                    ->toggleable(),
                 TextColumn::make('versions_summary')
                     ->label('Версии')
                     ->state(fn (Scenario $record): string => static::formatVersionsSummary($record))
                     ->wrap()
                     ->limit(80)
-                    ->tooltip(fn (Scenario $record): string => static::formatVersionsSummary($record)),
+                    ->tooltip(fn (Scenario $record): string => static::formatVersionsSummary($record))
+                    ->toggleable(),
                 TextColumn::make('is_active')
                     ->label('Активность')
                     ->badge()
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключён')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('is_archived')
                     ->label('Архив')
                     ->badge()
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Архивный' : 'Рабочий')
                     ->color(fn (bool $state): string => $state ? 'gray' : 'primary')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('updated_at')
                     ->label('Обновлён')
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
             ])
             ->filters([
                 TernaryFilter::make('is_active')

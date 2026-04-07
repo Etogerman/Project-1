@@ -158,26 +158,30 @@ class UserResource extends Resource
                 TextColumn::make('name')
                     ->label('Имя')
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('email')
                     ->label('Email')
                     ->searchable()
                     ->sortable()
-                    ->copyable(),
+                    ->copyable()
+                    ->toggleable(),
                 TextColumn::make('is_active')
                     ->label('Статус')
                     ->badge()
                     ->extraAttributes(['class' => 'ac-user-table-badge'])
                     ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключён')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('role')
                     ->label('Роль')
                     ->badge()
                     ->extraAttributes(['class' => 'ac-user-table-badge'])
                     ->formatStateUsing(fn (string $state, User $record): string => static::roleLabel($record))
                     ->color(fn (string $state, User $record): string => static::roleTone($record))
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('created_at')
                     ->label('Создан')
                     ->dateTime('d.m.Y H:i')
@@ -198,6 +202,14 @@ class UserResource extends Resource
                         User::ROLE_EMPLOYEE => 'Сотрудник',
                     ]),
             ])
+            ->columnManager()
+            ->deferColumnManager(false)
+            ->columnManagerWidth(\Filament\Support\Enums\Width::Medium)
+            ->columnManagerTriggerAction(
+                fn (\Filament\Actions\Action $action): \Filament\Actions\Action => $action
+                    ->tooltip('Столбцы')
+                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+            )
             ->defaultSort('created_at', 'desc')
             ->emptyStateHeading('Сотрудники ещё не добавлены')
             ->emptyStateDescription('Добавьте первого сотрудника команды.')

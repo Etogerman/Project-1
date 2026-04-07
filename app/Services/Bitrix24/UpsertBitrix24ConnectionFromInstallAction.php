@@ -8,6 +8,11 @@ use Carbon\CarbonImmutable;
 
 class UpsertBitrix24ConnectionFromInstallAction
 {
+    public function __construct(
+        private readonly HashBitrix24ApplicationTokenAction $hashApplicationToken,
+        private readonly SanitizeBitrix24ApplicationTokenPayloadAction $sanitizePayload,
+    ) {}
+
     public function handle(Bitrix24InstallPayloadData $payload): Bitrix24Connection
     {
         $connection = Bitrix24Connection::query()->firstOrNew([
@@ -23,7 +28,7 @@ class UpsertBitrix24ConnectionFromInstallAction
             'scope' => $payload->scope,
             'client_endpoint' => $payload->clientEndpoint,
             'server_endpoint' => $this->resolveTrustedOauthServerUrl(),
-            'install_payload' => $payload->rawPayload,
+            'install_payload' => $this->sanitizePayload->handle($payload->rawPayload),
             'installed_at' => now(),
             'last_install_callback_at' => now(),
             'last_error_at' => null,
@@ -31,7 +36,7 @@ class UpsertBitrix24ConnectionFromInstallAction
         ]);
 
         $connection->forceFill([
-            'application_token' => $payload->applicationToken,
+            'application_token_hash' => $this->hashApplicationToken->handle($payload->applicationToken),
             'access_token_encrypted' => $payload->accessToken,
             'refresh_token_encrypted' => $payload->refreshToken,
         ]);

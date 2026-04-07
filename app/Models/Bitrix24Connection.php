@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Bitrix24\HashBitrix24ApplicationTokenAction;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -43,6 +44,8 @@ class Bitrix24Connection extends Model
      * @var list<string>
      */
     protected $hidden = [
+        'application_token',
+        'application_token_hash',
         'access_token_encrypted',
         'refresh_token_encrypted',
     ];
@@ -63,6 +66,12 @@ class Bitrix24Connection extends Model
         'last_openlines_callback_at' => 'datetime',
         'last_error_at' => 'datetime',
     ];
+
+    public function setApplicationTokenAttribute(mixed $value): void
+    {
+        $this->attributes['application_token'] = null;
+        $this->attributes['application_token_hash'] = app(HashBitrix24ApplicationTokenAction::class)->handle($value);
+    }
 
     public function webhookEvents(): HasMany
     {

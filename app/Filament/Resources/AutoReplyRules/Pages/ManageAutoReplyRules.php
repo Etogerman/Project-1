@@ -36,8 +36,19 @@ class ManageAutoReplyRules extends ManageRecords
                 ->label('Добавить правило')
                 ->modalWidth(Width::FiveExtraLarge)
                 ->modalFooterActionsAlignment(Alignment::End)
-                ->extraModalWindowAttributes(['class' => 'ac-auto-reply-form-modal'])
-                ->using(fn (array $data): AutoReplyRule => AutoReplyRuleResource::saveAutoReplyRule($data))
+                ->extraModalWindowAttributes([
+                    'class' => 'ac-auto-reply-form-modal',
+                    'style' => 'width: 90vw; max-width: 90vw;',
+                ])
+                ->using(function (array $data): AutoReplyRule {
+                    try {
+                        return AutoReplyRuleResource::saveAutoReplyRule($data);
+                    } catch (\Illuminate\Validation\ValidationException $exception) {
+                        AutoReplyRuleResource::notifyValidationFailure($exception);
+
+                        throw $exception;
+                    }
+                })
                 ->createAnother(false),
         ];
     }

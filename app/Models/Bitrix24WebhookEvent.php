@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Bitrix24\HashBitrix24ApplicationTokenAction;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -33,6 +34,7 @@ class Bitrix24WebhookEvent extends Model
         'event_name',
         'member_id',
         'application_token',
+        'application_token_hash',
         'portal_domain',
         'payload_hash',
         'payload',
@@ -56,6 +58,20 @@ class Bitrix24WebhookEvent extends Model
         'failed_at' => 'datetime',
         'attempts' => 'integer',
     ];
+
+    /**
+     * @var list<string>
+     */
+    protected $hidden = [
+        'application_token',
+        'application_token_hash',
+    ];
+
+    public function setApplicationTokenAttribute(mixed $value): void
+    {
+        $this->attributes['application_token'] = '';
+        $this->attributes['application_token_hash'] = app(HashBitrix24ApplicationTokenAction::class)->handle($value);
+    }
 
     public function connection(): BelongsTo
     {

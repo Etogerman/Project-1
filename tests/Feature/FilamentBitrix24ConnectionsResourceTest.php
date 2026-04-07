@@ -209,7 +209,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
             'event_name' => 'ONCRMCONTACTADD',
             'member_id' => $connection->member_id,
-            'application_token' => $connection->application_token,
+            'application_token' => 'application-token',
             'portal_domain' => $connection->portal_domain,
             'payload_hash' => sha1((string) str()->uuid()),
             'payload' => ['event' => 'payload'],
