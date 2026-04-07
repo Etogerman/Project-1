@@ -17,6 +17,7 @@ use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
 use App\Services\Contacts\MergeContactsAction;
+use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
@@ -31,6 +32,7 @@ class StoreInboundMessageAction
         protected FindDuplicateContactRootsByPhoneAction $findDuplicateContactRootsByPhoneAction,
         protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
         protected MergeContactsAction $mergeContactsAction,
+        protected ResolveRootContactAction $resolveRootContactAction,
         protected ChannelActivityLogger $channelActivityLogger,
         protected QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
         protected SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
@@ -40,39 +42,8 @@ class StoreInboundMessageAction
     public function handle(Channel $channel, IncomingBotMessage $message): StoredInboundMessageResult
     {
         return DB::transaction(function () use ($channel, $message): StoredInboundMessageResult {
-            $identity = ContactIdentity::query()
-                ->with('contact')
-                ->where('channel_id', $channel->id)
-                ->where('external_user_id', $message->externalUserId)
-                ->first();
-
-            if ($identity === null) {
-                $contact = Contact::query()->create([
-                    'name' => $message->contactName,
-                ]);
-
-                try {
-                    $identity = ContactIdentity::query()->create([
-                        'contact_id' => $contact->id,
-                        'channel_id' => $channel->id,
-                        'platform' => $message->platform,
-                        'external_user_id' => $message->externalUserId,
-                        'external_username' => $message->externalUsername,
-                    ])->load('contact');
-                } catch (QueryException $exception) {
-                    if (! $this->wasUniqueConstraintViolation($exception)) {
-                        throw $exception;
-                    }
-
-                    $contact->delete();
-
-                    $identity = ContactIdentity::query()
-                        ->with('contact')
-                        ->where('channel_id', $channel->id)
-                        ->where('external_user_id', $message->externalUserId)
-                        ->firstOrFail();
-                }
-            }
+            $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId)
+                ?? $this->resolveOrCreateContactIdentity($channel, $message);
 
             $contact = $identity->contact;
 
@@ -173,6 +144,161 @@ class StoreInboundMessageAction
                 );
             }
         });
+    }
+
+    protected function findContactIdentityForChannel(Channel $channel, ?string $externalUserId): ?ContactIdentity
+    {
+        return ContactIdentity::query()
+            ->with('contact')
+            ->where('channel_id', $channel->id)
+            ->where('external_user_id', $externalUserId)
+            ->first();
+    }
+
+    protected function resolveOrCreateContactIdentity(Channel $channel, IncomingBotMessage $message): ContactIdentity
+    {
+        if (! filled($message->externalUserId)) {
+            return $this->createNewContactWithIdentity($channel, $message);
+        }
+
+        $this->acquireCrossChannelIdentityLock($channel->platform, $message->externalUserId);
+
+        $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId);
+
+        if ($identity instanceof ContactIdentity) {
+            return $identity;
+        }
+
+        $identity = $this->resolveCrossChannelContactIdentity($channel, $message);
+
+        if ($identity instanceof ContactIdentity) {
+            return $identity;
+        }
+
+        return $this->createNewContactWithIdentity($channel, $message);
+    }
+
+    protected function resolveCrossChannelContactIdentity(Channel $channel, IncomingBotMessage $message): ?ContactIdentity
+    {
+        $matchedIdentities = ContactIdentity::query()
+            ->with('contact')
+            ->where('platform', $channel->platform)
+            ->where('external_user_id', $message->externalUserId)
+            ->orderBy('id')
+            ->get();
+
+        if ($matchedIdentities->isEmpty()) {
+            return null;
+        }
+
+        $matchedIdentityIds = $matchedIdentities->pluck('id')->all();
+        $rootContactsById = [];
+
+        foreach ($matchedIdentities as $matchedIdentity) {
+            try {
+                $rootContact = $this->resolveRootContactAction->handle($matchedIdentity->contact_id);
+            } catch (BrokenContactMergeChainException $exception) {
+                $this->channelActivityLogger->warning(
+                    $channel,
+                    'contact.cross_channel_identity_broken_merge_chain',
+                    'Cross-channel identity не удалось безопасно привязать из-за сломанной merge chain.',
+                    [
+                        'channel_id' => $channel->id,
+                        'platform' => $channel->platform,
+                        'external_user_id' => $message->externalUserId,
+                        'matched_identity_id' => $matchedIdentity->id,
+                        'matched_channel_id' => $matchedIdentity->channel_id,
+                        'error' => $exception->getMessage(),
+                    ],
+                );
+
+                return null;
+            }
+
+            $rootContactsById[$rootContact->id] = $rootContact;
+        }
+
+        $matchedRootContactIds = array_keys($rootContactsById);
+        sort($matchedRootContactIds);
+
+        if (count($matchedRootContactIds) !== 1) {
+            $this->channelActivityLogger->warning(
+                $channel,
+                'contact.cross_channel_identity_ambiguous',
+                'Cross-channel identity не привязана автоматически: найдено несколько root-контактов.',
+                [
+                    'channel_id' => $channel->id,
+                    'platform' => $channel->platform,
+                    'external_user_id' => $message->externalUserId,
+                    'matched_identity_ids' => $matchedIdentityIds,
+                    'matched_root_contact_ids' => $matchedRootContactIds,
+                    'matched_root_count' => count($matchedRootContactIds),
+                ],
+            );
+
+            return null;
+        }
+
+        /** @var Contact $rootContact */
+        $rootContact = reset($rootContactsById);
+        /** @var ContactIdentity $matchedIdentity */
+        $matchedIdentity = $matchedIdentities->first();
+
+        try {
+            $identity = $this->createContactIdentityForChannel($rootContact, $channel, $message);
+        } catch (QueryException $exception) {
+            if (! $this->wasUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+
+            $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId) ?? throw $exception;
+        }
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'contact.cross_channel_identity_linked',
+            'Новый канал привязан к существующему контакту по platform user ID.',
+            [
+                'contact_id' => $rootContact->id,
+                'channel_id' => $channel->id,
+                'matched_identity_id' => $matchedIdentity->id,
+                'matched_channel_id' => $matchedIdentity->channel_id,
+                'platform' => $channel->platform,
+                'external_user_id' => $message->externalUserId,
+            ],
+        );
+
+        return $identity;
+    }
+
+    protected function createContactIdentityForChannel(Contact $contact, Channel $channel, IncomingBotMessage $message): ContactIdentity
+    {
+        return ContactIdentity::query()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $message->platform,
+            'external_user_id' => $message->externalUserId,
+            'external_username' => $message->externalUsername,
+        ])->load('contact');
+    }
+
+    protected function createNewContactWithIdentity(Channel $channel, IncomingBotMessage $message): ContactIdentity
+    {
+        $contact = Contact::query()->create([
+            'name' => $message->contactName,
+        ]);
+
+        try {
+            return $this->createContactIdentityForChannel($contact, $channel, $message);
+        } catch (QueryException $exception) {
+            if (! $this->wasUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+
+            $contact->delete();
+
+            return $this->findContactIdentityForChannel($channel, $message->externalUserId) ?? throw $exception;
+        }
     }
 
     protected function findExistingInboundMessage(Channel $channel, string $providerEventKey): ?Message
@@ -453,6 +579,14 @@ class StoreInboundMessageAction
     private function acquirePhoneCaptureLock(string $phoneNormalized): void
     {
         DB::selectOne('SELECT pg_advisory_xact_lock(hashtext(?))', [$phoneNormalized]);
+    }
+
+    private function acquireCrossChannelIdentityLock(string $platform, string $externalUserId): void
+    {
+        DB::selectOne(
+            'SELECT pg_advisory_xact_lock(hashtext(?))',
+            ['cross_channel_identity:'.$platform.':'.$externalUserId],
+        );
     }
 
     /**

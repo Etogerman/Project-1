@@ -793,6 +793,326 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame('2026-03-28 18:05:00', $dialog->last_inbound_at?->format('Y-m-d H:i:s'));
     }
 
+    public function test_store_inbound_message_reuses_existing_contact_for_same_platform_user_on_another_channel(): void
+    {
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Existing contact',
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $firstChannel->id,
+            'platform' => $firstChannel->platform,
+            'external_user_id' => 'cross-user-100',
+            'external_username' => 'telegram_cross_100',
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $secondChannel,
+            new IncomingBotMessage(
+                platform: $secondChannel->platform,
+                channelId: $secondChannel->id,
+                externalChatId: 'cross-chat-100',
+                externalUserId: 'cross-user-100',
+                providerEventKey: 'telegram-cross-identity-100',
+                externalMessageId: 'cross-100',
+                externalUsername: 'telegram_cross_100',
+                contactName: 'Existing contact',
+                text: 'Привет со второго бота',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет со второго бота']],
+                receivedAt: Carbon::parse('2026-04-07 16:40:00'),
+            ),
+        );
+
+        $newIdentity = ContactIdentity::query()
+            ->where('channel_id', $secondChannel->id)
+            ->where('external_user_id', 'cross-user-100')
+            ->firstOrFail();
+
+        $this->assertSame($contact->id, $storedResult->message->contact_id);
+        $this->assertSame($contact->id, $newIdentity->contact_id);
+        $this->assertDatabaseCount('contacts', 1);
+        $this->assertDatabaseCount('contact_identities', 2);
+        $this->assertDatabaseHas('dialogs', [
+            'contact_id' => $contact->id,
+            'channel_id' => $secondChannel->id,
+            'current_contact_identity_id' => $newIdentity->id,
+            'external_chat_id' => 'cross-chat-100',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $secondChannel->id,
+            'event' => 'contact.cross_channel_identity_linked',
+        ]);
+    }
+
+    public function test_store_inbound_message_keeps_same_channel_identity_reuse_when_external_user_id_is_blank(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Legacy blank user',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '',
+            'external_username' => 'legacy_blank_user',
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: '',
+                externalUserId: '',
+                providerEventKey: 'max-blank-user-same-channel',
+                externalMessageId: 'max-blank-user-1',
+                externalUsername: 'legacy_blank_user',
+                contactName: 'Legacy blank user',
+                text: 'Привет из MAX',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['body' => ['text' => 'Привет из MAX']]],
+                receivedAt: Carbon::parse('2026-04-07 16:45:00'),
+            ),
+        );
+
+        $this->assertSame($contact->id, $storedResult->message->contact_id);
+        $this->assertSame($identity->id, $storedResult->message->contact_identity_id);
+        $this->assertDatabaseCount('contacts', 1);
+        $this->assertDatabaseCount('contact_identities', 1);
+    }
+
+    public function test_store_inbound_message_does_not_cross_link_same_external_user_id_across_platforms(): void
+    {
+        $telegramChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $telegramContact = Contact::factory()->create([
+            'name' => 'Telegram contact',
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $telegramContact->id,
+            'channel_id' => $telegramChannel->id,
+            'platform' => $telegramChannel->platform,
+            'external_user_id' => 'cross-user-200',
+            'external_username' => 'telegram_cross_200',
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $maxChannel,
+            new IncomingBotMessage(
+                platform: $maxChannel->platform,
+                channelId: $maxChannel->id,
+                externalChatId: 'max-chat-200',
+                externalUserId: 'cross-user-200',
+                providerEventKey: 'max-cross-identity-200',
+                externalMessageId: 'max-cross-200',
+                externalUsername: 'max_cross_200',
+                contactName: 'MAX contact',
+                text: 'Привет из MAX',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['body' => ['text' => 'Привет из MAX']]],
+                receivedAt: Carbon::parse('2026-04-07 16:41:00'),
+            ),
+        );
+
+        $this->assertNotSame($telegramContact->id, $storedResult->message->contact_id);
+        $this->assertDatabaseCount('contacts', 2);
+        $this->assertDatabaseHas('contact_identities', [
+            'channel_id' => $maxChannel->id,
+            'platform' => Channel::PLATFORM_MAX,
+            'external_user_id' => 'cross-user-200',
+        ]);
+    }
+
+    public function test_store_inbound_message_links_new_channel_identity_to_root_contact_from_merged_chain(): void
+    {
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $rootContact = Contact::factory()->create([
+            'name' => 'Root contact',
+        ]);
+        $mergedContact = Contact::factory()->create([
+            'name' => 'Merged contact',
+            'merged_into_contact_id' => $rootContact->id,
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $mergedContact->id,
+            'channel_id' => $firstChannel->id,
+            'platform' => $firstChannel->platform,
+            'external_user_id' => 'cross-user-300',
+            'external_username' => 'telegram_cross_300',
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $secondChannel,
+            new IncomingBotMessage(
+                platform: $secondChannel->platform,
+                channelId: $secondChannel->id,
+                externalChatId: 'cross-chat-300',
+                externalUserId: 'cross-user-300',
+                providerEventKey: 'telegram-cross-identity-300',
+                externalMessageId: 'cross-300',
+                externalUsername: 'telegram_cross_300',
+                contactName: 'Root contact',
+                text: 'Привет после merge',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет после merge']],
+                receivedAt: Carbon::parse('2026-04-07 16:42:00'),
+            ),
+        );
+
+        $newIdentity = ContactIdentity::query()
+            ->where('channel_id', $secondChannel->id)
+            ->where('external_user_id', 'cross-user-300')
+            ->firstOrFail();
+
+        $this->assertSame($rootContact->id, $storedResult->message->contact_id);
+        $this->assertSame($rootContact->id, $newIdentity->contact_id);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $secondChannel->id,
+            'event' => 'contact.cross_channel_identity_linked',
+        ]);
+    }
+
+    public function test_store_inbound_message_logs_ambiguous_cross_channel_identity_and_falls_back_to_new_contact(): void
+    {
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $thirdChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $firstRoot = Contact::factory()->create([
+            'name' => 'First root',
+        ]);
+        $secondRoot = Contact::factory()->create([
+            'name' => 'Second root',
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $firstRoot->id,
+            'channel_id' => $firstChannel->id,
+            'platform' => $firstChannel->platform,
+            'external_user_id' => 'cross-user-400',
+            'external_username' => 'telegram_cross_400_a',
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $secondRoot->id,
+            'channel_id' => $secondChannel->id,
+            'platform' => $secondChannel->platform,
+            'external_user_id' => 'cross-user-400',
+            'external_username' => 'telegram_cross_400_b',
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $thirdChannel,
+            new IncomingBotMessage(
+                platform: $thirdChannel->platform,
+                channelId: $thirdChannel->id,
+                externalChatId: 'cross-chat-400',
+                externalUserId: 'cross-user-400',
+                providerEventKey: 'telegram-cross-identity-400',
+                externalMessageId: 'cross-400',
+                externalUsername: 'telegram_cross_400_c',
+                contactName: 'Fallback contact',
+                text: 'Привет с ambiguous identity',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет с ambiguous identity']],
+                receivedAt: Carbon::parse('2026-04-07 16:43:00'),
+            ),
+        );
+
+        $this->assertNotContains($storedResult->message->contact_id, [$firstRoot->id, $secondRoot->id]);
+        $this->assertDatabaseCount('contacts', 3);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $thirdChannel->id,
+            'event' => 'contact.cross_channel_identity_ambiguous',
+        ]);
+    }
+
+    public function test_store_inbound_message_falls_back_to_new_contact_when_cross_channel_identity_has_broken_merge_chain(): void
+    {
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $brokenContact = Contact::factory()->create([
+            'name' => 'Broken contact',
+            'merged_into_contact_id' => 999999,
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $brokenContact->id,
+            'channel_id' => $firstChannel->id,
+            'platform' => $firstChannel->platform,
+            'external_user_id' => 'cross-user-500',
+            'external_username' => 'telegram_cross_500',
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $secondChannel,
+            new IncomingBotMessage(
+                platform: $secondChannel->platform,
+                channelId: $secondChannel->id,
+                externalChatId: 'cross-chat-500',
+                externalUserId: 'cross-user-500',
+                providerEventKey: 'telegram-cross-identity-500',
+                externalMessageId: 'cross-500',
+                externalUsername: 'telegram_cross_500',
+                contactName: 'Fallback after broken chain',
+                text: 'Привет после broken chain',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет после broken chain']],
+                receivedAt: Carbon::parse('2026-04-07 16:44:00'),
+            ),
+        );
+
+        $this->assertNotSame($brokenContact->id, $storedResult->message->contact_id);
+        $this->assertDatabaseCount('contacts', 2);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $secondChannel->id,
+            'event' => 'contact.cross_channel_identity_broken_merge_chain',
+        ]);
+    }
+
     public function test_older_inbound_contact_share_does_not_override_newer_dialog_confirmed_phone(): void
     {
         $channel = Channel::factory()->create([
