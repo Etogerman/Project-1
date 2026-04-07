@@ -154,7 +154,7 @@ class UserResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->copyable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->toggleable(),
                 TextColumn::make('name')
                     ->label('Имя')
                     ->searchable()
