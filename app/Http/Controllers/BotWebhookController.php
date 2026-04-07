@@ -220,12 +220,14 @@ class BotWebhookController extends Controller
 
         return [
             'platform' => Channel::PLATFORM_MAX,
+            'reason' => $this->resolveMaxUnhandledPayloadReason($payload),
             'update_type' => data_get($payload, 'update_type'),
             'message_mid' => data_get($body, 'mid'),
             'message_body_type' => data_get($body, 'type'),
             'has_sender' => is_array(data_get($message, 'sender')),
             'has_sender_user_id' => filled(data_get($message, 'sender.user_id')),
             'has_recipient' => is_array(data_get($message, 'recipient')),
+            'has_recipient_user_id' => filled(data_get($message, 'recipient.user_id')),
             'has_recipient_chat_id' => filled(data_get($message, 'recipient.chat_id')),
             'has_body_contact' => is_array(data_get($body, 'contact')),
             'has_attachments' => $attachments !== [],
@@ -242,6 +244,58 @@ class BotWebhookController extends Controller
                 ? mb_substr($payloadExcerpt, 0, 1000)
                 : null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxUnhandledPayloadReason(array $payload): string
+    {
+        $updateType = trim((string) data_get($payload, 'update_type', ''));
+
+        if ($updateType === 'bot_started') {
+            if (! filled(data_get($payload, 'user.user_id'))) {
+                return 'missing_user_id';
+            }
+
+            if (! filled($payload['chat_id'] ?? null)) {
+                return 'missing_chat_id';
+            }
+
+            return 'unknown';
+        }
+
+        if ($updateType !== 'message_created') {
+            return 'unsupported_update_type';
+        }
+
+        $message = data_get($payload, 'message');
+
+        if (! is_array($message)) {
+            return 'missing_message_payload';
+        }
+
+        if (data_get($message, 'sender.is_bot') === true) {
+            return 'sender_is_bot';
+        }
+
+        $isDialog = filled($payload['user_locale'] ?? null)
+            || filled(data_get($message, 'recipient.user_id'))
+            || ! filled(data_get($message, 'recipient.chat_id'));
+
+        if (! $isDialog) {
+            return 'not_dialog';
+        }
+
+        if (! filled(data_get($message, 'sender.user_id'))) {
+            return 'missing_user_id';
+        }
+
+        if (! filled(data_get($message, 'recipient.chat_id'))) {
+            return 'missing_chat_id';
+        }
+
+        return 'unknown';
     }
 
     protected function resolveWebhookDeliveryLagSeconds(Channel $channel, Carbon $messageReceivedAt, Carbon $webhookProcessedAt): ?int

@@ -599,7 +599,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
-    public function test_max_webhook_logs_unhandled_payload_when_normalizer_returns_null(): void
+    public function test_max_webhook_logs_unhandled_payload_when_normalizer_returns_null_due_to_missing_chat_id(): void
     {
         Queue::fake();
         Http::fake();
@@ -660,13 +660,238 @@ class BotWebhookAutoReplyTest extends TestCase
             ->latest('id')
             ->firstOrFail();
 
+        $this->assertSame('missing_chat_id', data_get($log->context, 'reason'));
         $this->assertSame('message_created', data_get($log->context, 'update_type'));
         $this->assertSame('max-unhandled-contact-1', data_get($log->context, 'message_mid'));
         $this->assertTrue((bool) data_get($log->context, 'has_sender_user_id'));
+        $this->assertTrue((bool) data_get($log->context, 'has_recipient_user_id'));
         $this->assertFalse((bool) data_get($log->context, 'has_recipient_chat_id'));
         $this->assertTrue((bool) data_get($log->context, 'has_body_contact'));
         $this->assertFalse((bool) data_get($log->context, 'has_vcf_info'));
         $this->assertIsString(data_get($log->context, 'payload_excerpt'));
+    }
+
+    public function test_max_webhook_logs_reason_when_update_type_is_not_supported(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = [
+            'update_type' => 'message_callback',
+            'timestamp' => 1_775_578_788_491,
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $channel->id)
+            ->where('event', 'webhook.max_unhandled_payload')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame('unsupported_update_type', data_get($log->context, 'reason'));
+        $this->assertSame('message_callback', data_get($log->context, 'update_type'));
+        $this->assertNull(data_get($log->context, 'message_mid'));
+        $this->assertFalse((bool) data_get($log->context, 'has_sender'));
+        $this->assertFalse((bool) data_get($log->context, 'has_attachments'));
+        $this->assertDatabaseCount('messages', 0);
+    }
+
+    public function test_max_webhook_logs_reason_when_message_payload_is_missing(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'timestamp' => 1_775_578_788_491,
+            'user_locale' => 'ru',
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $channel->id)
+            ->where('event', 'webhook.max_unhandled_payload')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame('missing_message_payload', data_get($log->context, 'reason'));
+        $this->assertFalse((bool) data_get($log->context, 'has_sender'));
+        $this->assertFalse((bool) data_get($log->context, 'has_recipient'));
+        $this->assertDatabaseCount('messages', 0);
+    }
+
+    public function test_max_webhook_logs_reason_when_sender_is_bot(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'timestamp' => 1_775_578_788_491,
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 228532008,
+                    'is_bot' => true,
+                ],
+                'recipient' => [
+                    'chat_id' => 66552012,
+                    'user_id' => 241737700,
+                    'chat_type' => 'dialog',
+                ],
+                'body' => [
+                    'mid' => 'max-unhandled-bot-sender-1',
+                    'text' => 'hello',
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $channel->id)
+            ->where('event', 'webhook.max_unhandled_payload')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame('sender_is_bot', data_get($log->context, 'reason'));
+        $this->assertSame('max-unhandled-bot-sender-1', data_get($log->context, 'message_mid'));
+        $this->assertTrue((bool) data_get($log->context, 'has_sender_user_id'));
+        $this->assertTrue((bool) data_get($log->context, 'has_recipient_chat_id'));
+        $this->assertDatabaseCount('messages', 0);
+    }
+
+    public function test_max_webhook_logs_reason_when_payload_is_not_dialog(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'timestamp' => 1_775_578_788_491,
+            'message' => [
+                'sender' => [
+                    'user_id' => 228532008,
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 66552012,
+                    'chat_type' => 'dialog',
+                ],
+                'body' => [
+                    'mid' => 'max-unhandled-not-dialog-1',
+                    'text' => 'hello',
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $channel->id)
+            ->where('event', 'webhook.max_unhandled_payload')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame('not_dialog', data_get($log->context, 'reason'));
+        $this->assertSame('max-unhandled-not-dialog-1', data_get($log->context, 'message_mid'));
+        $this->assertTrue((bool) data_get($log->context, 'has_sender_user_id'));
+        $this->assertFalse((bool) data_get($log->context, 'has_recipient_user_id'));
+        $this->assertTrue((bool) data_get($log->context, 'has_recipient_chat_id'));
+        $this->assertDatabaseCount('messages', 0);
+    }
+
+    public function test_max_webhook_logs_reason_when_sender_user_id_is_missing(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'timestamp' => 1_775_578_788_491,
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 66552012,
+                    'user_id' => 241737700,
+                    'chat_type' => 'dialog',
+                ],
+                'body' => [
+                    'mid' => 'max-unhandled-missing-user-1',
+                    'text' => 'hello',
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $channel->id)
+            ->where('event', 'webhook.max_unhandled_payload')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame('missing_user_id', data_get($log->context, 'reason'));
+        $this->assertSame('max-unhandled-missing-user-1', data_get($log->context, 'message_mid'));
+        $this->assertFalse((bool) data_get($log->context, 'has_sender_user_id'));
+        $this->assertTrue((bool) data_get($log->context, 'has_recipient_user_id'));
+        $this->assertTrue((bool) data_get($log->context, 'has_recipient_chat_id'));
+        $this->assertDatabaseCount('messages', 0);
     }
 
     public function test_late_max_contact_share_logs_delayed_received_and_phone_capture_arrived_late(): void
