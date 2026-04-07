@@ -73,7 +73,7 @@ class BotAutoReplyService
         if ($matchedRule !== null) {
             $replyText = (string) $matchedRule->reply_text;
             $autoReplySource = 'rule';
-            $buttonType = $this->resolveButtonType($matchedRule, $channel->platform);
+            $buttonType = $this->resolveButtonType($matchedRule, $channel);
 
             $this->channelActivityLogger->info(
                 $channel,
@@ -131,14 +131,14 @@ class BotAutoReplyService
                 $externalChatId,
                 $externalUserId,
                 $replyText,
-                $this->buildTelegramReplyMarkup($matchedRule),
+                $this->buildTelegramReplyMarkup($matchedRule, $channel),
             ),
             \App\Models\Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
                 $channel,
                 $externalChatId,
                 $externalUserId,
                 $replyText,
-                $this->buildMaxAttachments($matchedRule),
+                $this->buildMaxAttachments($matchedRule, $channel),
             ),
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
         };
@@ -181,38 +181,54 @@ class BotAutoReplyService
     /**
      * @return array<string, mixed>|null
      */
-    protected function buildTelegramReplyMarkup(?AutoReplyRule $matchedRule): ?array
+    protected function buildTelegramReplyMarkup(AutoReplyRule $matchedRule, \App\Models\Channel $channel): ?array
     {
-        if (
-            ! $matchedRule instanceof AutoReplyRule
-            || $matchedRule->telegram_button_type !== AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE
-        ) {
+        $buttonType = $matchedRule->getButtonTypeForChannel($channel);
+
+        if ($buttonType === AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT) {
+            return [
+                'keyboard' => [
+                    [
+                        [
+                            'text' => 'Поделиться номером телефона',
+                            'request_contact' => true,
+                        ],
+                    ],
+                ],
+                'resize_keyboard' => true,
+                'one_time_keyboard' => true,
+            ];
+        }
+
+        if ($buttonType !== AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD) {
+            return null;
+        }
+
+        $buttonText = $matchedRule->getButtonTextForChannel($channel);
+        $buttonUrl = $matchedRule->getButtonUrlForChannel($channel);
+
+        if (! filled($buttonText) || ! filled($buttonUrl)) {
             return null;
         }
 
         return [
-            'keyboard' => [
+            'inline_keyboard' => [
                 [
                     [
-                        'text' => 'Поделиться номером телефона',
-                        'request_contact' => true,
+                        'text' => $buttonText,
+                        'url' => $buttonUrl,
                     ],
                 ],
             ],
-            'resize_keyboard' => true,
-            'one_time_keyboard' => true,
         ];
     }
 
     /**
      * @return array<int, array<string, mixed>>|null
      */
-    protected function buildMaxAttachments(?AutoReplyRule $matchedRule): ?array
+    protected function buildMaxAttachments(AutoReplyRule $matchedRule, \App\Models\Channel $channel): ?array
     {
-        if (
-            ! $matchedRule instanceof AutoReplyRule
-            || $matchedRule->max_button_type !== AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE
-        ) {
+        if ($matchedRule->getButtonTypeForChannel($channel) !== AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT) {
             return null;
         }
 
@@ -227,12 +243,8 @@ class BotAutoReplyService
         ]];
     }
 
-    protected function resolveButtonType(AutoReplyRule $matchedRule, string $platform): ?string
+    protected function resolveButtonType(AutoReplyRule $matchedRule, \App\Models\Channel $channel): ?string
     {
-        return match ($platform) {
-            \App\Models\Channel::PLATFORM_TELEGRAM => $matchedRule->telegram_button_type,
-            \App\Models\Channel::PLATFORM_MAX => $matchedRule->max_button_type,
-            default => null,
-        };
+        return $matchedRule->getButtonTypeForChannel($channel);
     }
 }

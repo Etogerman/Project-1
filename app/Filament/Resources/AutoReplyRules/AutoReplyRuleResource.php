@@ -24,6 +24,7 @@ use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\Alignment;
@@ -42,6 +43,10 @@ use UnitEnum;
 
 class AutoReplyRuleResource extends Resource
 {
+    protected const BUTTON_KIND_REQUEST_PHONE = 'request_phone';
+
+    protected const BUTTON_KIND_LINK = 'link';
+
     protected static ?string $model = AutoReplyRule::class;
 
     protected static ?string $recordTitleAttribute = 'keyword';
@@ -60,7 +65,7 @@ class AutoReplyRuleResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->with(['channel', 'tagEffects.tag', 'tagConditions.tag']);
+        return parent::getEloquentQuery()->with(['channel', 'channels', 'tagEffects.tag', 'tagConditions.tag']);
     }
 
     public static function form(Schema $schema): Schema
@@ -82,13 +87,42 @@ class AutoReplyRuleResource extends Resource
                         Section::make('Триггеры и условия')
                             ->extraAttributes(['class' => 'ac-auto-reply-form-section ac-auto-reply-form-section--flat ac-auto-reply-form-section--minimal ac-auto-reply-form-section--triggers'])
                             ->schema([
-                                Select::make('channel_id')
-                                    ->label('Канал')
+                                Select::make('channel_ids')
+                                    ->label('Каналы')
+                                    ->multiple()
                                     ->options(static::getChannelOptions())
                                     ->required()
                                     ->searchable()
                                     ->preload()
                                     ->live()
+                                    ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                        if (! $record instanceof AutoReplyRule) {
+                                            return;
+                                        }
+
+                                        $record->loadMissing('channels');
+
+                                        $component->state(
+                                            $record->channels
+                                                ->pluck('id')
+                                                ->map(fn (mixed $channelId): int => (int) $channelId)
+                                                ->all(),
+                                        );
+                                    })
+                                    ->afterStateUpdated(function (mixed $state, Get $get, Set $set): void {
+                                        $availableButtonKinds = array_keys(
+                                            static::getButtonKindOptions(static::normalizeChannelIds($state)),
+                                        );
+                                        $currentButtonKind = filled($get('button_kind') ?? null)
+                                            ? trim((string) $get('button_kind'))
+                                            : null;
+
+                                        if ($currentButtonKind !== null && ! in_array($currentButtonKind, $availableButtonKinds, true)) {
+                                            $set('button_kind', null);
+                                            $set('button_text', null);
+                                            $set('button_url', null);
+                                        }
+                                    })
                                     ->native(false),
                                 Select::make('match_scope')
                                     ->label('Область срабатывания')
@@ -107,6 +141,12 @@ class AutoReplyRuleResource extends Resource
                                     ->options(AutoReplyRule::phoneConditionOptions())
                                     ->placeholder('Неважно')
                                     ->native(false),
+                                TextInput::make('priority')
+                                    ->label('Приоритет')
+                                    ->numeric()
+                                    ->default(10)
+                                    ->required()
+                                    ->helperText('Меньшее число выполняется раньше. При равном приоритете раньше выполняется правило с меньшим ID.'),
                                 Select::make('required_tag_ids')
                                     ->label('Обязательные теги')
                                     ->options(fn (?AutoReplyRule $record): array => static::getTagConditionOptions($record))
@@ -154,18 +194,48 @@ class AutoReplyRuleResource extends Resource
                                     ->rows(8)
                                     ->maxLength(2000)
                                     ->columnSpanFull(),
-                                Select::make('telegram_button_type')
+                                Select::make('button_kind')
                                     ->label('Кнопка')
-                                    ->options(AutoReplyRule::telegramButtonTypeOptions())
+                                    ->options(fn (Get $get): array => static::getButtonKindOptions(static::normalizeChannelIds($get('channel_ids'))))
                                     ->placeholder('Без кнопки')
                                     ->native(false)
-                                    ->hidden(fn (Get $get): bool => ! static::channelSupportsTelegram((int) $get('channel_id'))),
-                                Select::make('max_button_type')
-                                    ->label('Кнопка')
-                                    ->options(AutoReplyRule::maxButtonTypeOptions())
-                                    ->placeholder('Без кнопки')
-                                    ->native(false)
-                                    ->hidden(fn (Get $get): bool => ! static::channelSupportsMax((int) $get('channel_id'))),
+                                    ->live()
+                                    ->afterStateHydrated(function (Select $component, ?AutoReplyRule $record): void {
+                                        if (! $record instanceof AutoReplyRule) {
+                                            return;
+                                        }
+
+                                        $component->state(static::resolveSharedButtonStateFromRecord($record)['button_kind']);
+                                    })
+                                    ->afterStateUpdated(function (mixed $state, Set $set): void {
+                                        if (($state ?? null) !== static::BUTTON_KIND_LINK) {
+                                            $set('button_text', null);
+                                            $set('button_url', null);
+                                        }
+                                    }),
+                                TextInput::make('button_text')
+                                    ->label('Текст кнопки')
+                                    ->hidden(fn (Get $get): bool => ($get('button_kind') ?? null) !== static::BUTTON_KIND_LINK)
+                                    ->required(fn (Get $get): bool => ($get('button_kind') ?? null) === static::BUTTON_KIND_LINK)
+                                    ->afterStateHydrated(function (TextInput $component, ?AutoReplyRule $record): void {
+                                        if (! $record instanceof AutoReplyRule) {
+                                            return;
+                                        }
+
+                                        $component->state(static::resolveSharedButtonStateFromRecord($record)['button_text']);
+                                    }),
+                                TextInput::make('button_url')
+                                    ->label('Ссылка кнопки')
+                                    ->url()
+                                    ->hidden(fn (Get $get): bool => ($get('button_kind') ?? null) !== static::BUTTON_KIND_LINK)
+                                    ->required(fn (Get $get): bool => ($get('button_kind') ?? null) === static::BUTTON_KIND_LINK)
+                                    ->afterStateHydrated(function (TextInput $component, ?AutoReplyRule $record): void {
+                                        if (! $record instanceof AutoReplyRule) {
+                                            return;
+                                        }
+
+                                        $component->state(static::resolveSharedButtonStateFromRecord($record)['button_url']);
+                                    }),
                             ])
                             ->columns(1),
                         Section::make('Дополнительные действия')
@@ -257,7 +327,7 @@ class AutoReplyRuleResource extends Resource
     protected static function buildRulePreviewViewData(Get $get): array
     {
         return [
-            'channelLabel' => static::resolveChannelLabel($get('channel_id')),
+            'channelLabel' => static::resolveChannelSummary($get('channel_ids')),
             'isActive' => (bool) $get('is_active'),
             'summaryLines' => static::buildTriggerSummaryLines($get),
             'replyText' => trim((string) ($get('reply_text') ?? '')),
@@ -270,7 +340,7 @@ class AutoReplyRuleResource extends Resource
     protected static function buildHeaderSummaryLine(Get $get): string
     {
         $parts = array_filter([
-            static::resolveChannelLabel($get('channel_id')),
+            static::resolveChannelSummary($get('channel_ids')),
             static::resolveScopeSummary($get),
             static::resolvePhoneConditionSummary($get('contact_phone_condition')),
             (bool) $get('is_active') ? 'активно' : 'выключено',
@@ -285,7 +355,7 @@ class AutoReplyRuleResource extends Resource
     protected static function buildHeaderHighlights(Get $get): array
     {
         return array_values(array_filter([
-            static::resolveChannelLabel($get('channel_id')) ?? 'Канал не выбран',
+            static::resolveChannelSummary($get('channel_ids')) ?? 'Каналы не выбраны',
             'Триггер: '.static::resolveScopeSummary($get),
             'Телефон: '.static::resolvePhoneConditionSummary($get('contact_phone_condition')),
             (bool) $get('is_active') ? 'Активно' : 'Выключено',
@@ -299,8 +369,8 @@ class AutoReplyRuleResource extends Resource
     {
         $lines = [];
 
-        if (filled($channelLabel = static::resolveChannelLabel($get('channel_id')))) {
-            $lines[] = 'Канал: '.$channelLabel;
+        if (filled($channelLabel = static::resolveChannelSummary($get('channel_ids')))) {
+            $lines[] = 'Каналы: '.$channelLabel;
         }
 
         $lines[] = static::resolveScopeLine($get);
@@ -390,37 +460,41 @@ class AutoReplyRuleResource extends Resource
         return static::getChannelOptions()[$channelId] ?? null;
     }
 
+    protected static function resolveChannelSummary(mixed $channelIds): ?string
+    {
+        $labels = array_values(array_filter(array_map(
+            fn (int $channelId): ?string => static::resolveChannelLabel($channelId),
+            static::normalizeChannelIds($channelIds),
+        )));
+
+        if ($labels === []) {
+            return null;
+        }
+
+        return implode(', ', $labels);
+    }
+
     protected static function resolveButtonLabel(Get $get): ?string
     {
-        $channelId = (int) ($get('channel_id') ?? 0);
-
-        if (static::channelSupportsTelegram($channelId)) {
-            $buttonType = (string) ($get('telegram_button_type') ?? '');
-
-            return filled($buttonType)
-                ? (AutoReplyRule::telegramButtonTypeOptions()[$buttonType] ?? $buttonType)
-                : null;
-        }
-
-        if (static::channelSupportsMax($channelId)) {
-            $buttonType = (string) ($get('max_button_type') ?? '');
-
-            return filled($buttonType)
-                ? (AutoReplyRule::maxButtonTypeOptions()[$buttonType] ?? $buttonType)
-                : null;
-        }
-
-        $telegramButtonType = (string) ($get('telegram_button_type') ?? '');
-
-        if (filled($telegramButtonType)) {
-            return AutoReplyRule::telegramButtonTypeOptions()[$telegramButtonType] ?? $telegramButtonType;
-        }
-
-        $maxButtonType = (string) ($get('max_button_type') ?? '');
-
-        return filled($maxButtonType)
-            ? (AutoReplyRule::maxButtonTypeOptions()[$maxButtonType] ?? $maxButtonType)
+        $buttonKind = filled($get('button_kind') ?? null)
+            ? trim((string) $get('button_kind'))
             : null;
+
+        if (! filled($buttonKind)) {
+            return null;
+        }
+
+        $label = static::resolveButtonKindLabel($buttonKind);
+
+        if ($label === null) {
+            return null;
+        }
+
+        if ($buttonKind === static::BUTTON_KIND_LINK && filled($get('button_text') ?? null)) {
+            $label .= ': '.trim((string) $get('button_text'));
+        }
+
+        return $label;
     }
 
     /**
@@ -460,9 +534,13 @@ class AutoReplyRuleResource extends Resource
     {
         return $table
             ->columns([
-                TextColumn::make('channel_display')
-                    ->label('Канал')
-                    ->state(fn (AutoReplyRule $record): string => static::formatChannelLabel($record->channel))
+                TextColumn::make('channels_display')
+                    ->label('Каналы')
+                    ->state(fn (AutoReplyRule $record): string => static::formatChannelsLabel($record))
+                    ->toggleable(),
+                TextColumn::make('priority')
+                    ->label('Приоритет')
+                    ->sortable()
                     ->toggleable(),
                 TextColumn::make('keyword')
                     ->label('Условие')
@@ -492,12 +570,7 @@ class AutoReplyRuleResource extends Resource
                 TextColumn::make('button_type')
                     ->label('Кнопка')
                     ->placeholder('—')
-                    ->state(fn (AutoReplyRule $record): ?string => $record->telegram_button_type ?? $record->max_button_type)
-                    ->formatStateUsing(fn (?string $state): string => filled($state)
-                        ? (AutoReplyRule::telegramButtonTypeOptions()[$state]
-                            ?? AutoReplyRule::maxButtonTypeOptions()[$state]
-                            ?? $state)
-                        : '—')
+                    ->state(fn (AutoReplyRule $record): string => static::formatButtonSummary($record))
                     ->toggleable(),
                 TextColumn::make('tag_effects_summary')
                     ->label('Теги')
@@ -523,7 +596,18 @@ class AutoReplyRuleResource extends Resource
             ->filters([
                 SelectFilter::make('channel_id')
                     ->label('Канал')
-                    ->options(static::getChannelOptions()),
+                    ->options(static::getChannelOptions())
+                    ->query(function (Builder $query, array $data): Builder {
+                        $channelId = (int) ($data['value'] ?? 0);
+
+                        if ($channelId <= 0) {
+                            return $query;
+                        }
+
+                        return $query->whereHas('channels', function (Builder $channelQuery) use ($channelId): void {
+                            $channelQuery->whereKey($channelId);
+                        });
+                    }),
                 SelectFilter::make('tag')
                     ->label('Тег')
                     ->options(static::getTagFilterOptions())
@@ -605,6 +689,9 @@ class AutoReplyRuleResource extends Resource
      */
     public static function mutateAutoReplyRuleData(array $data, ?AutoReplyRule $record = null): array
     {
+        $data['channel_id'] = filled($data['channel_id'] ?? null)
+            ? (int) $data['channel_id']
+            : null;
         $data['match_scope'] = filled($data['match_scope'] ?? null)
             ? trim((string) $data['match_scope'])
             : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
@@ -621,13 +708,27 @@ class AutoReplyRuleResource extends Resource
         $data['max_button_type'] = filled($data['max_button_type'] ?? null)
             ? trim((string) $data['max_button_type'])
             : null;
+        $data['priority'] = filled($data['priority'] ?? null)
+            ? (int) $data['priority']
+            : 10;
         $data['normalized_keyword'] = static::usesKeywordScope($data['match_scope'] ?? null)
             ? AutoReplyRule::normalizeKeyword($data['keyword'] ?? null)
             : null;
 
         static::guardAgainstConflictingRule($data, $record);
 
-        return $data;
+        return Arr::only($data, [
+            'channel_id',
+            'keyword',
+            'normalized_keyword',
+            'match_scope',
+            'contact_phone_condition',
+            'reply_text',
+            'telegram_button_type',
+            'max_button_type',
+            'is_active',
+            'priority',
+        ]);
     }
 
     /**
@@ -637,19 +738,27 @@ class AutoReplyRuleResource extends Resource
     {
         $tagEffects = static::extractTagEffectIds($data);
         $tagConditions = static::extractTagConditionIds($data);
+        $channelIds = static::normalizeChannelIds($data['channel_ids'] ?? []);
+        $sharedButtonConfig = static::normalizeSharedButtonConfigForPersistence($data, $channelIds);
+        $channelSettings = static::buildChannelSettingsFromSharedButtonConfig($channelIds, $sharedButtonConfig);
+        $legacyBridgeData = static::buildLegacyBridgeData($channelIds, $sharedButtonConfig);
         $ruleData = static::mutateAutoReplyRuleData(
-            Arr::except($data, ['assign_tag_ids', 'remove_tag_ids', 'required_tag_ids', 'excluded_tag_ids']),
+            Arr::except($data, ['assign_tag_ids', 'remove_tag_ids', 'required_tag_ids', 'excluded_tag_ids', 'channel_ids', 'button_kind', 'button_text', 'button_url'])
+                + ['channel_ids' => $channelIds]
+                + $legacyBridgeData,
             $record,
         );
 
         /** @var AutoReplyRule $rule */
-        $rule = DB::transaction(function () use ($record, $ruleData, $tagEffects, $tagConditions): AutoReplyRule {
+        $rule = DB::transaction(function () use ($record, $ruleData, $tagEffects, $tagConditions, $channelSettings): AutoReplyRule {
             if ($record instanceof AutoReplyRule) {
                 $record->update($ruleData);
                 $rule = $record;
             } else {
                 $rule = AutoReplyRule::query()->create($ruleData);
             }
+
+            static::syncRuleChannels($rule, $channelSettings);
 
             app(SyncAutoReplyRuleTagEffectsAction::class)->handle(
                 $rule,
@@ -665,7 +774,7 @@ class AutoReplyRuleResource extends Resource
             return $rule;
         });
 
-        return $rule->fresh(['channel', 'tagEffects.tag', 'tagConditions.tag']) ?? $rule;
+        return $rule->fresh(['channel', 'channels', 'tagEffects.tag', 'tagConditions.tag']) ?? $rule;
     }
 
     public static function notifyValidationFailure(\Illuminate\Validation\ValidationException $exception): void
@@ -703,10 +812,10 @@ class AutoReplyRuleResource extends Resource
      */
     protected static function guardAgainstDuplicateNormalizedKeyword(array $data, ?AutoReplyRule $record = null): void
     {
-        $channelId = (int) ($data['channel_id'] ?? 0);
+        $channelIds = static::normalizeChannelIds($data['channel_ids'] ?? []);
         $normalizedKeyword = AutoReplyRule::normalizeKeyword($data['keyword'] ?? null);
 
-        if ($channelId <= 0 || ! filled($normalizedKeyword)) {
+        if ($channelIds === [] || ! filled($normalizedKeyword)) {
             return;
         }
 
@@ -715,7 +824,9 @@ class AutoReplyRuleResource extends Resource
             : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
 
         $exists = AutoReplyRule::query()
-            ->where('channel_id', $channelId)
+            ->whereHas('channels', function (Builder $query) use ($channelIds): void {
+                $query->whereIn('channels.id', $channelIds);
+            })
             ->where('match_scope', $matchScope)
             ->where('normalized_keyword', $normalizedKeyword)
             ->when($record instanceof AutoReplyRule, fn ($query) => $query->whereKeyNot($record->id))
@@ -726,7 +837,7 @@ class AutoReplyRuleResource extends Resource
         }
 
         throw ValidationException::withMessages([
-            'keyword' => 'Для этого канала правило с таким условием уже существует.',
+            'keyword' => 'Для одного из выбранных каналов правило с таким условием уже существует.',
         ]);
     }
 
@@ -735,17 +846,19 @@ class AutoReplyRuleResource extends Resource
      */
     protected static function guardAgainstDuplicateAnyInboundRule(array $data, ?AutoReplyRule $record = null): void
     {
-        $channelId = (int) ($data['channel_id'] ?? 0);
+        $channelIds = static::normalizeChannelIds($data['channel_ids'] ?? []);
         $contactPhoneCondition = filled($data['contact_phone_condition'] ?? null)
             ? trim((string) $data['contact_phone_condition'])
             : null;
 
-        if ($channelId <= 0) {
+        if ($channelIds === []) {
             return;
         }
 
         $exists = AutoReplyRule::query()
-            ->where('channel_id', $channelId)
+            ->whereHas('channels', function (Builder $query) use ($channelIds): void {
+                $query->whereIn('channels.id', $channelIds);
+            })
             ->where('match_scope', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND)
             ->where(fn ($query) => filled($contactPhoneCondition)
                 ? $query->where('contact_phone_condition', $contactPhoneCondition)
@@ -758,7 +871,7 @@ class AutoReplyRuleResource extends Resource
         }
 
         throw ValidationException::withMessages([
-            'match_scope' => 'Для этого канала правило на любое входящее с таким условием уже существует.',
+            'match_scope' => 'Для одного из выбранных каналов правило на любое входящее с таким условием уже существует.',
         ]);
     }
 
@@ -786,6 +899,56 @@ class AutoReplyRuleResource extends Resource
         return sprintf('%s (%s)', $channel->name, $platform);
     }
 
+    protected static function formatChannelsLabel(AutoReplyRule $record): string
+    {
+        $record->loadMissing('channels');
+
+        $labels = $record->channels
+            ->map(fn (Channel $channel): string => static::formatChannelLabel($channel))
+            ->all();
+
+        return $labels === []
+            ? '—'
+            : implode(', ', $labels);
+    }
+
+    protected static function formatButtonSummary(AutoReplyRule $record): string
+    {
+        $record->loadMissing('channels');
+
+        $parts = $record->channels
+            ->map(function (Channel $channel) use ($record): ?string {
+                $buttonType = $record->getButtonTypeForChannel($channel);
+
+                if (! filled($buttonType)) {
+                    return null;
+                }
+
+                $label = match ($buttonType) {
+                    AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT => 'Запросить номер телефона',
+                    AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD => 'Ссылка',
+                    default => $buttonType,
+                };
+
+                if ($label === null) {
+                    return null;
+                }
+
+                if ($buttonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD && filled($record->getButtonTextForChannel($channel))) {
+                    $label .= ': '.$record->getButtonTextForChannel($channel);
+                }
+
+                return sprintf('%s — %s', $channel->name, $label);
+            })
+            ->filter()
+            ->values()
+            ->all();
+
+        return $parts === []
+            ? '—'
+            : implode('; ', $parts);
+    }
+
     protected static function channelSupportsTelegram(int $channelId): bool
     {
         if ($channelId <= 0) {
@@ -808,6 +971,246 @@ class AutoReplyRuleResource extends Resource
             ->whereKey($channelId)
             ->where('platform', Channel::PLATFORM_MAX)
             ->exists();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected static function getButtonKindOptions(array $channelIds): array
+    {
+        if ($channelIds === []) {
+            return [];
+        }
+
+        $platforms = Channel::query()
+            ->whereIn('id', $channelIds)
+            ->pluck('platform')
+            ->filter(fn (mixed $platform): bool => is_string($platform) && $platform !== '')
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($platforms === []) {
+            return [];
+        }
+
+        $options = [
+            static::BUTTON_KIND_REQUEST_PHONE => 'Запросить номер телефона',
+        ];
+
+        if (count($platforms) === 1 && $platforms[0] === Channel::PLATFORM_TELEGRAM) {
+            $options[static::BUTTON_KIND_LINK] = 'Ссылка';
+        }
+
+        return $options;
+    }
+
+    protected static function resolveButtonKindLabel(?string $buttonKind): ?string
+    {
+        if (! filled($buttonKind)) {
+            return null;
+        }
+
+        return match ($buttonKind) {
+            static::BUTTON_KIND_REQUEST_PHONE => 'Запросить номер телефона',
+            static::BUTTON_KIND_LINK => 'Ссылка',
+            default => $buttonKind,
+        };
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    protected static function normalizeChannelIds(mixed $state): array
+    {
+        if (! is_array($state)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            fn (mixed $value): int => (int) $value,
+            $state,
+        ), fn (int $value): bool => $value > 0)));
+    }
+
+    /**
+     * @return array{button_kind:?string,button_text:?string,button_url:?string}
+     */
+    protected static function resolveSharedButtonStateFromRecord(AutoReplyRule $record): array
+    {
+        $record->loadMissing('channels');
+
+        $firstChannel = $record->channels->first();
+
+        if (! $firstChannel instanceof Channel) {
+            return [
+                'button_kind' => null,
+                'button_text' => null,
+                'button_url' => null,
+            ];
+        }
+
+        $buttonType = $record->getButtonTypeForChannel($firstChannel);
+
+        return [
+            'button_kind' => match ($buttonType) {
+                AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT => static::BUTTON_KIND_REQUEST_PHONE,
+                AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD => static::BUTTON_KIND_LINK,
+                default => null,
+            },
+            'button_text' => $buttonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD
+                ? $record->getButtonTextForChannel($firstChannel)
+                : null,
+            'button_url' => $buttonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD
+                ? $record->getButtonUrlForChannel($firstChannel)
+                : null,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<int, int>  $channelIds
+     * @return array{button_kind:?string,button_text:?string,button_url:?string}
+     */
+    protected static function normalizeSharedButtonConfigForPersistence(array $data, array $channelIds): array
+    {
+        if ($channelIds === []) {
+            throw ValidationException::withMessages([
+                'channel_ids' => 'Выберите хотя бы один канал.',
+            ]);
+        }
+
+        $buttonKind = filled($data['button_kind'] ?? null)
+            ? trim((string) $data['button_kind'])
+            : null;
+        $buttonText = filled($data['button_text'] ?? null)
+            ? trim((string) $data['button_text'])
+            : null;
+        $buttonUrl = filled($data['button_url'] ?? null)
+            ? trim((string) $data['button_url'])
+            : null;
+
+        $channels = Channel::query()
+            ->whereIn('id', $channelIds)
+            ->get()
+            ->keyBy('id');
+
+        if ($channels->count() !== count($channelIds)) {
+            throw ValidationException::withMessages([
+                'channel_ids' => 'Один из выбранных каналов больше недоступен.',
+            ]);
+        }
+
+        $availableButtonKinds = static::getButtonKindOptions($channelIds);
+
+        if ($buttonKind !== null && ! array_key_exists($buttonKind, $availableButtonKinds)) {
+            throw ValidationException::withMessages([
+                'button_kind' => 'Выбранная кнопка недоступна для текущего набора каналов.',
+            ]);
+        }
+
+        if ($buttonKind !== static::BUTTON_KIND_LINK) {
+            $buttonText = null;
+            $buttonUrl = null;
+        }
+
+        if ($buttonKind === static::BUTTON_KIND_LINK) {
+            if (! filled($buttonText) || ! filled($buttonUrl)) {
+                throw ValidationException::withMessages([
+                    'button_kind' => 'Для кнопки-ссылки заполните текст и ссылку.',
+                ]);
+            }
+
+            if (filter_var($buttonUrl, FILTER_VALIDATE_URL) === false) {
+                throw ValidationException::withMessages([
+                    'button_url' => 'Для кнопки-ссылки укажите корректную ссылку.',
+                ]);
+            }
+        }
+
+        return [
+            'button_kind' => $buttonKind,
+            'button_text' => $buttonText,
+            'button_url' => $buttonUrl,
+        ];
+    }
+
+    /**
+     * @param  array<int, int>  $channelIds
+     * @param  array{button_kind:?string,button_text:?string,button_url:?string}  $sharedButtonConfig
+     * @return array<int, array{channel_id:int,button_type:?string,button_text:?string,button_url:?string}>
+     */
+    protected static function buildChannelSettingsFromSharedButtonConfig(array $channelIds, array $sharedButtonConfig): array
+    {
+        $buttonType = match ($sharedButtonConfig['button_kind']) {
+            static::BUTTON_KIND_REQUEST_PHONE => AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT,
+            static::BUTTON_KIND_LINK => AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD,
+            default => null,
+        };
+
+        return array_map(
+            fn (int $channelId): array => [
+                'channel_id' => $channelId,
+                'button_type' => $buttonType,
+                'button_text' => $buttonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD
+                    ? $sharedButtonConfig['button_text']
+                    : null,
+                'button_url' => $buttonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD
+                    ? $sharedButtonConfig['button_url']
+                    : null,
+            ],
+            $channelIds,
+        );
+    }
+
+    /**
+     * @param  array<int, int>  $channelIds
+     * @param  array{button_kind:?string,button_text:?string,button_url:?string}  $sharedButtonConfig
+     * @return array<string, mixed>
+     */
+    protected static function buildLegacyBridgeData(array $channelIds, array $sharedButtonConfig): array
+    {
+        $primaryChannelId = $channelIds[0] ?? null;
+        $telegramButtonType = null;
+        $maxButtonType = null;
+
+        if ($primaryChannelId !== null && $sharedButtonConfig['button_kind'] === static::BUTTON_KIND_REQUEST_PHONE) {
+            $primaryChannel = Channel::query()->find($primaryChannelId);
+
+            if ($primaryChannel instanceof Channel) {
+                if ($primaryChannel->platform === Channel::PLATFORM_TELEGRAM) {
+                    $telegramButtonType = AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE;
+                }
+
+                if ($primaryChannel->platform === Channel::PLATFORM_MAX) {
+                    $maxButtonType = AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE;
+                }
+            }
+        }
+
+        return [
+            'channel_id' => $primaryChannelId,
+            'telegram_button_type' => $telegramButtonType,
+            'max_button_type' => $maxButtonType,
+        ];
+    }
+
+    /**
+     * @param  array<int, array{channel_id:int,button_type:?string,button_text:?string,button_url:?string}>  $channelSettings
+     */
+    protected static function syncRuleChannels(AutoReplyRule $rule, array $channelSettings): void
+    {
+        $syncPayload = [];
+
+        foreach ($channelSettings as $settings) {
+            $syncPayload[$settings['channel_id']] = [
+                'button_type' => $settings['button_type'],
+                'button_text' => $settings['button_text'],
+                'button_url' => $settings['button_url'],
+            ];
+        }
+
+        $rule->channels()->sync($syncPayload);
     }
 
     protected static function usesExactKeywordScope(?string $matchScope): bool
