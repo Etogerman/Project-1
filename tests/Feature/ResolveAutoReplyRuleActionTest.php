@@ -10,13 +10,14 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Tag;
 use App\Services\Bots\ResolveAutoReplyRuleAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use Tests\TestCase;
 
 class ResolveAutoReplyRuleActionTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_it_returns_matching_rule_with_trim_and_case_insensitive_normalization(): void
+    public function test_it_returns_matching_rules_with_trim_and_case_insensitive_normalization(): void
     {
         $channel = Channel::factory()->create();
         $contact = Contact::factory()->create();
@@ -31,11 +32,10 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, '  тест1  ');
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($rule));
+        $this->assertResolvedRules($resolved, [$rule]);
     }
 
-    public function test_it_returns_null_when_message_text_is_empty_or_rule_is_inactive_or_from_another_channel(): void
+    public function test_it_returns_empty_collection_when_message_text_is_empty_or_rule_is_inactive_or_from_another_channel(): void
     {
         $channel = Channel::factory()->create();
         $otherChannel = Channel::factory()->create();
@@ -57,10 +57,10 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolver = app(ResolveAutoReplyRuleAction::class);
 
-        $this->assertNull($resolver->handle($channel, $contact, null));
-        $this->assertNull($resolver->handle($channel, $contact, '   '));
-        $this->assertNull($resolver->handle($channel, $contact, 'Тест2'));
-        $this->assertNull($resolver->handle($channel, $contact, 'Нет совпадения'));
+        $this->assertResolvedRules($resolver->handle($channel, $contact, null), []);
+        $this->assertResolvedRules($resolver->handle($channel, $contact, '   '), []);
+        $this->assertResolvedRules($resolver->handle($channel, $contact, 'Тест2'), []);
+        $this->assertResolvedRules($resolver->handle($channel, $contact, 'Нет совпадения'), []);
     }
 
     public function test_it_respects_phone_condition_for_exact_keyword_rules(): void
@@ -83,8 +83,8 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolver = app(ResolveAutoReplyRuleAction::class);
 
-        $this->assertTrue($resolver->handle($channel, $contactWithPhone, 'Тест1')?->is($rule) ?? false);
-        $this->assertNull($resolver->handle($channel, $contactWithoutPhone, 'Тест1'));
+        $this->assertResolvedRules($resolver->handle($channel, $contactWithPhone, 'Тест1'), [$rule]);
+        $this->assertResolvedRules($resolver->handle($channel, $contactWithoutPhone, 'Тест1'), []);
     }
 
     public function test_it_falls_back_to_any_inbound_rule_when_exact_rule_is_not_applicable_for_contact(): void
@@ -111,8 +111,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'Тест1');
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($fallbackRule));
+        $this->assertResolvedRules($resolved, [$fallbackRule]);
     }
 
     public function test_it_prefers_exact_parameter_rule_over_exact_text_rule(): void
@@ -138,8 +137,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, '/start TEXT_1', 'TEXT_1');
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($parameterRule));
+        $this->assertResolvedRules($resolved, [$parameterRule]);
     }
 
     public function test_it_matches_exact_text_or_parameter_rule_by_message_parameter(): void
@@ -162,8 +160,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
             'PROMO_2026',
         );
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($combinedRule));
+        $this->assertResolvedRules($resolved, [$combinedRule]);
     }
 
     public function test_it_matches_exact_text_or_parameter_rule_by_message_text(): void
@@ -186,8 +183,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
             null,
         );
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($combinedRule));
+        $this->assertResolvedRules($resolved, [$combinedRule]);
     }
 
     public function test_it_respects_phone_condition_for_exact_text_or_parameter_rules(): void
@@ -212,8 +208,8 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolver = app(ResolveAutoReplyRuleAction::class);
 
-        $this->assertTrue($resolver->handle($channel, $contactWithPhone, null, 'promo_dual')?->is($combinedRule) ?? false);
-        $this->assertNull($resolver->handle($channel, $contactWithoutPhone, 'promo_dual'));
+        $this->assertResolvedRules($resolver->handle($channel, $contactWithPhone, null, 'promo_dual'), [$combinedRule]);
+        $this->assertResolvedRules($resolver->handle($channel, $contactWithoutPhone, 'promo_dual'), []);
     }
 
     public function test_it_matches_contains_text_rule_by_substring(): void
@@ -231,8 +227,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'У меня есть скидка на заказ');
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($containsRule));
+        $this->assertResolvedRules($resolved, [$containsRule]);
     }
 
     public function test_it_respects_phone_condition_for_exact_parameter_rules(): void
@@ -256,8 +251,8 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolver = app(ResolveAutoReplyRuleAction::class);
 
-        $this->assertTrue($resolver->handle($channel, $contactWithPhone, null, 'promo_123')?->is($rule) ?? false);
-        $this->assertNull($resolver->handle($channel, $contactWithoutPhone, null, 'promo_123'));
+        $this->assertResolvedRules($resolver->handle($channel, $contactWithPhone, null, 'promo_123'), [$rule]);
+        $this->assertResolvedRules($resolver->handle($channel, $contactWithoutPhone, null, 'promo_123'), []);
     }
 
     public function test_it_matches_rule_when_contact_has_all_required_tags(): void
@@ -301,8 +296,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'Любое сообщение');
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($rule));
+        $this->assertResolvedRules($resolved, [$rule]);
     }
 
     public function test_it_does_not_match_rule_when_required_tag_is_missing(): void
@@ -327,7 +321,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'Любое сообщение');
 
-        $this->assertNull($resolved);
+        $this->assertResolvedRules($resolved, []);
     }
 
     public function test_it_does_not_match_rule_when_contact_has_excluded_tag(): void
@@ -359,7 +353,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'Любое сообщение');
 
-        $this->assertNull($resolved);
+        $this->assertResolvedRules($resolved, []);
     }
 
     public function test_it_resolves_tag_conditions_by_root_contact_after_merge(): void
@@ -395,8 +389,7 @@ class ResolveAutoReplyRuleActionTest extends TestCase
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $mergedContact, 'Любое сообщение');
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($rule));
+        $this->assertResolvedRules($resolved, [$rule]);
     }
 
     public function test_it_matches_rule_through_pivot_channel_binding(): void
@@ -413,11 +406,64 @@ class ResolveAutoReplyRuleActionTest extends TestCase
                 'normalized_keyword' => AutoReplyRule::normalizeKeyword('MULTI_CHANNEL'),
                 'reply_text' => 'Matched through pivot',
                 'is_active' => true,
-            ]);
+        ]);
 
         $resolved = app(ResolveAutoReplyRuleAction::class)->handle($secondaryChannel, $contact, 'multi_channel');
 
-        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
-        $this->assertTrue($resolved->is($rule));
+        $this->assertResolvedRules($resolved, [$rule]);
+    }
+
+    public function test_it_collects_all_matching_rules_sorted_by_priority_and_id(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+
+        $laterExactRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'Мульти',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Мульти'),
+            'reply_text' => 'Exact later',
+            'priority' => 20,
+        ]);
+
+        $firstAnyInboundRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Any inbound first',
+            'priority' => 5,
+        ]);
+
+        $secondAnyInboundRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Any inbound second',
+            'priority' => 5,
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->handle($channel, $contact, 'мульти');
+
+        $this->assertResolvedRules($resolved, [$firstAnyInboundRule, $secondAnyInboundRule, $laterExactRule]);
+    }
+
+    /**
+     * @param  array<int, AutoReplyRule>  $expectedRules
+     */
+    private function assertResolvedRules(Collection $resolved, array $expectedRules): void
+    {
+        $this->assertInstanceOf(Collection::class, $resolved);
+        $this->assertSame(
+            array_map(
+                fn (AutoReplyRule $rule): int => (int) $rule->getKey(),
+                $expectedRules,
+            ),
+            $resolved
+                ->map(fn (AutoReplyRule $rule): int => (int) $rule->getKey())
+                ->all(),
+        );
     }
 }

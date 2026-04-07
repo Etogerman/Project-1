@@ -68,7 +68,6 @@ class AutoReplyRule extends Model
             $rule->guardMatchScope();
             $rule->guardContactPhoneCondition();
             $rule->guardKeywordFieldsForMatchScope();
-            $rule->guardAnyInboundUniqueness();
             $rule->guardTelegramButtonType();
             $rule->guardMaxButtonType();
         });
@@ -301,30 +300,6 @@ class AutoReplyRule extends Model
 
         $this->keyword = filled($this->keyword) ? trim((string) $this->keyword) : $normalizedKeyword;
         $this->normalized_keyword = $normalizedKeyword;
-    }
-
-    protected function guardAnyInboundUniqueness(): void
-    {
-        if (! $this->usesAnyInboundScope() || ! filled($this->channel_id)) {
-            return;
-        }
-
-        $existing = static::query()
-            ->where('channel_id', $this->channel_id)
-            ->where('match_scope', self::MATCH_SCOPE_ANY_INBOUND)
-            ->where(fn (Builder $query) => filled($this->contact_phone_condition)
-                ? $query->where('contact_phone_condition', $this->contact_phone_condition)
-                : $query->whereNull('contact_phone_condition'))
-            ->when($this->exists, fn (Builder $query) => $query->whereKeyNot($this->getKey()))
-            ->exists();
-
-        if (! $existing) {
-            return;
-        }
-
-        throw ValidationException::withMessages([
-            'match_scope' => 'Для этого канала правило на любое входящее с таким условием уже существует.',
-        ]);
     }
 
     protected function guardTelegramButtonType(): void

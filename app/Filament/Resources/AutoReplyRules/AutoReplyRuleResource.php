@@ -715,8 +715,6 @@ class AutoReplyRuleResource extends Resource
             ? AutoReplyRule::normalizeKeyword($data['keyword'] ?? null)
             : null;
 
-        static::guardAgainstConflictingRule($data, $record);
-
         return Arr::only($data, [
             'channel_id',
             'keyword',
@@ -791,88 +789,6 @@ class AutoReplyRuleResource extends Resource
                 : 'Проверьте данные формы и попробуйте ещё раз.')
             ->danger()
             ->send();
-    }
-
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    protected static function guardAgainstConflictingRule(array $data, ?AutoReplyRule $record = null): void
-    {
-        if (($data['match_scope'] ?? AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD) === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
-            static::guardAgainstDuplicateAnyInboundRule($data, $record);
-
-            return;
-        }
-
-        static::guardAgainstDuplicateNormalizedKeyword($data, $record);
-    }
-
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    protected static function guardAgainstDuplicateNormalizedKeyword(array $data, ?AutoReplyRule $record = null): void
-    {
-        $channelIds = static::normalizeChannelIds($data['channel_ids'] ?? []);
-        $normalizedKeyword = AutoReplyRule::normalizeKeyword($data['keyword'] ?? null);
-
-        if ($channelIds === [] || ! filled($normalizedKeyword)) {
-            return;
-        }
-
-        $matchScope = filled($data['match_scope'] ?? null)
-            ? trim((string) $data['match_scope'])
-            : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
-
-        $exists = AutoReplyRule::query()
-            ->whereHas('channels', function (Builder $query) use ($channelIds): void {
-                $query->whereIn('channels.id', $channelIds);
-            })
-            ->where('match_scope', $matchScope)
-            ->where('normalized_keyword', $normalizedKeyword)
-            ->when($record instanceof AutoReplyRule, fn ($query) => $query->whereKeyNot($record->id))
-            ->exists();
-
-        if (! $exists) {
-            return;
-        }
-
-        throw ValidationException::withMessages([
-            'keyword' => 'Для одного из выбранных каналов правило с таким условием уже существует.',
-        ]);
-    }
-
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    protected static function guardAgainstDuplicateAnyInboundRule(array $data, ?AutoReplyRule $record = null): void
-    {
-        $channelIds = static::normalizeChannelIds($data['channel_ids'] ?? []);
-        $contactPhoneCondition = filled($data['contact_phone_condition'] ?? null)
-            ? trim((string) $data['contact_phone_condition'])
-            : null;
-
-        if ($channelIds === []) {
-            return;
-        }
-
-        $exists = AutoReplyRule::query()
-            ->whereHas('channels', function (Builder $query) use ($channelIds): void {
-                $query->whereIn('channels.id', $channelIds);
-            })
-            ->where('match_scope', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND)
-            ->where(fn ($query) => filled($contactPhoneCondition)
-                ? $query->where('contact_phone_condition', $contactPhoneCondition)
-                : $query->whereNull('contact_phone_condition'))
-            ->when($record instanceof AutoReplyRule, fn ($query) => $query->whereKeyNot($record->id))
-            ->exists();
-
-        if (! $exists) {
-            return;
-        }
-
-        throw ValidationException::withMessages([
-            'match_scope' => 'Для одного из выбранных каналов правило на любое входящее с таким условием уже существует.',
-        ]);
     }
 
     /**
