@@ -49,6 +49,8 @@ class AutoReplyRuleResource extends Resource
 
     protected const BUTTON_KIND_LINK = 'link';
 
+    protected const CATEGORY_FILTER_WITHOUT = '__without_category__';
+
     protected static ?string $model = AutoReplyRule::class;
 
     protected static ?string $recordTitleAttribute = 'keyword';
@@ -635,8 +637,21 @@ class AutoReplyRuleResource extends Resource
             ->filters([
                 SelectFilter::make('auto_reply_category_id')
                     ->label('Категория')
-                    ->options(static::getAutoReplyCategoryOptions())
+                    ->options(static::getAutoReplyCategoryFilterOptions())
                     ->searchable()
+                    ->query(function (Builder $query, array $data): Builder {
+                        $value = $data['value'] ?? null;
+
+                        if (! filled($value)) {
+                            return $query;
+                        }
+
+                        if ($value === static::CATEGORY_FILTER_WITHOUT) {
+                            return $query->whereNull('auto_reply_category_id');
+                        }
+
+                        return $query->where('auto_reply_category_id', (int) $value);
+                    })
                     ->visible(static::hasAutoReplyCategorySchema())
                     ->native(false),
                 SelectFilter::make('channel_id')
@@ -743,6 +758,17 @@ class AutoReplyRuleResource extends Resource
             ->pluck('name', 'id')
             ->mapWithKeys(fn (mixed $label, mixed $value): array => [(int) $value => (string) $label])
             ->all();
+    }
+
+    /**
+     * @return array<int|string, string>
+     */
+    protected static function getAutoReplyCategoryFilterOptions(): array
+    {
+        return [
+            static::CATEGORY_FILTER_WITHOUT => 'Без категории',
+            ...static::getAutoReplyCategoryOptions(),
+        ];
     }
 
     /**

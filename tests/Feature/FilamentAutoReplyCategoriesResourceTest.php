@@ -137,4 +137,28 @@ class FilamentAutoReplyCategoriesResourceTest extends TestCase
 
         $this->assertDatabaseCount('auto_reply_categories', 1);
     }
+
+    public function test_auto_reply_categories_table_shows_toggleable_id_column(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $category = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyCategories::class)
+            ->tap(function ($component) use ($category): void {
+                $table = $component->instance()->getTable();
+
+                $this->assertTrue($table->hasColumnManager());
+                $this->assertFalse($table->hasDeferredColumnManager());
+                $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertTrue($table->getColumn('id')?->isToggleable());
+                $this->assertSame($category->id, $table->getColumn('id')?->getStateFromRecord($category));
+            });
+    }
 }

@@ -970,16 +970,24 @@
     .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-list,
     .ac-auto-reply-form-modal .fi-select-input .fi-select-input-search-ctn,
     .ac-auto-reply-form-modal .fi-select-input .fi-select-input-options-ctn,
-    .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-header {
+    .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-header,
+    .fi-ta-filters-dropdown .fi-select-input .fi-dropdown-panel,
+    .fi-ta-filters-dropdown .fi-select-input .fi-dropdown-list,
+    .fi-ta-filters-dropdown .fi-select-input .fi-select-input-search-ctn,
+    .fi-ta-filters-dropdown .fi-select-input .fi-select-input-options-ctn,
+    .fi-ta-filters-dropdown .fi-select-input .fi-dropdown-header {
         border-radius: 0 !important;
     }
 
     .ac-auto-reply-form-modal .fi-select-input .fi-select-input-search-ctn .fi-input-wrp,
-    .ac-auto-reply-form-modal .fi-select-input .fi-select-input-option {
+    .ac-auto-reply-form-modal .fi-select-input .fi-select-input-option,
+    .fi-ta-filters-dropdown .fi-select-input .fi-select-input-search-ctn .fi-input-wrp,
+    .fi-ta-filters-dropdown .fi-select-input .fi-select-input-option {
         border-radius: 0 !important;
     }
 
-    .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-panel {
+    .ac-auto-reply-form-modal .fi-select-input .fi-dropdown-panel,
+    .fi-ta-filters-dropdown .fi-select-input .fi-dropdown-panel {
         overflow: hidden !important;
     }
 

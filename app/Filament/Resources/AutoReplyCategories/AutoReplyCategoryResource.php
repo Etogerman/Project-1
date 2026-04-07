@@ -76,6 +76,11 @@ class AutoReplyCategoryResource extends Resource
     {
         return $table
             ->columns([
+                TextColumn::make('id')
+                    ->label('ID')
+                    ->sortable()
+                    ->copyable()
+                    ->toggleable(),
                 TextColumn::make('name')
                     ->label('Название')
                     ->searchable()

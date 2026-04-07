@@ -353,6 +353,30 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$otherRule]);
     }
 
+    public function test_table_filter_can_filter_rules_without_category(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $category = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
+        $withoutCategoryRule = AutoReplyRule::factory()->create([
+            'auto_reply_category_id' => null,
+        ]);
+        $categorizedRule = AutoReplyRule::factory()->create([
+            'auto_reply_category_id' => $category->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->filterTable('auto_reply_category_id', '__without_category__')
+            ->assertCanSeeTableRecords([$withoutCategoryRule])
+            ->assertCanNotSeeTableRecords([$categorizedRule]);
+    }
+
     public function test_admin_can_create_multichannel_rule_with_shared_request_phone_button(): void
     {
         $admin = User::factory()->create([
