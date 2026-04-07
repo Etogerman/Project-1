@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
@@ -311,9 +312,11 @@ class Channel extends Model
         return $this->hasMany(Dialog::class);
     }
 
-    public function autoReplyRules(): HasMany
+    public function autoReplyRules(): BelongsToMany
     {
-        return $this->hasMany(AutoReplyRule::class);
+        return $this->belongsToMany(AutoReplyRule::class, 'auto_reply_rule_channels')
+            ->withPivot(['button_type', 'button_text', 'button_url'])
+            ->withTimestamps();
     }
 
     public function scenarioBindings(): HasMany
