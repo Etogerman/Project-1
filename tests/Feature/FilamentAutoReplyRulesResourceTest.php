@@ -263,6 +263,84 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame('https://example.com/form', $rule->getButtonUrlForChannel($telegramChannel));
     }
 
+    public function test_admin_can_create_max_rule_with_shared_link_button(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData(
+                $maxChannel,
+                [
+                    'keyword' => 'MAX ссылка',
+                    'reply_text' => 'Перейдите по ссылке',
+                ],
+                [
+                    'button_kind' => 'link',
+                    'button_text' => 'Открыть MAX форму',
+                    'button_url' => 'https://example.com/max-form',
+                ],
+            ))
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
+
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($maxChannel));
+        $this->assertSame('Открыть MAX форму', $rule->getButtonTextForChannel($maxChannel));
+        $this->assertSame('https://example.com/max-form', $rule->getButtonUrlForChannel($maxChannel));
+    }
+
+    public function test_admin_can_create_mixed_platform_rule_with_shared_link_button(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Telegram Sales',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Общая ссылка',
+                    'reply_text' => 'Перейдите по ссылке',
+                ],
+                [
+                    'button_kind' => 'link',
+                    'button_text' => 'Открыть заявку',
+                    'button_url' => 'https://example.com/shared-form',
+                ],
+            ))
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
+
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($telegramChannel));
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($maxChannel));
+        $this->assertSame('Открыть заявку', $rule->getButtonTextForChannel($telegramChannel));
+        $this->assertSame('Открыть заявку', $rule->getButtonTextForChannel($maxChannel));
+        $this->assertSame('https://example.com/shared-form', $rule->getButtonUrlForChannel($telegramChannel));
+        $this->assertSame('https://example.com/shared-form', $rule->getButtonUrlForChannel($maxChannel));
+    }
+
     public function test_auto_reply_rules_table_uses_live_column_manager_and_icon_only_edit_action(): void
     {
         $admin = User::factory()->create([

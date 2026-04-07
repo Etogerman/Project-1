@@ -228,7 +228,28 @@ class BotAutoReplyService
      */
     protected function buildMaxAttachments(AutoReplyRule $matchedRule, \App\Models\Channel $channel): ?array
     {
-        if ($matchedRule->getButtonTypeForChannel($channel) !== AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT) {
+        $buttonType = $matchedRule->getButtonTypeForChannel($channel);
+
+        if ($buttonType === AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT) {
+            return [[
+                'type' => 'inline_keyboard',
+                'payload' => [
+                    'buttons' => [[[
+                        'type' => 'request_contact',
+                        'text' => 'Поделиться номером телефона',
+                    ]]],
+                ],
+            ]];
+        }
+
+        if ($buttonType !== AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD) {
+            return null;
+        }
+
+        $buttonText = $matchedRule->getButtonTextForChannel($channel);
+        $buttonUrl = $matchedRule->getButtonUrlForChannel($channel);
+
+        if (! filled($buttonText) || ! filled($buttonUrl)) {
             return null;
         }
 
@@ -236,8 +257,9 @@ class BotAutoReplyService
             'type' => 'inline_keyboard',
             'payload' => [
                 'buttons' => [[[
-                    'type' => 'request_contact',
-                    'text' => 'Поделиться номером телефона',
+                    'type' => 'link',
+                    'text' => $buttonText,
+                    'url' => $buttonUrl,
                 ]]],
             ],
         ]];
