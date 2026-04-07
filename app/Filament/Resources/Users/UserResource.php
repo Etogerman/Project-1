@@ -153,7 +153,8 @@ class UserResource extends Resource
                     ->label('ID')
                     ->searchable()
                     ->sortable()
-                    ->copyable(),
+                    ->copyable()
+                    ->toggleable(),
                 TextColumn::make('name')
                     ->label('Имя')
                     ->searchable()
