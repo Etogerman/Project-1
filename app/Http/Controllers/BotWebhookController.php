@@ -149,6 +149,15 @@ class BotWebhookController extends Controller
 
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
+        if ($message === null && $expectedPlatform === Channel::PLATFORM_MAX) {
+            $channelActivityLogger->warning(
+                $channel,
+                'webhook.max_unhandled_payload',
+                'Webhook из MAX не удалось распознать в поддерживаемое входящее сообщение.',
+                $this->buildMaxUnhandledPayloadContext($payload),
+            );
+        }
+
         if ($message !== null) {
             $webhookProcessedAt = now();
             $deliveryLagSeconds = $this->resolveWebhookDeliveryLagSeconds($channel, $message->receivedAt, $webhookProcessedAt);
@@ -178,6 +187,61 @@ class BotWebhookController extends Controller
         return response()->json([
             'ok' => true,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    protected function buildMaxUnhandledPayloadContext(array $payload): array
+    {
+        $message = is_array(data_get($payload, 'message')) ? data_get($payload, 'message') : [];
+        $body = is_array(data_get($message, 'body')) ? data_get($message, 'body') : [];
+        $attachments = is_array(data_get($body, 'attachments')) ? data_get($body, 'attachments') : [];
+        $attachmentTypes = array_values(array_filter(array_map(function (mixed $attachment): ?string {
+            if (! is_array($attachment)) {
+                return null;
+            }
+
+            $type = trim((string) data_get($attachment, 'type', ''));
+
+            return $type !== '' ? $type : null;
+        }, $attachments)));
+
+        $excerpt = [
+            'update_type' => data_get($payload, 'update_type'),
+            'message_keys' => array_keys($message),
+            'body_keys' => array_keys($body),
+            'body_contact_keys' => is_array(data_get($body, 'contact')) ? array_keys((array) data_get($body, 'contact')) : [],
+            'attachment_types' => $attachmentTypes,
+        ];
+
+        $payloadExcerpt = json_encode($excerpt, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return [
+            'platform' => Channel::PLATFORM_MAX,
+            'update_type' => data_get($payload, 'update_type'),
+            'message_mid' => data_get($body, 'mid'),
+            'message_body_type' => data_get($body, 'type'),
+            'has_sender' => is_array(data_get($message, 'sender')),
+            'has_sender_user_id' => filled(data_get($message, 'sender.user_id')),
+            'has_recipient' => is_array(data_get($message, 'recipient')),
+            'has_recipient_chat_id' => filled(data_get($message, 'recipient.chat_id')),
+            'has_body_contact' => is_array(data_get($body, 'contact')),
+            'has_attachments' => $attachments !== [],
+            'has_vcf_info' => filled(data_get($body, 'vcf_info'))
+                || filled(data_get($body, 'payload.vcf_info'))
+                || collect($attachments)->contains(function (mixed $attachment): bool {
+                    return is_array($attachment)
+                        && (
+                            filled(data_get($attachment, 'vcf_info'))
+                            || filled(data_get($attachment, 'payload.vcf_info'))
+                        );
+                }),
+            'payload_excerpt' => filled($payloadExcerpt)
+                ? mb_substr($payloadExcerpt, 0, 1000)
+                : null,
+        ];
     }
 
     protected function resolveWebhookDeliveryLagSeconds(Channel $channel, Carbon $messageReceivedAt, Carbon $webhookProcessedAt): ?int

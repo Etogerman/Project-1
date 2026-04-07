@@ -66,6 +66,10 @@ class BotWebhookAutoReplyTest extends TestCase
             'channel_id' => $channel->id,
             'event' => 'bot.reply_queued',
         ]);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'webhook.max_unhandled_payload',
+        ]);
         $this->assertDatabaseCount('contacts', 1);
         $this->assertDatabaseCount('contact_identities', 1);
         $this->assertDatabaseCount('messages', 1);
@@ -593,6 +597,76 @@ class BotWebhookAutoReplyTest extends TestCase
             'channel_id' => $channel->id,
             'event' => 'contact.phone_capture_confirmation_queued',
         ]);
+    }
+
+    public function test_max_webhook_logs_unhandled_payload_when_normalizer_returns_null(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'timestamp' => 1_775_578_788_491,
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 228532008,
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'user_id' => 241737700,
+                    'chat_type' => 'dialog',
+                ],
+                'body' => [
+                    'mid' => 'max-unhandled-contact-1',
+                    'contact' => [
+                        'name' => 'Герман Абрикосов',
+                    ],
+                ],
+            ],
+        ];
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNothingPushed();
+        Http::assertNothingSent();
+        $this->assertDatabaseCount('messages', 0);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'webhook.received',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'webhook.max_unhandled_payload',
+        ]);
+
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $channel->id)
+            ->where('event', 'webhook.max_unhandled_payload')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame('message_created', data_get($log->context, 'update_type'));
+        $this->assertSame('max-unhandled-contact-1', data_get($log->context, 'message_mid'));
+        $this->assertTrue((bool) data_get($log->context, 'has_sender_user_id'));
+        $this->assertFalse((bool) data_get($log->context, 'has_recipient_chat_id'));
+        $this->assertTrue((bool) data_get($log->context, 'has_body_contact'));
+        $this->assertFalse((bool) data_get($log->context, 'has_vcf_info'));
+        $this->assertIsString(data_get($log->context, 'payload_excerpt'));
     }
 
     public function test_late_max_contact_share_logs_delayed_received_and_phone_capture_arrived_late(): void

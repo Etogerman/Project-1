@@ -753,6 +753,7 @@ class ChannelResource extends Resource
     {
         return match ($event) {
             'webhook.received' => 'Webhook',
+            'webhook.max_unhandled_payload' => 'MAX webhook не распознан',
             'webhook.rate_limited' => 'Webhook ограничен по частоте',
             'bot.reply_queued' => 'Ответ в очереди',
             'bot.reply_rule_matched' => 'Правило автоответа',
