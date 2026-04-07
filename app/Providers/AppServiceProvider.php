@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Models\AutoReplyRule;
+use App\Models\AutoReplyCategory;
 use App\Models\Bitrix24Connection;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -10,6 +11,7 @@ use App\Models\Dialog;
 use App\Models\Scenario;
 use App\Models\User;
 use App\Policies\AutoReplyRulePolicy;
+use App\Policies\AutoReplyCategoryPolicy;
 use App\Policies\Bitrix24ConnectionPolicy;
 use App\Policies\ChannelPolicy;
 use App\Policies\ContactPolicy;
@@ -43,6 +45,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(User::class, UserPolicy::class);
         Gate::policy(Scenario::class, ScenarioPolicy::class);
         Gate::policy(AutoReplyRule::class, AutoReplyRulePolicy::class);
+        Gate::policy(AutoReplyCategory::class, AutoReplyCategoryPolicy::class);
         Gate::policy(Bitrix24Connection::class, Bitrix24ConnectionPolicy::class);
 
         RateLimiter::for('bitrix24-install', function (Request $request): Limit {

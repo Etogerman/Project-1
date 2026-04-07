@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
+use App\Models\AutoReplyCategory;
 use App\Models\AutoReplyRule;
 use App\Models\AutoReplyRuleTagCondition;
 use App\Models\AutoReplyRuleTagEffect;
@@ -240,6 +241,70 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame('Старт Telegram', $rule->display_name);
     }
 
+    public function test_admin_can_create_rule_with_category(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $category = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData($channel, [
+                'name' => 'Старт Telegram',
+                'auto_reply_category_id' => $category->id,
+                'keyword' => 'Тест1',
+                'reply_text' => 'Шаблон 1',
+            ]))
+            ->assertHasNoFormErrors()
+            ->assertSee('Старт');
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        $this->assertSame($category->id, $rule->auto_reply_category_id);
+    }
+
+    public function test_admin_can_edit_rule_category(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $firstCategory = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
+        $secondCategory = AutoReplyCategory::query()->create([
+            'name' => 'Fallback',
+            'sort_order' => 20,
+        ]);
+        $rule = AutoReplyRule::factory()->create([
+            'auto_reply_category_id' => $firstCategory->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('edit', $rule, $this->buildRuleFormData($channel, [
+                'name' => 'Старт Telegram',
+                'auto_reply_category_id' => $secondCategory->id,
+                'keyword' => 'Тест2',
+                'reply_text' => 'Шаблон 2',
+            ]))
+            ->assertHasNoTableActionErrors();
+
+        $this->assertSame($secondCategory->id, $rule->fresh()->auto_reply_category_id);
+    }
+
     public function test_table_search_can_find_rule_by_name(): void
     {
         $admin = User::factory()->create([
@@ -258,6 +323,58 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->searchTable('VIP fallback')
             ->assertCanSeeTableRecords([$namedRule])
             ->assertCanNotSeeTableRecords([$otherRule]);
+    }
+
+    public function test_table_filter_can_filter_rules_by_category(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $matchingCategory = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
+        $otherCategory = AutoReplyCategory::query()->create([
+            'name' => 'Fallback',
+            'sort_order' => 20,
+        ]);
+        $matchingRule = AutoReplyRule::factory()->create([
+            'auto_reply_category_id' => $matchingCategory->id,
+        ]);
+        $otherRule = AutoReplyRule::factory()->create([
+            'auto_reply_category_id' => $otherCategory->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->filterTable('auto_reply_category_id', $matchingCategory->id)
+            ->assertCanSeeTableRecords([$matchingRule])
+            ->assertCanNotSeeTableRecords([$otherRule]);
+    }
+
+    public function test_table_filter_can_filter_rules_without_category(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $category = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 10,
+        ]);
+        $withoutCategoryRule = AutoReplyRule::factory()->create([
+            'auto_reply_category_id' => null,
+        ]);
+        $categorizedRule = AutoReplyRule::factory()->create([
+            'auto_reply_category_id' => $category->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->filterTable('auto_reply_category_id', '__without_category__')
+            ->assertCanSeeTableRecords([$withoutCategoryRule])
+            ->assertCanNotSeeTableRecords([$categorizedRule]);
     }
 
     public function test_admin_can_create_multichannel_rule_with_shared_request_phone_button(): void
@@ -434,6 +551,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 $this->assertTrue($table->hasColumnManager());
                 $this->assertFalse($table->hasDeferredColumnManager());
                 $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertTrue($table->getColumn('id')?->isToggleable());
                 $this->assertTrue($table->getColumn('match_scope')?->isToggleable());
                 $this->assertTrue($table->getColumn('contact_phone_condition')?->isToggleable());
                 $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
@@ -1038,6 +1156,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
 
         return array_merge([
             'name' => null,
+            'auto_reply_category_id' => null,
             'channel_ids' => array_map(
                 fn (Channel $channel): int => (int) $channel->id,
                 $channelList,

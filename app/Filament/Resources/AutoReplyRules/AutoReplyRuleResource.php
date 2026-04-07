@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\AutoReplyRules;
 
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
+use App\Models\AutoReplyCategory;
 use App\Models\AutoReplyRule;
 use App\Models\AutoReplyRuleTagCondition;
 use App\Models\AutoReplyRuleTagEffect;
@@ -38,6 +39,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema as SchemaFacade;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -46,6 +48,8 @@ class AutoReplyRuleResource extends Resource
     protected const BUTTON_KIND_REQUEST_PHONE = 'request_phone';
 
     protected const BUTTON_KIND_LINK = 'link';
+
+    protected const CATEGORY_FILTER_WITHOUT = '__without_category__';
 
     protected static ?string $model = AutoReplyRule::class;
 
@@ -65,7 +69,13 @@ class AutoReplyRuleResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->with(['channel', 'channels', 'tagEffects.tag', 'tagConditions.tag']);
+        $relations = ['channel', 'channels', 'tagEffects.tag', 'tagConditions.tag'];
+
+        if (static::hasAutoReplyCategorySchema()) {
+            $relations[] = 'category';
+        }
+
+        return parent::getEloquentQuery()->with($relations);
     }
 
     public static function form(Schema $schema): Schema
@@ -84,6 +94,15 @@ class AutoReplyRuleResource extends Resource
                             ->placeholder('Например: Старт Telegram')
                             ->helperText('Если оставить пустым, будет отображаться как «Автоответ #ID».')
                             ->maxLength(255),
+                        Select::make('auto_reply_category_id')
+                            ->label('Категория')
+                            ->options(static::getAutoReplyCategoryOptions())
+                            ->placeholder('Без категории')
+                            ->searchable()
+                            ->preload()
+                            ->noOptionsMessage('Категории не найдены')
+                            ->visible(static::hasAutoReplyCategorySchema())
+                            ->native(false),
                     ])
                     ->columnSpanFull(),
                 Grid::make(['default' => 1, 'xl' => 2])
@@ -539,12 +558,22 @@ class AutoReplyRuleResource extends Resource
     {
         return $table
             ->columns([
+                TextColumn::make('id')
+                    ->label('ID')
+                    ->sortable()
+                    ->copyable()
+                    ->toggleable(),
                 TextColumn::make('display_name')
                     ->label('Название')
                     ->state(fn (AutoReplyRule $record): string => $record->display_name)
                     ->searchable(query: function (Builder $query, string $search): Builder {
                         return $query->where('name', 'like', "%{$search}%");
                     })
+                    ->toggleable(),
+                TextColumn::make('category.name')
+                    ->label('Категория')
+                    ->placeholder('—')
+                    ->visible(static::hasAutoReplyCategorySchema())
                     ->toggleable(),
                 TextColumn::make('channels_display')
                     ->label('Каналы')
@@ -606,6 +635,25 @@ class AutoReplyRuleResource extends Resource
                     ->toggleable(),
             ])
             ->filters([
+                SelectFilter::make('auto_reply_category_id')
+                    ->label('Категория')
+                    ->options(static::getAutoReplyCategoryFilterOptions())
+                    ->searchable()
+                    ->query(function (Builder $query, array $data): Builder {
+                        $value = $data['value'] ?? null;
+
+                        if (! filled($value)) {
+                            return $query;
+                        }
+
+                        if ($value === static::CATEGORY_FILTER_WITHOUT) {
+                            return $query->whereNull('auto_reply_category_id');
+                        }
+
+                        return $query->where('auto_reply_category_id', (int) $value);
+                    })
+                    ->visible(static::hasAutoReplyCategorySchema())
+                    ->native(false),
                 SelectFilter::make('channel_id')
                     ->label('Канал')
                     ->options(static::getChannelOptions())
@@ -696,6 +744,34 @@ class AutoReplyRuleResource extends Resource
     }
 
     /**
+     * @return array<int, string>
+     */
+    protected static function getAutoReplyCategoryOptions(): array
+    {
+        if (! static::hasAutoReplyCategorySchema()) {
+            return [];
+        }
+
+        return AutoReplyCategory::query()
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->pluck('name', 'id')
+            ->mapWithKeys(fn (mixed $label, mixed $value): array => [(int) $value => (string) $label])
+            ->all();
+    }
+
+    /**
+     * @return array<int|string, string>
+     */
+    protected static function getAutoReplyCategoryFilterOptions(): array
+    {
+        return [
+            static::CATEGORY_FILTER_WITHOUT => 'Без категории',
+            ...static::getAutoReplyCategoryOptions(),
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
@@ -703,6 +779,9 @@ class AutoReplyRuleResource extends Resource
     {
         $data['name'] = filled($data['name'] ?? null)
             ? trim((string) $data['name'])
+            : null;
+        $data['auto_reply_category_id'] = static::hasAutoReplyCategorySchema() && filled($data['auto_reply_category_id'] ?? null)
+            ? (int) $data['auto_reply_category_id']
             : null;
         $data['channel_id'] = filled($data['channel_id'] ?? null)
             ? (int) $data['channel_id']
@@ -730,8 +809,9 @@ class AutoReplyRuleResource extends Resource
             ? AutoReplyRule::normalizeKeyword($data['keyword'] ?? null)
             : null;
 
-        return Arr::only($data, [
+        $allowedKeys = [
             'name',
+            'auto_reply_category_id',
             'channel_id',
             'keyword',
             'normalized_keyword',
@@ -742,7 +822,15 @@ class AutoReplyRuleResource extends Resource
             'max_button_type',
             'is_active',
             'priority',
-        ]);
+        ];
+
+        return Arr::only($data, $allowedKeys);
+    }
+
+    protected static function hasAutoReplyCategorySchema(): bool
+    {
+        return SchemaFacade::hasTable('auto_reply_categories')
+            && SchemaFacade::hasColumn('auto_reply_rules', 'auto_reply_category_id');
     }
 
     /**

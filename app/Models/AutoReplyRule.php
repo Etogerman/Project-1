@@ -43,6 +43,7 @@ class AutoReplyRule extends Model
      */
     protected $fillable = [
         'name',
+        'auto_reply_category_id',
         'channel_id',
         'keyword',
         'normalized_keyword',
@@ -115,6 +116,11 @@ class AutoReplyRule extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(AutoReplyCategory::class, 'auto_reply_category_id');
     }
 
     public function channels(): BelongsToMany
