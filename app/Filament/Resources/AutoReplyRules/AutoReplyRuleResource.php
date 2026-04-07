@@ -998,7 +998,12 @@ class AutoReplyRuleResource extends Resource
             static::BUTTON_KIND_REQUEST_PHONE => 'Запросить номер телефона',
         ];
 
-        if (count($platforms) === 1 && $platforms[0] === Channel::PLATFORM_TELEGRAM) {
+        $supportedLinkPlatforms = [
+            Channel::PLATFORM_TELEGRAM,
+            Channel::PLATFORM_MAX,
+        ];
+
+        if (array_diff($platforms, $supportedLinkPlatforms) === []) {
             $options[static::BUTTON_KIND_LINK] = 'Ссылка';
         }
 

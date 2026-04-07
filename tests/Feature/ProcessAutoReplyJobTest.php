@@ -999,6 +999,62 @@ class ProcessAutoReplyJobTest extends TestCase
         });
     }
 
+    public function test_job_sends_link_button_for_max_rule(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'message_id' => 'max-link-button-1',
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+
+        $rule = AutoReplyRule::factory()
+            ->forChannel($channel)
+            ->create([
+                'channel_id' => $channel->id,
+                'keyword' => 'Ссылка',
+                'normalized_keyword' => AutoReplyRule::normalizeKeyword('Ссылка'),
+                'reply_text' => 'Перейдите по ссылке',
+                'is_active' => true,
+            ]);
+
+        $rule->channels()->sync([
+            $channel->id => [
+                'button_type' => AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD,
+                'button_text' => 'Открыть MAX форму',
+                'button_url' => 'https://example.com/max-form',
+            ],
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'max-link-button',
+            'text' => 'ссылка',
+            'external_chat_id' => '700',
+        ], [
+            'external_user_id' => '500',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+                && $request['text'] === 'Перейдите по ссылке'
+                && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+                && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'link'
+                && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'Открыть MAX форму'
+                && data_get($request->data(), 'attachments.0.payload.buttons.0.0.url') === 'https://example.com/max-form';
+        });
+    }
+
     public function test_job_skips_reply_when_channel_is_rules_only_and_no_rule_matches(): void
     {
         Http::fake();
