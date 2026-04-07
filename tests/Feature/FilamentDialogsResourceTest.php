@@ -90,6 +90,53 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Диалоги');
     }
 
+    public function test_employee_without_dialogs_view_cannot_open_dialog_pages(): void
+    {
+        $user = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        \Illuminate\Support\Facades\DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'dialogs.view')
+            ->update(['granted' => false]);
+
+        $user = User::query()->findOrFail($user->id);
+
+        $this->actingAs($user)
+            ->get(DialogResource::getUrl('index'))
+            ->assertForbidden();
+
+        $this->actingAs($user)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertForbidden();
+    }
+
+    public function test_dialog_policy_and_reply_helper_respect_disabled_employee_matrix_values(): void
+    {
+        $user = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        \Illuminate\Support\Facades\DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'dialogs.edit')
+            ->update(['granted' => false]);
+
+        $user = User::query()->findOrFail($user->id);
+
+        $this->assertTrue(\Illuminate\Support\Facades\Gate::forUser($user)->allows('viewAny', Dialog::class));
+        $this->assertTrue(\Illuminate\Support\Facades\Gate::forUser($user)->allows('view', $dialog));
+        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($user)->allows('update', $dialog));
+        $this->assertFalse($user->canReplyInDialogs());
+    }
+
     public function test_dialogs_inbox_defaults_to_requires_manual_reply_filter(): void
     {
         $admin = User::factory()->create([

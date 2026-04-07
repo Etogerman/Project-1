@@ -3006,7 +3006,7 @@ class FilamentContactsResourceTest extends TestCase
             });
     }
 
-    public function test_contact_policy_allows_only_read_access_for_active_admins(): void
+    public function test_contact_policy_for_active_admin_uses_role_permission_matrix(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -3017,8 +3017,36 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertTrue(Gate::forUser($admin)->allows('viewAny', Contact::class));
         $this->assertTrue(Gate::forUser($admin)->allows('view', $contact));
         $this->assertFalse(Gate::forUser($admin)->allows('create', Contact::class));
-        $this->assertFalse(Gate::forUser($admin)->allows('update', $contact));
-        $this->assertFalse(Gate::forUser($admin)->allows('delete', $contact));
+        $this->assertTrue(Gate::forUser($admin)->allows('update', $contact));
+        $this->assertTrue(Gate::forUser($admin)->allows('delete', $contact));
         $this->assertFalse(Gate::forUser($admin)->allows('deleteAny', Contact::class));
+    }
+
+    public function test_contact_permissions_and_helpers_respect_disabled_employee_matrix_values(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $contact = Contact::factory()->create();
+
+        \Illuminate\Support\Facades\DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->whereIn('permission_key', ['contacts.view', 'contacts.edit', 'contacts.delete'])
+            ->update(['granted' => false]);
+
+        $employee = User::query()->findOrFail($employee->id);
+
+        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($employee)->allows('viewAny', Contact::class));
+        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($employee)->allows('view', $contact));
+        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($employee)->allows('update', $contact));
+        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($employee)->allows('delete', $contact));
+        $this->assertFalse($employee->canManageContactWorkspaceMutations());
+        $this->assertFalse($employee->canManageContactProfile());
+        $this->assertFalse($employee->canManageContactOwnership());
+        $this->assertFalse($employee->canEditExistingContactPhones());
+        $this->assertFalse($employee->canDeleteExistingContactPhones());
+        $this->assertFalse($employee->canDeleteContacts());
     }
 }

@@ -90,6 +90,11 @@ class RolePermissionCatalogTest extends TestCase
             ->all();
 
         $this->assertSame([
+            'contacts.view',
+            'contacts.edit',
+            'contacts.delete',
+            'dialogs.view',
+            'dialogs.edit',
             'users.view',
             'users.edit',
             'channels.view',
