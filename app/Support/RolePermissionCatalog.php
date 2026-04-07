@@ -30,7 +30,7 @@ class RolePermissionCatalog
                 'actions' => [
                     [
                         'code' => 'contacts.view',
-                        'label' => 'Просмотр контактов',
+                        'label' => 'Просмотр',
                         'description' => 'Список контактов и карточка клиента.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -39,7 +39,7 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'contacts.edit',
-                        'label' => 'Редактирование контактов',
+                        'label' => 'Редактирование',
                         'description' => 'Крупное право для изменения данных и рабочих действий в карточке клиента.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -48,7 +48,7 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'contacts.delete',
-                        'label' => 'Удаление контактов',
+                        'label' => 'Удаление',
                         'description' => 'Полное удаление клиента и связанной истории.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -64,7 +64,7 @@ class RolePermissionCatalog
                 'actions' => [
                     [
                         'code' => 'dialogs.view',
-                        'label' => 'Просмотр диалогов',
+                        'label' => 'Просмотр',
                         'description' => 'Список диалогов, страница диалога и история сообщений.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -73,21 +73,12 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'dialogs.edit',
-                        'label' => 'Редактирование диалогов',
+                        'label' => 'Редактирование',
                         'description' => 'Крупное право для рабочих действий в диалоге. На текущем контуре напрямую соответствует ручному ответу.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
                         'preparatoryLabel' => null,
                         'preparatoryDescription' => null,
-                    ],
-                    [
-                        'code' => 'dialogs.delete',
-                        'label' => 'Удаление диалогов',
-                        'description' => 'Подготовительная строка для будущей матрицы. В текущем контуре удаление диалогов не поддерживается.',
-                        'isRuntimeActive' => false,
-                        'isPreparatory' => true,
-                        'preparatoryLabel' => 'Подготовительное право',
-                        'preparatoryDescription' => 'Ключ уже зафиксирован в словаре будущей матрицы, но пока не подключён к рабочим проверкам доступа.',
                     ],
                 ],
             ],
@@ -98,7 +89,7 @@ class RolePermissionCatalog
                 'actions' => [
                     [
                         'code' => 'tags.view',
-                        'label' => 'Просмотр тегов',
+                        'label' => 'Просмотр',
                         'description' => 'Доступ к разделу тегов и просмотру списка.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -107,7 +98,7 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'tags.edit',
-                        'label' => 'Редактирование тегов',
+                        'label' => 'Редактирование',
                         'description' => 'Создание и изменение тегов в панели.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -116,7 +107,7 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'tags.delete',
-                        'label' => 'Удаление тегов',
+                        'label' => 'Удаление',
                         'description' => 'Удаление тегов, которые не используются контактами или правилами.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -132,7 +123,7 @@ class RolePermissionCatalog
                 'actions' => [
                     [
                         'code' => 'users.view',
-                        'label' => 'Просмотр сотрудников',
+                        'label' => 'Просмотр',
                         'description' => 'Доступ к разделу сотрудников и просмотру команды.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -141,7 +132,7 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'users.edit',
-                        'label' => 'Редактирование сотрудников',
+                        'label' => 'Редактирование',
                         'description' => 'Создание и изменение сотрудников в панели.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -149,17 +140,8 @@ class RolePermissionCatalog
                         'preparatoryDescription' => null,
                     ],
                     [
-                        'code' => 'users.delete',
-                        'label' => 'Удаление сотрудников',
-                        'description' => 'Подготовительная строка для будущей матрицы. В текущем контуре удаление сотрудников не поддерживается.',
-                        'isRuntimeActive' => false,
-                        'isPreparatory' => true,
-                        'preparatoryLabel' => 'Подготовительное право',
-                        'preparatoryDescription' => 'Ключ уже зафиксирован в словаре будущей матрицы, но пока не подключён к рабочим проверкам доступа.',
-                    ],
-                    [
                         'code' => 'channels.view',
-                        'label' => 'Просмотр каналов связи',
+                        'label' => 'Просмотр',
                         'description' => 'Просмотр списка каналов связи и их карточек.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -168,7 +150,7 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'channels.edit',
-                        'label' => 'Редактирование каналов связи',
+                        'label' => 'Редактирование',
                         'description' => 'Создание и изменение каналов связи.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -176,17 +158,8 @@ class RolePermissionCatalog
                         'preparatoryDescription' => null,
                     ],
                     [
-                        'code' => 'channels.delete',
-                        'label' => 'Удаление каналов связи',
-                        'description' => 'Подготовительная строка для будущей матрицы. В текущем контуре удаление каналов не поддерживается.',
-                        'isRuntimeActive' => false,
-                        'isPreparatory' => true,
-                        'preparatoryLabel' => 'Подготовительное право',
-                        'preparatoryDescription' => 'Ключ уже зафиксирован в словаре будущей матрицы, но пока не подключён к рабочим проверкам доступа.',
-                    ],
-                    [
                         'code' => 'auto_reply_rules.view',
-                        'label' => 'Просмотр правил автоответа',
+                        'label' => 'Просмотр',
                         'description' => 'Просмотр правил автоматической обработки сообщений.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -195,7 +168,7 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'auto_reply_rules.edit',
-                        'label' => 'Редактирование правил автоответа',
+                        'label' => 'Редактирование',
                         'description' => 'Создание и изменение правил автоматической обработки сообщений.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -204,7 +177,7 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'auto_reply_rules.delete',
-                        'label' => 'Удаление правил автоответа',
+                        'label' => 'Удаление',
                         'description' => 'Удаление правил автоматической обработки сообщений.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
@@ -213,30 +186,12 @@ class RolePermissionCatalog
                     ],
                     [
                         'code' => 'bitrix24.view',
-                        'label' => 'Просмотр Bitrix24',
+                        'label' => 'Просмотр',
                         'description' => 'Диагностика и состояние подключения Bitrix24.',
                         'isRuntimeActive' => true,
                         'isPreparatory' => false,
                         'preparatoryLabel' => null,
                         'preparatoryDescription' => null,
-                    ],
-                    [
-                        'code' => 'bitrix24.edit',
-                        'label' => 'Редактирование Bitrix24',
-                        'description' => 'Подготовительная строка для будущей матрицы. В текущем контуре изменение Bitrix24 из панели не поддерживается.',
-                        'isRuntimeActive' => false,
-                        'isPreparatory' => true,
-                        'preparatoryLabel' => 'Подготовительное право',
-                        'preparatoryDescription' => 'Ключ уже зафиксирован в словаре будущей матрицы, но пока не подключён к рабочим проверкам доступа.',
-                    ],
-                    [
-                        'code' => 'bitrix24.delete',
-                        'label' => 'Удаление Bitrix24',
-                        'description' => 'Подготовительная строка для будущей матрицы. В текущем контуре удаление подключений Bitrix24 не поддерживается.',
-                        'isRuntimeActive' => false,
-                        'isPreparatory' => true,
-                        'preparatoryLabel' => 'Подготовительное право',
-                        'preparatoryDescription' => 'Ключ уже зафиксирован в словаре будущей матрицы, но пока не подключён к рабочим проверкам доступа.',
                     ],
                 ],
             ],

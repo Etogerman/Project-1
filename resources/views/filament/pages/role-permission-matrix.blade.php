@@ -5,15 +5,6 @@
             gap: 1rem;
         }
 
-        .ac-role-permission-note {
-            display: grid;
-            gap: 0.45rem;
-            padding: 0.8rem;
-            border: 1px dashed color-mix(in srgb, var(--ac-warning-500) 45%, var(--ac-border));
-            border-radius: var(--ac-radius-sm);
-            background: color-mix(in srgb, var(--ac-warning-50) 78%, white);
-        }
-
         .ac-role-permission-table-shell {
             display: grid;
             gap: 1rem;
@@ -219,43 +210,21 @@
         <section class="ac-surface ac-surface--hero">
             <div class="ac-surface__header ac-surface__header--centered">
                 <div class="ac-surface__title-group">
-                    <p class="ac-surface__eyebrow">Команда</p>
-                    <h3 class="ac-surface__title">Матрица ролей и прав</h3>
+                    <h3 class="ac-surface__title">Права доступа</h3>
                     <p class="ac-surface__subtitle">
-                        Страница показывает управляемую матрицу прав из базы данных. Часть строк уже влияет на
-                        реальный доступ, часть пока остаётся только конфигурацией в <code>role_permissions</code>.
-                        Суперадминистратор остаётся отдельным recovery-контуром вне этой таблицы.
+                        Настройте, какие действия доступны администраторам и сотрудникам в панели.
                     </p>
                 </div>
 
                 <div class="ac-button-group">
                     <x-filament::button type="button" wire:click="reloadPermissionMatrix" color="gray">
-                        Сбросить несохранённые изменения
+                        Отмена
                     </x-filament::button>
                     <x-filament::button type="button" wire:click="savePermissionMatrix">
-                        Сохранить матрицу
+                        Сохранить
                     </x-filament::button>
-                    @foreach ($roles as $role)
-                        <span class="ac-pill" data-tone="{{ $role['tone'] }}">
-                            {{ $role['label'] }}
-                        </span>
-                    @endforeach
                 </div>
             </div>
-        </section>
-
-        <section class="ac-role-permission-note" data-role="database-readonly-note">
-            <div class="ac-button-group">
-                <span class="ac-pill" data-role="runtime-active-badge" data-tone="success">Уже влияет на доступ</span>
-                <span class="ac-pill" data-role="config-only-badge" data-tone="gray">Пока только конфигурация</span>
-                <span class="ac-pill" data-role="superadmin-recovery-badge" data-tone="danger">Суперадминистратор вне матрицы</span>
-            </div>
-            <p class="ac-list-card__body">
-                Матрица читает и сохраняет значения в таблицу <code>role_permissions</code> в смешанном режиме rollout:
-                строки со статусом runtime-active уже управляют доступом в системе, а config-only строки пока
-                остаются подготовленной конфигурацией. Подготовительные права отмечены отдельно, а recovery-доступ
-                суперадминистратора не зависит от этой таблицы.
-            </p>
         </section>
 
         <section class="ac-surface ac-surface--soft ac-role-permission-table-shell">
