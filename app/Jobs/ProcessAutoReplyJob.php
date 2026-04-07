@@ -102,6 +102,7 @@ class ProcessAutoReplyJob implements ShouldQueue
                         'auto_reply_source' => $autoReplySource,
                         'button_type' => $buttonType,
                         'rule_id' => $failedRule?->id,
+                        'rule_name' => $failedRule?->display_name,
                         'match_scope' => $failedRule?->match_scope,
                         'contact_phone_condition' => $failedRule?->contact_phone_condition,
                         'error' => $throwable->getMessage(),
@@ -115,6 +116,7 @@ class ProcessAutoReplyJob implements ShouldQueue
                 'message_id' => $message->id,
                 'button_type' => $buttonType,
                 'rule_id' => $failedRule?->id,
+                'rule_name' => $failedRule?->display_name,
                 'match_scope' => $failedRule?->match_scope,
                 'error' => $throwable->getMessage(),
             ]);

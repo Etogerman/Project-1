@@ -42,6 +42,7 @@ class AutoReplyRule extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'name',
         'channel_id',
         'keyword',
         'normalized_keyword',
@@ -250,6 +251,24 @@ class AutoReplyRule extends Model
                 'keyword' => filled($value) ? trim((string) $value) : $value,
                 'normalized_keyword' => static::normalizeKeyword($value),
             ],
+        );
+    }
+
+    protected function name(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value): ?string => filled($value)
+                ? trim((string) $value)
+                : null,
+        );
+    }
+
+    protected function displayName(): Attribute
+    {
+        return Attribute::make(
+            get: fn (): string => filled($this->name)
+                ? (string) $this->name
+                : "Автоответ #{$this->id}",
         );
     }
 
