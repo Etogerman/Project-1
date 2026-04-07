@@ -367,7 +367,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             });
     }
 
-    public function test_normalized_keyword_must_be_unique_within_channel(): void
+    public function test_normalized_keyword_duplicates_are_allowed_within_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -392,10 +392,10 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 'is_active' => true,
             ]));
 
-        $this->assertSame(1, AutoReplyRule::query()->count());
+        $this->assertSame(2, AutoReplyRule::query()->count());
     }
 
-    public function test_exact_keyword_duplicate_is_blocked_for_overlapping_selected_channels(): void
+    public function test_exact_keyword_duplicate_is_allowed_for_overlapping_selected_channels(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -428,7 +428,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 ],
             ));
 
-        $this->assertSame(1, AutoReplyRule::query()->count());
+        $this->assertSame(2, AutoReplyRule::query()->count());
     }
 
     public function test_admin_can_create_any_inbound_rule_without_keyword(): void
@@ -784,7 +784,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame(3, AutoReplyRule::query()->count());
     }
 
-    public function test_exact_text_or_parameter_rule_must_be_unique_within_same_scope(): void
+    public function test_exact_text_or_parameter_duplicates_are_allowed_within_same_scope(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -810,10 +810,10 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 'is_active' => true,
             ]));
 
-        $this->assertSame(1, AutoReplyRule::query()->count());
+        $this->assertSame(2, AutoReplyRule::query()->count());
     }
 
-    public function test_any_inbound_rule_must_be_unique_per_channel_and_phone_condition(): void
+    public function test_any_inbound_duplicates_are_allowed_per_channel_and_phone_condition(): void
     {
         $channel = Channel::factory()->create([
             'is_active' => true,
@@ -827,8 +827,6 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             'is_active' => true,
         ]);
 
-        $this->expectException(ValidationException::class);
-
         AutoReplyRule::query()->create([
             'channel_id' => $channel->id,
             'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
@@ -836,9 +834,11 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             'reply_text' => 'Дубликат',
             'is_active' => true,
         ]);
+
+        $this->assertSame(2, AutoReplyRule::query()->count());
     }
 
-    public function test_any_inbound_duplicate_is_blocked_for_overlapping_selected_channels(): void
+    public function test_any_inbound_duplicate_is_allowed_for_overlapping_selected_channels(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -871,7 +871,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 ],
             ));
 
-        $this->assertSame(1, AutoReplyRule::query()->count());
+        $this->assertSame(2, AutoReplyRule::query()->count());
     }
 
     public function test_request_phone_button_cannot_be_saved_for_non_telegram_channel(): void

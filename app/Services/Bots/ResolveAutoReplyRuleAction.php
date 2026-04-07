@@ -8,6 +8,7 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 
 class ResolveAutoReplyRuleAction
 {
@@ -20,7 +21,7 @@ class ResolveAutoReplyRuleAction
         Contact $contact,
         ?string $messageText,
         ?string $messageParameter = null,
-    ): ?AutoReplyRule
+    ): Collection
     {
         $contactHasPhone = $contact->phoneNumbers()->exists();
         $rootContact = $this->resolveRootContactAction->handle($contact);
@@ -30,59 +31,43 @@ class ResolveAutoReplyRuleAction
             ->all();
         $normalizedText = AutoReplyRule::normalizeKeyword($messageText);
         $normalizedParameter = AutoReplyRule::normalizeKeyword($messageParameter);
+        $matchedRules = collect();
 
         if (filled($normalizedParameter)) {
-            $parameterRule = $this->resolveExactRule(
+            $matchedRules = $matchedRules->concat($this->resolveExactRules(
                 $channel,
                 $contactHasPhone,
                 $rootContactTagIds,
                 $normalizedParameter,
                 AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
-            );
-
-            if ($parameterRule instanceof AutoReplyRule) {
-                return $parameterRule;
-            }
-
-            $combinedParameterRule = $this->resolveExactRule(
+            ));
+            $matchedRules = $matchedRules->concat($this->resolveExactRules(
                 $channel,
                 $contactHasPhone,
                 $rootContactTagIds,
                 $normalizedParameter,
                 AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
-            );
-
-            if ($combinedParameterRule instanceof AutoReplyRule) {
-                return $combinedParameterRule;
-            }
+            ));
         }
 
         if (filled($normalizedText)) {
-            $exactRule = $this->resolveExactRule(
+            $matchedRules = $matchedRules->concat($this->resolveExactRules(
                 $channel,
                 $contactHasPhone,
                 $rootContactTagIds,
                 $normalizedText,
                 AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-            );
-
-            if ($exactRule instanceof AutoReplyRule) {
-                return $exactRule;
-            }
-
-            $combinedTextRule = $this->resolveExactRule(
+            ));
+            $matchedRules = $matchedRules->concat($this->resolveExactRules(
                 $channel,
                 $contactHasPhone,
                 $rootContactTagIds,
                 $normalizedText,
                 AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
-            );
+            ));
 
-            if ($combinedTextRule instanceof AutoReplyRule) {
-                return $combinedTextRule;
-            }
-
-            $containsRule = AutoReplyRule::query()
+            $matchedRules = $matchedRules->concat(
+                AutoReplyRule::query()
                 ->active()
                 ->forChannel($channel)
                 ->where('match_scope', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT)
@@ -91,40 +76,40 @@ class ResolveAutoReplyRuleAction
                 ->orderByRaw('char_length(normalized_keyword) desc')
                 ->orderBy('id')
                 ->get()
-                ->first(fn (AutoReplyRule $rule): bool => filled($rule->normalized_keyword)
-                    && str_contains($normalizedText, (string) $rule->normalized_keyword));
-
-            if ($containsRule instanceof AutoReplyRule) {
-                return $containsRule;
-            }
+                ->filter(fn (AutoReplyRule $rule): bool => filled($rule->normalized_keyword)
+                    && str_contains($normalizedText, (string) $rule->normalized_keyword))
+            );
         }
 
-        return AutoReplyRule::query()
+        $matchedRules = $matchedRules->concat(
+            AutoReplyRule::query()
             ->active()
             ->forChannel($channel)
             ->where('match_scope', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND)
             ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
             ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
-            ->orderByRaw(
-                'CASE WHEN contact_phone_condition = ? THEN 0 WHEN contact_phone_condition IS NULL THEN 1 ELSE 2 END',
-                [$contactHasPhone
-                    ? AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
-                    : AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE]
-            )
-            ->orderBy('id')
-            ->first();
+            ->get()
+        );
+
+        return $matchedRules
+            ->unique(fn (AutoReplyRule $rule): int => (int) $rule->getKey())
+            ->sortBy([
+                ['priority', 'asc'],
+                ['id', 'asc'],
+            ])
+            ->values();
     }
 
     /**
      * @param  list<int>  $rootContactTagIds
      */
-    protected function resolveExactRule(
+    protected function resolveExactRules(
         Channel $channel,
         bool $contactHasPhone,
         array $rootContactTagIds,
         string $normalizedValue,
         string $matchScope,
-    ): ?AutoReplyRule {
+    ): Collection {
         return AutoReplyRule::query()
             ->active()
             ->forChannel($channel)
@@ -132,8 +117,7 @@ class ResolveAutoReplyRuleAction
             ->where('normalized_keyword', $normalizedValue)
             ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
             ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
-            ->orderBy('id')
-            ->first();
+            ->get();
     }
 
     protected function applyPhoneConditionFilter(Builder $query, bool $contactHasPhone): void

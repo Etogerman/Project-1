@@ -2,7 +2,9 @@
 
 namespace App\Jobs;
 
+use App\Models\AutoReplyRule;
 use App\Models\Message;
+use App\Services\Bots\AutoReplyDispatchException;
 use App\Services\Bots\BotAutoReplyService;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\ResolveAutoReplyRuleAction;
@@ -66,10 +68,6 @@ class ProcessAutoReplyJob implements ShouldQueue
             return;
         }
 
-        if ($message->hasSuccessfulAutoReply()) {
-            return;
-        }
-
         if ($message->contact?->isInDataCollection() && ! $this->isAutoReplyOnlyMaxBotStartedEvent($message)) {
             return;
         }
@@ -78,6 +76,15 @@ class ProcessAutoReplyJob implements ShouldQueue
             $botAutoReplyService->handle($message);
         } catch (Throwable $throwable) {
             $channel = $message->channel;
+            $failedRule = $throwable instanceof AutoReplyDispatchException
+                ? $throwable->rule
+                : null;
+            $buttonType = $throwable instanceof AutoReplyDispatchException
+                ? $throwable->buttonType
+                : $this->resolveAutoReplyButtonType($message, $resolveAutoReplyRuleAction);
+            $autoReplySource = $throwable instanceof AutoReplyDispatchException
+                ? 'rule'
+                : $this->resolveAutoReplySource($message, $resolveAutoReplyRuleAction);
 
             if ($channel !== null) {
                 $channel->markError($throwable);
@@ -92,8 +99,11 @@ class ProcessAutoReplyJob implements ShouldQueue
                         'provider_event_key' => $message->provider_event_key,
                         'external_message_id' => $message->external_message_id,
                         'auto_reply_mode' => $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY,
-                        'auto_reply_source' => $this->resolveAutoReplySource($message, $resolveAutoReplyRuleAction),
-                        'button_type' => $this->resolveAutoReplyButtonType($message, $resolveAutoReplyRuleAction),
+                        'auto_reply_source' => $autoReplySource,
+                        'button_type' => $buttonType,
+                        'rule_id' => $failedRule?->id,
+                        'match_scope' => $failedRule?->match_scope,
+                        'contact_phone_condition' => $failedRule?->contact_phone_condition,
                         'error' => $throwable->getMessage(),
                     ],
                 );
@@ -103,7 +113,9 @@ class ProcessAutoReplyJob implements ShouldQueue
                 'channel_id' => $channel?->id,
                 'platform' => $channel?->platform,
                 'message_id' => $message->id,
-                'button_type' => $this->resolveAutoReplyButtonType($message, $resolveAutoReplyRuleAction),
+                'button_type' => $buttonType,
+                'rule_id' => $failedRule?->id,
+                'match_scope' => $failedRule?->match_scope,
                 'error' => $throwable->getMessage(),
             ]);
 
@@ -123,15 +135,18 @@ class ProcessAutoReplyJob implements ShouldQueue
             return 'skipped_no_rule';
         }
 
-        if (
-            $message->contact !== null
-            && $resolveAutoReplyRuleAction->handle(
-                $channel,
-                $message->contact,
-                $message->text,
-                $message->message_parameter,
-            ) !== null
-        ) {
+        if ($message->contact === null) {
+            return 'skipped_no_rule';
+        }
+
+        $matchedRules = $resolveAutoReplyRuleAction->handle(
+            $channel,
+            $message->contact,
+            $message->text,
+            $message->message_parameter,
+        );
+
+        if ($matchedRules->isNotEmpty()) {
             return 'rule';
         }
 
@@ -150,14 +165,16 @@ class ProcessAutoReplyJob implements ShouldQueue
             return null;
         }
 
-        $rule = $resolveAutoReplyRuleAction->handle(
+        $matchedRules = $resolveAutoReplyRuleAction->handle(
             $channel,
             $message->contact,
             $message->text,
             $message->message_parameter,
         );
 
-        if ($rule === null) {
+        $rule = $matchedRules->first();
+
+        if (! $rule instanceof AutoReplyRule) {
             return null;
         }
 
