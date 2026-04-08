@@ -27,14 +27,17 @@ class RolePermissionCatalogTest extends TestCase
             'tags.view',
             'tags.edit',
             'tags.delete',
-            'users.view',
-            'users.edit',
             'channels.view',
             'channels.edit',
             'auto_reply_rules.view',
             'auto_reply_rules.edit',
             'auto_reply_rules.delete',
             'bitrix24.view',
+            'scenarios.view',
+            'scenarios.edit',
+            'scenarios.archive',
+            'users.view',
+            'users.edit',
         ], $codes);
     }
 
@@ -56,6 +59,7 @@ class RolePermissionCatalogTest extends TestCase
         $this->assertNotContains('channels.delete', $codes);
         $this->assertNotContains('bitrix24.edit', $codes);
         $this->assertNotContains('bitrix24.delete', $codes);
+        $this->assertNotContains('scenarios.delete', $codes);
     }
 
     public function test_catalog_does_not_expose_preparatory_rows_to_user_interface(): void
@@ -94,14 +98,17 @@ class RolePermissionCatalogTest extends TestCase
             'tags.view',
             'tags.edit',
             'tags.delete',
-            'users.view',
-            'users.edit',
             'channels.view',
             'channels.edit',
             'auto_reply_rules.view',
             'auto_reply_rules.edit',
             'auto_reply_rules.delete',
             'bitrix24.view',
+            'scenarios.view',
+            'scenarios.edit',
+            'scenarios.archive',
+            'users.view',
+            'users.edit',
         ], $runtimeActiveCodes);
     }
 }

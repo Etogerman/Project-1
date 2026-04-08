@@ -9,22 +9,27 @@ class ScenarioPolicy
 {
     public function viewAny(User $user): bool
     {
-        return $this->canManageScenarios($user);
+        return $user->hasRolePermission('scenarios.view');
     }
 
     public function view(User $user, Scenario $scenario): bool
     {
-        return $this->canManageScenarios($user);
+        return $user->hasRolePermission('scenarios.view');
     }
 
     public function create(User $user): bool
     {
-        return $this->canManageScenarios($user);
+        return $user->hasRolePermission('scenarios.edit');
     }
 
     public function update(User $user, Scenario $scenario): bool
     {
-        return $this->canManageScenarios($user);
+        return $user->hasRolePermission('scenarios.edit');
+    }
+
+    public function archive(User $user, Scenario $scenario): bool
+    {
+        return $user->hasRolePermission('scenarios.archive');
     }
 
     public function delete(User $user, Scenario $scenario): bool
@@ -35,10 +40,5 @@ class ScenarioPolicy
     public function deleteAny(User $user): bool
     {
         return false;
-    }
-
-    protected function canManageScenarios(User $user): bool
-    {
-        return $user->canManageSystem();
     }
 }

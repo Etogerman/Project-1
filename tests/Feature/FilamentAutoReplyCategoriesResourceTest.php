@@ -9,6 +9,8 @@ use App\Models\AutoReplyRule;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -42,11 +44,91 @@ class FilamentAutoReplyCategoriesResourceTest extends TestCase
         $employee = User::factory()->create([
             'is_active' => true,
             'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
         ]);
 
         $this->actingAs($employee)
             ->get(AutoReplyCategoryResource::getUrl())
             ->assertForbidden();
+    }
+
+    public function test_employee_with_auto_reply_view_can_open_auto_reply_categories_page(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'auto_reply_rules.view')
+            ->update(['granted' => true]);
+
+        $this->actingAs($employee->fresh())
+            ->get(AutoReplyCategoryResource::getUrl())
+            ->assertOk()
+            ->assertSee('Категории автоответов');
+    }
+
+    public function test_auto_reply_category_policy_for_employee_uses_auto_reply_rule_matrix(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $category = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 0,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->whereIn('permission_key', [
+                'auto_reply_rules.view',
+                'auto_reply_rules.edit',
+                'auto_reply_rules.delete',
+            ])
+            ->update(['granted' => true]);
+
+        $employee = $employee->fresh();
+
+        $this->assertTrue(Gate::forUser($employee)->allows('viewAny', AutoReplyCategory::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('view', $category));
+        $this->assertTrue(Gate::forUser($employee)->allows('create', AutoReplyCategory::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('update', $category));
+        $this->assertTrue(Gate::forUser($employee)->allows('delete', $category));
+    }
+
+    public function test_auto_reply_category_permissions_respect_disabled_employee_matrix_values(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $category = AutoReplyCategory::query()->create([
+            'name' => 'Старт',
+            'sort_order' => 0,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->whereIn('permission_key', [
+                'auto_reply_rules.view',
+                'auto_reply_rules.edit',
+                'auto_reply_rules.delete',
+            ])
+            ->update(['granted' => false]);
+
+        $employee = $employee->fresh();
+
+        $this->assertFalse(Gate::forUser($employee)->allows('viewAny', AutoReplyCategory::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('view', $category));
+        $this->assertFalse(Gate::forUser($employee)->allows('create', AutoReplyCategory::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('update', $category));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $category));
     }
 
     public function test_admin_can_create_edit_and_delete_unused_auto_reply_category(): void

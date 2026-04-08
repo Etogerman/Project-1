@@ -65,7 +65,15 @@
 
         .ac-role-permission-group-row th {
             padding: 1rem;
-            background: color-mix(in srgb, var(--ac-surface-muted) 88%, white);
+            background:
+                linear-gradient(
+                    180deg,
+                    color-mix(in srgb, var(--ac-surface-muted) 92%, var(--ac-primary-50) 8%) 0%,
+                    color-mix(in srgb, var(--ac-surface-muted) 86%, var(--ac-primary-100) 14%) 100%
+                );
+            box-shadow:
+                inset 0 1px 0 color-mix(in srgb, white 72%, transparent),
+                inset 0 -1px 0 color-mix(in srgb, var(--ac-border) 82%, transparent);
             text-align: left;
         }
 
@@ -81,7 +89,7 @@
             max-width: 52rem;
             font-size: 0.86rem;
             line-height: 1.45;
-            color: var(--ac-text-soft);
+            color: color-mix(in srgb, var(--ac-text-soft) 84%, var(--ac-text) 16%);
         }
 
         .ac-role-permission-action {
@@ -93,26 +101,12 @@
             background: linear-gradient(180deg, color-mix(in srgb, var(--ac-warning-50) 48%, white) 0%, var(--ac-surface-strong) 100%);
         }
 
-        .ac-role-permission-code {
-            margin: 0;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 0.76rem;
-            color: var(--ac-text-soft);
-        }
-
         .ac-role-permission-action__topline {
             display: flex;
             align-items: center;
             gap: 0.5rem;
             flex-wrap: wrap;
             margin-top: 0.3rem;
-        }
-
-        .ac-role-permission-action__badges {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            flex-wrap: wrap;
         }
 
         .ac-role-permission-action__title {
@@ -238,7 +232,7 @@
                     </colgroup>
                     <thead>
                         <tr>
-                            <th>Право</th>
+                            <th>Раздел и действия</th>
                             @foreach ($roles as $role)
                                 <th>{{ $role['label'] }}</th>
                             @endforeach
@@ -255,35 +249,10 @@
                             </tr>
 
                             @foreach ($group['actions'] as $action)
-                                <tr
-                                    data-role="permission-row"
-                                    data-code="{{ $action['code'] }}"
-                                    data-runtime="{{ $action['runtimeStatus'] }}"
-                                >
+                                <tr data-role="permission-row">
                                     <td class="ac-role-permission-action{{ $action['isPreparatory'] ? ' ac-role-permission-action--preparatory' : '' }}">
-                                        <p class="ac-role-permission-code">{{ $action['code'] }}</p>
                                         <div class="ac-role-permission-action__topline">
                                             <p class="ac-role-permission-action__title">{{ $action['label'] }}</p>
-
-                                            <span
-                                                class="ac-pill"
-                                                data-role="permission-runtime-status"
-                                                data-tone="{{ $action['runtimeTone'] }}"
-                                                title="{{ $action['runtimeDescription'] }}"
-                                            >
-                                                {{ $action['runtimeLabel'] }}
-                                            </span>
-
-                                            @if ($action['isPreparatory'])
-                                                <span
-                                                    class="ac-pill"
-                                                    data-tone="warning"
-                                                    data-role="permission-row-note"
-                                                    title="{{ $action['preparatoryDescription'] }}"
-                                                >
-                                                    {{ $action['preparatoryLabel'] }}
-                                                </span>
-                                            @endif
                                         </div>
                                         <p
                                             class="ac-role-permission-action__description"
@@ -302,7 +271,6 @@
                                         <td
                                             class="ac-role-permission-state"
                                             data-role="permission-state"
-                                            data-code="{{ $action['code'] }}"
                                             data-role-key="{{ $role['key'] }}"
                                             data-status="{{ $state['status'] }}"
                                             data-editable="{{ $state['editable'] ? 'true' : 'false' }}"

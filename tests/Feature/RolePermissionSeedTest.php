@@ -14,32 +14,25 @@ class RolePermissionSeedTest extends TestCase
 
     public function test_role_permissions_table_is_fully_seeded_for_admin_and_employee(): void
     {
-        $permissionKeys = collect(app(RolePermissionCatalog::class)->groups())
-            ->pluck('actions')
-            ->flatten(1)
-            ->pluck('code')
-            ->values()
-            ->all();
-
         $this->assertSame(
-            count($permissionKeys) * 2,
+            count($this->expectedDatabasePermissionKeys()) * 2,
             DB::table('role_permissions')->count(),
         );
 
         $this->assertSame(
-            $permissionKeys,
+            $this->expectedDatabasePermissionKeys(),
             DB::table('role_permissions')
                 ->where('role', User::ROLE_ADMIN)
-                ->orderBy('id')
+                ->orderBy('permission_key')
                 ->pluck('permission_key')
                 ->all(),
         );
 
         $this->assertSame(
-            $permissionKeys,
+            $this->expectedDatabasePermissionKeys(),
             DB::table('role_permissions')
                 ->where('role', User::ROLE_EMPLOYEE)
-                ->orderBy('id')
+                ->orderBy('permission_key')
                 ->pluck('permission_key')
                 ->all(),
         );
@@ -77,6 +70,9 @@ class RolePermissionSeedTest extends TestCase
             'dialogs.delete' => true,
             'dialogs.edit' => true,
             'dialogs.view' => true,
+            'scenarios.archive' => true,
+            'scenarios.edit' => true,
+            'scenarios.view' => true,
             'tags.delete' => true,
             'tags.edit' => true,
             'tags.view' => true,
@@ -101,6 +97,9 @@ class RolePermissionSeedTest extends TestCase
             'dialogs.delete' => false,
             'dialogs.edit' => true,
             'dialogs.view' => true,
+            'scenarios.archive' => false,
+            'scenarios.edit' => false,
+            'scenarios.view' => false,
             'tags.delete' => false,
             'tags.edit' => true,
             'tags.view' => true,
@@ -108,5 +107,38 @@ class RolePermissionSeedTest extends TestCase
             'users.edit' => false,
             'users.view' => false,
         ], $employeeMatrix);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function expectedDatabasePermissionKeys(): array
+    {
+        return [
+            'auto_reply_rules.delete',
+            'auto_reply_rules.edit',
+            'auto_reply_rules.view',
+            'bitrix24.delete',
+            'bitrix24.edit',
+            'bitrix24.view',
+            'channels.delete',
+            'channels.edit',
+            'channels.view',
+            'contacts.delete',
+            'contacts.edit',
+            'contacts.view',
+            'dialogs.delete',
+            'dialogs.edit',
+            'dialogs.view',
+            'scenarios.archive',
+            'scenarios.edit',
+            'scenarios.view',
+            'tags.delete',
+            'tags.edit',
+            'tags.view',
+            'users.delete',
+            'users.edit',
+            'users.view',
+        ];
     }
 }

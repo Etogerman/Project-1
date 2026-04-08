@@ -52,7 +52,7 @@ class RolePermissionMatrix extends Page
 
     public function getSubheading(): ?string
     {
-        return 'Управление правами доступа для ролей администратора и сотрудника.';
+        return null;
     }
 
     public function savePermissionMatrix(): void
