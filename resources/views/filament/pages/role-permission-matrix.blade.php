@@ -215,7 +215,18 @@
                     <x-filament::button type="button" wire:click="reloadPermissionMatrix" color="gray">
                         Отмена
                     </x-filament::button>
-                    <x-filament::button type="button" wire:click="savePermissionMatrix">
+                    <x-filament::button
+                        type="button"
+                        wire:click="savePermissionMatrix"
+                        color="success"
+                        style="background:#1cae6a;border:1px solid rgba(255,255,255,0.14);color:#fff;"
+                        onmouseenter="this.style.background='#18985d';this.style.borderColor='rgba(255,255,255,0.14)'"
+                        onmouseleave="this.style.background='#1cae6a';this.style.borderColor='rgba(255,255,255,0.14)'"
+                        onfocus="this.style.background='#18985d';this.style.borderColor='rgba(255,255,255,0.14)'"
+                        onblur="this.style.background='#1cae6a';this.style.borderColor='rgba(255,255,255,0.14)'"
+                        onmousedown="this.style.background='#13784a';this.style.borderColor='rgba(255,255,255,0.14)'"
+                        onmouseup="this.style.background='#18985d';this.style.borderColor='rgba(255,255,255,0.14)'"
+                    >
                         Сохранить
                     </x-filament::button>
                 </div>

@@ -19,6 +19,7 @@ class ManageAutoReplyCategories extends ManageRecords
                 ->label('Добавить категорию')
                 ->modalWidth(Width::ThreeExtraLarge)
                 ->modalFooterActionsAlignment(Alignment::End)
+                ->extraModalWindowAttributes(['class' => 'ac-auto-reply-form-modal'])
                 ->createAnother(false),
         ];
     }

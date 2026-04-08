@@ -487,7 +487,9 @@ class ChannelResource extends Resource
                     ->tooltip('Сценарии')
                     ->modalWidth(Width::Large)
                     ->modalHeading('Сценарии канала')
-                    ->modalSubmitActionLabel('Сохранить')
+                    ->modalSubmitAction(fn (Action $action): Action => $action
+                        ->label('Сохранить')
+                        ->color('success'))
                     ->fillForm(function (Channel $record): array {
                         $scenarioRegistry = app(ScenarioRegistry::class);
                         $compatibleScenarioCodes = $scenarioRegistry->compatibleScenarioCodesForChannel($record);
