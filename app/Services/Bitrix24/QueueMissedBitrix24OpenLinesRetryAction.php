@@ -8,29 +8,47 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveRootContactAction;
+use Illuminate\Support\Collection;
 
 class QueueMissedBitrix24OpenLinesRetryAction
 {
+    private const CANDIDATE_BATCH_SIZE = 50;
+
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly IsMessageReadyForBitrix24LiveExportAction $isMessageReadyForBitrix24LiveExportAction,
         private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
     ) {}
 
     public function handle(Contact|int $contact): bool
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
-        $message = $this->findLatestMissedInboundMessage($rootContact);
 
-        if (! $message instanceof Message) {
-            return false;
-        }
+        $page = 1;
 
-        $result = $this->queueBitrix24LiveMessageExportAction->handle($message, retryAfterSync: true);
+        do {
+            $candidates = $this->findMissedInboundCandidates($rootContact, $page);
 
-        return $result->queued || $result->alreadyPending;
+            foreach ($candidates as $message) {
+                if (! $this->isMessageReadyForBitrix24LiveExportAction->handle($message)) {
+                    continue;
+                }
+
+                $result = $this->queueBitrix24LiveMessageExportAction->handle($message, retryAfterSync: true);
+
+                return $result->queued || $result->alreadyPending;
+            }
+
+            $page++;
+        } while ($candidates->isNotEmpty());
+
+        return false;
     }
 
-    private function findLatestMissedInboundMessage(Contact $rootContact): ?Message
+    /**
+     * @return Collection<int, Message>
+     */
+    private function findMissedInboundCandidates(Contact $rootContact, int $page): Collection
     {
         return Message::query()
             ->select('messages.*')
@@ -60,6 +78,7 @@ class QueueMissedBitrix24OpenLinesRetryAction
             ->with(['dialog.channel', 'contact'])
             ->orderByDesc('messages.received_at')
             ->orderByDesc('messages.id')
-            ->first();
+            ->forPage($page, self::CANDIDATE_BATCH_SIZE)
+            ->get();
     }
 }
