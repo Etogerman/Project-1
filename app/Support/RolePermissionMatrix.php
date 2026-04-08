@@ -82,9 +82,15 @@ class RolePermissionMatrix
         foreach (app(RolePermissionCatalog::class)->groups() as $group) {
             foreach ($group['actions'] as $action) {
                 [$resource, $ability] = explode('.', $action['code'], 2);
+                $permissionKeys = $this->actionPermissionKeys($action);
 
                 foreach ($roles as $role) {
-                    $state[$role][$resource][$ability] = (bool) ($databaseStates[$role][$action['code']] ?? false);
+                    $values = array_map(
+                        fn (string $permissionKey): bool => (bool) ($databaseStates[$role][$permissionKey] ?? false),
+                        $permissionKeys,
+                    );
+
+                    $state[$role][$resource][$ability] = ! in_array(false, $values, true);
                 }
             }
         }
@@ -97,6 +103,7 @@ class RolePermissionMatrix
      *     code:string,
      *     label:string,
      *     description:string,
+     *     mirroredCodes?: list<string>,
      *     isRuntimeActive: bool,
      *     isPreparatory: bool,
      *     preparatoryLabel: ?string,
@@ -131,11 +138,12 @@ class RolePermissionMatrix
     {
         return array_map(function (array $action) use ($roles, $databaseStates, $overrides): array {
             $states = [];
+            $permissionKeys = $this->actionPermissionKeys($action);
 
             foreach ($roles as $role) {
-                $states[$role['key']] = $this->resolveState(
+                $states[$role['key']] = $this->resolveActionState(
                     $role['key'],
-                    $action['code'],
+                    $permissionKeys,
                     $databaseStates,
                     $overrides,
                 );
@@ -158,6 +166,21 @@ class RolePermissionMatrix
                 'states' => $states,
             ];
         }, $actions);
+    }
+
+    /**
+     * @param  array{
+     *     code:string,
+     *     mirroredCodes?: list<string>
+     * }  $action
+     * @return list<string>
+     */
+    protected function actionPermissionKeys(array $action): array
+    {
+        return array_values(array_unique([
+            $action['code'],
+            ...($action['mirroredCodes'] ?? []),
+        ]));
     }
 
     /**
@@ -213,6 +236,42 @@ class RolePermissionMatrix
             'status' => $granted ? 'enabled' : 'disabled',
             'editable' => $editable,
             'lockReason' => $lockReason,
+        ];
+    }
+
+    /**
+     * @param  list<string>  $permissionKeys
+     * @param  array<string, array<string, bool>>  $databaseStates
+     * @param  array<string, mixed>|null  $overrides
+     * @return array{allowed:bool,label:string,tone:string,status:string,editable:bool,lockReason:?string}
+     */
+    protected function resolveActionState(string $role, array $permissionKeys, array $databaseStates, ?array $overrides): array
+    {
+        $states = array_map(
+            fn (string $permissionKey): array => $this->resolveState($role, $permissionKey, $databaseStates, $overrides),
+            $permissionKeys,
+        );
+
+        if (in_array('missing', array_column($states, 'status'), true)) {
+            return [
+                'allowed' => false,
+                'label' => 'Нет записи',
+                'tone' => 'warning',
+                'status' => 'missing',
+                'editable' => ! in_array(false, array_column($states, 'editable'), true),
+                'lockReason' => collect(array_column($states, 'lockReason'))->filter()->first(),
+            ];
+        }
+
+        $allowed = ! in_array(false, array_column($states, 'allowed'), true);
+
+        return [
+            'allowed' => $allowed,
+            'label' => $allowed ? 'Включено' : 'Выключено',
+            'tone' => $allowed ? 'success' : 'gray',
+            'status' => $allowed ? 'enabled' : 'disabled',
+            'editable' => ! in_array(false, array_column($states, 'editable'), true),
+            'lockReason' => collect(array_column($states, 'lockReason'))->filter()->first(),
         ];
     }
 

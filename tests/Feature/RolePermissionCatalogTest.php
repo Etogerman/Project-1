@@ -35,7 +35,6 @@ class RolePermissionCatalogTest extends TestCase
             'bitrix24.view',
             'scenarios.view',
             'scenarios.edit',
-            'scenarios.archive',
             'users.view',
             'users.edit',
         ], $codes);
@@ -59,6 +58,7 @@ class RolePermissionCatalogTest extends TestCase
         $this->assertNotContains('channels.delete', $codes);
         $this->assertNotContains('bitrix24.edit', $codes);
         $this->assertNotContains('bitrix24.delete', $codes);
+        $this->assertNotContains('scenarios.archive', $codes);
         $this->assertNotContains('scenarios.delete', $codes);
     }
 
@@ -106,7 +106,6 @@ class RolePermissionCatalogTest extends TestCase
             'bitrix24.view',
             'scenarios.view',
             'scenarios.edit',
-            'scenarios.archive',
             'users.view',
             'users.edit',
         ], $runtimeActiveCodes);

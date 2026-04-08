@@ -68,9 +68,10 @@
             background:
                 linear-gradient(
                     180deg,
-                    color-mix(in srgb, var(--ac-surface-muted) 92%, var(--ac-primary-50) 8%) 0%,
-                    color-mix(in srgb, var(--ac-surface-muted) 86%, var(--ac-primary-100) 14%) 100%
+                    color-mix(in srgb, var(--ac-surface-muted) 74%, #dbe2ea 26%) 0%,
+                    color-mix(in srgb, var(--ac-surface-muted) 58%, #cbd5e1 42%) 100%
                 );
+            border-left: 0.32rem solid color-mix(in srgb, var(--ac-border-strong) 56%, var(--ac-text-soft) 44%);
             box-shadow:
                 inset 0 1px 0 color-mix(in srgb, white 72%, transparent),
                 inset 0 -1px 0 color-mix(in srgb, var(--ac-border) 82%, transparent);
@@ -81,7 +82,7 @@
             margin: 0;
             font-size: 1rem;
             font-weight: 700;
-            color: var(--ac-text);
+            color: color-mix(in srgb, var(--ac-text) 82%, black);
         }
 
         .ac-role-permission-group__description {
@@ -89,7 +90,7 @@
             max-width: 52rem;
             font-size: 0.86rem;
             line-height: 1.45;
-            color: color-mix(in srgb, var(--ac-text-soft) 84%, var(--ac-text) 16%);
+            color: color-mix(in srgb, var(--ac-text-soft) 72%, var(--ac-text) 28%);
         }
 
         .ac-role-permission-action {

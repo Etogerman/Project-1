@@ -16,34 +16,36 @@ class UpdateRolePermissionMatrixAction
         $records = [];
 
         foreach ($this->roles() as $role) {
-            foreach ($this->permissionKeys() as $permissionKey) {
-                $granted = (bool) data_get($permissionState, sprintf('%s.%s', $role, $permissionKey), false);
+            foreach ($this->catalogActions() as $action) {
+                $granted = (bool) data_get($permissionState, sprintf('%s.%s', $role, $action['code']), false);
 
-                if ($this->rolePermissionMatrix()->isProtectedAssignment($role, $permissionKey)) {
-                    if (! $granted) {
-                        $forcedAssignments[] = sprintf('%s.%s', $role, $permissionKey);
+                foreach ($this->actionPermissionKeys($action) as $permissionKey) {
+                    if ($this->rolePermissionMatrix()->isProtectedAssignment($role, $permissionKey)) {
+                        if (! $granted) {
+                            $forcedAssignments[] = sprintf('%s.%s', $role, $permissionKey);
+                        }
+
+                        $granted = true;
                     }
 
-                    $granted = true;
+                    $records[sprintf('%s:%s', $role, $permissionKey)] = [
+                        'role' => $role,
+                        'permission_key' => $permissionKey,
+                        'granted' => $granted,
+                        'created_at' => $timestamp,
+                        'updated_at' => $timestamp,
+                    ];
                 }
-
-                $records[] = [
-                    'role' => $role,
-                    'permission_key' => $permissionKey,
-                    'granted' => $granted,
-                    'created_at' => $timestamp,
-                    'updated_at' => $timestamp,
-                ];
             }
         }
 
         DB::table('role_permissions')->upsert(
-            $records,
+            array_values($records),
             ['role', 'permission_key'],
             ['granted', 'updated_at'],
         );
 
-        return $forcedAssignments;
+        return array_values(array_unique($forcedAssignments));
     }
 
     /**
@@ -58,16 +60,27 @@ class UpdateRolePermissionMatrixAction
     }
 
     /**
-     * @return list<string>
+     * @return list<array{code:string, mirroredCodes?: list<string>}>
      */
-    protected function permissionKeys(): array
+    protected function catalogActions(): array
     {
         return collect(app(RolePermissionCatalog::class)->groups())
             ->pluck('actions')
             ->flatten(1)
-            ->pluck('code')
             ->values()
             ->all();
+    }
+
+    /**
+     * @param  array{code:string, mirroredCodes?: list<string>}  $action
+     * @return list<string>
+     */
+    protected function actionPermissionKeys(array $action): array
+    {
+        return array_values(array_unique([
+            $action['code'],
+            ...($action['mirroredCodes'] ?? []),
+        ]));
     }
 
     protected function rolePermissionMatrix(): RolePermissionMatrix
