@@ -222,12 +222,15 @@
         color: #ffffff;
     }
 
-    .fi-btn.fi-color-primary,
     .fi-btn.fi-color-success,
     .fi-btn.fi-color-danger,
-    .fi-btn.fi-color-warning,
     .fi-btn.fi-color-info {
         color: #ffffff;
+    }
+
+    .fi-btn.fi-color-primary,
+    .fi-btn.fi-color-warning {
+        color: #111111;
     }
 
     .fi-input-wrp {
@@ -1600,7 +1603,7 @@
     .ac-button--primary {
         border-color: color-mix(in srgb, var(--ac-primary) 45%, transparent);
         background: var(--ac-primary);
-        color: #ffffff;
+        color: #111111;
     }
 
     .ac-button--primary-soft {
@@ -1610,7 +1613,7 @@
             color-mix(in srgb, var(--ac-primary) 84%, #ffffff 16%) 0%,
             color-mix(in srgb, var(--ac-primary) 90%, #1e3a8a 10%) 100%
         );
-        color: #ffffff;
+        color: #111111;
     }
 
     .ac-button--success {
