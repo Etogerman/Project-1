@@ -17,13 +17,13 @@ class RolePermissionMatrix extends Page
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedShieldCheck;
 
-    protected static ?string $navigationLabel = 'Матрица прав';
+    protected static ?string $navigationLabel = 'Права доступа';
 
     protected static string|UnitEnum|null $navigationGroup = 'Команда';
 
     protected static ?int $navigationSort = 20;
 
-    protected static ?string $title = 'Матрица ролей и прав';
+    protected static ?string $title = 'Права доступа';
 
     /**
      * @var array<string, array<string, array<string, bool>>>
@@ -52,7 +52,7 @@ class RolePermissionMatrix extends Page
 
     public function getSubheading(): ?string
     {
-        return 'Страница recovery-доступа для суперадминистратора. Она управляет конфигурацией матрицы прав и остаётся доступной вне обычного role_permissions rollout.';
+        return null;
     }
 
     public function savePermissionMatrix(): void
@@ -63,11 +63,11 @@ class RolePermissionMatrix extends Page
 
         Notification::make()
             ->success()
-            ->title('Матрица прав сохранена')
+            ->title('Права доступа сохранены')
             ->body(
                 empty($forcedAssignments)
-                    ? 'Изменения записаны в таблицу role_permissions.'
-                    : 'Изменения записаны в таблицу role_permissions. Критичные права администратора сохранены включёнными.',
+                    ? 'Изменения сохранены.'
+                    : 'Изменения сохранены. Критичные права администратора оставлены включёнными.',
             )
             ->send();
     }

@@ -217,8 +217,12 @@ class ScenarioResource extends Resource
                     ->tooltip('Опубликовать черновик')
                     ->color('success')
                     ->requiresConfirmation()
-                    ->visible(fn (Scenario $record): bool => ! $record->is_archived && $record->draftVersion instanceof ScenarioVersion)
+                    ->visible(fn (Scenario $record): bool => ! $record->is_archived
+                        && $record->draftVersion instanceof ScenarioVersion
+                        && (auth()->user()?->can('update', $record) ?? false))
                     ->action(function (Scenario $record): void {
+                        abort_unless(auth()->user()?->can('update', $record) ?? false, 403);
+
                         $draftVersion = $record->draftVersion()->first();
 
                         if (! $draftVersion instanceof ScenarioVersion) {
@@ -241,8 +245,13 @@ class ScenarioResource extends Resource
                     ->tooltip('Создать новый черновик')
                     ->color('primary')
                     ->requiresConfirmation()
-                    ->visible(fn (Scenario $record): bool => ! $record->is_archived && $record->draftVersion === null && $record->publishedVersion instanceof ScenarioVersion)
+                    ->visible(fn (Scenario $record): bool => ! $record->is_archived
+                        && $record->draftVersion === null
+                        && $record->publishedVersion instanceof ScenarioVersion
+                        && (auth()->user()?->can('update', $record) ?? false))
                     ->action(function (Scenario $record): void {
+                        abort_unless(auth()->user()?->can('update', $record) ?? false, 403);
+
                         app(CreateNextScenarioDraftAction::class)->handle($record);
 
                         Notification::make()
@@ -265,8 +274,11 @@ class ScenarioResource extends Resource
                     ->tooltip('Архивировать сценарий')
                     ->color('danger')
                     ->requiresConfirmation()
-                    ->visible(fn (Scenario $record): bool => ! $record->is_archived)
+                    ->visible(fn (Scenario $record): bool => ! $record->is_archived
+                        && (auth()->user()?->can('archive', $record) ?? false))
                     ->action(function (Scenario $record): void {
+                        abort_unless(auth()->user()?->can('archive', $record) ?? false, 403);
+
                         app(ArchiveScenarioAction::class)->handle($record);
 
                         Notification::make()

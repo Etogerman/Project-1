@@ -5,15 +5,6 @@
             gap: 1rem;
         }
 
-        .ac-role-permission-note {
-            display: grid;
-            gap: 0.45rem;
-            padding: 0.8rem;
-            border: 1px dashed color-mix(in srgb, var(--ac-warning-500) 45%, var(--ac-border));
-            border-radius: var(--ac-radius-sm);
-            background: color-mix(in srgb, var(--ac-warning-50) 78%, white);
-        }
-
         .ac-role-permission-table-shell {
             display: grid;
             gap: 1rem;
@@ -74,7 +65,16 @@
 
         .ac-role-permission-group-row th {
             padding: 1rem;
-            background: color-mix(in srgb, var(--ac-surface-muted) 88%, white);
+            background:
+                linear-gradient(
+                    180deg,
+                    color-mix(in srgb, var(--ac-surface-muted) 74%, #dbe2ea 26%) 0%,
+                    color-mix(in srgb, var(--ac-surface-muted) 58%, #cbd5e1 42%) 100%
+                );
+            border-left: 0.32rem solid color-mix(in srgb, var(--ac-border-strong) 56%, var(--ac-text-soft) 44%);
+            box-shadow:
+                inset 0 1px 0 color-mix(in srgb, white 72%, transparent),
+                inset 0 -1px 0 color-mix(in srgb, var(--ac-border) 82%, transparent);
             text-align: left;
         }
 
@@ -82,7 +82,7 @@
             margin: 0;
             font-size: 1rem;
             font-weight: 700;
-            color: var(--ac-text);
+            color: color-mix(in srgb, var(--ac-text) 82%, black);
         }
 
         .ac-role-permission-group__description {
@@ -90,7 +90,7 @@
             max-width: 52rem;
             font-size: 0.86rem;
             line-height: 1.45;
-            color: var(--ac-text-soft);
+            color: color-mix(in srgb, var(--ac-text-soft) 72%, var(--ac-text) 28%);
         }
 
         .ac-role-permission-action {
@@ -102,26 +102,12 @@
             background: linear-gradient(180deg, color-mix(in srgb, var(--ac-warning-50) 48%, white) 0%, var(--ac-surface-strong) 100%);
         }
 
-        .ac-role-permission-code {
-            margin: 0;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 0.76rem;
-            color: var(--ac-text-soft);
-        }
-
         .ac-role-permission-action__topline {
             display: flex;
             align-items: center;
             gap: 0.5rem;
             flex-wrap: wrap;
             margin-top: 0.3rem;
-        }
-
-        .ac-role-permission-action__badges {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            flex-wrap: wrap;
         }
 
         .ac-role-permission-action__title {
@@ -219,43 +205,21 @@
         <section class="ac-surface ac-surface--hero">
             <div class="ac-surface__header ac-surface__header--centered">
                 <div class="ac-surface__title-group">
-                    <p class="ac-surface__eyebrow">Команда</p>
-                    <h3 class="ac-surface__title">Матрица ролей и прав</h3>
+                    <h3 class="ac-surface__title">Права доступа</h3>
                     <p class="ac-surface__subtitle">
-                        Страница показывает управляемую матрицу прав из базы данных. Часть строк уже влияет на
-                        реальный доступ, часть пока остаётся только конфигурацией в <code>role_permissions</code>.
-                        Суперадминистратор остаётся отдельным recovery-контуром вне этой таблицы.
+                        Настройте, какие действия доступны администраторам и сотрудникам в панели.
                     </p>
                 </div>
 
                 <div class="ac-button-group">
                     <x-filament::button type="button" wire:click="reloadPermissionMatrix" color="gray">
-                        Сбросить несохранённые изменения
+                        Отмена
                     </x-filament::button>
                     <x-filament::button type="button" wire:click="savePermissionMatrix">
-                        Сохранить матрицу
+                        Сохранить
                     </x-filament::button>
-                    @foreach ($roles as $role)
-                        <span class="ac-pill" data-tone="{{ $role['tone'] }}">
-                            {{ $role['label'] }}
-                        </span>
-                    @endforeach
                 </div>
             </div>
-        </section>
-
-        <section class="ac-role-permission-note" data-role="database-readonly-note">
-            <div class="ac-button-group">
-                <span class="ac-pill" data-role="runtime-active-badge" data-tone="success">Уже влияет на доступ</span>
-                <span class="ac-pill" data-role="config-only-badge" data-tone="gray">Пока только конфигурация</span>
-                <span class="ac-pill" data-role="superadmin-recovery-badge" data-tone="danger">Суперадминистратор вне матрицы</span>
-            </div>
-            <p class="ac-list-card__body">
-                Матрица читает и сохраняет значения в таблицу <code>role_permissions</code> в смешанном режиме rollout:
-                строки со статусом runtime-active уже управляют доступом в системе, а config-only строки пока
-                остаются подготовленной конфигурацией. Подготовительные права отмечены отдельно, а recovery-доступ
-                суперадминистратора не зависит от этой таблицы.
-            </p>
         </section>
 
         <section class="ac-surface ac-surface--soft ac-role-permission-table-shell">
@@ -269,7 +233,7 @@
                     </colgroup>
                     <thead>
                         <tr>
-                            <th>Право</th>
+                            <th>Раздел и действия</th>
                             @foreach ($roles as $role)
                                 <th>{{ $role['label'] }}</th>
                             @endforeach
@@ -286,35 +250,10 @@
                             </tr>
 
                             @foreach ($group['actions'] as $action)
-                                <tr
-                                    data-role="permission-row"
-                                    data-code="{{ $action['code'] }}"
-                                    data-runtime="{{ $action['runtimeStatus'] }}"
-                                >
+                                <tr data-role="permission-row">
                                     <td class="ac-role-permission-action{{ $action['isPreparatory'] ? ' ac-role-permission-action--preparatory' : '' }}">
-                                        <p class="ac-role-permission-code">{{ $action['code'] }}</p>
                                         <div class="ac-role-permission-action__topline">
                                             <p class="ac-role-permission-action__title">{{ $action['label'] }}</p>
-
-                                            <span
-                                                class="ac-pill"
-                                                data-role="permission-runtime-status"
-                                                data-tone="{{ $action['runtimeTone'] }}"
-                                                title="{{ $action['runtimeDescription'] }}"
-                                            >
-                                                {{ $action['runtimeLabel'] }}
-                                            </span>
-
-                                            @if ($action['isPreparatory'])
-                                                <span
-                                                    class="ac-pill"
-                                                    data-tone="warning"
-                                                    data-role="permission-row-note"
-                                                    title="{{ $action['preparatoryDescription'] }}"
-                                                >
-                                                    {{ $action['preparatoryLabel'] }}
-                                                </span>
-                                            @endif
                                         </div>
                                         <p
                                             class="ac-role-permission-action__description"
@@ -333,7 +272,6 @@
                                         <td
                                             class="ac-role-permission-state"
                                             data-role="permission-state"
-                                            data-code="{{ $action['code'] }}"
                                             data-role-key="{{ $role['key'] }}"
                                             data-status="{{ $state['status'] }}"
                                             data-editable="{{ $state['editable'] ? 'true' : 'false' }}"

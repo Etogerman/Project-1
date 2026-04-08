@@ -24,26 +24,23 @@ class RolePermissionCatalogTest extends TestCase
             'contacts.delete',
             'dialogs.view',
             'dialogs.edit',
-            'dialogs.delete',
             'tags.view',
             'tags.edit',
             'tags.delete',
-            'users.view',
-            'users.edit',
-            'users.delete',
             'channels.view',
             'channels.edit',
-            'channels.delete',
             'auto_reply_rules.view',
             'auto_reply_rules.edit',
             'auto_reply_rules.delete',
             'bitrix24.view',
-            'bitrix24.edit',
-            'bitrix24.delete',
+            'scenarios.view',
+            'scenarios.edit',
+            'users.view',
+            'users.edit',
         ], $codes);
     }
 
-    public function test_catalog_does_not_expose_granular_legacy_rows_or_tags(): void
+    public function test_catalog_does_not_expose_granular_legacy_or_hidden_preparatory_rows(): void
     {
         $catalog = app(RolePermissionCatalog::class)->groups();
 
@@ -56,9 +53,16 @@ class RolePermissionCatalogTest extends TestCase
 
         $this->assertNotContains('contacts.phone.edit_existing', $codes);
         $this->assertNotContains('contacts.assignee.assign', $codes);
+        $this->assertNotContains('dialogs.delete', $codes);
+        $this->assertNotContains('users.delete', $codes);
+        $this->assertNotContains('channels.delete', $codes);
+        $this->assertNotContains('bitrix24.edit', $codes);
+        $this->assertNotContains('bitrix24.delete', $codes);
+        $this->assertNotContains('scenarios.archive', $codes);
+        $this->assertNotContains('scenarios.delete', $codes);
     }
 
-    public function test_catalog_marks_preparatory_rows_explicitly(): void
+    public function test_catalog_does_not_expose_preparatory_rows_to_user_interface(): void
     {
         $catalog = app(RolePermissionCatalog::class)->groups();
 
@@ -70,13 +74,7 @@ class RolePermissionCatalogTest extends TestCase
             ->values()
             ->all();
 
-        $this->assertSame([
-            'dialogs.delete',
-            'users.delete',
-            'channels.delete',
-            'bitrix24.edit',
-            'bitrix24.delete',
-        ], $preparatoryCodes);
+        $this->assertSame([], $preparatoryCodes);
     }
 
     public function test_catalog_marks_runtime_active_rows_explicitly(): void
@@ -100,14 +98,16 @@ class RolePermissionCatalogTest extends TestCase
             'tags.view',
             'tags.edit',
             'tags.delete',
-            'users.view',
-            'users.edit',
             'channels.view',
             'channels.edit',
             'auto_reply_rules.view',
             'auto_reply_rules.edit',
             'auto_reply_rules.delete',
             'bitrix24.view',
+            'scenarios.view',
+            'scenarios.edit',
+            'users.view',
+            'users.edit',
         ], $runtimeActiveCodes);
     }
 }

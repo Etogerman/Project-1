@@ -11,6 +11,8 @@ use App\Services\Scenarios\CreateScenarioAction;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -44,11 +46,117 @@ class FilamentScenariosResourceTest extends TestCase
         $employee = User::factory()->create([
             'is_active' => true,
             'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
         ]);
 
         $this->actingAs($employee)
             ->get(ScenarioResource::getUrl())
             ->assertForbidden();
+    }
+
+    public function test_employee_with_scenarios_view_can_open_scenarios_page(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'scenarios.view')
+            ->update(['granted' => true]);
+
+        $this->actingAs($employee->fresh())
+            ->get(ScenarioResource::getUrl())
+            ->assertOk()
+            ->assertSee('Сценарии');
+    }
+
+    public function test_scenario_policy_for_employee_uses_role_permission_matrix(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'qualification',
+            'name' => 'Квалификация',
+            'is_active' => true,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->whereIn('permission_key', [
+                'scenarios.view',
+                'scenarios.edit',
+                'scenarios.archive',
+            ])
+            ->update(['granted' => true]);
+
+        $employee = $employee->fresh();
+
+        $this->assertTrue(Gate::forUser($employee)->allows('viewAny', Scenario::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('view', $scenario));
+        $this->assertTrue(Gate::forUser($employee)->allows('create', Scenario::class));
+        $this->assertTrue(Gate::forUser($employee)->allows('update', $scenario));
+        $this->assertTrue(Gate::forUser($employee)->allows('archive', $scenario));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $scenario));
+    }
+
+    public function test_scenario_table_actions_respect_employee_matrix_values(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'retention',
+            'name' => 'Удержание',
+            'is_active' => true,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->whereIn('permission_key', [
+                'scenarios.view',
+                'scenarios.edit',
+                'scenarios.archive',
+            ])
+            ->update(['granted' => false]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'scenarios.view')
+            ->update(['granted' => true]);
+
+        Livewire::actingAs($employee->fresh())
+            ->test(ManageScenarios::class)
+            ->assertTableActionHidden('publishDraft', $scenario)
+            ->assertTableActionHidden('edit', $scenario)
+            ->assertTableActionHidden('archiveScenario', $scenario);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'scenarios.edit')
+            ->update(['granted' => true]);
+
+        Livewire::actingAs($employee->fresh())
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('publishDraft', $scenario)
+            ->assertTableActionVisible('edit', $scenario)
+            ->assertTableActionHidden('archiveScenario', $scenario);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'scenarios.archive')
+            ->update(['granted' => true]);
+
+        Livewire::actingAs($employee->fresh())
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('archiveScenario', $scenario);
     }
 
     public function test_admin_can_create_and_edit_scenario_with_draft_json(): void
