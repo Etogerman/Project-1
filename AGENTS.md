@@ -1,28 +1,3 @@
-<!-- VERCEL BEST PRACTICES START -->
-## Best practices for developing on Vercel
-
-These defaults are optimized for AI coding agents (and humans) working on apps that deploy to Vercel.
-
-- Treat Vercel Functions as stateless + ephemeral (no durable RAM/FS, no background daemons), use Blob or marketplace integrations for preserving state
-- Edge Functions (standalone) are deprecated; prefer Vercel Functions
-- Don't start new projects on Vercel KV/Postgres (both discontinued); use Marketplace Redis/Postgres instead
-- Store secrets in Vercel Env Variables; not in git or `NEXT_PUBLIC_*`
-- Provision Marketplace native integrations with `vercel integration add` (CI/agent-friendly)
-- Sync env + project settings with `vercel env pull` / `vercel pull` when you need local/offline parity
-- Use `waitUntil` for post-response work; avoid the deprecated Function `context` parameter
-- Set Function regions near your primary data source; avoid cross-region DB/service roundtrips
-- Tune Fluid Compute knobs (e.g., `maxDuration`, memory/CPU) for long I/O-heavy calls (LLMs, APIs)
-- Use Runtime Cache for fast **regional** caching + tag invalidation (don't treat it as global KV)
-- Use Cron Jobs for schedules; cron runs in UTC and triggers your production URL via HTTP GET
-- Use Vercel Blob for uploads/media; Use Edge Config for small, globally-read config
-- If Enable Deployment Protection is enabled, use a bypass secret to directly access them
-- Add OpenTelemetry via `@vercel/otel` on Node; don't expect OTEL support on the Edge runtime
-- Enable Web Analytics + Speed Insights early
-- Use AI Gateway for model routing, set AI_GATEWAY_API_KEY, using a model string (e.g. 'anthropic/claude-sonnet-4.6'), Gateway is already default in AI SDK
-  needed. Always curl https://ai-gateway.vercel.sh/v1/models first; never trust model IDs from memory
-- For durable agent loops or untrusted code: use Workflow (pause/resume/state) + Sandbox; use Vercel MCP for secure infra access
-<!-- VERCEL BEST PRACTICES END -->
-
 <!-- ABRIKOSOFF CONNECTOR PROJECT START -->
 
 # Abrikosoff Connector
@@ -69,6 +44,11 @@ Abrikosoff Connector — операторская платформа для ра
   - Telegram line id `32`
   - MAX line id `31`
   - existing-contact rebinding happy-path работает для Telegram и MAX
+- Подтверждённый локальный happy-path со стороны приложения:
+  - `contact sync -> deal sync -> history export`
+  - live bridge идёт через `Dialog` / `Message`
+  - missed inbound recovery разрешён только внутри уже подтверждённого
+    Open Lines happy-path
 - Любое новое расширение Bitrix24 вне подтверждённого happy-path
   требует отдельного ТЗ.
 - Возможно подключение дополнительных мессенджеров.
@@ -101,6 +81,8 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Services/DataCollection/` — extractor/action-классы и collector orchestration helpers
 - `app/Services/Contacts/` — ownership-действия и phone CRUD/action-классы
 - `app/Services/Dialogs/` — dialog routing, history loading, feed building и overview-данные
+- `app/Services/Bitrix24/` — contact/deal sync, history export, Open Lines,
+  OAuth/connection recovery и callback processing
 - `app/Jobs/` — queued orchestration для автоответа, phone capture follow-up и collector flow
 - `app/Http/Controllers/` — тонкие HTTP-контроллеры
 - `app/Filament/Resources/` — UI админки (Resources + Pages)
@@ -136,6 +118,17 @@ Abrikosoff Connector — операторская платформа для ра
   - `distance_to_moscow_*` — best-effort вычисляемое поле
     для квалификации только по России; считается асинхронно,
     не влияет на progression collector-а
+  - Bitrix24 sync state:
+    `bitrix24_contact_id`, `bitrix24_sync_status`,
+    `bitrix24_sync_pending`, `bitrix24_last_synced_at`,
+    `bitrix24_linked_at`
+  - Bitrix24 deal/history state:
+    `bitrix24_deal_id`, `bitrix24_deal_sync_status`,
+    `bitrix24_deal_last_synced_at`, `bitrix24_deal_linked_at`,
+    `bitrix24_deal_sync_pending`,
+    `bitrix24_history_sync_status`,
+    `bitrix24_history_last_synced_at`,
+    `bitrix24_history_sync_pending`
   - вычисляемые поля: `display_name`, `effective_age_years`
 - **ContactIdentity** — связь Contact ↔ Channel через external_user_id;
   unique constraint на `[channel_id, external_user_id]`
@@ -148,6 +141,9 @@ Abrikosoff Connector — операторская платформа для ра
   - хранит route context канала:
     `current_contact_identity_id`, `external_chat_id`,
     `confirmed_phone_*`, `last_message_at`, `last_inbound_at`, `last_outbound_at`
+  - Bitrix24 live state:
+    `bitrix24_live_status`, `bitrix24_live_chat_id`,
+    `bitrix24_live_last_exported_at`, `bitrix24_live_last_imported_at`
   - manual reply из operator UI отправляется через точный `dialog_id`
 - **Message** — единая таблица входящих и исходящих сообщений
   - `direction`: inbound | outbound
@@ -164,6 +160,11 @@ Abrikosoff Connector — операторская платформа для ра
   - `contact_phone_condition`: `null | has_phone | missing_phone`
   - `telegram_button_type`, `max_button_type`: `request_phone`
 - **ChannelActivityLog** — append-only журнал событий канала
+- **Bitrix24Connection** — состояние установленного Bitrix24-приложения
+  - portal/client endpoint, OAuth state и token expiry
+  - `status`, `installed_at`, `last_refreshed_at`
+  - callback timestamps и `last_error_message`
+  - persisted install payload и encrypted access/refresh token state
 - **User** — внутренний сотрудник (is_active, is_admin)
 
 ## Конфигурация
@@ -175,6 +176,15 @@ Abrikosoff Connector — операторская платформа для ра
   и rate-limit настройки публичных bot webhook endpoints
 - `config/bitrix24.php` — callback URLs, Bitrix24 интеграционные настройки
   и rate-limit настройки публичных callback endpoints
+- обязательные Bitrix24 env:
+  - `BITRIX24_PORTAL_DOMAIN`
+  - `BITRIX24_CLIENT_ID`
+  - `BITRIX24_CLIENT_SECRET`
+  - `BITRIX24_APP_CODE`
+  - `BITRIX24_AUTH_SERVER_URL`
+- `BITRIX24_AUTH_SERVER_URL` критичен для token refresh; его отсутствие
+  может вывести `Bitrix24Connection` из рабочего состояния и остановить
+  contact/deal/history/Open Lines sync
 - `config/russian_region_cities.php` — deterministic source of truth
   для `российский город -> exact candidate regions` и
   geocode hints для `distance_to_moscow`
@@ -212,6 +222,8 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Jobs/ProcessDataCollectionQuestionJob.php` — отправка следующего вопроса collector-а
 - `app/Jobs/ProcessDataCollectionResponseJob.php` — обработка ответа на collector field
 - `app/Jobs/CalculateDistanceToMoscowJob.php` — queued sync `distance_to_moscow_*`
+- `app/Jobs/SyncContactToBitrix24Job.php` — orchestration Bitrix24 contact sync
+  и post-sync хвостов `deal/history/open lines retry`
 - `app/Services/Bots/StoreOutboundAutoReplyMessageAction.php` — сохранение исходящего автоответа
 - `app/Services/Bots/SendManualDialogReplyAction.php` — ручной ответ оператора через точный dialog route
 - `app/Services/Dialogs/ResolveDialogRouteSourceAction.php` — определение route source для dialog/provider
@@ -226,9 +238,16 @@ Abrikosoff Connector — операторская платформа для ра
 - `app/Services/Contacts/UpdateContactProfileAction.php` — обновление профильных полей контакта
 - `app/Services/Contacts/DeleteContactAction.php` — удаление контакта и связанных сущностей
 - `app/Services/Contacts/ClaimContactAction.php` — взятие контакта в работу
+- `app/Services/Bitrix24/SyncContactToBitrix24Action.php` — основной sync контакта в Bitrix24
+- `app/Services/Bitrix24/QueueBitrix24DealSyncAction.php` — постановка sync сделки
+- `app/Services/Bitrix24/QueueBitrix24HistoryExportAction.php` — постановка history export
+- `app/Services/Bitrix24/QueueMissedBitrix24OpenLinesRetryAction.php` — retry missed inbound live-export
+- `app/Services/Bitrix24/RefreshBitrix24AccessTokenAction.php` — refresh OAuth access token
+- `app/Services/Bitrix24/ResolveActiveBitrix24ConnectionAction.php` — выбор активного Bitrix24 connection
 - `app/Filament/Resources/Contacts/ContactResource.php` — overview карточка контакта
 - `app/Filament/Resources/Contacts/Pages/ManageContacts.php` — Livewire-логика контактов
 - `app/Filament/Resources/Dialogs/DialogResource.php` — hidden resource страницы диалога
+- `app/Filament/Resources/Bitrix24Connections/Bitrix24ConnectionResource.php` — operator/admin обзор состояния Bitrix24 connection
 - `app/Filament/Resources/Dialogs/Pages/ViewDialog.php` — operator workspace конкретного диалога
 - `resources/views/filament/dialogs/pages/view-dialog.blade.php` — layout страницы диалога
 - `resources/views/filament/contacts/partials/contact-dialogs.blade.php` — overview карточки диалогов на контакте
