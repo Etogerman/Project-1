@@ -11,6 +11,10 @@ class Message extends Model
 {
     use HasFactory;
 
+    public const TEXT_FORMAT_PLAIN_TEXT = 'plain_text';
+
+    public const TEXT_FORMAT_HTML = 'html';
+
     public const DIRECTION_INBOUND = 'inbound';
 
     public const DIRECTION_OUTBOUND = 'outbound';
@@ -75,6 +79,8 @@ class Message extends Model
         'external_chat_id',
         'external_message_id',
         'text',
+        'text_format',
+        'source_text',
         'message_parameter',
         'raw_payload',
         'received_at',
@@ -93,6 +99,29 @@ class Message extends Model
     public function hasSuccessfulAutoReply(): bool
     {
         return $this->auto_reply_sent_at !== null;
+    }
+
+    public function usesHtmlFormat(): bool
+    {
+        return $this->text_format === self::TEXT_FORMAT_HTML && filled($this->source_text);
+    }
+
+    public static function normalizeTextFormat(?string $value): string
+    {
+        return $value === self::TEXT_FORMAT_HTML
+            ? self::TEXT_FORMAT_HTML
+            : self::TEXT_FORMAT_PLAIN_TEXT;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function textFormatOptions(): array
+    {
+        return [
+            self::TEXT_FORMAT_PLAIN_TEXT => 'Просто текст',
+            self::TEXT_FORMAT_HTML => 'HTML',
+        ];
     }
 
     public function contact(): BelongsTo

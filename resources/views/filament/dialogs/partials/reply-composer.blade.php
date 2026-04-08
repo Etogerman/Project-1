@@ -4,6 +4,8 @@
 >
     @php
         $replyTextModel = $replyTextModel ?? 'dialogReplyText';
+        $replyFormatModel = $replyFormatModel ?? 'dialogReplyFormat';
+        $replyFormatOptions = $replyFormatOptions ?? \App\Models\Message::textFormatOptions();
         $replyErrorModel = $replyErrorModel ?? $replyTextModel;
         $submitMethod = $submitMethod ?? 'sendDialogReply';
     @endphp
@@ -37,6 +39,22 @@
         <label for="conversation-reply-textarea" class="ac-field-label">
             Сообщение
         </label>
+        <div class="ac-button-group">
+            @foreach ($replyFormatOptions as $replyFormatValue => $replyFormatLabel)
+                <button
+                    type="button"
+                    wire:click="$set('{{ $replyFormatModel }}', '{{ $replyFormatValue }}')"
+                    @class([
+                        'ac-button',
+                        'ac-button--primary' => $this->{$replyFormatModel} === $replyFormatValue,
+                        'ac-button--secondary' => $this->{$replyFormatModel} !== $replyFormatValue,
+                    ])
+                    @disabled(! $canReply)
+                >
+                    {{ $replyFormatLabel }}
+                </button>
+            @endforeach
+        </div>
         <textarea
             id="conversation-reply-textarea"
             data-role="conversation-reply-textarea"
@@ -47,6 +65,14 @@
             @disabled(! $canReply)
             class="ac-textarea ac-textarea--composer"
         ></textarea>
+
+        @if ($this->{$replyFormatModel} === \App\Models\Message::TEXT_FORMAT_HTML)
+            <p class="ac-note">
+                Разрешены только теги: <code>&lt;b&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;em&gt;</code>,
+                <code>&lt;u&gt;</code>, <code>&lt;ins&gt;</code>, <code>&lt;s&gt;</code>, <code>&lt;del&gt;</code>, <code>&lt;code&gt;</code>,
+                <code>&lt;pre&gt;</code>, <code>&lt;a href="https://..."&gt;</code>.
+            </p>
+        @endif
 
         @error($replyErrorModel)
             <p class="ac-field-error">{{ $message }}</p>

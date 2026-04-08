@@ -327,6 +327,34 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertArrayNotHasKey('params', $payload['MESSAGES'][0]['message']);
     }
 
+    public function test_live_payload_uses_plain_text_fallback_for_html_message(): void
+    {
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'first_name' => 'Герман',
+            'last_name' => 'Германов',
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Привет в Open Lines',
+            'text_format' => Message::TEXT_FORMAT_HTML,
+            'source_text' => '<b>Привет в Open Lines</b>',
+            'received_at' => Carbon::parse('2026-04-01 13:46:00', 'Europe/Moscow'),
+        ]);
+
+        $payload = app(BuildBitrix24OpenLinesMessagePayloadAction::class)->handle(
+            $message,
+            new Bitrix24OpenLinesRouteData(
+                platform: Channel::PLATFORM_TELEGRAM,
+                connectorCode: 'abrikosoff_telegram',
+                lineId: 'line-telegram',
+            ),
+        );
+
+        $this->assertSame('Привет в Open Lines', $payload['MESSAGES'][0]['message']['text'] ?? null);
+    }
+
     public function test_retry_after_sync_live_payload_includes_explicit_contact_probe_carriers(): void
     {
         $dialog = $this->createLiveReadyDialog(contactAttributes: [

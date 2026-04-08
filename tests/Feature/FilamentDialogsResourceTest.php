@@ -966,6 +966,50 @@ class FilamentDialogsResourceTest extends TestCase
             && $request['text'] === 'Ответ из dialog page');
     }
 
+    public function test_dialog_view_can_toggle_between_formatted_and_html_source_modes_for_html_reply(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response([
+                'message' => [
+                    'message_id' => 'max-dialog-html-001',
+                ],
+            ]),
+        ]);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(3);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->set('dialogReplyFormat', Message::TEXT_FORMAT_HTML)
+            ->set('dialogReplyText', '<b>HTML ответ</b>')
+            ->call('sendDialogReply')
+            ->assertNotified()
+            ->assertDispatched('dialog-reply-sent')
+            ->assertSeeHtml('<b>HTML ответ</b>')
+            ->assertDontSeeHtml('&lt;b&gt;HTML ответ&lt;/b&gt;');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertSame(Message::TEXT_FORMAT_HTML, $messages[3]['text_format']);
+        $this->assertSame('HTML ответ', $messages[3]['display_text']);
+        $this->assertSame('<b>HTML ответ</b>', $messages[3]['formatted_html']);
+        $this->assertSame('<b>HTML ответ</b>', $messages[3]['html_source_text']);
+
+        $component
+            ->set('conversationDisplayMode', ViewDialog::CONVERSATION_DISPLAY_MODE_HTML)
+            ->assertSeeHtml('&lt;b&gt;HTML ответ&lt;/b&gt;')
+            ->assertDontSeeHtml('<b>HTML ответ</b>');
+
+        Http::assertSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+            && str_contains($request->url(), 'chat_id=66552012')
+            && $request['text'] === '<b>HTML ответ</b>'
+            && $request['format'] === 'html');
+    }
+
     public function test_employee_can_send_reply_from_dialog_page_without_reassigning_foreign_contact(): void
     {
         Http::fake([

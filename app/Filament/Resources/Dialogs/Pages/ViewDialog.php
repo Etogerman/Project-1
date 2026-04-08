@@ -18,12 +18,17 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Throwable;
 
 class ViewDialog extends ViewRecord
 {
+    public const CONVERSATION_DISPLAY_MODE_FORMATTED = 'formatted';
+
+    public const CONVERSATION_DISPLAY_MODE_HTML = 'html';
+
     protected static string $resource = DialogResource::class;
 
     protected string $view = 'filament.dialogs.pages.view-dialog';
@@ -38,6 +43,10 @@ class ViewDialog extends ViewRecord
     public bool $hasMoreOlderMessages = false;
 
     public string $dialogReplyText = '';
+
+    public string $dialogReplyFormat = Message::TEXT_FORMAT_PLAIN_TEXT;
+
+    public string $conversationDisplayMode = self::CONVERSATION_DISPLAY_MODE_FORMATTED;
 
     /**
      * @var array{sort_at:string,id:int}|null
@@ -122,9 +131,11 @@ class ViewDialog extends ViewRecord
     {
         $validated = $this->validate([
             'dialogReplyText' => ['required', 'string', 'max:2000'],
+            'dialogReplyFormat' => ['required', 'string', Rule::in(array_keys(Message::textFormatOptions()))],
         ]);
 
         $text = trim((string) ($validated['dialogReplyText'] ?? ''));
+        $textFormat = Message::normalizeTextFormat($validated['dialogReplyFormat'] ?? null);
 
         if ($text === '') {
             throw ValidationException::withMessages([
@@ -139,6 +150,7 @@ class ViewDialog extends ViewRecord
                 $this->getRecord(),
                 $employee,
                 $text,
+                $textFormat,
             );
 
             $this->dialogReplyText = '';
@@ -169,6 +181,7 @@ class ViewDialog extends ViewRecord
             'dialogHeader' => $this->getDialogHeaderViewData(),
             'contactSummary' => $this->getContactSummaryViewData(),
             'contactUrl' => $this->getContactViewUrl(),
+            'conversationDisplayModeOptions' => $this->getConversationDisplayModeOptions(),
             'replyComposer' => $this->getReplyComposerViewData(),
         ];
     }
@@ -189,6 +202,8 @@ class ViewDialog extends ViewRecord
      *     blockedReason:?string,
      *     autoReplyEnabled:bool,
      *     replyTextModel:string,
+     *     replyFormatModel:string,
+     *     replyFormatOptions:array<string, string>,
      *     replyErrorModel:string,
      *     submitMethod:string
      * }
@@ -203,8 +218,21 @@ class ViewDialog extends ViewRecord
             'blockedReason' => $this->getDialogReplyBlockedReason(),
             'autoReplyEnabled' => $replyOwner?->isAutoReplyEnabled() ?? false,
             'replyTextModel' => 'dialogReplyText',
+            'replyFormatModel' => 'dialogReplyFormat',
+            'replyFormatOptions' => Message::textFormatOptions(),
             'replyErrorModel' => 'dialogReplyText',
             'submitMethod' => 'sendDialogReply',
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function getConversationDisplayModeOptions(): array
+    {
+        return [
+            self::CONVERSATION_DISPLAY_MODE_FORMATTED => 'Форматированный',
+            self::CONVERSATION_DISPLAY_MODE_HTML => 'HTML',
         ];
     }
 

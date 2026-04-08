@@ -27,6 +27,7 @@ class MaxBotApiService
         ?string $externalUserId,
         string $text,
         ?array $attachments = null,
+        string $textFormat = \App\Models\Message::TEXT_FORMAT_PLAIN_TEXT,
     ): AutoReplyDeliveryResult
     {
         $query = [];
@@ -42,6 +43,10 @@ class MaxBotApiService
         $payload = [
             'text' => $text,
         ];
+
+        if ($textFormat === \App\Models\Message::TEXT_FORMAT_HTML) {
+            $payload['format'] = 'html';
+        }
 
         if ($attachments !== null && $attachments !== []) {
             $payload['attachments'] = $attachments;

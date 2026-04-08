@@ -1808,6 +1808,28 @@
         text-align: left;
     }
 
+    .ac-message__text--html a {
+        color: var(--ac-primary);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+    }
+
+    .ac-message__text--html code {
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--ac-surface-strong) 72%, #0f172a 28%);
+        padding: 0.08rem 0.32rem;
+        font-size: 0.92em;
+    }
+
+    .ac-message__text--html pre {
+        margin: 0.55rem 0 0;
+        overflow-x: auto;
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--ac-surface-strong) 78%, #0f172a 22%);
+        padding: 0.75rem 0.85rem;
+        white-space: pre-wrap;
+    }
+
     .ac-message__timestamp {
         flex: 0 0 auto;
         font-size: 0.72rem;

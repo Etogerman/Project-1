@@ -4,6 +4,7 @@ namespace App\Services\Dialogs;
 
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\Messages\PrepareMessageContentAction;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -12,6 +13,7 @@ class BuildConversationFeedViewDataAction
 {
     public function __construct(
         private readonly MessageChronology $messageChronology,
+        private readonly PrepareMessageContentAction $prepareMessageContentAction,
     ) {}
 
     /**
@@ -33,7 +35,11 @@ class BuildConversationFeedViewDataAction
                     'channel_label' => $this->resolveConversationChannelLabel($message),
                     'sender_label' => $this->resolveConversationSenderLabel($message),
                     'sender_type' => $message->sent_by_type,
+                    'text_format' => Message::normalizeTextFormat($message->text_format),
+                    'is_html' => $message->usesHtmlFormat(),
                     'display_text' => $this->resolveConversationDisplayText($message),
+                    'formatted_html' => $this->resolveConversationFormattedHtml($message),
+                    'html_source_text' => $this->resolveConversationHtmlSourceText($message),
                     'time_label' => $messageAt?->format('H:i') ?? '—',
                     'timestamp_label' => $messageAt?->format('H:i d.m.Y') ?? '—',
                     'date_key' => $messageAt?->format('Y-m-d') ?? 'unknown-date',
@@ -111,6 +117,34 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
             default => 'Системное сообщение',
         };
+    }
+
+    protected function resolveConversationFormattedHtml(Message $message): ?string
+    {
+        if (! $message->usesHtmlFormat()) {
+            return null;
+        }
+
+        if (! filled($message->source_text)) {
+            return null;
+        }
+
+        $sanitizedHtml = $this->prepareMessageContentAction->sanitizeHtml((string) $message->source_text);
+
+        return $sanitizedHtml !== ''
+            ? $sanitizedHtml
+            : null;
+    }
+
+    protected function resolveConversationHtmlSourceText(Message $message): ?string
+    {
+        if (! $message->usesHtmlFormat()) {
+            return null;
+        }
+
+        return filled($message->source_text)
+            ? (string) $message->source_text
+            : null;
     }
 
     protected function resolveTelegramStartPayloadDisplayText(Message $message): ?string
