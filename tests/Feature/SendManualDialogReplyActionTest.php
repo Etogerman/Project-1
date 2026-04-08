@@ -239,6 +239,40 @@ class SendManualDialogReplyActionTest extends TestCase
         $this->assertNotSame($olderInbound->id, $outboundMessage->reply_to_message_id);
     }
 
+    public function test_send_manual_dialog_reply_sends_html_and_stores_plain_text_fallback(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 99113,
+                ],
+            ]),
+        ]);
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createTelegramDialog(assignedUserId: $employee->id, externalChatId: 'chat-html');
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            "<b>HTML ответ</b>\n<pre>строка 1\nстрока 2</pre>",
+            Message::TEXT_FORMAT_HTML,
+        );
+
+        $this->assertSame(Message::TEXT_FORMAT_HTML, $outboundMessage->text_format);
+        $this->assertSame("HTML ответ\nстрока 1\nстрока 2", $outboundMessage->text);
+        $this->assertSame("<b>HTML ответ</b>\n<pre>строка 1\nстрока 2</pre>", $outboundMessage->source_text);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === 'chat-html'
+            && $request['text'] === $outboundMessage->source_text
+            && $request['parse_mode'] === 'HTML');
+    }
+
     public function test_send_manual_dialog_reply_keeps_unassigned_contact_without_auto_claim(): void
     {
         Http::fake([

@@ -1,3 +1,7 @@
+@php
+    $displayMode = $displayMode ?? \App\Filament\Resources\Dialogs\Pages\ViewDialog::CONVERSATION_DISPLAY_MODE_FORMATTED;
+@endphp
+
 <div
     data-role="conversation-thread"
     class="ac-thread"
@@ -59,7 +63,13 @@
                             </div>
                         </div>
 
-                        <div class="ac-message__text">{{ $message['display_text'] }}</div>
+                        @if ($displayMode === \App\Filament\Resources\Dialogs\Pages\ViewDialog::CONVERSATION_DISPLAY_MODE_FORMATTED && filled($message['formatted_html'] ?? null))
+                            <div class="ac-message__text ac-message__text--html">{!! $message['formatted_html'] !!}</div>
+                        @elseif ($displayMode === \App\Filament\Resources\Dialogs\Pages\ViewDialog::CONVERSATION_DISPLAY_MODE_HTML && filled($message['html_source_text'] ?? null))
+                            <div class="ac-message__text">{{ $message['html_source_text'] }}</div>
+                        @else
+                            <div class="ac-message__text">{{ $message['display_text'] }}</div>
+                        @endif
                     </article>
                 </div>
             @endforeach

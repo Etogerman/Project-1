@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
+use App\Services\Messages\PrepareMessageContentAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -26,9 +27,15 @@ class SendManualDialogReplyAction
         protected StoreManualOutboundMessageAction $storeManualOutboundMessageAction,
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
+        protected PrepareMessageContentAction $prepareMessageContentAction,
     ) {}
 
-    public function handle(Dialog $dialog, User $employee, string $text): Message
+    public function handle(
+        Dialog $dialog,
+        User $employee,
+        string $text,
+        string $textFormat = Message::TEXT_FORMAT_PLAIN_TEXT,
+    ): Message
     {
         if (! $employee->canReplyInDialogs()) {
             throw new AuthorizationException();
@@ -44,11 +51,7 @@ class SendManualDialogReplyAction
 
         $effectiveContact = $this->resolveRootContactAction->handle($contact);
 
-        $text = trim($text);
-
-        if ($text === '') {
-            throw new InvalidArgumentException('Введите текст ответа.');
-        }
+        $content = $this->prepareMessageContentAction->handle($text, $textFormat);
 
         $blockedReason = $this->getBlockedReason($dialog);
 
@@ -65,7 +68,7 @@ class SendManualDialogReplyAction
         $replyToMessage = $this->resolveReplyToMessage($dialog);
 
         try {
-            $deliveryResult = $this->sendTextMessage($dialog, $text);
+            $deliveryResult = $this->sendTextMessage($dialog, $content->transportText, $content->textFormat);
         } catch (Throwable $throwable) {
             $channel->markError($throwable);
 
@@ -81,17 +84,19 @@ class SendManualDialogReplyAction
                     'platform' => $channel->platform,
                     'external_chat_id' => $dialog->external_chat_id,
                     'reply_to_message_id' => $replyToMessage?->id,
+                    'text_format' => $content->textFormat,
                 ],
             );
 
             throw $throwable;
         }
 
-        return DB::transaction(function () use ($channel, $dialog, $deliveryResult, $employee, $replyToMessage, $effectiveContact): Message {
+        return DB::transaction(function () use ($channel, $dialog, $deliveryResult, $employee, $replyToMessage, $effectiveContact, $content): Message {
             $outboundMessage = $this->storeManualOutboundMessageAction->handle(
                 $dialog,
                 $employee,
                 $deliveryResult,
+                $content,
                 $replyToMessage,
             );
 
@@ -110,6 +115,7 @@ class SendManualDialogReplyAction
                     'external_chat_id' => $dialog->external_chat_id,
                     'outbound_external_message_id' => $deliveryResult->externalMessageId,
                     'reply_to_message_id' => $replyToMessage?->id,
+                    'text_format' => $content->textFormat,
                 ],
             );
 
@@ -131,7 +137,11 @@ class SendManualDialogReplyAction
             ->first();
     }
 
-    protected function sendTextMessage(Dialog $dialog, string $text): AutoReplyDeliveryResult
+    protected function sendTextMessage(
+        Dialog $dialog,
+        string $text,
+        string $textFormat = Message::TEXT_FORMAT_PLAIN_TEXT,
+    ): AutoReplyDeliveryResult
     {
         $dialog->loadMissing(['channel', 'currentContactIdentity']);
 
@@ -144,8 +154,8 @@ class SendManualDialogReplyAction
         $externalUserId = $dialog->currentContactIdentity?->external_user_id;
 
         return match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage($channel, $dialog->external_chat_id, $externalUserId, $text),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage($channel, $dialog->external_chat_id, $externalUserId, $text),
+            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage($channel, $dialog->external_chat_id, $externalUserId, $text, null, $textFormat),
+            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage($channel, $dialog->external_chat_id, $externalUserId, $text, null, $textFormat),
             default => throw new InvalidArgumentException('У этого диалога сейчас нет рабочего маршрута для отправки ответа.'),
         };
     }

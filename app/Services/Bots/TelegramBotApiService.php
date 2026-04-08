@@ -26,6 +26,7 @@ class TelegramBotApiService
         ?string $externalUserId,
         string $text,
         ?array $replyMarkup = null,
+        string $textFormat = \App\Models\Message::TEXT_FORMAT_PLAIN_TEXT,
     ): AutoReplyDeliveryResult
     {
         if (! filled($externalChatId)) {
@@ -36,6 +37,10 @@ class TelegramBotApiService
             'chat_id' => $externalChatId,
             'text' => $text,
         ];
+
+        if ($textFormat === \App\Models\Message::TEXT_FORMAT_HTML) {
+            $payload['parse_mode'] = 'HTML';
+        }
 
         if ($replyMarkup !== null) {
             $payload['reply_markup'] = $replyMarkup;

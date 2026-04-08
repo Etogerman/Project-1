@@ -50,6 +50,8 @@ class MessageFactory extends Factory
             'external_chat_id' => (string) fake()->numerify('########'),
             'external_message_id' => (string) fake()->numerify('########'),
             'text' => fake()->optional()->sentence(),
+            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            'source_text' => null,
             'raw_payload' => ['message' => 'payload'],
             'received_at' => now(),
             'auto_reply_sent_at' => null,

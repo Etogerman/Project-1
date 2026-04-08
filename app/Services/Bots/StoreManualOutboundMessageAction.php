@@ -3,6 +3,7 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\AutoReplyDeliveryResult;
+use App\Data\Messages\PreparedMessageContentData;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
@@ -20,6 +21,7 @@ class StoreManualOutboundMessageAction
         Dialog $routeDialog,
         User $employee,
         AutoReplyDeliveryResult $deliveryResult,
+        PreparedMessageContentData $content,
         ?Message $replyToMessage = null,
     ): Message
     {
@@ -36,7 +38,9 @@ class StoreManualOutboundMessageAction
             'provider_event_key' => null,
             'external_chat_id' => $storedExternalChatId,
             'external_message_id' => $deliveryResult->externalMessageId,
-            'text' => $deliveryResult->text,
+            'text' => $content->plainText,
+            'text_format' => $content->textFormat,
+            'source_text' => $content->sourceText,
             'raw_payload' => $deliveryResult->rawPayload,
             'received_at' => now(),
         ]);

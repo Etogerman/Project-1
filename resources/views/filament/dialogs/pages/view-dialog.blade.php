@@ -170,23 +170,39 @@
                         </p>
                     </div>
 
-                    @if ($hasMoreOlderMessages)
-                        <button
-                            type="button"
-                            data-role="dialog-load-older"
-                            x-on:click="rememberPositionBeforePrepend()"
-                            wire:click="loadOlderMessages"
-                            wire:loading.attr="disabled"
-                            wire:target="loadOlderMessages"
-                            class="ac-button ac-button--secondary"
-                        >
-                            <span wire:loading.remove wire:target="loadOlderMessages">Показать более ранние</span>
-                            <span wire:loading wire:target="loadOlderMessages">Загружаем…</span>
-                        </button>
-                    @endif
+                    <div class="ac-button-group ac-button-group--end">
+                        @foreach ($conversationDisplayModeOptions as $displayModeValue => $displayModeLabel)
+                            <button
+                                type="button"
+                                wire:click="$set('conversationDisplayMode', '{{ $displayModeValue }}')"
+                                @class([
+                                    'ac-button',
+                                    'ac-button--primary-soft' => $conversationDisplayMode === $displayModeValue,
+                                    'ac-button--secondary' => $conversationDisplayMode !== $displayModeValue,
+                                ])
+                            >
+                                {{ $displayModeLabel }}
+                            </button>
+                        @endforeach
+
+                        @if ($hasMoreOlderMessages)
+                            <button
+                                type="button"
+                                data-role="dialog-load-older"
+                                x-on:click="rememberPositionBeforePrepend()"
+                                wire:click="loadOlderMessages"
+                                wire:loading.attr="disabled"
+                                wire:target="loadOlderMessages"
+                                class="ac-button ac-button--secondary"
+                            >
+                                <span wire:loading.remove wire:target="loadOlderMessages">Показать более ранние</span>
+                                <span wire:loading wire:target="loadOlderMessages">Загружаем…</span>
+                            </button>
+                        @endif
+                    </div>
                 </div>
 
-                @include('filament.contacts.partials.conversation-chat', ['messages' => $conversationMessages])
+                @include('filament.contacts.partials.conversation-chat', ['messages' => $conversationMessages, 'displayMode' => $conversationDisplayMode])
             </section>
 
             @if ($replyComposer['isVisible'])
