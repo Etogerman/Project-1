@@ -124,7 +124,8 @@ class AutoReplyCategoryResource extends Resource
                     ->iconButton()
                     ->tooltip('Изменить категорию')
                     ->modalWidth(Width::ThreeExtraLarge)
-                    ->modalFooterActionsAlignment(Alignment::End),
+                    ->modalFooterActionsAlignment(Alignment::End)
+                    ->extraModalWindowAttributes(['class' => 'ac-auto-reply-form-modal']),
                 DeleteAction::make()
                     ->icon(Heroicon::OutlinedTrash)
                     ->iconButton()
