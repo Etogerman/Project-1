@@ -22,7 +22,17 @@ npx playwright install chromium
 
 ## Локальный запуск
 
-Сначала подними приложение:
+Сначала создай локального администратора с явным паролем:
+
+```bash
+export ADMIN_USER_SEEDER_PASSWORD='replace-with-local-secret'
+php artisan db:seed --class=AdminUserSeeder
+```
+
+`AdminUserSeeder` больше не вызывается через дефолтный `php artisan db:seed`,
+и пароль администратора не хранится в репозитории.
+
+Потом подними приложение:
 
 ```bash
 php artisan serve
@@ -33,7 +43,7 @@ php artisan serve
 ```bash
 export PLAYWRIGHT_BASE_URL=http://127.0.0.1:8000
 export PLAYWRIGHT_ADMIN_EMAIL=admin@abrikosoff.local
-export PLAYWRIGHT_ADMIN_PASSWORD=admin12345
+export PLAYWRIGHT_ADMIN_PASSWORD="$ADMIN_USER_SEEDER_PASSWORD"
 npx playwright test
 ```
 
