@@ -72,9 +72,26 @@ class PrepareMessageContentAction
         );
     }
 
+    public function sanitizeHtml(string $sourceText): string
+    {
+        $normalizedSourceText = $this->normalizeInput($sourceText);
+
+        if ($normalizedSourceText === '') {
+            return '';
+        }
+
+        $sanitizedHtml = trim($this->htmlSanitizer->sanitize($normalizedSourceText));
+
+        if ($sanitizedHtml === '') {
+            return '';
+        }
+
+        return $this->unwrapAnchorsWithoutHref($sanitizedHtml);
+    }
+
     private function prepareHtmlContent(string $sourceText): PreparedMessageContentData
     {
-        $sanitizedHtml = trim($this->htmlSanitizer->sanitize($sourceText));
+        $sanitizedHtml = $this->sanitizeHtml($sourceText);
 
         if ($sanitizedHtml === '') {
             throw new InvalidArgumentException('HTML-сообщение не содержит поддерживаемого текста.');
@@ -111,5 +128,10 @@ class PrepareMessageContentAction
         $plainText = preg_replace("/\n{3,}/u", "\n\n", $plainText) ?? $plainText;
 
         return trim($plainText);
+    }
+
+    private function unwrapAnchorsWithoutHref(string $sanitizedHtml): string
+    {
+        return preg_replace('/<a>(.*?)<\/a>/isu', '$1', $sanitizedHtml) ?? $sanitizedHtml;
     }
 }

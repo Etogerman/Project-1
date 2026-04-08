@@ -273,6 +273,41 @@ class SendManualDialogReplyActionTest extends TestCase
             && $request['parse_mode'] === 'HTML');
     }
 
+    public function test_send_manual_dialog_reply_unwraps_links_without_valid_href_before_transport(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 99114,
+                ],
+            ]),
+        ]);
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createTelegramDialog(assignedUserId: $employee->id, externalChatId: 'chat-html-links');
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            '<a href="javascript:alert(1)">плохая ссылка</a> <a href="https://example.com">хорошая ссылка</a>',
+            Message::TEXT_FORMAT_HTML,
+        );
+
+        $this->assertSame(
+            'плохая ссылка <a href="https://example.com">хорошая ссылка</a>',
+            $outboundMessage->source_text,
+        );
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === 'chat-html-links'
+            && $request['text'] === 'плохая ссылка <a href="https://example.com">хорошая ссылка</a>'
+            && $request['parse_mode'] === 'HTML');
+    }
+
     public function test_send_manual_dialog_reply_keeps_unassigned_contact_without_auto_claim(): void
     {
         Http::fake([

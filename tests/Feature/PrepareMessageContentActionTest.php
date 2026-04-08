@@ -36,7 +36,8 @@ class PrepareMessageContentActionTest extends TestCase
         $this->assertSame(Message::TEXT_FORMAT_HTML, $content->textFormat);
         $this->assertNotNull($content->sourceText);
         $this->assertStringContainsString('<b>Привет</b>', $content->sourceText);
-        $this->assertStringContainsString('<a>ссылка</a>', $content->sourceText);
+        $this->assertStringNotContainsString('<a>ссылка</a>', $content->sourceText);
+        $this->assertStringNotContainsString('<a>пример</a>', $content->sourceText);
         $this->assertStringContainsString('<a href="https://example.com">пример</a>', $content->sourceText);
         $this->assertStringNotContainsString('script', $content->sourceText);
         $this->assertStringNotContainsString('onclick', $content->sourceText);

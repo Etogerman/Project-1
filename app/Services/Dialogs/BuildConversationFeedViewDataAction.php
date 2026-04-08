@@ -4,6 +4,7 @@ namespace App\Services\Dialogs;
 
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\Messages\PrepareMessageContentAction;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -12,6 +13,7 @@ class BuildConversationFeedViewDataAction
 {
     public function __construct(
         private readonly MessageChronology $messageChronology,
+        private readonly PrepareMessageContentAction $prepareMessageContentAction,
     ) {}
 
     /**
@@ -123,8 +125,14 @@ class BuildConversationFeedViewDataAction
             return null;
         }
 
-        return filled($message->source_text)
-            ? (string) $message->source_text
+        if (! filled($message->source_text)) {
+            return null;
+        }
+
+        $sanitizedHtml = $this->prepareMessageContentAction->sanitizeHtml((string) $message->source_text);
+
+        return $sanitizedHtml !== ''
+            ? $sanitizedHtml
             : null;
     }
 
