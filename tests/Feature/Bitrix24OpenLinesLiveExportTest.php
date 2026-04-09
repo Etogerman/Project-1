@@ -296,6 +296,62 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         });
     }
 
+    public function test_fake_happy_path_live_export_marks_message_as_exported_without_bitrix_request(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        config()->set('bitrix24.features.fake_happy_path_enabled', true);
+        config()->set('bitrix24.duplicate_phone_diagnostic.enabled', true);
+
+        $dialog = $this->createLiveReadyDialog(
+            contactAttributes: [
+                'first_name' => 'Макс',
+                'last_name' => 'Тестов',
+            ],
+            dialogAttributes: [
+                'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+            ],
+        );
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $dialog->contact_id,
+            'phone_raw' => '+7 926 352-71-11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Fake Open Lines export',
+            'received_at' => Carbon::parse('2026-04-01 13:31:00', 'Europe/Moscow'),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame('fake-live-dialog-'.$dialog->id, $dialog->bitrix24_live_chat_id);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertNotNull($dialog->bitrix24_live_last_exported_at);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_live_exported_fake',
+            'status' => \App\Models\Bitrix24SyncLog::STATUS_SUCCESS,
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
+        ]);
+
+        Http::assertNothingSent();
+        Queue::assertNotPushed(DedupeBitrix24ContactPhonesJob::class);
+        Queue::assertNotPushed(LogBitrix24RawContactPhoneSnapshotJob::class);
+    }
+
     public function test_live_payload_omits_optional_crm_binding_fields_without_phone_and_last_name(): void
     {
         $dialog = $this->createLiveReadyDialog(contactAttributes: [

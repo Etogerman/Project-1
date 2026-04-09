@@ -39,6 +39,7 @@ Required values to set in Laravel Cloud:
 - `SESSION_DRIVER=database`
 - `CACHE_STORE=database`
 - `QUEUE_CONNECTION=database`
+- `BITRIX24_FAKE_HAPPY_PATH_ENABLED=false`
 
 Database host, port, database, username, and password should come from the attached managed PostgreSQL service.
 
@@ -83,6 +84,33 @@ Use the staging environment as the main integration environment for:
 - MAX webhook checks
 - token and channel configuration
 - admin-panel sanity checks
+
+## Fake Bitrix happy-path for staging
+
+If staging is not connected to a live Bitrix24 portal but you still need to
+verify delayed parameter auto replies after qualification, enable:
+
+- `BITRIX24_CONTACTS_SYNC_ENABLED=true`
+- `BITRIX24_OPENLINES_ENABLED=true`
+- `BITRIX24_FAKE_HAPPY_PATH_ENABLED=true`
+
+This mode is intended only for non-production environments.
+
+What it does:
+
+- fakes successful Bitrix24 contact sync
+- fakes successful Open Lines live export
+- preserves the existing orchestration order
+  `sync -> retry/export -> delayed parameter auto reply`
+
+What it does not prove:
+
+- real OAuth / token refresh
+- real Bitrix24 REST compatibility
+- real Open Lines transport compatibility
+
+Use it only for staging smoke when the goal is to validate the application
+flow end-to-end without a live Bitrix24 connection.
 
 Use local development mainly for:
 
