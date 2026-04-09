@@ -226,6 +226,93 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         });
     }
 
+    public function test_max_parameter_inbound_is_replied_after_fake_sync_and_fake_retry_export(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'body' => [
+                        'mid' => 'max-delayed-9001',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        config()->set('bitrix24.features.fake_happy_path_enabled', true);
+
+        $channel = $this->makeMaxChannel();
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'max-e2e-deferred-fake-retry',
+                externalMessageId: 'max-e2e-deferred-fake-retry',
+                messageParameter: 'PROMO_MAX',
+                receivedAt: Carbon::parse('2026-04-09 14:20:00'),
+                externalChatId: 'max-chat-100',
+                externalUserId: 'max-user-100',
+            ),
+        );
+
+        $dialog = Dialog::query()->findOrFail($storedResult->message->dialog_id);
+        $contact = Contact::query()->findOrFail($storedResult->message->contact_id);
+
+        $this->qualifyContactForSync($contact);
+        $dialog->forceFill([
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+        ])->save();
+
+        AutoReplyRule::factory()->forChannel($channel)->create([
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'PROMO_MAX',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('PROMO_MAX'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'reply_text' => 'MAX delayed fake reply',
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($storedResult): bool {
+            return $job->messageId === $storedResult->message->id
+                && $job->retryAfterSync === true;
+        });
+        Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($storedResult->message, retryAfterSync: true);
+
+        Queue::assertPushed(ProcessDeferredParameterAutoReplyJob::class, function (ProcessDeferredParameterAutoReplyJob $job) use ($dialog): bool {
+            return $job->dialogId === $dialog->id;
+        });
+
+        app()->call([new ProcessDeferredParameterAutoReplyJob($dialog->id), 'handle']);
+
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+            && str_contains($request->url(), 'chat_id=max-chat-100')
+            && $request['text'] === 'MAX delayed fake reply');
+        Http::assertSentCount(1);
+
+        $storedResult->message->refresh();
+        $dialog->refresh();
+        $outbound = Message::query()
+            ->where('reply_to_message_id', $storedResult->message->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_AUTO_REPLY)
+            ->firstOrFail();
+
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertSame('fake-live-dialog-'.$dialog->id, $dialog->bitrix24_live_chat_id);
+        $this->assertNotNull($storedResult->message->auto_reply_sent_at);
+        $this->assertNull($dialog->pending_auto_reply_source_message_id);
+        $this->assertSame('MAX delayed fake reply', $outbound->text);
+        $this->assertSame('max-chat-100', $outbound->external_chat_id);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($outbound): bool {
+            return $job->messageId === $outbound->id
+                && $job->retryAfterSync === false;
+        });
+    }
+
     private function makeTelegramChannel(array $overrides = []): Channel
     {
         return Channel::factory()->create(array_merge([
@@ -237,6 +324,21 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
             'is_active' => true,
             'credentials' => [
                 'token' => 'telegram-token',
+            ],
+        ], $overrides));
+    }
+
+    private function makeMaxChannel(array $overrides = []): Channel
+    {
+        return Channel::factory()->create(array_merge([
+            'name' => 'MAX Sales',
+            'platform' => Channel::PLATFORM_MAX,
+            'bot_username' => 'abrikosoff_max',
+            'bot_name' => 'Abrikosoff MAX',
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'is_active' => true,
+            'credentials' => [
+                'token' => 'max-token',
             ],
         ], $overrides));
     }

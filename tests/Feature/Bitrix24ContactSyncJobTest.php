@@ -590,6 +590,43 @@ class Bitrix24ContactSyncJobTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_fake_happy_path_sync_succeeds_without_active_connection(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        config()->set('bitrix24.features.fake_happy_path_enabled', true);
+
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_linked_at' => null,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_sync_fingerprint' => null,
+        ]);
+
+        $this->runSyncJob($contact);
+
+        $contact->refresh();
+
+        $this->assertSame('FAKE-B24-CONTACT-'.$contact->id, $contact->bitrix24_contact_id);
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_SYNCED, $contact->bitrix24_sync_status);
+        $this->assertFalse($contact->bitrix24_sync_pending);
+        $this->assertNotNull($contact->bitrix24_linked_at);
+        $this->assertNotNull($contact->bitrix24_last_synced_at);
+        $this->assertSame('fake-happy-path:'.$contact->id, $contact->bitrix24_sync_fingerprint);
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'contact_sync_fake_succeeded',
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+
+        Http::assertNothingSent();
+    }
+
     public function test_linked_contact_with_matching_remote_snapshot_is_a_noop_sync(): void
     {
         $this->makeActiveConnection();

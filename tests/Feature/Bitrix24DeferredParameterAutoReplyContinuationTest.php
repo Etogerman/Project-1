@@ -141,6 +141,97 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
         Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
     }
 
+    public function test_resync_of_already_linked_contact_queues_deferred_parameter_job_for_pending_dialog_without_relevant_retry(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_linked_at' => now()->subDay(),
+            'bitrix24_last_synced_at' => now()->subDay(),
+            'bitrix24_sync_fingerprint' => 'existing-sync',
+        ], channel: $channel);
+
+        $dialog = $this->makeDialog($contact, $channel, [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_ACTIVE,
+        ]);
+        $pendingSource = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Already linked pending dialog without retry',
+        ]);
+
+        $dialog->forceFill([
+            'pending_auto_reply_source_message_id' => $pendingSource->id,
+        ])->save();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                ]),
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Queue::assertPushed(ProcessDeferredParameterAutoReplyJob::class, function (ProcessDeferredParameterAutoReplyJob $job) use ($dialog): bool {
+            return $job->dialogId === $dialog->id;
+        });
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+    }
+
+    public function test_resync_of_already_linked_contact_waits_for_relevant_retry_before_queuing_deferred_parameter_job(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_linked_at' => now()->subDay(),
+            'bitrix24_last_synced_at' => now()->subDay(),
+            'bitrix24_sync_fingerprint' => 'existing-sync',
+        ], channel: $channel);
+
+        $dialog = $this->makeDialog($contact, $channel, [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+        ]);
+        $pendingSource = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Already linked pending dialog with required retry',
+        ]);
+
+        $dialog->forceFill([
+            'pending_auto_reply_source_message_id' => $pendingSource->id,
+        ])->save();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                ]),
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($pendingSource): bool {
+            return $job->messageId === $pendingSource->id
+                && $job->retryAfterSync === true;
+        });
+        Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
+    }
+
     public function test_successful_retry_after_sync_live_export_queues_deferred_parameter_job_for_same_dialog(): void
     {
         Queue::fake();
