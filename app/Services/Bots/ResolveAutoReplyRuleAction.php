@@ -100,6 +100,30 @@ class ResolveAutoReplyRuleAction
             ->values();
     }
 
+    public function resolveDelayedFinalRule(
+        Channel $channel,
+        Contact $contact,
+        ?string $messageParameter,
+    ): ?AutoReplyRule {
+        $normalizedParameter = AutoReplyRule::normalizeKeyword($messageParameter);
+
+        if (! filled($normalizedParameter) || ! $contact->phoneNumbers()->exists()) {
+            return null;
+        }
+
+        $rootContact = $this->resolveRootContactAction->handle($contact);
+        $rootContactTagIds = $rootContact->tags()
+            ->pluck('tags.id')
+            ->map(fn (mixed $tagId): int => (int) $tagId)
+            ->all();
+
+        return $this->resolveDelayedFinalRules(
+            $channel,
+            $rootContactTagIds,
+            $normalizedParameter,
+        )->first();
+    }
+
     /**
      * @param  list<int>  $rootContactTagIds
      */
@@ -118,6 +142,33 @@ class ResolveAutoReplyRuleAction
             ->where(fn (Builder $query) => $this->applyPhoneConditionFilter($query, $contactHasPhone))
             ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
             ->get();
+    }
+
+    /**
+     * @param  list<int>  $rootContactTagIds
+     */
+    protected function resolveDelayedFinalRules(
+        Channel $channel,
+        array $rootContactTagIds,
+        string $normalizedParameter,
+    ): Collection {
+        return collect([
+            AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+        ])->flatMap(fn (string $matchScope): Collection => AutoReplyRule::query()
+            ->active()
+            ->forChannel($channel)
+            ->where('match_scope', $matchScope)
+            ->where('normalized_keyword', $normalizedParameter)
+            ->where('contact_phone_condition', AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE)
+            ->where(fn (Builder $query) => $this->applyTagConditionFilter($query, $rootContactTagIds))
+            ->get())
+            ->unique(fn (AutoReplyRule $rule): int => (int) $rule->getKey())
+            ->sortBy([
+                ['priority', 'asc'],
+                ['id', 'asc'],
+            ])
+            ->values();
     }
 
     protected function applyPhoneConditionFilter(Builder $query, bool $contactHasPhone): void

@@ -9,7 +9,9 @@ use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bitrix24\IsDialogReadyForBitrix24LiveBridgeAction;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\AssignContactStartTagAction;
 use App\Services\Contacts\BrokenContactMergeChainException;
@@ -19,6 +21,7 @@ use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
 use App\Services\Contacts\MergeContactsAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
+use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Database\QueryException;
@@ -33,7 +36,9 @@ class StoreInboundMessageAction
         protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
         protected MergeContactsAction $mergeContactsAction,
         protected ResolveRootContactAction $resolveRootContactAction,
+        protected ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
         protected ChannelActivityLogger $channelActivityLogger,
+        protected IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
         protected QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
         protected SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
         protected SyncDialogConfirmedPhoneAction $syncDialogConfirmedPhoneAction,
@@ -80,6 +85,7 @@ class StoreInboundMessageAction
                     $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
                     $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
                     $this->assignStartTagIfNeeded($channel, $contact, $existingMessage);
+                    $this->syncDialogPendingAutoReplySource($existingMessage, $contact);
                     $this->queueBitrix24LiveMessageExportAction->handle($existingMessage);
 
                     return new StoredInboundMessageResult(
@@ -114,6 +120,7 @@ class StoreInboundMessageAction
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $storedMessage, $message);
                 $this->syncDialogConfirmedPhoneIfNeeded($storedMessage, $message, $phoneCaptureStatus);
                 $this->assignStartTagIfNeeded($channel, $contact, $storedMessage);
+                $this->syncDialogPendingAutoReplySource($storedMessage, $contact);
                 $this->queueBitrix24LiveMessageExportAction->handle($storedMessage);
 
                 return new StoredInboundMessageResult(
@@ -136,6 +143,7 @@ class StoreInboundMessageAction
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
                 $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
                 $this->assignStartTagIfNeeded($channel, $contact, $existingMessage);
+                $this->syncDialogPendingAutoReplySource($existingMessage, $contact);
                 $this->queueBitrix24LiveMessageExportAction->handle($existingMessage);
 
                 return new StoredInboundMessageResult(
@@ -387,6 +395,114 @@ class StoreInboundMessageAction
         }
 
         $this->assignContactStartTagAction->handle($contact, $storedMessage, $channel);
+    }
+
+    protected function syncDialogPendingAutoReplySource(
+        Message $storedMessage,
+        ?Contact $fallbackContact,
+    ): void {
+        if (
+            $storedMessage->direction !== Message::DIRECTION_INBOUND
+            || $storedMessage->message_kind !== Message::KIND_INBOUND_USER
+            || ! filled($storedMessage->message_parameter)
+        ) {
+            return;
+        }
+
+        $storedMessage->loadMissing(['dialog', 'contact']);
+
+        $dialog = $storedMessage->dialog;
+        $contact = $storedMessage->contact ?? $fallbackContact;
+
+        if (! $dialog instanceof Dialog || ! $contact instanceof Contact) {
+            return;
+        }
+
+        $existingPendingSource = null;
+
+        if (filled($dialog->pending_auto_reply_source_message_id)) {
+            $existingPendingSource = Message::query()->find($dialog->pending_auto_reply_source_message_id);
+
+            if (
+                $existingPendingSource instanceof Message
+                && ! $this->isSameOrNewerPendingSourceCandidate($storedMessage, $existingPendingSource)
+            ) {
+                return;
+            }
+        }
+
+        if (! $contact->isAutoReplyEnabled() || $storedMessage->hasSuccessfulAutoReply()) {
+            $this->clearDialogPendingAutoReplySource($dialog);
+
+            return;
+        }
+
+        $rootContact = $this->resolveRootContactAction->handle($contact);
+
+        if ($this->canUseImmediateFinalParameterPath($dialog, $rootContact)) {
+            $this->clearDialogPendingAutoReplySource($dialog);
+
+            return;
+        }
+
+        if ($dialog->pending_auto_reply_source_message_id === $storedMessage->id) {
+            return;
+        }
+
+        $dialog->forceFill([
+            'pending_auto_reply_source_message_id' => $storedMessage->id,
+        ])->save();
+    }
+
+    protected function canUseImmediateFinalParameterPath(Dialog $dialog, Contact $rootContact): bool
+    {
+        if (! $rootContact->phoneNumbers()
+            ->whereNotNull('phone_normalized')
+            ->where('phone_normalized', '!=', '')
+            ->exists()) {
+            return false;
+        }
+
+        if ($this->resolveNextDataCollectionFieldAction->handle($rootContact) !== null) {
+            return false;
+        }
+
+        return $this->isDialogReadyForBitrix24LiveBridgeAction->handle($dialog);
+    }
+
+    protected function isSameOrNewerPendingSourceCandidate(
+        Message $candidate,
+        Message $current,
+    ): bool {
+        $candidateReceivedAt = $candidate->received_at;
+        $currentReceivedAt = $current->received_at;
+
+        if ($candidateReceivedAt !== null && $currentReceivedAt !== null) {
+            if ($candidateReceivedAt->gt($currentReceivedAt)) {
+                return true;
+            }
+
+            if ($candidateReceivedAt->lt($currentReceivedAt)) {
+                return false;
+            }
+        } elseif ($candidateReceivedAt !== null) {
+            return true;
+        } elseif ($currentReceivedAt !== null) {
+            return false;
+        }
+
+        return $candidate->id >= $current->id;
+    }
+
+    protected function clearDialogPendingAutoReplySource(Dialog $dialog): void
+    {
+        if ($dialog->pending_auto_reply_source_message_id === null) {
+            return;
+        }
+
+        $dialog->forceFill([
+            'pending_auto_reply_source_message_id' => null,
+        ])->save();
     }
 
     protected function captureSharedPhoneIfNeeded(

@@ -233,6 +233,7 @@ class ConsolidateDialogsForRootContactAction
             'last_message_at' => $this->resolveLastMessageAt($dialogs, $messages),
             'last_inbound_at' => $this->resolveLastInboundAt($dialogs, $messages),
             'last_outbound_at' => $this->resolveLastOutboundAt($dialogs, $messages),
+            'pending_auto_reply_source_message_id' => $this->resolveLatestPendingAutoReplySourceMessage($dialogs, $messages)?->id,
         ];
 
         $routeSourceMessage = $this->resolveLatestInboundRouteSourceMessage($messages, $channel);
@@ -263,6 +264,35 @@ class ConsolidateDialogsForRootContactAction
         }
 
         return $payload;
+    }
+
+    /**
+     * @param  Collection<int, Dialog>  $dialogs
+     * @param  Collection<int, Message>  $messages
+     */
+    private function resolveLatestPendingAutoReplySourceMessage(Collection $dialogs, Collection $messages): ?Message
+    {
+        $pendingSourceIds = $dialogs
+            ->pluck('pending_auto_reply_source_message_id')
+            ->filter()
+            ->map(fn (mixed $messageId): int => (int) $messageId)
+            ->unique()
+            ->values();
+
+        if ($pendingSourceIds->isEmpty()) {
+            return null;
+        }
+
+        /** @var ?Message $message */
+        $message = $messages
+            ->whereIn('id', $pendingSourceIds->all())
+            ->sortByDesc(fn (Message $message): string => $this->messageChronology->timestampAndIdSortKey(
+                $message->received_at,
+                $message->id,
+            ))
+            ->first();
+
+        return $message;
     }
 
     /**

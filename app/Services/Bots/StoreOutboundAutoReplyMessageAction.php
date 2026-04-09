@@ -5,6 +5,7 @@ namespace App\Services\Bots;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
@@ -23,24 +24,29 @@ class StoreOutboundAutoReplyMessageAction
         Message $inboundMessage,
         AutoReplyDeliveryResult $deliveryResult,
         ?AutoReplyRule $matchedRule = null,
+        ?Dialog $routeDialog = null,
     ): Message
     {
-        return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult, $matchedRule): Message {
+        return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult, $matchedRule, $routeDialog): Message {
             $inboundMessage->forceFill([
                 'auto_reply_sent_at' => now(),
             ])->save();
 
-            $contact = $inboundMessage->contact()->firstOrFail();
+            $routeDialog?->loadMissing(['contact', 'currentContactIdentity']);
+
+            $contact = $routeDialog?->contact ?? $inboundMessage->contact()->firstOrFail();
+            $routeContactIdentity = $routeDialog?->currentContactIdentity ?? $inboundMessage->contactIdentity;
+            $routeExternalChatId = $routeDialog?->external_chat_id ?? $inboundMessage->external_chat_id;
 
             $outboundMessage = Message::query()->create([
-                'contact_id' => $inboundMessage->contact_id,
-                'contact_identity_id' => $inboundMessage->contact_identity_id,
+                'contact_id' => $contact->id,
+                'contact_identity_id' => $routeContactIdentity?->id,
                 'channel_id' => $channel->id,
                 'direction' => Message::DIRECTION_OUTBOUND,
                 'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
                 'reply_to_message_id' => $inboundMessage->id,
                 'provider_event_key' => null,
-                'external_chat_id' => $inboundMessage->external_chat_id,
+                'external_chat_id' => $routeExternalChatId,
                 'external_message_id' => $deliveryResult->externalMessageId,
                 'text' => $deliveryResult->text,
                 'raw_payload' => $deliveryResult->rawPayload,
@@ -51,8 +57,8 @@ class StoreOutboundAutoReplyMessageAction
                 $outboundMessage,
                 $contact,
                 $channel,
-                $inboundMessage->contactIdentity,
-                $inboundMessage->external_chat_id,
+                $routeContactIdentity,
+                $routeExternalChatId,
                 Message::SENT_BY_TYPE_AUTO_REPLY,
                 null,
                 Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,

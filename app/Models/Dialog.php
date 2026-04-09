@@ -30,6 +30,7 @@ class Dialog extends Model
         'contact_id',
         'channel_id',
         'current_contact_identity_id',
+        'pending_auto_reply_source_message_id',
         'external_chat_id',
         'bitrix24_live_chat_id',
         'bitrix24_live_status',
@@ -74,6 +75,11 @@ class Dialog extends Model
     public function currentContactIdentity(): BelongsTo
     {
         return $this->belongsTo(ContactIdentity::class, 'current_contact_identity_id');
+    }
+
+    public function pendingAutoReplySourceMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'pending_auto_reply_source_message_id');
     }
 
     public function messages(): HasMany

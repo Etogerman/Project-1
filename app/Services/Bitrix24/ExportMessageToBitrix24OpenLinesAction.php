@@ -6,6 +6,7 @@ use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
 use App\Services\Contacts\ResolveRootContactAction;
 
 class ExportMessageToBitrix24OpenLinesAction
@@ -19,6 +20,8 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly LogBitrix24RawContactPhoneSnapshotAction $logBitrix24RawContactPhoneSnapshotAction,
         private readonly QueueBitrix24RawContactPhoneSnapshotAction $queueBitrix24RawContactPhoneSnapshotAction,
         private readonly QueueBitrix24ContactPhoneDedupeAction $queueBitrix24ContactPhoneDedupeAction,
+        private readonly IsDialogBitrix24OpenLinesRetryRequiredAction $isDialogBitrix24OpenLinesRetryRequiredAction,
+        private readonly QueueDeferredParameterAutoReplyAction $queueDeferredParameterAutoReplyAction,
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
     ) {}
@@ -127,6 +130,14 @@ class ExportMessageToBitrix24OpenLinesAction
                     entityType: 'dialog',
                     entityId: (string) $dialog->id,
                 );
+            }
+
+            if (
+                $retryAfterSync
+                && filled($dialog->pending_auto_reply_source_message_id)
+                && ! $this->isDialogBitrix24OpenLinesRetryRequiredAction->handle($dialog)
+            ) {
+                $this->queueDeferredParameterAutoReplyAction->handle($dialog);
             }
 
             return $message->fresh() ?? $message;
