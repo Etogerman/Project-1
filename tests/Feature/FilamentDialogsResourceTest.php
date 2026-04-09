@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
@@ -892,7 +893,7 @@ class FilamentDialogsResourceTest extends TestCase
         ));
     }
 
-    public function test_dialog_view_contact_link_points_to_contact_modal_url(): void
+    public function test_dialog_view_contact_link_points_to_contact_page_url(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -905,7 +906,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]));
 
         $response->assertOk()
-            ->assertSee('/admin/contacts?tableAction=view&amp;tableActionRecord='.$contact->id, escape: false);
+            ->assertSee(ContactResource::getUrl('view', ['record' => $contact]), escape: false);
     }
 
     public function test_dialog_view_shows_reply_composer(): void
