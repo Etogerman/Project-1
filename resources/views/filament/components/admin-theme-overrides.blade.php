@@ -2681,6 +2681,34 @@
         align-content: start;
     }
 
+    .ac-diagnostics-payload {
+        display: grid;
+        gap: 0.65rem;
+    }
+
+    .ac-diagnostics-payload__label {
+        margin: 0;
+        font-size: 0.9rem;
+        font-weight: 700;
+        line-height: 1.35;
+        color: var(--ac-text);
+    }
+
+    .ac-diagnostics-payload__pre {
+        margin: 0;
+        max-height: 26rem;
+        overflow: auto;
+        padding: 1rem;
+        border: 1px solid color-mix(in srgb, var(--ac-border) 84%, transparent);
+        border-radius: 1rem;
+        background: color-mix(in srgb, var(--ac-surface-muted) 82%, var(--ac-surface-strong));
+        color: var(--ac-text);
+        font-size: 0.8rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
     @media (max-width: 1140px) {
         .ac-contact-page__layout,
         .ac-contact-form-grid,
