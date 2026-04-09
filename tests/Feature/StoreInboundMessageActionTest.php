@@ -140,6 +140,213 @@ class StoreInboundMessageActionTest extends TestCase
         ]);
     }
 
+    public function test_store_inbound_message_saves_pending_auto_reply_source_for_parameter_when_final_gate_is_not_ready(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-pending-parameter-1',
+                externalMessageId: 'pending-parameter-1',
+                text: '/start PROMO_1',
+                messageParameter: 'PROMO_1',
+                receivedAt: Carbon::parse('2026-04-09 11:00:00'),
+            ),
+        );
+
+        $dialog = Dialog::query()
+            ->where('contact_id', $storedResult->message->contact_id)
+            ->where('channel_id', $channel->id)
+            ->firstOrFail();
+
+        $this->assertSame($storedResult->message->id, $dialog->pending_auto_reply_source_message_id);
+    }
+
+    public function test_store_inbound_message_does_not_save_pending_auto_reply_source_without_parameter(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-without-parameter-1',
+                externalMessageId: 'without-parameter-1',
+                text: 'Просто сообщение',
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-09 11:05:00'),
+            ),
+        );
+
+        $dialog = Dialog::query()
+            ->where('contact_id', $storedResult->message->contact_id)
+            ->where('channel_id', $channel->id)
+            ->firstOrFail();
+
+        $this->assertNull($dialog->pending_auto_reply_source_message_id);
+    }
+
+    public function test_store_inbound_message_does_not_save_pending_auto_reply_source_for_live_ready_contact(): void
+    {
+        config()->set('bitrix24.features.openlines_enabled', true);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        [$contact] = $this->createLiveReadyContact($channel, 'tg-live-user-1');
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                externalUserId: 'tg-live-user-1',
+                providerEventKey: 'telegram-live-ready-parameter-1',
+                externalMessageId: 'live-ready-parameter-1',
+                text: '/start PROMO_READY',
+                messageParameter: 'PROMO_READY',
+                receivedAt: Carbon::parse('2026-04-09 11:10:00'),
+            ),
+        );
+
+        $dialog = Dialog::query()
+            ->where('contact_id', $contact->id)
+            ->where('channel_id', $channel->id)
+            ->firstOrFail();
+
+        $this->assertSame($contact->id, $storedResult->message->contact_id);
+        $this->assertNull($dialog->pending_auto_reply_source_message_id);
+    }
+
+    public function test_newer_parameter_inbound_overwrites_existing_pending_auto_reply_source(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $firstResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-parameter-overwrite-1',
+                externalMessageId: 'parameter-overwrite-1',
+                text: '/start PROMO_OLD',
+                messageParameter: 'PROMO_OLD',
+                receivedAt: Carbon::parse('2026-04-09 11:15:00'),
+            ),
+        );
+
+        $secondResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-parameter-overwrite-2',
+                externalMessageId: 'parameter-overwrite-2',
+                text: '/start PROMO_NEW',
+                messageParameter: 'PROMO_NEW',
+                receivedAt: Carbon::parse('2026-04-09 11:16:00'),
+            ),
+        );
+
+        $dialog = Dialog::query()
+            ->where('contact_id', $firstResult->message->contact_id)
+            ->where('channel_id', $channel->id)
+            ->firstOrFail();
+
+        $this->assertSame($secondResult->message->id, $dialog->pending_auto_reply_source_message_id);
+    }
+
+    public function test_older_parameter_inbound_does_not_override_newer_pending_auto_reply_source(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $newerResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-parameter-newer-first',
+                externalMessageId: 'parameter-newer-first',
+                text: '/start PROMO_NEW',
+                messageParameter: 'PROMO_NEW',
+                receivedAt: Carbon::parse('2026-04-09 11:20:00'),
+            ),
+        );
+
+        $olderResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-parameter-older-second',
+                externalMessageId: 'parameter-older-second',
+                text: '/start PROMO_OLD',
+                messageParameter: 'PROMO_OLD',
+                receivedAt: Carbon::parse('2026-04-09 11:19:00'),
+            ),
+        );
+
+        $dialog = Dialog::query()
+            ->where('contact_id', $newerResult->message->contact_id)
+            ->where('channel_id', $channel->id)
+            ->firstOrFail();
+
+        $this->assertNotSame($newerResult->message->id, $olderResult->message->id);
+        $this->assertSame($newerResult->message->id, $dialog->pending_auto_reply_source_message_id);
+    }
+
+    public function test_immediate_ready_parameter_inbound_clears_stale_pending_auto_reply_source(): void
+    {
+        config()->set('bitrix24.features.openlines_enabled', true);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        [$contact] = $this->createLiveReadyContact($channel, 'tg-live-user-2');
+
+        $staleResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                externalUserId: 'tg-live-user-2',
+                providerEventKey: 'telegram-stale-parameter-1',
+                externalMessageId: 'stale-parameter-1',
+                text: '/start PROMO_STALE',
+                messageParameter: 'PROMO_STALE',
+                receivedAt: Carbon::parse('2026-04-09 11:25:00'),
+            ),
+        );
+
+        $dialog = Dialog::query()
+            ->where('contact_id', $contact->id)
+            ->where('channel_id', $channel->id)
+            ->firstOrFail();
+
+        $dialog->forceFill([
+            'pending_auto_reply_source_message_id' => $staleResult->message->id,
+        ])->save();
+
+        app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                externalUserId: 'tg-live-user-2',
+                providerEventKey: 'telegram-immediate-parameter-2',
+                externalMessageId: 'immediate-parameter-2',
+                text: '/start PROMO_IMMEDIATE',
+                messageParameter: 'PROMO_IMMEDIATE',
+                receivedAt: Carbon::parse('2026-04-09 11:26:00'),
+            ),
+        );
+
+        $this->assertNull($dialog->fresh()->pending_auto_reply_source_message_id);
+    }
+
     public function test_store_inbound_message_saves_phone_from_contact_share(): void
     {
         $channel = Channel::factory()->create([
@@ -1164,5 +1371,77 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame('+7 999 111 11 11', $dialog->confirmed_phone_raw);
         $this->assertSame('+79991111111', $dialog->confirmed_phone_normalized);
         $this->assertSame('2026-03-28 20:00:00', $dialog->phone_confirmed_at?->format('Y-m-d H:i:s'));
+    }
+
+    private function makeInboundUserMessage(
+        Channel $channel,
+        string $providerEventKey,
+        string $externalMessageId,
+        ?string $text,
+        ?string $messageParameter,
+        Carbon $receivedAt,
+        string $externalUserId = '200',
+        string $externalChatId = '300',
+    ): IncomingBotMessage {
+        return new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $externalChatId,
+            externalUserId: $externalUserId,
+            providerEventKey: $providerEventKey,
+            externalMessageId: $externalMessageId,
+            externalUsername: 'telegram_user_'.$externalUserId,
+            contactName: 'Тестовый контакт '.$externalUserId,
+            text: $text,
+            messageParameter: $messageParameter,
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: ['message' => ['text' => $text]],
+            receivedAt: $receivedAt,
+        );
+    }
+
+    /**
+     * @return array{Contact, ContactIdentity, Dialog}
+     */
+    private function createLiveReadyContact(Channel $channel, string $externalUserId): array
+    {
+        $contact = Contact::factory()->create([
+            'first_name' => 'Иван',
+            'city' => 'Москва',
+            'country' => 'Россия',
+            'age_range' => '26-35',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'bitrix24_contact_id' => 'b24-'.$externalUserId,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_sync_pending' => false,
+            'bitrix24_linked_at' => Carbon::parse('2026-04-09 10:00:00'),
+            'bitrix24_last_synced_at' => Carbon::parse('2026-04-09 10:05:00'),
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 555 55 55',
+            'phone_normalized' => '+79995555555',
+            'is_primary' => true,
+        ]);
+
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => $externalUserId,
+            'external_username' => 'telegram_user_'.$externalUserId,
+        ]);
+
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'dialog-'.$externalUserId,
+        ]);
+
+        return [$contact, $identity, $dialog];
     }
 }

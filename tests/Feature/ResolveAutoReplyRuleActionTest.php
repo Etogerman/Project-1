@@ -255,6 +255,108 @@ class ResolveAutoReplyRuleActionTest extends TestCase
         $this->assertResolvedRules($resolver->handle($channel, $contactWithoutPhone, null, 'promo_123'), []);
     }
 
+    public function test_it_resolves_single_delayed_final_rule_using_parameter_scopes_and_has_phone_only(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'is_primary' => true,
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'priority' => 1,
+            'reply_text' => 'Ignored any inbound',
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'promo_delayed',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_delayed'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'priority' => 1,
+            'reply_text' => 'Ignored keyword',
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo_delayed',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_delayed'),
+            'contact_phone_condition' => null,
+            'priority' => 1,
+            'reply_text' => 'Ignored null condition',
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo_delayed',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_delayed'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+            'priority' => 1,
+            'reply_text' => 'Ignored missing phone',
+        ]);
+
+        $laterRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo_delayed',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_delayed'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'priority' => 20,
+            'reply_text' => 'Later delayed rule',
+        ]);
+
+        $firstRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+            'keyword' => 'promo_delayed',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_delayed'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'priority' => 10,
+            'reply_text' => 'First delayed rule',
+        ]);
+
+        $resolved = app(ResolveAutoReplyRuleAction::class)->resolveDelayedFinalRule(
+            $channel,
+            $contact,
+            'promo_delayed',
+        );
+
+        $this->assertInstanceOf(AutoReplyRule::class, $resolved);
+        $this->assertTrue($resolved->is($firstRule));
+        $this->assertFalse($resolved->is($laterRule));
+    }
+
+    public function test_it_returns_null_for_delayed_final_rule_without_phone_or_parameter(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo_delayed',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_delayed'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'reply_text' => 'Delayed rule',
+        ]);
+
+        $resolver = app(ResolveAutoReplyRuleAction::class);
+
+        $this->assertNull($resolver->resolveDelayedFinalRule($channel, $contact, 'promo_delayed'));
+        $this->assertNull($resolver->resolveDelayedFinalRule($channel, $contact, null));
+        $this->assertNull($resolver->resolveDelayedFinalRule($channel, $contact, '   '));
+    }
+
     public function test_it_matches_rule_when_contact_has_all_required_tags(): void
     {
         $channel = Channel::factory()->create();
