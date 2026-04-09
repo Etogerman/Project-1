@@ -9,9 +9,6 @@
                     <h2 class="ac-surface__title ac-surface__title--hero">
                         {{ $contactHeader['title'] }}
                     </h2>
-                    <p class="ac-surface__subtitle">
-                        Имя в мессенджере: {{ $contactHeader['messengerName'] }}
-                    </p>
                 </div>
 
                 <div class="ac-button-group ac-button-group--end">
