@@ -84,20 +84,39 @@ class ProcessDeferredParameterAutoReplyJobTest extends TestCase
         });
     }
 
-    public function test_job_clears_pending_when_source_message_already_has_auto_reply_sent_at(): void
+    public function test_job_still_sends_delayed_reply_when_source_message_already_has_auto_reply_sent_at(): void
     {
         Queue::fake();
-        Http::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9705,
+                ],
+            ]),
+        ]);
 
-        [$dialog] = $this->createPendingDialogWithSource([
+        [$dialog, $sourceMessage] = $this->createPendingDialogWithSource([
             'auto_reply_sent_at' => now(),
+        ]);
+        AutoReplyRule::factory()->forChannel($dialog->channel)->create([
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'reply_text' => 'Финальный ответ после missing_phone',
         ]);
 
         app()->call([new ProcessDeferredParameterAutoReplyJob($dialog->id), 'handle']);
 
-        Http::assertNothingSent();
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === 'dialog-chat-current'
+            && $request['text'] === 'Финальный ответ после missing_phone');
         $this->assertNull($dialog->fresh()->pending_auto_reply_source_message_id);
-        $this->assertDatabaseCount('messages', 1);
+        $this->assertSame(1, Message::query()
+            ->where('reply_to_message_id', $sourceMessage->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_AUTO_REPLY)
+            ->count());
     }
 
     public function test_job_clears_pending_when_no_delayed_rule_matches(): void

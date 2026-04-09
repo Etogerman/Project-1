@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Data\Bots\IncomingBotMessage;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
+use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDeferredParameterAutoReplyJob;
 use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\AutoReplyRule;
@@ -265,12 +266,27 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         ])->save();
 
         AutoReplyRule::factory()->forChannel($channel)->create([
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+            'reply_text' => 'Сначала запросим телефон',
+        ]);
+        AutoReplyRule::factory()->forChannel($channel)->create([
             'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
             'keyword' => 'PROMO_MAX',
             'normalized_keyword' => AutoReplyRule::normalizeKeyword('PROMO_MAX'),
             'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
             'reply_text' => 'MAX delayed fake reply',
         ]);
+
+        app()->call([new ProcessAutoReplyJob($storedResult->message->id), 'handle']);
+
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+            && str_contains($request->url(), 'chat_id=max-chat-100')
+            && $request['text'] === 'Сначала запросим телефон');
+        $storedResult->message->refresh();
+        $this->assertNotNull($storedResult->message->auto_reply_sent_at);
 
         $this->runSyncJob($contact);
 
@@ -291,7 +307,7 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
             && str_contains($request->url(), 'chat_id=max-chat-100')
             && $request['text'] === 'MAX delayed fake reply');
-        Http::assertSentCount(1);
+        Http::assertSentCount(2);
 
         $storedResult->message->refresh();
         $dialog->refresh();

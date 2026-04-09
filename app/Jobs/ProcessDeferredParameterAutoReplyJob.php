@@ -82,12 +82,6 @@ class ProcessDeferredParameterAutoReplyJob implements ShouldQueue
             return;
         }
 
-        if ($sourceMessage->auto_reply_sent_at !== null) {
-            $this->clearPendingIfCurrent($dialog->id, $sourceMessage->id);
-
-            return;
-        }
-
         $dialogContact = $dialog->contact;
 
         if ($dialogContact === null) {
