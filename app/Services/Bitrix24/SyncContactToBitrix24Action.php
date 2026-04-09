@@ -32,6 +32,10 @@ class SyncContactToBitrix24Action
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
 
+        if ($this->fakeHappyPathEnabled()) {
+            return $this->syncFakeContact($rootContact);
+        }
+
         if (filled($rootContact->bitrix24_contact_id)) {
             return $this->syncExistingLinkedContact($rootContact);
         }
@@ -275,6 +279,52 @@ class SyncContactToBitrix24Action
         ])->save();
 
         return $contact->fresh();
+    }
+
+    private function syncFakeContact(Contact $contact): Contact
+    {
+        $bitrix24ContactId = filled($contact->bitrix24_contact_id)
+            ? (string) $contact->bitrix24_contact_id
+            : sprintf('FAKE-B24-CONTACT-%d', $contact->id);
+        $fingerprint = sprintf('fake-happy-path:%d', $contact->id);
+
+        $attributes = [
+            'bitrix24_contact_id' => $bitrix24ContactId,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_last_synced_at' => now(),
+            'bitrix24_sync_fingerprint' => $fingerprint,
+        ];
+
+        if ($contact->bitrix24_linked_at === null) {
+            $attributes['bitrix24_linked_at'] = now();
+        }
+
+        $contact->forceFill($attributes)->save();
+
+        $this->logApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'contact_sync_fake_succeeded',
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'contact_id' => $contact->id,
+                'fake_mode' => true,
+            ],
+            responsePayload: [
+                'bitrix24_contact_id' => $bitrix24ContactId,
+                'fingerprint' => $fingerprint,
+            ],
+            connection: null,
+            entityType: 'contact',
+            entityId: (string) $contact->id,
+        );
+
+        return $contact->fresh();
+    }
+
+    private function fakeHappyPathEnabled(): bool
+    {
+        return (bool) config('bitrix24.features.fake_happy_path_enabled', false)
+            && ! app()->environment('production');
     }
 
     /**

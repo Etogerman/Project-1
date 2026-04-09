@@ -125,24 +125,29 @@ class SyncContactToBitrix24Job implements ShouldQueue
             && filled($rootContact->bitrix24_contact_id)
             && $rootContact->bitrix24_sync_status === Contact::BITRIX24_SYNC_STATUS_SYNCED
             && ! $rootContact->bitrix24_sync_pending;
+        $pendingDialogs = Dialog::query()
+            ->where('contact_id', $rootContact->id)
+            ->whereNotNull('pending_auto_reply_source_message_id')
+            ->get();
+        $hasPendingDialogs = $pendingDialogs->isNotEmpty();
 
         if ($becameLinkedAfterSync) {
             $logBitrix24RawContactPhoneSnapshotAction->handle($rootContact, 'after_contact_sync');
+        }
+
+        if ($becameLinkedAfterSync || $hasPendingDialogs) {
             $queueMissedBitrix24OpenLinesRetryAction->handle($rootContact);
 
-            Dialog::query()
-                ->where('contact_id', $rootContact->id)
-                ->whereNotNull('pending_auto_reply_source_message_id')
-                ->each(function (Dialog $dialog) use (
-                    $isDialogBitrix24OpenLinesRetryRequiredAction,
-                    $queueDeferredParameterAutoReplyAction,
-                ): void {
-                    if ($isDialogBitrix24OpenLinesRetryRequiredAction->handle($dialog)) {
-                        return;
-                    }
+            $pendingDialogs->each(function (Dialog $dialog) use (
+                $isDialogBitrix24OpenLinesRetryRequiredAction,
+                $queueDeferredParameterAutoReplyAction,
+            ): void {
+                if ($isDialogBitrix24OpenLinesRetryRequiredAction->handle($dialog)) {
+                    return;
+                }
 
-                    $queueDeferredParameterAutoReplyAction->handle($dialog);
-                });
+                $queueDeferredParameterAutoReplyAction->handle($dialog);
+            });
         }
 
         $queueBitrix24DealSyncAction->handle($rootContact);
