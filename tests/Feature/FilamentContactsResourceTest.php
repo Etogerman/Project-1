@@ -97,9 +97,6 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableFilterExists('unassigned_contacts')
             ->assertTableFilterExists('duplicate_review_pending')
             ->assertTableFilterExists('tags')
-            ->assertTableActionExists('view', null, $contact)
-            ->assertTableActionHasIcon('view', Heroicon::OutlinedEye, $contact)
-            ->assertTableActionDoesNotHaveLabel('view', $contact)
             ->assertTableActionExists('delete', null, $contact)
             ->assertTableActionHasIcon('delete', Heroicon::OutlinedTrash, $contact)
             ->assertTableActionDoesNotHaveLabel('delete', $contact)
@@ -125,7 +122,6 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($user)
             ->test(ManageContacts::class)
             ->assertCanSeeTableRecords([$contact])
-            ->assertTableActionExists('view', null, $contact)
             ->assertTableActionDoesNotExist('delete', null, $contact);
     }
 
@@ -935,7 +931,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->assertTableActionExists('view', null, $contact)
             ->mountTableAction('view', $contact)
             ->assertMountedActionModalSee('Анкета')
             ->assertMountedActionModalSee('Диагностика webhook')

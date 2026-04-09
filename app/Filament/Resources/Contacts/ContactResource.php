@@ -488,6 +488,7 @@ class ContactResource extends Resource
                     ->iconButton()
                     ->color('gray')
                     ->tooltip('Просмотр')
+                    ->hidden()
                     ->modalWidth(Width::SevenExtraLarge)
                     ->mountUsing(function (Action $action, ?Schema $schema, ManageContacts $livewire): void {
                         $schema?->fill();
