@@ -146,7 +146,6 @@ class ViewContact extends ViewRecord
      * @return array{
      *     backUrl:string,
      *     title:string,
-     *     messengerName:string,
      *     mergedRootLabel:?string,
      *     mergedRootUrl:?string,
      *     canEditProfile:bool
@@ -160,7 +159,6 @@ class ViewContact extends ViewRecord
         return [
             'backUrl' => ContactResource::getUrl('index'),
             'title' => $this->resolveHeadingLabel($record),
-            'messengerName' => filled($record->name) ? (string) $record->name : '—',
             'mergedRootLabel' => $mergedInto instanceof Contact
                 ? sprintf('#%d %s', $mergedInto->id, $mergedInto->display_name)
                 : null,
