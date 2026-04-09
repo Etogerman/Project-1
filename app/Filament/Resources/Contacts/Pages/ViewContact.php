@@ -22,6 +22,8 @@ class ViewContact extends ViewRecord
 
     public const TAB_HISTORY = 'history';
 
+    public const TAB_DIAGNOSTICS = 'diagnostics';
+
     protected static string $resource = ContactResource::class;
 
     protected string $view = 'filament.contacts.pages.view-contact';
@@ -30,11 +32,19 @@ class ViewContact extends ViewRecord
 
     public string $activeTab = self::TAB_GENERAL;
 
+    public int $historyVisibleCount = 20;
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
 
         $this->activeTab = $this->normalizeTab((string) request()->query('tab', self::TAB_GENERAL));
+        $this->historyVisibleCount = 20;
+    }
+
+    public function loadMoreHistory(): void
+    {
+        $this->historyVisibleCount += 20;
     }
 
     public function getTitle(): string|Htmlable
@@ -89,6 +99,9 @@ class ViewContact extends ViewRecord
         $collectorStatus = ContactResource::buildCollectorStatusViewData($record);
         $tagsViewData = ContactResource::buildTagsViewData($record);
         $phoneNumbersViewData = ContactResource::buildPhoneNumbersViewData($record);
+        $diagnosticsViewData = $this->activeTab === self::TAB_DIAGNOSTICS
+            ? ContactResource::buildDiagnosticsViewData($record)
+            : null;
 
         return [
             'activeTab' => $this->activeTab,
@@ -103,6 +116,7 @@ class ViewContact extends ViewRecord
             'profileViewData' => $profileViewData,
             'ownershipControls' => $ownershipControls,
             'collectorStatus' => $collectorStatus,
+            'diagnosticsViewData' => $diagnosticsViewData,
             'questionnaireAction' => $collectorStatus['canResume'] && $collectorStatus['canResumeAction']
                 ? $this->makeAction(
                     method: 'resumeMountedContactDataCollection',
@@ -114,6 +128,9 @@ class ViewContact extends ViewRecord
             'tagsViewData' => $tagsViewData,
             'phoneNumbersViewData' => $phoneNumbersViewData,
             'dialogsViewData' => $dialogsViewData,
+            'historyViewData' => $this->activeTab === self::TAB_HISTORY
+                ? ContactResource::buildHistoryTimelineViewData($record, $this->historyVisibleCount)
+                : null,
         ];
     }
 
@@ -174,12 +191,18 @@ class ViewContact extends ViewRecord
      */
     protected function buildTabsViewData(): array
     {
-        return [
+        $tabs = [
             $this->makeTab(self::TAB_GENERAL, 'Общее'),
             $this->makeTab(self::TAB_DIALOGS, 'Диалоги'),
             $this->makeTab(self::TAB_BITRIX24, 'Битрикс24'),
             $this->makeTab(self::TAB_HISTORY, 'История'),
         ];
+
+        if (ContactResource::canCurrentUserViewContactDiagnostics()) {
+            $tabs[] = $this->makeTab(self::TAB_DIAGNOSTICS, 'Диагностика');
+        }
+
+        return $tabs;
     }
 
     /**
@@ -428,12 +451,18 @@ class ViewContact extends ViewRecord
 
     protected function normalizeTab(string $tab): string
     {
-        return in_array($tab, [
+        $allowedTabs = [
             self::TAB_GENERAL,
             self::TAB_DIALOGS,
             self::TAB_BITRIX24,
             self::TAB_HISTORY,
-        ], true) ? $tab : self::TAB_GENERAL;
+        ];
+
+        if (ContactResource::canCurrentUserViewContactDiagnostics()) {
+            $allowedTabs[] = self::TAB_DIAGNOSTICS;
+        }
+
+        return in_array($tab, $allowedTabs, true) ? $tab : self::TAB_GENERAL;
     }
 
     protected function resolveHeadingLabel(Contact $record): string

@@ -8,6 +8,7 @@ use App\Data\Contacts\ResolvedContactDeletePreviewResult;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
+use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\ContactStartTag;
 use App\Models\ContactPhoneNumber;
@@ -15,6 +16,7 @@ use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\BuildContactHistoryTimelineAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
@@ -843,6 +845,160 @@ class ContactResource extends Resource
 
     /**
      * @return array{
+     *     hasLatestInboundMessage: bool,
+     *     latestInboundRows: list<array{label:string,key:string,value:string}>,
+     *     latestInboundPayload: ?string,
+     *     routeContextRows: list<array{label:string,key:string,value:string}>,
+     *     identityRows: list<array{label:string,key:string,value:string}>,
+     *     dedupRows: list<array{label:string,key:string,value:string}>
+     * }
+     */
+    public static function buildDiagnosticsViewData(Contact $record): array
+    {
+        $latestInboundMessage = static::resolveLatestInboundMessage($record);
+
+        if ($latestInboundMessage instanceof Message) {
+            $latestInboundMessage->loadMissing([
+                'dialog.channel',
+                'dialog.currentContactIdentity.channel',
+                'contactIdentity.channel',
+            ]);
+        }
+
+        $diagnosticsDialog = static::resolveDiagnosticsDialog($record, $latestInboundMessage);
+        $diagnosticsIdentity = static::resolveDiagnosticsIdentity($record, $diagnosticsDialog, $latestInboundMessage);
+
+        $record->loadMissing('mergedInto');
+
+        return [
+            'hasLatestInboundMessage' => $latestInboundMessage instanceof Message,
+            'latestInboundRows' => [
+                [
+                    'label' => 'Последний внешний message ID',
+                    'key' => 'external_message_id',
+                    'value' => $latestInboundMessage?->external_message_id ?: '—',
+                ],
+                [
+                    'label' => 'Provider event key',
+                    'key' => 'provider_event_key',
+                    'value' => $latestInboundMessage?->provider_event_key ?: '—',
+                ],
+                [
+                    'label' => 'Распарсенное received_at',
+                    'key' => 'received_at',
+                    'value' => $latestInboundMessage?->received_at?->format('d.m.Y H:i:s') ?? '—',
+                ],
+                [
+                    'label' => 'Автоответ отправлен',
+                    'key' => 'auto_reply_sent_at',
+                    'value' => $latestInboundMessage?->auto_reply_sent_at?->format('d.m.Y H:i:s') ?? '—',
+                ],
+                [
+                    'label' => 'Статус автоответа',
+                    'key' => 'reply_status',
+                    'value' => static::formatMessageReplyStatus($latestInboundMessage) ?? '—',
+                ],
+            ],
+            'latestInboundPayload' => filled($latestInboundMessage?->raw_payload)
+                ? static::encodeJsonPayload($latestInboundMessage->raw_payload)
+                : null,
+            'routeContextRows' => [
+                [
+                    'label' => 'Dialog ID',
+                    'key' => 'dialog_id',
+                    'value' => $diagnosticsDialog instanceof Dialog ? (string) $diagnosticsDialog->id : '—',
+                ],
+                [
+                    'label' => 'Канал',
+                    'key' => 'channel',
+                    'value' => static::formatChannelLabel($diagnosticsDialog?->channel),
+                ],
+                [
+                    'label' => 'External chat ID',
+                    'key' => 'external_chat_id',
+                    'value' => $diagnosticsDialog?->external_chat_id ?: '—',
+                ],
+                [
+                    'label' => 'Current contact identity ID',
+                    'key' => 'current_contact_identity_id',
+                    'value' => $diagnosticsDialog?->current_contact_identity_id !== null
+                        ? (string) $diagnosticsDialog->current_contact_identity_id
+                        : '—',
+                ],
+                [
+                    'label' => 'Последнее сообщение',
+                    'key' => 'last_message_at',
+                    'value' => $diagnosticsDialog?->last_message_at?->format('d.m.Y H:i:s') ?? '—',
+                ],
+                [
+                    'label' => 'Последнее входящее',
+                    'key' => 'last_inbound_at',
+                    'value' => $diagnosticsDialog?->last_inbound_at?->format('d.m.Y H:i:s') ?? '—',
+                ],
+                [
+                    'label' => 'Последнее исходящее',
+                    'key' => 'last_outbound_at',
+                    'value' => $diagnosticsDialog?->last_outbound_at?->format('d.m.Y H:i:s') ?? '—',
+                ],
+            ],
+            'identityRows' => [
+                [
+                    'label' => 'Contact identity ID',
+                    'key' => 'contact_identity_id',
+                    'value' => $diagnosticsIdentity?->id !== null ? (string) $diagnosticsIdentity->id : '—',
+                ],
+                [
+                    'label' => 'External user ID',
+                    'key' => 'external_user_id',
+                    'value' => $diagnosticsIdentity?->external_user_id ?: '—',
+                ],
+                [
+                    'label' => 'External username',
+                    'key' => 'external_username',
+                    'value' => filled($diagnosticsIdentity?->external_username)
+                        ? '@'.ltrim((string) $diagnosticsIdentity->external_username, '@')
+                        : '—',
+                ],
+                [
+                    'label' => 'Channel ID',
+                    'key' => 'channel_id',
+                    'value' => $diagnosticsIdentity?->channel_id !== null ? (string) $diagnosticsIdentity->channel_id : '—',
+                ],
+            ],
+            'dedupRows' => [
+                [
+                    'label' => 'Статус дедупликации',
+                    'key' => 'duplicate_review_status',
+                    'value' => static::formatDedupStatusLabel($record->duplicate_review_status),
+                ],
+                [
+                    'label' => 'Основной контакт',
+                    'key' => 'merged_into_contact_id',
+                    'value' => $record->mergedInto !== null
+                        ? sprintf('#%d %s', $record->mergedInto->id, $record->mergedInto->display_name)
+                        : '—',
+                ],
+                [
+                    'label' => 'Склеен',
+                    'key' => 'merged_at',
+                    'value' => $record->merged_at?->format('d.m.Y H:i:s') ?? '—',
+                ],
+                [
+                    'label' => 'Причина',
+                    'key' => 'merge_reason',
+                    'value' => static::formatMergeReason($record->merge_reason),
+                ],
+                [
+                    'label' => 'Триггерный телефон',
+                    'key' => 'merge_trigger_phone',
+                    'value' => $record->merge_trigger_phone ?: '—',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{
      *     isMerged: bool,
      *     dedupStatusLabel: string,
      *     dedupStatusTone: string,
@@ -1146,6 +1302,16 @@ class ContactResource extends Resource
             : '—';
     }
 
+    protected static function formatDedupStatusLabel(?string $value): string
+    {
+        return match ($value) {
+            Contact::DUPLICATE_REVIEW_STATUS_PENDING => 'Нужна проверка',
+            Contact::DUPLICATE_REVIEW_STATUS_RESOLVED => 'Разобрано',
+            Contact::DUPLICATE_REVIEW_STATUS_NONE, null, '' => '—',
+            default => (string) $value,
+        };
+    }
+
     protected static function getDedupStatusColor(Contact $record): string
     {
         return $record->duplicate_review_status === Contact::DUPLICATE_REVIEW_STATUS_PENDING
@@ -1338,6 +1504,36 @@ class ContactResource extends Resource
         ];
     }
 
+    /**
+     * @return array{
+     *     items:list<array{
+     *         type:string,
+     *         title:string,
+     *         description:string,
+     *         timestampLabel:string
+     *     }>,
+     *     hasMore:bool,
+     *     visibleCount:int,
+     *     totalCount:int
+     * }
+     */
+    public static function buildHistoryTimelineViewData(Contact $record, int $visibleCount = 20): array
+    {
+        $timelineItems = app(BuildContactHistoryTimelineAction::class)
+            ->handle($record)
+            ->values();
+
+        $visibleCount = max(20, $visibleCount);
+        $totalCount = $timelineItems->count();
+
+        return [
+            'items' => $timelineItems->take($visibleCount)->all(),
+            'hasMore' => $totalCount > $visibleCount,
+            'visibleCount' => min($visibleCount, $totalCount),
+            'totalCount' => $totalCount,
+        ];
+    }
+
     protected static function formatDialogTimestamp(?Carbon $timestamp): string
     {
         return $timestamp?->format('d.m.Y H:i') ?? '—';
@@ -1468,11 +1664,59 @@ class ContactResource extends Resource
         return static::currentUser()?->canManageContactOwnership() ?? false;
     }
 
+    public static function canCurrentUserViewContactDiagnostics(): bool
+    {
+        return static::currentUser()?->canManageSystem() ?? false;
+    }
+
     protected static function currentUser(): ?User
     {
         $user = auth()->user();
 
         return $user instanceof User ? $user : null;
+    }
+
+    protected static function resolveDiagnosticsDialog(Contact $record, ?Message $latestInboundMessage): ?Dialog
+    {
+        $dialog = $latestInboundMessage?->dialog;
+
+        if ($dialog instanceof Dialog) {
+            $dialog->loadMissing(['channel', 'currentContactIdentity.channel']);
+
+            return $dialog;
+        }
+
+        return $record->dialogs()
+            ->with(['channel', 'currentContactIdentity.channel'])
+            ->orderByDesc('last_message_at')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    protected static function resolveDiagnosticsIdentity(
+        Contact $record,
+        ?Dialog $diagnosticsDialog,
+        ?Message $latestInboundMessage,
+    ): ?ContactIdentity {
+        $identity = $diagnosticsDialog?->currentContactIdentity;
+
+        if ($identity instanceof ContactIdentity) {
+            $identity->loadMissing('channel');
+
+            return $identity;
+        }
+
+        $identity = $latestInboundMessage?->contactIdentity;
+
+        if ($identity instanceof ContactIdentity) {
+            $identity->loadMissing('channel');
+
+            return $identity;
+        }
+
+        $record->loadMissing('primaryIdentity.channel');
+
+        return $record->primaryIdentity;
     }
 
     protected static function resolveDeleteContactPreview(Contact $record): ResolvedContactDeletePreviewResult
