@@ -317,10 +317,7 @@ class ViewDialog extends ViewRecord
             return ContactResource::getUrl('index');
         }
 
-        return ContactResource::getUrl('index', [
-            'tableAction' => 'view',
-            'tableActionRecord' => (string) $contact->id,
-        ]);
+        return ContactResource::getUrl('view', ['record' => $contact]);
     }
 
     protected function resolveCurrentEmployee(): User

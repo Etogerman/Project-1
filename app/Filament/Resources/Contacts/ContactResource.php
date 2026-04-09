@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Contacts;
 
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
+use App\Filament\Resources\Contacts\Pages\ViewContact;
 use App\Data\Contacts\ResolvedContactDeletePreviewResult;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -331,6 +332,7 @@ class ContactResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->recordUrl(fn (Contact $record): string => static::getUrl('view', ['record' => $record]))
             ->columns([
                 TextColumn::make('display_name')
                     ->label('Контакт')
@@ -536,6 +538,7 @@ class ContactResource extends Resource
     {
         return [
             'index' => ManageContacts::route('/'),
+            'view' => ViewContact::route('/{record}'),
         ];
     }
 
@@ -771,7 +774,7 @@ class ContactResource extends Resource
      *     regionOptions: array<string, string>
      * }
      */
-    protected static function buildContactProfileViewData(Contact $record): array
+    public static function buildContactProfileViewData(Contact $record): array
     {
         $effectiveAgeYears = $record->effective_age_years;
         $ageSourceLabel = $record->birth_date !== null
@@ -817,7 +820,7 @@ class ContactResource extends Resource
      *     ageRange: string
      * }
      */
-    protected static function buildCollectorStatusViewData(Contact $record): array
+    public static function buildCollectorStatusViewData(Contact $record): array
     {
         return [
             'statusLabel' => static::formatDataCollectionStatus($record->data_collection_status),
@@ -1041,7 +1044,7 @@ class ContactResource extends Resource
         };
     }
 
-    protected static function formatDataCollectionStatus(?string $status): string
+    public static function formatDataCollectionStatus(?string $status): string
     {
         return match ($status) {
             Contact::DATA_COLLECTION_STATUS_ACTIVE => 'В процессе',
@@ -1059,12 +1062,13 @@ class ContactResource extends Resource
         };
     }
 
-    protected static function formatDataCollectionField(?string $field): string
+    public static function formatDataCollectionField(?string $field): string
     {
         return match ($field) {
             Contact::DATA_COLLECTION_FIELD_FIRST_NAME => 'Имя',
             Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => 'Город проживания',
             Contact::DATA_COLLECTION_FIELD_COUNTRY => 'Страна',
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => 'Регион',
             Contact::DATA_COLLECTION_FIELD_CITY => 'Город',
             Contact::DATA_COLLECTION_FIELD_AGE_RANGE => 'Возраст',
             default => '—',
@@ -1182,7 +1186,7 @@ class ContactResource extends Resource
         };
     }
 
-    protected static function buildOwnershipControlsViewData(Contact $record): array
+    public static function buildOwnershipControlsViewData(Contact $record): array
     {
         $record->loadMissing('assignedUser');
 
@@ -1208,7 +1212,7 @@ class ContactResource extends Resource
      *     availableTags: array<int, string>
      * }
      */
-    protected static function buildTagsViewData(Contact $record): array
+    public static function buildTagsViewData(Contact $record): array
     {
         $record->loadMissing('tags');
         $assignedTagIds = $record->tags
@@ -1254,7 +1258,7 @@ class ContactResource extends Resource
      *     canDeletePhones: bool
      * }
      */
-    protected static function buildPhoneNumbersViewData(Contact $record): array
+    public static function buildPhoneNumbersViewData(Contact $record): array
     {
         $phoneNumbers = $record->relationLoaded('phoneNumbers')
             ? $record->phoneNumbers
@@ -1325,7 +1329,7 @@ class ContactResource extends Resource
      *     }>
      * }
      */
-    protected static function buildDialogsViewData(Contact $record): array
+    public static function buildDialogsViewData(Contact $record): array
     {
         return [
             'messengerName' => $record->name ?? '—',
@@ -1400,7 +1404,7 @@ class ContactResource extends Resource
         return $user?->id;
     }
 
-    protected static function formatAssignedUserLabel(Contact $record): string
+    public static function formatAssignedUserLabel(Contact $record): string
     {
         $record->loadMissing('assignedUser');
 

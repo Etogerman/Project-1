@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
+use App\Filament\Resources\Contacts\Pages\ViewContact;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Models\Channel;
@@ -126,6 +127,185 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$contact])
             ->assertTableActionExists('view', null, $contact)
             ->assertTableActionDoesNotExist('delete', null, $contact);
+    }
+
+    public function test_contact_view_page_renders_flat_general_sections(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $assignee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Ответственный оператор',
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => 'VIP',
+            'slug' => 'vip',
+            'color' => 'success',
+            'is_active' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Имя из мессенджера',
+            'first_name' => 'Герман',
+            'last_name' => 'Абрикосов',
+            'gender' => 'male',
+            'age_years' => 34,
+            'age_range' => '30_39',
+            'birth_date' => '1991-03-02',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'region' => 'Московская область',
+            'region_status' => Contact::REGION_STATUS_RESOLVED,
+            'region_source' => Contact::REGION_SOURCE_MANUAL,
+            'pending_region_candidates' => ['Московская область', 'Москва'],
+            'distance_to_moscow_km' => 0,
+            'distance_to_moscow_status' => Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED,
+            'distance_to_moscow_calculated_at' => now(),
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            'data_collection_started_at' => now()->subHour(),
+            'data_collection_current_field_started_at' => now()->subMinutes(10),
+            'data_collection_attempts_count' => 1,
+            'is_auto_reply_enabled' => true,
+            'assigned_user_id' => $assignee->id,
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+        ]);
+        $contact->tags()->attach($tag);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+            'source' => ContactPhoneNumber::SOURCE_MANUAL,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->assertSee('Абрикосов Герман')
+            ->assertSee('Имя в мессенджере: Имя из мессенджера')
+            ->assertSee('Общее')
+            ->assertSee('Диалоги')
+            ->assertSee('Битрикс24')
+            ->assertSee('История')
+            ->assertSee('Данные клиента')
+            ->assertSee('Работа с контактом')
+            ->assertSee('Локация')
+            ->assertSee('Анкета')
+            ->assertSee('Теги контакта')
+            ->assertSee('Телефоны')
+            ->assertSee('Ответственный')
+            ->assertSee('Автоответы')
+            ->assertDontSee('effective_age_years')
+            ->assertDontSee('pending_region_candidates')
+            ->assertDontSee('data_collection_current_field_started_at')
+            ->assertDontSee('Дедупликация')
+            ->assertDontSee('Диагностика webhook')
+            ->assertDontSee('Профиль')
+            ->assertDontSee('Служебные данные');
+    }
+
+    public function test_admin_can_open_contact_view_page_route(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Маршрут контакта',
+        ]);
+
+        $this->actingAs($admin)
+            ->get(ContactResource::getUrl('view', ['record' => $contact]))
+            ->assertOk()
+            ->assertSee('Маршрут контакта');
+    }
+
+    public function test_contact_view_page_shows_minimal_indicator_for_merged_contact(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Главный клиент',
+            'first_name' => 'Герман',
+            'last_name' => 'Абрикосов',
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $merged->getRouteKey()])
+            ->assertSee('Контакт объединён с основным контактом')
+            ->assertSee('#'.$root->id)
+            ->assertSee($root->display_name)
+            ->assertDontSee('Склейки и проверки дублей')
+            ->assertDontSee('Открытые проверки');
+    }
+
+    public function test_contact_view_page_renders_bitrix_and_history_tabs(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'bitrix24_contact_id' => 'B24-C-100',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_sync_pending' => true,
+            'bitrix24_deal_id' => 'B24-D-200',
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED,
+            'bitrix24_history_sync_pending' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_BITRIX24)
+            ->assertSee('Контакт в Bitrix24')
+            ->assertSee('Сделка в Bitrix24')
+            ->assertSee('История в Bitrix24')
+            ->assertSee('bitrix24_sync_status')
+            ->assertSee('bitrix24_history_sync_pending')
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('История событий контакта')
+            ->assertSee('История событий контакта будет подключена следующим этапом.');
+    }
+
+    public function test_admin_can_update_contact_profile_from_contact_view_page(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Имя из мессенджера',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->call('openEditProfileDialog')
+            ->assertSet('showEditProfileDialog', true)
+            ->set('editingFirstName', 'Герман')
+            ->set('editingLastName', 'Абрикосов')
+            ->set('editingGender', 'male')
+            ->set('editingAgeRange', '30_39')
+            ->set('editingCountry', 'Россия')
+            ->set('editingCity', 'Москва')
+            ->call('saveMountedContactProfile')
+            ->assertHasNoErrors()
+            ->assertSee('Герман')
+            ->assertSee('Абрикосов')
+            ->assertSee('Россия')
+            ->assertSee('Москва');
     }
 
     public function test_contacts_table_hides_merged_contacts_from_default_listing(): void
