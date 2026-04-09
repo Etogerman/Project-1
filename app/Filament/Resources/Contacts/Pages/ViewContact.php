@@ -22,6 +22,8 @@ class ViewContact extends ViewRecord
 
     public const TAB_HISTORY = 'history';
 
+    public const TAB_DIAGNOSTICS = 'diagnostics';
+
     protected static string $resource = ContactResource::class;
 
     protected string $view = 'filament.contacts.pages.view-contact';
@@ -35,6 +37,11 @@ class ViewContact extends ViewRecord
         parent::mount($record);
 
         $this->activeTab = $this->normalizeTab((string) request()->query('tab', self::TAB_GENERAL));
+    }
+
+    public function updatedActiveTab(string $value): void
+    {
+        $this->activeTab = $this->normalizeTab($value);
     }
 
     public function getTitle(): string|Htmlable
@@ -89,6 +96,7 @@ class ViewContact extends ViewRecord
         $collectorStatus = ContactResource::buildCollectorStatusViewData($record);
         $tagsViewData = ContactResource::buildTagsViewData($record);
         $phoneNumbersViewData = ContactResource::buildPhoneNumbersViewData($record);
+        $diagnosticsViewData = ContactResource::buildDiagnosticsViewData($record);
 
         return [
             'activeTab' => $this->activeTab,
@@ -103,6 +111,7 @@ class ViewContact extends ViewRecord
             'profileViewData' => $profileViewData,
             'ownershipControls' => $ownershipControls,
             'collectorStatus' => $collectorStatus,
+            'diagnosticsViewData' => $diagnosticsViewData,
             'questionnaireAction' => $collectorStatus['canResume'] && $collectorStatus['canResumeAction']
                 ? $this->makeAction(
                     method: 'resumeMountedContactDataCollection',
@@ -174,12 +183,18 @@ class ViewContact extends ViewRecord
      */
     protected function buildTabsViewData(): array
     {
-        return [
+        $tabs = [
             $this->makeTab(self::TAB_GENERAL, 'Общее'),
             $this->makeTab(self::TAB_DIALOGS, 'Диалоги'),
             $this->makeTab(self::TAB_BITRIX24, 'Битрикс24'),
             $this->makeTab(self::TAB_HISTORY, 'История'),
         ];
+
+        if (ContactResource::canCurrentUserViewContactDiagnostics()) {
+            $tabs[] = $this->makeTab(self::TAB_DIAGNOSTICS, 'Диагностика');
+        }
+
+        return $tabs;
     }
 
     /**
@@ -428,12 +443,18 @@ class ViewContact extends ViewRecord
 
     protected function normalizeTab(string $tab): string
     {
-        return in_array($tab, [
+        $allowedTabs = [
             self::TAB_GENERAL,
             self::TAB_DIALOGS,
             self::TAB_BITRIX24,
             self::TAB_HISTORY,
-        ], true) ? $tab : self::TAB_GENERAL;
+        ];
+
+        if (ContactResource::canCurrentUserViewContactDiagnostics()) {
+            $allowedTabs[] = self::TAB_DIAGNOSTICS;
+        }
+
+        return in_array($tab, $allowedTabs, true) ? $tab : self::TAB_GENERAL;
     }
 
     protected function resolveHeadingLabel(Contact $record): string

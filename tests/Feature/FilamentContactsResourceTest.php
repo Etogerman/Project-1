@@ -186,6 +186,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Диалоги')
             ->assertSee('Битрикс24')
             ->assertSee('История')
+            ->assertSee('Диагностика')
             ->assertSee('Данные клиента')
             ->assertSee('Имя (мессенджер)')
             ->assertSee('Работа с контактом')
@@ -203,6 +204,110 @@ class FilamentContactsResourceTest extends TestCase
             ->assertDontSee('Диагностика webhook')
             ->assertDontSee('Профиль')
             ->assertDontSee('Служебные данные');
+    }
+
+    public function test_admin_can_view_contact_diagnostics_tab_with_runtime_data(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Root контакт',
+            'first_name' => 'Root',
+            'last_name' => 'Контакт',
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Диагностика',
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now()->subMinute(),
+            'merge_reason' => 'phone_exact_match',
+            'merge_trigger_phone' => '+79990000000',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Runtime',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'runtime-user-100',
+            'external_username' => 'runtime_customer',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'chat-runtime-100',
+            'last_message_at' => now()->subMinute(),
+            'last_inbound_at' => now()->subMinute(),
+            'last_outbound_at' => now(),
+        ]);
+
+        Message::query()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-runtime-100',
+            'external_message_id' => 'msg-runtime-100',
+            'provider_event_key' => 'evt-runtime-100',
+            'text' => 'Проверка диагностики',
+            'raw_payload' => [
+                'debug' => 'payload-runtime-100',
+                'message' => [
+                    'id' => 'msg-runtime-100',
+                ],
+            ],
+            'received_at' => now()->subMinute(),
+            'auto_reply_sent_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->assertSee('Диагностика')
+            ->set('activeTab', ViewContact::TAB_DIAGNOSTICS)
+            ->assertSee('Последний inbound webhook')
+            ->assertSee('Route context')
+            ->assertSee('Identity')
+            ->assertSee('Дедупликация')
+            ->assertSee('msg-runtime-100')
+            ->assertSee('evt-runtime-100')
+            ->assertSee('payload-runtime-100')
+            ->assertSee('Ответ отправлен')
+            ->assertSee('Telegram Runtime')
+            ->assertSee('chat-runtime-100')
+            ->assertSee((string) $identity->id)
+            ->assertSee('@runtime_customer')
+            ->assertSee('Нужна проверка')
+            ->assertSee('+79990000000')
+            ->assertSee('Совпадение телефона');
+    }
+
+    public function test_employee_does_not_see_contact_diagnostics_tab_or_diagnostics_query(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт без диагностики',
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->assertDontSee('Диагностика');
+
+        $this->actingAs($employee)
+            ->get(ContactResource::getUrl('view', ['record' => $contact, 'tab' => ViewContact::TAB_DIAGNOSTICS]))
+            ->assertOk()
+            ->assertSee('Данные клиента')
+            ->assertDontSee('Последний inbound webhook')
+            ->assertDontSee('Route context');
     }
 
     public function test_admin_can_open_contact_view_page_route(): void
