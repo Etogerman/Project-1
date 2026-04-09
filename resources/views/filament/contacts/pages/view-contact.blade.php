@@ -142,6 +142,45 @@
                     </section>
                 @endforeach
             </div>
+        @elseif ($activeTab === 'diagnostics')
+            <div data-role="contact-diagnostics-tab" class="ac-contact-page__stack">
+                @include('filament.contacts.partials.contact-diagnostics-section', [
+                    'dataRole' => 'contact-diagnostics-latest-inbound',
+                    'title' => 'Последний inbound webhook',
+                    'subtitle' => 'Последнее входящее сообщение и его технический payload.',
+                    'rows' => $diagnosticsViewData['latestInboundRows'],
+                    'showFieldKeys' => $showFieldKeys,
+                    'emptyState' => $diagnosticsViewData['hasLatestInboundMessage']
+                        ? null
+                        : 'Inbound-сообщений для этого контакта ещё не было.',
+                    'payloadLabel' => 'Последний raw payload',
+                    'payload' => $diagnosticsViewData['latestInboundPayload'],
+                ])
+
+                @include('filament.contacts.partials.contact-diagnostics-section', [
+                    'dataRole' => 'contact-diagnostics-route-context',
+                    'title' => 'Route context',
+                    'subtitle' => 'Текущий dialog route и технический контекст маршрутизации.',
+                    'rows' => $diagnosticsViewData['routeContextRows'],
+                    'showFieldKeys' => $showFieldKeys,
+                ])
+
+                @include('filament.contacts.partials.contact-diagnostics-section', [
+                    'dataRole' => 'contact-diagnostics-identity',
+                    'title' => 'Identity',
+                    'subtitle' => 'Текущая identity контакта для активного dialog route.',
+                    'rows' => $diagnosticsViewData['identityRows'],
+                    'showFieldKeys' => $showFieldKeys,
+                ])
+
+                @include('filament.contacts.partials.contact-diagnostics-section', [
+                    'dataRole' => 'contact-diagnostics-dedup',
+                    'title' => 'Дедупликация',
+                    'subtitle' => 'Техническое dedup-состояние контакта без возврата отдельной секции в `Общее`.',
+                    'rows' => $diagnosticsViewData['dedupRows'],
+                    'showFieldKeys' => $showFieldKeys,
+                ])
+            </div>
         @else
             <section data-role="contact-history-tab" class="ac-surface ac-surface--secondary ac-contact-history-placeholder">
                 <div class="ac-surface__header ac-surface__header--centered">
