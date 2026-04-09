@@ -182,21 +182,9 @@
                 ])
             </div>
         @else
-            <section data-role="contact-history-tab" class="ac-surface ac-surface--secondary ac-contact-history-placeholder">
-                <div class="ac-surface__header ac-surface__header--centered">
-                    <div class="ac-surface__title-group">
-                        <p class="ac-surface__eyebrow">История</p>
-                        <h3 class="ac-surface__title">История событий контакта</h3>
-                        <p class="ac-surface__subtitle">
-                            На первом этапе здесь только каркас вкладки. Таймлайн появится следующим шагом.
-                        </p>
-                    </div>
-                </div>
-
-                <div class="ac-empty-state ac-surface__divider">
-                    История событий контакта будет подключена следующим этапом.
-                </div>
-            </section>
+            <div data-role="contact-history-tab" class="ac-contact-page__full-width">
+                @include('filament.contacts.partials.contact-history-timeline', $historyViewData)
+            </div>
         @endif
     </div>
 </x-filament-panels::page>

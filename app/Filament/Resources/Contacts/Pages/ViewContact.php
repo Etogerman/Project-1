@@ -32,11 +32,19 @@ class ViewContact extends ViewRecord
 
     public string $activeTab = self::TAB_GENERAL;
 
+    public int $historyVisibleCount = 20;
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
 
         $this->activeTab = $this->normalizeTab((string) request()->query('tab', self::TAB_GENERAL));
+        $this->historyVisibleCount = 20;
+    }
+
+    public function loadMoreHistory(): void
+    {
+        $this->historyVisibleCount += 20;
     }
 
     public function updatedActiveTab(string $value): void
@@ -96,7 +104,9 @@ class ViewContact extends ViewRecord
         $collectorStatus = ContactResource::buildCollectorStatusViewData($record);
         $tagsViewData = ContactResource::buildTagsViewData($record);
         $phoneNumbersViewData = ContactResource::buildPhoneNumbersViewData($record);
-        $diagnosticsViewData = ContactResource::buildDiagnosticsViewData($record);
+        $diagnosticsViewData = $this->activeTab === self::TAB_DIAGNOSTICS
+            ? ContactResource::buildDiagnosticsViewData($record)
+            : null;
 
         return [
             'activeTab' => $this->activeTab,
@@ -123,6 +133,9 @@ class ViewContact extends ViewRecord
             'tagsViewData' => $tagsViewData,
             'phoneNumbersViewData' => $phoneNumbersViewData,
             'dialogsViewData' => $dialogsViewData,
+            'historyViewData' => $this->activeTab === self::TAB_HISTORY
+                ? ContactResource::buildHistoryTimelineViewData($record, $this->historyVisibleCount)
+                : null,
         ];
     }
 
