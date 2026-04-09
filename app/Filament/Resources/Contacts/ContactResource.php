@@ -16,6 +16,7 @@ use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\BuildContactHistoryTimelineAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
@@ -1500,6 +1501,36 @@ class ContactResource extends Resource
         return [
             'messengerName' => $record->name ?? '—',
             'dialogs' => app(LoadContactDialogsOverviewAction::class)->handle($record)->all(),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     items:list<array{
+     *         type:string,
+     *         title:string,
+     *         description:string,
+     *         timestampLabel:string
+     *     }>,
+     *     hasMore:bool,
+     *     visibleCount:int,
+     *     totalCount:int
+     * }
+     */
+    public static function buildHistoryTimelineViewData(Contact $record, int $visibleCount = 20): array
+    {
+        $timelineItems = app(BuildContactHistoryTimelineAction::class)
+            ->handle($record)
+            ->values();
+
+        $visibleCount = max(20, $visibleCount);
+        $totalCount = $timelineItems->count();
+
+        return [
+            'items' => $timelineItems->take($visibleCount)->all(),
+            'hasMore' => $totalCount > $visibleCount,
+            'visibleCount' => min($visibleCount, $totalCount),
+            'totalCount' => $totalCount,
         ];
     }
 

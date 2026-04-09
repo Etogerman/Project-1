@@ -359,6 +359,10 @@ class FilamentContactsResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
         ]);
+        $rootContact = Contact::factory()->create([
+            'first_name' => 'Основной',
+            'last_name' => 'Контакт',
+        ]);
         $contact = Contact::factory()->create([
             'bitrix24_contact_id' => 'B24-C-100',
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
@@ -367,7 +371,39 @@ class FilamentContactsResourceTest extends TestCase
             'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
             'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED,
             'bitrix24_history_sync_pending' => false,
+            'merged_into_contact_id' => $rootContact->id,
+            'merged_at' => now()->subDay(),
+            'data_collection_started_at' => now()->subDays(3),
+            'data_collection_completed_at' => now()->subDays(2),
         ]);
+        DB::table('contacts')
+            ->where('id', $contact->id)
+            ->update([
+                'created_at' => now()->subDays(5),
+                'updated_at' => now()->subDay(),
+            ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'history-dialog-100',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'history-chat-100',
+        ]);
+        DB::table('dialogs')
+            ->where('id', $dialog->id)
+            ->update([
+                'created_at' => now()->subDays(4),
+                'updated_at' => now()->subDays(4),
+            ]);
 
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
@@ -379,7 +415,149 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('bitrix24_history_sync_pending')
             ->set('activeTab', ViewContact::TAB_HISTORY)
             ->assertSee('История событий контакта')
-            ->assertSee('История событий контакта будет подключена следующим этапом.');
+            ->assertSeeInOrder([
+                'Контакт объединён',
+                'Анкета завершена',
+                'Анкета начата',
+                'Появился диалог',
+                'Контакт создан',
+            ])
+            ->assertSee('Контакт объединён с основным контактом')
+            ->assertSee('MAX Support')
+            ->assertDontSee('История событий контакта будет подключена следующим этапом.');
+    }
+
+    public function test_contact_history_tab_does_not_render_message_text(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        DB::table('contacts')
+            ->where('id', $contact->id)
+            ->update([
+                'created_at' => now()->subDays(2),
+                'updated_at' => now()->subDays(2),
+            ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'history-message-100',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'message-history-chat-100',
+        ]);
+        DB::table('dialogs')
+            ->where('id', $dialog->id)
+            ->update([
+                'created_at' => now()->subDay(),
+                'updated_at' => now()->subDay(),
+            ]);
+        Message::query()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'message-history-chat-100',
+            'external_message_id' => 'message-history-100',
+            'text' => 'Уникальный текст сообщения для истории',
+            'provider_event_key' => 'provider-history-100',
+            'received_at' => now()->subHours(12),
+            'raw_payload' => ['message' => 'payload'],
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('История событий контакта')
+            ->assertSee('Контакт создан')
+            ->assertDontSee('Уникальный текст сообщения для истории');
+    }
+
+    public function test_contact_history_tab_supports_load_more(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        DB::table('contacts')
+            ->where('id', $contact->id)
+            ->update([
+                'created_at' => now()->subDays(10),
+                'updated_at' => now()->subDays(10),
+            ]);
+
+        foreach (range(1, 21) as $index) {
+            $channel = Channel::factory()->create([
+                'name' => 'Канал '.$index,
+                'platform' => $index % 2 === 0 ? Channel::PLATFORM_MAX : Channel::PLATFORM_TELEGRAM,
+            ]);
+            $identity = ContactIdentity::factory()->create([
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'external_user_id' => 'history-load-more-'.$index,
+            ]);
+            $dialog = Dialog::factory()->create([
+                'contact_id' => $contact->id,
+                'channel_id' => $channel->id,
+                'current_contact_identity_id' => $identity->id,
+                'external_chat_id' => 'history-load-more-chat-'.$index,
+            ]);
+
+            DB::table('dialogs')
+                ->where('id', $dialog->id)
+                ->update([
+                    'created_at' => now()->subMinutes($index),
+                    'updated_at' => now()->subMinutes($index),
+                ]);
+        }
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('Показать ещё')
+            ->assertDontSee('Канал 21')
+            ->call('loadMoreHistory')
+            ->assertSee('Канал 21')
+            ->assertSee('Контакт создан');
+    }
+
+    public function test_contact_history_tab_renders_empty_state_without_events(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        DB::table('contacts')
+            ->where('id', $contact->id)
+            ->update([
+                'created_at' => null,
+                'updated_at' => null,
+                'data_collection_started_at' => null,
+                'data_collection_completed_at' => null,
+                'merged_at' => null,
+            ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('История событий контакта')
+            ->assertSee('По этому контакту пока нет событий для вкладки «История».')
+            ->assertDontSee('Показать ещё');
     }
 
     public function test_admin_can_update_contact_profile_from_contact_view_page(): void
