@@ -4,6 +4,7 @@ namespace App\Services\Bots;
 
 use App\Models\AutoReplyRule;
 use App\Models\Contact;
+use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -86,104 +87,56 @@ class BotAutoReplyService
             return;
         }
 
-        $externalChatId = $storedMessage->external_chat_id;
-        $externalUserId = $storedMessage->contactIdentity?->external_user_id;
-
         foreach ($matchedRules as $matchedRule) {
-            $replyText = (string) $matchedRule->reply_text;
-            $autoReplySource = 'rule';
-            $buttonType = $this->resolveButtonType($matchedRule, $channel);
-
-            try {
-                $this->channelActivityLogger->info(
-                    $channel,
-                    'bot.reply_rule_matched',
-                    'Выбрано правило автоответа.',
-                    $baseContext + [
-                        'auto_reply_source' => $autoReplySource,
-                        'button_type' => $buttonType,
-                        'rule_id' => $matchedRule->id,
-                        'rule_name' => $matchedRule->display_name,
-                        'match_scope' => $matchedRule->match_scope,
-                        'contact_phone_condition' => $matchedRule->contact_phone_condition,
-                        'keyword' => $matchedRule->keyword,
-                    ],
-                );
-
-                Log::info('bot auto reply started', [
-                        'channel_id' => $channel->id,
-                        'platform' => $channel->platform,
-                        'message_id' => $storedMessage->id,
-                        'external_chat_id' => $externalChatId,
-                        'external_user_id' => $externalUserId,
-                        'auto_reply_mode' => $autoReplyMode,
-                        'auto_reply_source' => $autoReplySource,
-                        'button_type' => $buttonType,
-                        'rule_id' => $matchedRule->id,
-                        'rule_name' => $matchedRule->display_name,
-                        'match_scope' => $matchedRule->match_scope,
-                        'contact_phone_condition' => $matchedRule->contact_phone_condition,
-                        'contact_has_phone' => $contactHasPhone,
-                ]);
-
-                $deliveryResult = match ($channel->platform) {
-                    \App\Models\Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
-                        $channel,
-                        $externalChatId,
-                        $externalUserId,
-                        $replyText,
-                        $this->buildTelegramReplyMarkup($matchedRule, $channel),
-                    ),
-                    \App\Models\Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
-                        $channel,
-                        $externalChatId,
-                        $externalUserId,
-                        $replyText,
-                        $this->buildMaxAttachments($matchedRule, $channel),
-                    ),
-                    default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-                };
-
-                $this->storeOutboundAutoReplyMessageAction->handle($channel, $storedMessage, $deliveryResult, $matchedRule);
-
-                $channel->markReplySent();
-
-                Log::info('bot auto reply sent', [
-                    'channel_id' => $channel->id,
-                    'platform' => $channel->platform,
-                    'message_id' => $storedMessage->id,
-                    'external_chat_id' => $externalChatId,
-                    'external_user_id' => $externalUserId,
-                    'auto_reply_mode' => $autoReplyMode,
-                    'auto_reply_source' => $autoReplySource,
-                    'button_type' => $buttonType,
-                    'match_scope' => $matchedRule->match_scope,
-                    'contact_phone_condition' => $matchedRule->contact_phone_condition,
-                    'contact_has_phone' => $contactHasPhone,
-                    'outbound_external_message_id' => $deliveryResult->externalMessageId,
-                    'rule_id' => $matchedRule->id,
-                    'rule_name' => $matchedRule->display_name,
-                ]);
-                $this->channelActivityLogger->info(
-                    $channel,
-                    'bot.reply_sent',
-                    'Автоответ отправлен.',
-                    $baseContext + [
-                        'auto_reply_source' => $autoReplySource,
-                        'button_type' => $buttonType,
-                        'match_scope' => $matchedRule->match_scope,
-                        'contact_phone_condition' => $matchedRule->contact_phone_condition,
-                        'external_chat_id' => $externalChatId,
-                        'external_user_id' => $externalUserId,
-                        'outbound_external_message_id' => $deliveryResult->externalMessageId,
-                        'rule_id' => $matchedRule->id,
-                        'rule_name' => $matchedRule->display_name,
-                    ],
-                );
-            } catch (Throwable $throwable) {
-                throw new AutoReplyDispatchException($matchedRule, $buttonType, $throwable);
-            }
+            $this->dispatchResolvedRule($storedMessage, $matchedRule, $channel, $contact, $baseContext);
         }
+    }
+
+    public function handleResolvedRule(
+        Message $storedMessage,
+        AutoReplyRule $matchedRule,
+        ?Dialog $routeDialog = null,
+    ): void {
+        $storedMessage->loadMissing(['channel', 'contactIdentity', 'contact']);
+        $routeDialog?->loadMissing(['channel', 'currentContactIdentity']);
+
+        $channel = $routeDialog?->channel ?? $storedMessage->channel;
+        $contact = $routeDialog?->contact ?? $storedMessage->contact;
+
+        if ($channel === null) {
+            throw new InvalidArgumentException("Inbound message [{$storedMessage->id}] does not have a channel.");
+        }
+
+        if (! $contact instanceof Contact) {
+            throw new InvalidArgumentException("Inbound message [{$storedMessage->id}] does not have a contact.");
+        }
+
+        $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY;
+        $contactHasPhone = $contact->phoneNumbers()->exists();
+        $baseContext = [
+            'platform' => $channel->platform,
+            'message_id' => $storedMessage->id,
+            'provider_event_key' => $storedMessage->provider_event_key,
+            'external_message_id' => $storedMessage->external_message_id,
+            'auto_reply_mode' => $autoReplyMode,
+            'contact_has_phone' => $contactHasPhone,
+            'button_type' => null,
+        ];
+
+        if (! $contact->isAutoReplyEnabled()) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'bot.reply_skipped_contact_disabled',
+                'Автоответ отключён для этого контакта.',
+                $baseContext + [
+                    'auto_reply_source' => 'skipped_contact_disabled',
+                ],
+            );
+
+            return;
+        }
+
+        $this->dispatchResolvedRule($storedMessage, $matchedRule, $channel, $contact, $baseContext, $routeDialog);
     }
 
     /**
@@ -276,5 +229,123 @@ class BotAutoReplyService
     protected function resolveButtonType(AutoReplyRule $matchedRule, \App\Models\Channel $channel): ?string
     {
         return $matchedRule->getButtonTypeForChannel($channel);
+    }
+
+    /**
+     * @param  array<string, mixed>  $baseContext
+     */
+    protected function dispatchResolvedRule(
+        Message $storedMessage,
+        AutoReplyRule $matchedRule,
+        \App\Models\Channel $channel,
+        Contact $contact,
+        array $baseContext,
+        ?Dialog $routeDialog = null,
+    ): void {
+        $routeDialog?->loadMissing(['currentContactIdentity']);
+
+        $replyText = (string) $matchedRule->reply_text;
+        $autoReplySource = 'rule';
+        $buttonType = $this->resolveButtonType($matchedRule, $channel);
+        $externalChatId = $routeDialog?->external_chat_id ?? $storedMessage->external_chat_id;
+        $externalUserId = $routeDialog?->currentContactIdentity?->external_user_id ?? $storedMessage->contactIdentity?->external_user_id;
+        $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY;
+        $contactHasPhone = $contact->phoneNumbers()->exists();
+
+        try {
+            $this->channelActivityLogger->info(
+                $channel,
+                'bot.reply_rule_matched',
+                'Выбрано правило автоответа.',
+                $baseContext + [
+                    'auto_reply_source' => $autoReplySource,
+                    'button_type' => $buttonType,
+                    'rule_id' => $matchedRule->id,
+                    'rule_name' => $matchedRule->display_name,
+                    'match_scope' => $matchedRule->match_scope,
+                    'contact_phone_condition' => $matchedRule->contact_phone_condition,
+                    'keyword' => $matchedRule->keyword,
+                ],
+            );
+
+            Log::info('bot auto reply started', [
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'message_id' => $storedMessage->id,
+                'external_chat_id' => $externalChatId,
+                'external_user_id' => $externalUserId,
+                'auto_reply_mode' => $autoReplyMode,
+                'auto_reply_source' => $autoReplySource,
+                'button_type' => $buttonType,
+                'rule_id' => $matchedRule->id,
+                'rule_name' => $matchedRule->display_name,
+                'match_scope' => $matchedRule->match_scope,
+                'contact_phone_condition' => $matchedRule->contact_phone_condition,
+                'contact_has_phone' => $contactHasPhone,
+            ]);
+
+            $deliveryResult = match ($channel->platform) {
+                \App\Models\Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
+                    $channel,
+                    $externalChatId,
+                    $externalUserId,
+                    $replyText,
+                    $this->buildTelegramReplyMarkup($matchedRule, $channel),
+                ),
+                \App\Models\Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
+                    $channel,
+                    $externalChatId,
+                    $externalUserId,
+                    $replyText,
+                    $this->buildMaxAttachments($matchedRule, $channel),
+                ),
+                default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
+            };
+
+            $this->storeOutboundAutoReplyMessageAction->handle(
+                $channel,
+                $storedMessage,
+                $deliveryResult,
+                $matchedRule,
+                $routeDialog,
+            );
+
+            $channel->markReplySent();
+
+            Log::info('bot auto reply sent', [
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'message_id' => $storedMessage->id,
+                'external_chat_id' => $externalChatId,
+                'external_user_id' => $externalUserId,
+                'auto_reply_mode' => $autoReplyMode,
+                'auto_reply_source' => $autoReplySource,
+                'button_type' => $buttonType,
+                'match_scope' => $matchedRule->match_scope,
+                'contact_phone_condition' => $matchedRule->contact_phone_condition,
+                'contact_has_phone' => $contactHasPhone,
+                'outbound_external_message_id' => $deliveryResult->externalMessageId,
+                'rule_id' => $matchedRule->id,
+                'rule_name' => $matchedRule->display_name,
+            ]);
+            $this->channelActivityLogger->info(
+                $channel,
+                'bot.reply_sent',
+                'Автоответ отправлен.',
+                $baseContext + [
+                    'auto_reply_source' => $autoReplySource,
+                    'button_type' => $buttonType,
+                    'match_scope' => $matchedRule->match_scope,
+                    'contact_phone_condition' => $matchedRule->contact_phone_condition,
+                    'external_chat_id' => $externalChatId,
+                    'external_user_id' => $externalUserId,
+                    'outbound_external_message_id' => $deliveryResult->externalMessageId,
+                    'rule_id' => $matchedRule->id,
+                    'rule_name' => $matchedRule->display_name,
+                ],
+            );
+        } catch (Throwable $throwable) {
+            throw new AutoReplyDispatchException($matchedRule, $buttonType, $throwable);
+        }
     }
 }

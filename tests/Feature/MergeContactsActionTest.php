@@ -341,6 +341,197 @@ class MergeContactsActionTest extends TestCase
         $this->assertDatabaseCount('contact_merge_logs', 0);
     }
 
+    public function test_it_preserves_secondary_pending_auto_reply_source_message_when_merging_dialogs(): void
+    {
+        $channel = Channel::factory()->create();
+        $primary = Contact::factory()->create();
+        $secondary = Contact::factory()->create();
+
+        $primaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'primary-user',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'secondary-user',
+        ]);
+
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+            'external_chat_id' => 'chat-primary',
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'chat-secondary',
+        ]);
+
+        $secondaryPendingSource = Message::factory()->create([
+            'dialog_id' => $secondaryDialog->id,
+            'contact_id' => $secondary->id,
+            'contact_identity_id' => $secondaryIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'chat-secondary',
+            'message_parameter' => 'promo-secondary',
+            'received_at' => now()->subMinutes(5),
+        ]);
+
+        $secondaryDialog->forceFill([
+            'pending_auto_reply_source_message_id' => $secondaryPendingSource->id,
+        ])->save();
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $primary->refresh();
+        $secondary->refresh();
+        $primaryDialog->refresh();
+        $secondaryPendingSource->refresh();
+
+        $this->assertSame($primary->id, $secondary->merged_into_contact_id);
+        $this->assertSame($secondaryPendingSource->id, $primaryDialog->pending_auto_reply_source_message_id);
+        $this->assertSame($primary->id, $secondaryPendingSource->contact_id);
+        $this->assertSame($primaryDialog->id, $secondaryPendingSource->dialog_id);
+        $this->assertDatabaseMissing('dialogs', [
+            'id' => $secondaryDialog->id,
+        ]);
+    }
+
+    public function test_it_keeps_newer_pending_auto_reply_source_message_by_received_at_when_merging_dialogs(): void
+    {
+        $channel = Channel::factory()->create();
+        $primary = Contact::factory()->create();
+        $secondary = Contact::factory()->create();
+
+        $primaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'primary-user',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'secondary-user',
+        ]);
+
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+        ]);
+
+        $primaryPendingSource = Message::factory()->create([
+            'dialog_id' => $primaryDialog->id,
+            'contact_id' => $primary->id,
+            'contact_identity_id' => $primaryIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_parameter' => 'older-parameter',
+            'received_at' => now()->subMinutes(20),
+        ]);
+        $secondaryPendingSource = Message::factory()->create([
+            'dialog_id' => $secondaryDialog->id,
+            'contact_id' => $secondary->id,
+            'contact_identity_id' => $secondaryIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_parameter' => 'newer-parameter',
+            'received_at' => now()->subMinutes(5),
+        ]);
+
+        $primaryDialog->forceFill([
+            'pending_auto_reply_source_message_id' => $primaryPendingSource->id,
+        ])->save();
+        $secondaryDialog->forceFill([
+            'pending_auto_reply_source_message_id' => $secondaryPendingSource->id,
+        ])->save();
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $primaryDialog->refresh();
+
+        $this->assertSame($secondaryPendingSource->id, $primaryDialog->pending_auto_reply_source_message_id);
+    }
+
+    public function test_it_keeps_newer_pending_auto_reply_source_message_by_id_when_received_at_matches(): void
+    {
+        $channel = Channel::factory()->create();
+        $primary = Contact::factory()->create();
+        $secondary = Contact::factory()->create();
+        $receivedAt = now()->subMinutes(10);
+
+        $primaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'primary-user',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'secondary-user',
+        ]);
+
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+        ]);
+
+        $primaryPendingSource = Message::factory()->create([
+            'dialog_id' => $primaryDialog->id,
+            'contact_id' => $primary->id,
+            'contact_identity_id' => $primaryIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_parameter' => 'same-time-primary',
+            'received_at' => $receivedAt,
+        ]);
+        $secondaryPendingSource = Message::factory()->create([
+            'dialog_id' => $secondaryDialog->id,
+            'contact_id' => $secondary->id,
+            'contact_identity_id' => $secondaryIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_parameter' => 'same-time-secondary',
+            'received_at' => $receivedAt,
+        ]);
+
+        $primaryDialog->forceFill([
+            'pending_auto_reply_source_message_id' => $primaryPendingSource->id,
+        ])->save();
+        $secondaryDialog->forceFill([
+            'pending_auto_reply_source_message_id' => $secondaryPendingSource->id,
+        ])->save();
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $primaryDialog->refresh();
+
+        $this->assertTrue($secondaryPendingSource->id > $primaryPendingSource->id);
+        $this->assertSame($secondaryPendingSource->id, $primaryDialog->pending_auto_reply_source_message_id);
+    }
+
     public function test_it_rolls_back_when_merge_log_insert_fails(): void
     {
         $channel = Channel::factory()->create();
