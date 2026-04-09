@@ -352,12 +352,18 @@ Abrikosoff Connector — операторская платформа для ра
 - локальный review diff
 - commit
 - push
-- draft PR
+- draft PR в `staging`
 - CI
 - финальный self-review
-- merge
-- deploy-check
-- post-deploy smoke
+- merge в `staging`
+- staging deploy-check
+- staging smoke
+- отдельный PR в `main` из проверенного diff текущего шага
+- CI
+- финальный self-review
+- merge в `main`
+- production deploy-check
+- production smoke
 - закрытие issue
 
 Новый кодовый шаг начинается только после:
@@ -423,10 +429,10 @@ Abrikosoff Connector — операторская платформа для ра
 
 Пример формата конца этапа:
 - `Что дальше:`
-- `1. COMMIT`
-- `2. COMMIT + PUSH`
-- `3. COMMIT + PUSH + DRAFT PR`
-- `Рекомендация: 1. COMMIT`
+- `1. commit`
+- `2. commit + push`
+- `3. commit + push + draft PR`
+- `Рекомендация: 1. commit`
 - `Почему: изменения готовы локально, но перед публикацией лучше оставить
   пользователю отдельную точку контроля.`
 
@@ -438,6 +444,14 @@ Abrikosoff Connector — операторская платформа для ра
   параллельные implementation- и policy-stream'ы не открываются,
   пока текущий шаг не завершён полностью или не отложен явно
 - новые clean streams режутся от `origin/main`, а не от stale mixed-ветки
+- `staging` используется как обязательный интеграционный gate, а не как база
+  для новых веток
+- путь публикации по умолчанию: `codex/... -> PR в staging -> staging smoke ->
+  отдельный PR в main`
+- PR `staging -> main` запрещён
+- в `main` идёт только отдельный PR из проверенного diff текущего шага:
+  обычно из той же `codex/...` ветки или из отдельной clean-ветки
+  с тем же validated diff
 - residual diff audit обязателен только для extraction из mixed/reference
   контекста, а не для каждого обычного нового шага от свежего `main`
 - branch создаётся только перед кодовой реализацией, а не заранее
@@ -459,9 +473,11 @@ Abrikosoff Connector — операторская платформа для ра
 Новый кодовый шаг запрещён, если предыдущий шаг ещё не закрыт полностью.
 Блокирующими считаются любые из состояний:
 - есть локальный незапубликованный diff по текущему шагу
-- есть открытый draft PR или обычный PR
-- PR смержен, но изменение ещё не выкачено в production
-- deploy прошёл, но post-deploy smoke-check ещё не завершён
+- есть открытый draft PR или обычный PR в `staging` или `main`
+- PR в `staging` смержен, но staging deploy или staging smoke-check ещё не завершён
+- staging smoke завершён, но PR в `main` для этого же diff ещё не проведён
+- PR в `main` смержен, но изменение ещё не выкачено в production
+- production deploy прошёл, но production smoke-check ещё не завершён
 
 Пока такой хвост существует, агент может только:
 - доводить этот же шаг до конца
@@ -470,7 +486,8 @@ Abrikosoff Connector — операторская платформа для ра
 
 Перед стартом нового кодового шага агент обязан сделать preflight-check:
 - есть ли активный PR по предыдущему шагу
-- есть ли незавершённый deploy или post-deploy smoke
+- есть ли незавершённый staging deploy или staging smoke
+- есть ли незавершённый production deploy или production smoke
 
 Если хвост найден, агент не начинает новую реализацию и сначала явно сообщает
 об этом пользователю.
