@@ -125,7 +125,7 @@ class User extends Authenticatable implements FilamentUser
 
     public function canAddContactTimelineComments(): bool
     {
-        return $this->canViewWorkspaces();
+        return $this->canManageContactWorkspaceMutations();
     }
 
     public function canDeleteContacts(): bool

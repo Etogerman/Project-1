@@ -882,8 +882,11 @@ trait InteractsWithContactWorkspace
     protected function canCurrentEmployeeAddContactHistoryComments(): bool
     {
         $employee = auth()->user();
+        $contact = $this->resolveWorkspaceContact();
 
         return $employee instanceof User
+            && $contact instanceof Contact
+            && ! $contact->isMerged()
             && $employee->canAddContactTimelineComments();
     }
 
