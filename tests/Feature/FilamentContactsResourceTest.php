@@ -350,8 +350,34 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Контакт объединён с основным контактом')
             ->assertSee('#'.$root->id)
             ->assertSee($root->display_name)
+            ->assertDontSee('История')
             ->assertDontSee('Склейки и проверки дублей')
             ->assertDontSee('Открытые проверки');
+    }
+
+    public function test_merged_contact_history_query_falls_back_to_general_tab(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Основной контакт',
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(ContactResource::getUrl('view', ['record' => $merged, 'tab' => ViewContact::TAB_HISTORY]))
+            ->assertOk()
+            ->assertSee('Данные клиента')
+            ->assertSee('Контакт объединён с основным контактом')
+            ->assertDontSee('История событий контакта')
+            ->assertDontSee('Комментарий оператора')
+            ->assertDontSee('contact-tab-history');
     }
 
     public function test_contact_view_page_renders_bitrix_and_history_tabs(): void
