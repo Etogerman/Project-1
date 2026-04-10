@@ -4,6 +4,7 @@ namespace App\Services\Contacts;
 
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactTimelineEvent;
 use App\Models\Dialog;
 use Illuminate\Support\Collection;
 
@@ -23,18 +24,22 @@ class BuildContactHistoryTimelineAction
      * @return Collection<int, array{
      *     type:string,
      *     title:string,
-     *     description:string,
+     *     description:?string,
+     *     body:?string,
+     *     actorName:?string,
      *     timestampLabel:string
      * }>
      */
     public function handle(Contact $contact): Collection
     {
-        $contact->loadMissing(['dialogs.channel', 'mergedInto']);
+        $contact->loadMissing(['dialogs.channel', 'mergedInto', 'timelineEvents.actorUser']);
 
         /** @var Collection<int, array{
          *     type:string,
          *     title:string,
-         *     description:string,
+         *     description:?string,
+         *     body:?string,
+         *     actorName:?string,
          *     timestampLabel:string,
          *     sortTimestamp:int,
          *     sortPriority:int,
@@ -102,6 +107,27 @@ class BuildContactHistoryTimelineAction
             ));
         }
 
+        foreach ($contact->timelineEvents as $timelineEvent) {
+            if (! $timelineEvent instanceof ContactTimelineEvent || $timelineEvent->occurred_at === null) {
+                continue;
+            }
+
+            if ($timelineEvent->event_type !== ContactTimelineEvent::EVENT_OPERATOR_COMMENT) {
+                continue;
+            }
+
+            $items->push($this->makeItem(
+                type: ContactTimelineEvent::EVENT_OPERATOR_COMMENT,
+                title: 'Комментарий оператора',
+                description: null,
+                body: $timelineEvent->body ?: null,
+                actorName: $this->formatCommentActorName($timelineEvent),
+                timestamp: $timelineEvent->occurred_at,
+                sortPriority: 90,
+                sortId: (int) $timelineEvent->id,
+            ));
+        }
+
         return $items
             ->sort(static function (array $left, array $right): int {
                 $timestampComparison = $right['sortTimestamp'] <=> $left['sortTimestamp'];
@@ -130,7 +156,9 @@ class BuildContactHistoryTimelineAction
      * @return array{
      *     type:string,
      *     title:string,
-     *     description:string,
+     *     description:?string,
+     *     body:?string,
+     *     actorName:?string,
      *     timestampLabel:string,
      *     sortTimestamp:int,
      *     sortPriority:int,
@@ -140,15 +168,19 @@ class BuildContactHistoryTimelineAction
     private function makeItem(
         string $type,
         string $title,
-        string $description,
+        ?string $description,
         \DateTimeInterface $timestamp,
         int $sortPriority,
         int $sortId,
+        ?string $body = null,
+        ?string $actorName = null,
     ): array {
         return [
             'type' => $type,
             'title' => $title,
             'description' => $description,
+            'body' => $body,
+            'actorName' => $actorName,
             'timestampLabel' => $timestamp->format('d.m.Y H:i:s'),
             'sortTimestamp' => $timestamp->getTimestamp(),
             'sortPriority' => $sortPriority,
@@ -186,5 +218,20 @@ class BuildContactHistoryTimelineAction
         }
 
         return 'Контакт объединён с основным контактом.';
+    }
+
+    private function formatCommentActorName(ContactTimelineEvent $timelineEvent): string
+    {
+        $actor = $timelineEvent->actorUser;
+
+        if (filled($actor?->name)) {
+            return (string) $actor->name;
+        }
+
+        if ($timelineEvent->actor_user_id !== null) {
+            return 'Сотрудник #'.$timelineEvent->actor_user_id;
+        }
+
+        return 'Неизвестный сотрудник';
     }
 }
