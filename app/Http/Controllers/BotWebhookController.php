@@ -11,6 +11,7 @@ use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
+use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -426,7 +427,13 @@ class BotWebhookController extends Controller
             return false;
         }
 
-        return $this->findTelegramScenarioRun($channel, $payload, (int) ($matches[1] ?? 0)) instanceof ScenarioRun;
+        $run = $this->findTelegramScenarioRun($channel, $payload, (int) ($matches[1] ?? 0));
+
+        if (! $run instanceof ScenarioRun) {
+            return false;
+        }
+
+        return app(ScenarioRegistry::class)->type($run->scenario_code) === 'builtin';
     }
 
     /**

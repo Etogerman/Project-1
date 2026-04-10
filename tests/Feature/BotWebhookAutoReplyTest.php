@@ -680,7 +680,7 @@ class BotWebhookAutoReplyTest extends TestCase
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
     }
 
-    public function test_telegram_generic_scenario_callback_queues_inbound_job_for_database_backed_run(): void
+    public function test_telegram_generic_scenario_callback_is_ignored_for_database_backed_run(): void
     {
         Queue::fake();
         Http::fake();
@@ -731,15 +731,9 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        $storedMessage = $this->inboundMessages()->firstOrFail();
-
-        Queue::assertPushed(ProcessScenarioInboundJob::class, function (ProcessScenarioInboundJob $job) use ($storedMessage, $run): bool {
-            return $job->inboundMessageId === $storedMessage->id
-                && $job->scenarioRunId === $run->id;
-        });
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
-
-        $this->assertSame('scenario:start_selection', $storedMessage->text);
+        $this->assertDatabaseCount('messages', 0);
     }
 
     public function test_telegram_generic_scenario_callback_queues_inbound_job_for_builtin_run(): void
