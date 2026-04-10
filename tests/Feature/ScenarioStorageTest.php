@@ -303,6 +303,23 @@ class ScenarioStorageTest extends TestCase
             'status' => ScenarioVersion::STATUS_PUBLISHED,
             'schema_payload' => [
                 'version' => 1,
+                'start_block_id' => 'welcome',
+                'triggers' => [
+                    [
+                        'type' => 'parameter',
+                        'value' => $code,
+                    ],
+                ],
+                'blocks' => [
+                    'welcome' => [
+                        'type' => 'message',
+                        'text' => 'Добро пожаловать',
+                        'next' => 'end',
+                    ],
+                    'end' => [
+                        'type' => 'complete',
+                    ],
+                ],
             ],
         ]);
 

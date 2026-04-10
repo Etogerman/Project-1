@@ -13,6 +13,7 @@ use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -191,12 +192,30 @@ class FilamentScenariosResourceTest extends TestCase
                 'is_active' => false,
                 'draft_schema_payload_json' => <<<'JSON'
 {
-    "steps": [
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
         {
-            "id": "start",
-            "type": "message"
+            "type": "parameter",
+            "value": "lead_router"
         }
-    ]
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "message",
+            "text": "Добро пожаловать",
+            "next": "ask_name"
+        },
+        "ask_name": {
+            "type": "question",
+            "text": "Как вас зовут?",
+            "save_to": "run.first_name",
+            "next": "end"
+        },
+        "end": {
+            "type": "complete"
+        }
+    }
 }
 JSON,
             ])
@@ -209,13 +228,74 @@ JSON,
         $this->assertSame('Маршрутизация заявок', $scenario->name);
         $this->assertFalse($scenario->is_active);
         $this->assertSame([
-            'steps' => [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
                 [
-                    'id' => 'start',
+                    'type' => 'parameter',
+                    'value' => 'lead_router',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
                     'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'text_format' => 'plain_text',
+                    'next' => 'ask_name',
+                ],
+                'ask_name' => [
+                    'type' => 'question',
+                    'text' => 'Как вас зовут?',
+                    'text_format' => 'plain_text',
+                    'expects' => 'text',
+                    'save_to' => 'run.first_name',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
                 ],
             ],
         ], $scenario->draftVersion?->schema_payload);
+    }
+
+    public function test_save_scenario_rejects_schema_outside_slice_one_scope(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_one_validation',
+            'name' => 'Проверка slice 1',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_one_validation"
+        }
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "condition"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 1 schema validation should reject unsupported block types.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Блок welcome использует неподдерживаемый type condition.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
     }
 
     public function test_admin_can_publish_create_next_draft_and_archive_scenario(): void
