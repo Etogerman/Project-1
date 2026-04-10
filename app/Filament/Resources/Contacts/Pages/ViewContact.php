@@ -264,8 +264,11 @@ class ViewContact extends ViewRecord
             $this->makeTab(self::TAB_GENERAL, 'Общее'),
             $this->makeTab(self::TAB_DIALOGS, 'Диалоги'),
             $this->makeTab(self::TAB_BITRIX24, 'Битрикс24'),
-            $this->makeTab(self::TAB_HISTORY, 'История'),
         ];
+
+        if ($this->canViewHistoryTab()) {
+            $tabs[] = $this->makeTab(self::TAB_HISTORY, 'История');
+        }
 
         if (ContactResource::canCurrentUserViewContactDiagnostics()) {
             $tabs[] = $this->makeTab(self::TAB_DIAGNOSTICS, 'Диагностика');
@@ -524,14 +527,24 @@ class ViewContact extends ViewRecord
             self::TAB_GENERAL,
             self::TAB_DIALOGS,
             self::TAB_BITRIX24,
-            self::TAB_HISTORY,
         ];
+
+        if ($this->canViewHistoryTab()) {
+            $allowedTabs[] = self::TAB_HISTORY;
+        }
 
         if (ContactResource::canCurrentUserViewContactDiagnostics()) {
             $allowedTabs[] = self::TAB_DIAGNOSTICS;
         }
 
         return in_array($tab, $allowedTabs, true) ? $tab : self::TAB_GENERAL;
+    }
+
+    protected function canViewHistoryTab(): bool
+    {
+        $record = $this->resolveWorkspaceContact();
+
+        return ! ($record instanceof Contact && $record->isMerged());
     }
 
     protected function resolveHeadingLabel(Contact $record): string
