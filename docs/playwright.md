@@ -66,24 +66,22 @@ npm run test:e2e:report
 
 ## GitHub Actions post-deploy smoke
 
-В репозитории есть отдельный workflow:
+В репозитории теперь два workflow:
 
 - `.github/workflows/post-deploy-smoke.yml`
+- `.github/workflows/production-post-deploy-smoke.yml`
 
-Он запускается:
+Staging smoke запускается:
 
 - после каждого `push` в `main`
 - вручную через `workflow_dispatch`
 
-Workflow сейчас автоматически проверяет:
+Production smoke запускается:
 
-- `production`
+- только вручную через `workflow_dispatch`
+- только после реального production deploy
 
-Сейчас workflow intentionally проверяет только `production`.
-`staging` будет добавлен обратно отдельным шагом, когда появится
-рабочее Bitrix24 staging-окружение.
-
-Для GitHub Environment `production` нужно настроить secrets:
+Для каждого environment нужны свои secrets:
 
 - `PLAYWRIGHT_BASE_URL`
 - `PLAYWRIGHT_ADMIN_EMAIL`
@@ -99,5 +97,5 @@ Smoke идёт по живому URL:
 Важно:
 
 - workflow должен отражать реальный release process, а не идеальную будущую схему
-- пока staging реально не участвует в приёмке релиза, он не должен оставаться
-  формально включённым в автоматический smoke
+- автоматический smoke должен смотреть туда, куда реально ушёл новый merge
+- production smoke имеет смысл только после фактического production deploy
