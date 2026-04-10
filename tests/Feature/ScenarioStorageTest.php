@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Channel;
+use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
+use App\Models\ScenarioVersion;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -78,6 +80,24 @@ class ScenarioStorageTest extends TestCase
         ]);
     }
 
+    public function test_channel_binding_accepts_published_database_backed_scenario_code(): void
+    {
+        $channel = Channel::factory()->create();
+        $scenario = $this->createPublishedScenario(code: 'vip_ibiza_apply');
+
+        $binding = ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'id' => $binding->id,
+            'channel_id' => $channel->id,
+            'scenario_code' => 'vip_ibiza_apply',
+        ]);
+    }
+
     public function test_channel_binding_is_unique_per_channel_and_scenario_code(): void
     {
         $channel = Channel::factory()->create();
@@ -132,6 +152,26 @@ class ScenarioStorageTest extends TestCase
             'scenario_code' => 'unknown',
             'status' => ScenarioRun::STATUS_ACTIVE,
             'started_at' => Carbon::parse('2026-04-03 12:00:00'),
+        ]);
+    }
+
+    public function test_run_accepts_published_database_backed_scenario_code(): void
+    {
+        $dialog = $this->createDialog();
+        $scenario = $this->createPublishedScenario(code: 'vip_ibiza_apply');
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'started_at' => Carbon::parse('2026-04-03 12:00:00'),
+        ]);
+
+        $this->assertDatabaseHas('scenario_runs', [
+            'id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'scenario_code' => 'vip_ibiza_apply',
+            'status' => ScenarioRun::STATUS_ACTIVE,
         ]);
     }
 
@@ -246,5 +286,43 @@ class ScenarioStorageTest extends TestCase
     private function createDialog(): \App\Models\Dialog
     {
         return \App\Models\Dialog::factory()->create();
+    }
+
+    private function createPublishedScenario(string $code): Scenario
+    {
+        $scenario = Scenario::query()->create([
+            'code' => $code,
+            'name' => 'VIP Ibiza',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => [
+                'version' => 1,
+                'start_block_id' => 'welcome',
+                'triggers' => [
+                    [
+                        'type' => 'parameter',
+                        'value' => $code,
+                    ],
+                ],
+                'blocks' => [
+                    'welcome' => [
+                        'type' => 'message',
+                        'text' => 'Добро пожаловать',
+                        'next' => 'end',
+                    ],
+                    'end' => [
+                        'type' => 'complete',
+                    ],
+                ],
+            ],
+        ]);
+
+        return $scenario->fresh('publishedVersion');
     }
 }

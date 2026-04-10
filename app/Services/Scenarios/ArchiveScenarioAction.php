@@ -13,6 +13,8 @@ class ArchiveScenarioAction
             'is_archived' => true,
         ])->save();
 
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
         return $scenario->fresh(['draftVersion', 'publishedVersion']);
     }
 }

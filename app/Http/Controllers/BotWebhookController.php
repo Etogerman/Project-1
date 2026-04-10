@@ -2,10 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Models\Channel;
 use App\Models\ContactIdentity;
-use App\Models\Message;
 use App\Models\ScenarioRun;
 use App\Services\Bots\BotWebhookRateLimiter;
 use App\Services\Bots\BotIncomingMessageNormalizer;
@@ -13,6 +11,7 @@ use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
+use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -143,7 +142,6 @@ class BotWebhookController extends Controller
                 botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
                 storeInboundMessageAction: $storeInboundMessageAction,
                 dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
-                channelActivityLogger: $channelActivityLogger,
             );
         }
 
@@ -320,7 +318,6 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
-        ChannelActivityLogger $channelActivityLogger,
     ): JsonResponse {
         $callbackQueryId = trim((string) data_get($payload, 'callback_query.id', ''));
 
@@ -336,7 +333,7 @@ class BotWebhookController extends Controller
                     'ok' => true,
                 ]);
             }
-        } elseif (! $this->isTelegramWarmupScenarioCallbackActionable($channel, $payload)) {
+        } elseif (! $this->isTelegramScenarioCallbackActionable($channel, $payload)) {
             return response()->json([
                 'ok' => true,
             ]);
@@ -351,39 +348,6 @@ class BotWebhookController extends Controller
         }
 
         $storedResult = $storeInboundMessageAction->handle($channel, $message);
-        $storedMessage = $storedResult->message;
-
-        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
-            return response()->json([
-                'ok' => true,
-            ]);
-        }
-
-        $storedMessage->loadMissing('contact');
-
-        if ($storedMessage->contact?->isInDataCollection()) {
-            ProcessDataCollectionResponseJob::dispatch(
-                $storedMessage->id,
-                $storedMessage->contact_id,
-                $storedMessage->contact?->data_collection_current_field,
-            )->afterCommit();
-
-            $channelActivityLogger->info(
-                $channel,
-                'contact.data_collection_response_queued',
-                'Ответ пользователя поставлен в очередь на обработку сборщиком профиля.',
-                [
-                    'platform' => $channel->platform,
-                    'message_id' => $storedMessage->id,
-                    'contact_id' => $storedMessage->contact_id,
-                    'current_field' => $storedMessage->contact?->data_collection_current_field,
-                ],
-            );
-            return response()->json([
-                'ok' => true,
-            ]);
-        }
-
         $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult);
 
         return response()->json([
@@ -445,36 +409,64 @@ class BotWebhookController extends Controller
     /**
      * @param  array<string, mixed>  $payload
      */
-    protected function isTelegramWarmupScenarioCallbackActionable(Channel $channel, array $payload): bool
+    protected function isTelegramScenarioCallbackActionable(Channel $channel, array $payload): bool
     {
         $callbackData = trim((string) data_get($payload, 'callback_query.data', ''));
 
-        if (! preg_match('/^scenario:warmup:(\d+):([a-z_]+)$/', $callbackData, $matches)) {
+        if ($callbackData === '') {
             return false;
         }
 
-        $runId = (int) ($matches[1] ?? 0);
+        if (preg_match('/^scenario:warmup:(\d+):([a-z_]+)$/', $callbackData, $matches)) {
+            $run = $this->findTelegramScenarioRun($channel, $payload, (int) ($matches[1] ?? 0));
+
+            return $run instanceof ScenarioRun && $run->scenario_code === 'warmup';
+        }
+
+        if (! preg_match('/^scenario:(\d+):([A-Za-z0-9_-]{1,32})$/', $callbackData, $matches)) {
+            return false;
+        }
+
+        $run = $this->findTelegramScenarioRun($channel, $payload, (int) ($matches[1] ?? 0));
+
+        if (! $run instanceof ScenarioRun) {
+            return false;
+        }
+
+        return app(ScenarioRegistry::class)->type($run->scenario_code) === 'builtin';
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function findTelegramScenarioRun(Channel $channel, array $payload, int $runId): ?ScenarioRun
+    {
         $externalUserId = trim((string) data_get($payload, 'callback_query.from.id', ''));
         $externalChatId = trim((string) data_get($payload, 'callback_query.message.chat.id', ''));
 
         if ($runId <= 0 || $externalUserId === '' || $externalChatId === '') {
-            return false;
+            return null;
         }
 
         $run = ScenarioRun::query()
             ->with('dialog.currentContactIdentity')
             ->active()
             ->whereKey($runId)
-            ->where('scenario_code', 'warmup')
             ->first();
 
         if (! $run instanceof ScenarioRun || ! $run->dialog) {
-            return false;
+            return null;
         }
 
-        return (int) $run->dialog->channel_id === (int) $channel->id
-            && (string) ($run->dialog->external_chat_id ?? '') === $externalChatId
-            && (string) ($run->dialog->currentContactIdentity?->external_user_id ?? '') === $externalUserId;
+        if (
+            (int) $run->dialog->channel_id !== (int) $channel->id
+            || (string) ($run->dialog->external_chat_id ?? '') !== $externalChatId
+            || (string) ($run->dialog->currentContactIdentity?->external_user_id ?? '') !== $externalUserId
+        ) {
+            return null;
+        }
+
+        return $run;
     }
 
     /**

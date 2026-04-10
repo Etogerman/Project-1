@@ -11,7 +11,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
-use App\Services\Scenarios\ScenarioHandler;
+use App\Services\Scenarios\ResolvedScenarioRuntime;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -195,7 +195,7 @@ class ProcessScenarioStartJobTest extends TestCase
         ]);
 
         $registry = $this->createMock(ScenarioRegistry::class);
-        $registry->expects($this->never())->method('make');
+        $registry->expects($this->never())->method('makeRuntime');
 
         $job = new ProcessScenarioStartJob($message->id, $dialog->id + 100, 'warmup');
 
@@ -214,11 +214,11 @@ class ProcessScenarioStartJobTest extends TestCase
         $registry = $this->createMock(ScenarioRegistry::class);
 
         $registry->expects($this->once())
-            ->method('make')
+            ->method('makeRuntime')
             ->with('warmup')
-            ->willReturn(new class implements ScenarioHandler
+            ->willReturn(new class implements ResolvedScenarioRuntime
             {
-                public static function code(): string
+                public function code(): string
                 {
                     return 'warmup';
                 }

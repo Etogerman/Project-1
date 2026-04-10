@@ -9,6 +9,10 @@ use Illuminate\Validation\ValidationException;
 
 class PublishScenarioVersionAction
 {
+    public function __construct(
+        private readonly ValidateScenarioSchemaPayloadAction $validateScenarioSchemaPayloadAction,
+    ) {}
+
     public function handle(ScenarioVersion $version): ScenarioVersion
     {
         if (! $version->isDraft()) {
@@ -31,7 +35,11 @@ class PublishScenarioVersionAction
             ]);
         }
 
-        return DB::transaction(function () use ($version): ScenarioVersion {
+        $normalizedSchemaPayload = $this->validateScenarioSchemaPayloadAction->handle(
+            is_array($version->schema_payload) ? $version->schema_payload : [],
+        );
+
+        $publishedVersion = DB::transaction(function () use ($version, $normalizedSchemaPayload): ScenarioVersion {
             ScenarioVersion::query()
                 ->where('scenario_id', $version->scenario_id)
                 ->where('status', ScenarioVersion::STATUS_PUBLISHED)
@@ -41,10 +49,15 @@ class PublishScenarioVersionAction
                 ]);
 
             $version->forceFill([
+                'schema_payload' => $normalizedSchemaPayload,
                 'status' => ScenarioVersion::STATUS_PUBLISHED,
             ])->save();
 
             return $version->fresh();
         });
+
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        return $publishedVersion;
     }
 }

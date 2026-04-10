@@ -148,6 +148,12 @@ class BotIncomingMessageNormalizer
             return $action !== '' ? 'warmup:'.$action : null;
         }
 
+        if (preg_match('/^scenario:(\d+):([A-Za-z0-9_-]{1,32})$/', $value, $matches)) {
+            $key = trim((string) ($matches[2] ?? ''));
+
+            return $key !== '' ? 'scenario:'.$key : null;
+        }
+
         return null;
     }
 

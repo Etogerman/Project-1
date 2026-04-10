@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -76,6 +77,15 @@ class Scenario extends Model
         ) {
             throw ValidationException::withMessages([
                 'code' => 'Код сценария нельзя менять после создания.',
+            ]);
+        }
+
+        if (
+            (! $this->exists || $this->isDirty('code'))
+            && app(ScenarioRegistry::class)->type($normalizedCode) === 'builtin'
+        ) {
+            throw ValidationException::withMessages([
+                'code' => 'Код сценария зарезервирован встроенным сценарием.',
             ]);
         }
 

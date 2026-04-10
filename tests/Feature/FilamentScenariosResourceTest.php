@@ -6,6 +6,7 @@ use App\Filament\Resources\Scenarios\Pages\ManageScenarios;
 use App\Filament\Resources\Scenarios\ScenarioResource;
 use App\Models\Scenario;
 use App\Models\ScenarioVersion;
+use App\Models\Tag;
 use App\Models\User;
 use App\Services\Scenarios\CreateScenarioAction;
 use Filament\Facades\Filament;
@@ -13,6 +14,7 @@ use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -191,12 +193,30 @@ class FilamentScenariosResourceTest extends TestCase
                 'is_active' => false,
                 'draft_schema_payload_json' => <<<'JSON'
 {
-    "steps": [
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
         {
-            "id": "start",
-            "type": "message"
+            "type": "parameter",
+            "value": "lead_router"
         }
-    ]
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "message",
+            "text": "Добро пожаловать",
+            "next": "ask_name"
+        },
+        "ask_name": {
+            "type": "question",
+            "text": "Как вас зовут?",
+            "save_to": "run.first_name",
+            "next": "end"
+        },
+        "end": {
+            "type": "complete"
+        }
+    }
 }
 JSON,
             ])
@@ -209,24 +229,376 @@ JSON,
         $this->assertSame('Маршрутизация заявок', $scenario->name);
         $this->assertFalse($scenario->is_active);
         $this->assertSame([
-            'steps' => [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
                 [
-                    'id' => 'start',
+                    'type' => 'parameter',
+                    'value' => 'lead_router',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
                     'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'text_format' => 'plain_text',
+                    'next' => 'ask_name',
+                ],
+                'ask_name' => [
+                    'type' => 'question',
+                    'text' => 'Как вас зовут?',
+                    'text_format' => 'plain_text',
+                    'expects' => 'text',
+                    'save_to' => 'run.first_name',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
                 ],
             ],
         ], $scenario->draftVersion?->schema_payload);
     }
 
-    public function test_admin_can_publish_create_next_draft_and_archive_scenario(): void
+    public function test_admin_can_save_slice_two_lite_schema_with_condition_and_tag_actions(): void
+    {
+        $strongTag = Tag::factory()->create([
+            'name' => 'VIP strong',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'VIP weak',
+        ]);
+
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_two_lite_schema',
+            'name' => 'Проверка slice 2 lite',
+            'is_active' => true,
+        ]);
+
+        ScenarioResource::saveScenario([
+            'name' => $scenario->name,
+            'is_active' => true,
+            'draft_schema_payload_json' => <<<JSON
+{
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_two_lite_schema"
+        }
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "message",
+            "text": "Старт",
+            "next": "ask_budget"
+        },
+        "ask_budget": {
+            "type": "question",
+            "text": "Какой у вас бюджет?",
+            "save_to": "run.budget_tier",
+            "next": "evaluate"
+        },
+        "evaluate": {
+            "type": "condition",
+            "branches": [
+                {
+                    "if": {
+                        "var": "run.budget_tier",
+                        "in": ["middle", "high"]
+                    },
+                    "then": "strong_branch"
+                },
+                {
+                    "default": "weak_branch"
+                }
+            ]
+        },
+        "strong_branch": {
+            "type": "message",
+            "text": "Подходит",
+            "actions": [
+                {"type": "set_tag", "value": "{$strongTag->slug}"},
+                {"type": "remove_tag", "value": "{$weakTag->slug}"}
+            ],
+            "next": "end"
+        },
+        "weak_branch": {
+            "type": "message",
+            "text": "Пока рано",
+            "actions": [
+                {"type": "set_tag", "value": "{$weakTag->slug}"}
+            ],
+            "next": "end"
+        },
+        "end": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+        ], $scenario);
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $this->assertSame('condition', data_get($scenario->draftVersion?->schema_payload, 'blocks.evaluate.type'));
+        $this->assertSame($strongTag->slug, data_get($scenario->draftVersion?->schema_payload, 'blocks.strong_branch.actions.0.value'));
+        $this->assertSame($weakTag->slug, data_get($scenario->draftVersion?->schema_payload, 'blocks.weak_branch.actions.0.value'));
+    }
+
+    public function test_save_scenario_rejects_condition_with_non_run_variable(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_two_lite_validation',
+            'name' => 'Проверка condition',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "evaluate",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_two_lite_validation"
+        }
+    ],
+    "blocks": {
+        "evaluate": {
+            "type": "condition",
+            "branches": [
+                {
+                    "if": {
+                        "var": "contact.city",
+                        "equals": "Москва"
+                    },
+                    "then": "end"
+                },
+                {
+                    "default": "end"
+                }
+            ]
+        },
+        "end": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 2 lite schema validation should reject non-run variables.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Блок evaluate, ветка #0 может читать только run.*.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
+    }
+
+    public function test_save_scenario_rejects_action_with_unknown_tag_slug(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_two_lite_tags',
+            'name' => 'Проверка тегов',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_two_lite_tags"
+        }
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "message",
+            "text": "Старт",
+            "actions": [
+                {"type": "set_tag", "value": "missing-tag"}
+            ],
+            "next": "end"
+        },
+        "end": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 2 lite schema validation should reject missing tag slugs.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Action #0 блока welcome ссылается на несуществующий или неактивный тег missing-tag.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
+    }
+
+    public function test_save_scenario_rejects_default_branch_with_extra_keys(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_two_lite_default_shape',
+            'name' => 'Проверка default-ветки',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "evaluate",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_two_lite_default_shape"
+        }
+    ],
+    "blocks": {
+        "evaluate": {
+            "type": "condition",
+            "branches": [
+                {
+                    "if": {
+                        "var": "run.city",
+                        "equals": "Москва"
+                    },
+                    "then": "done"
+                },
+                {
+                    "default": "done",
+                    "then": "unexpected"
+                }
+            ]
+        },
+        "done": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 2 lite schema validation should reject ambiguous default branches.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Ветка #1 блока evaluate содержит неподдерживаемые ключи: then.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
+    }
+
+    public function test_save_scenario_rejects_condition_with_mixed_operator_shapes(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_two_lite_mixed_condition',
+            'name' => 'Проверка mixed-condition',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "evaluate",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_two_lite_mixed_condition"
+        }
+    ],
+    "blocks": {
+        "evaluate": {
+            "type": "condition",
+            "branches": [
+                {
+                    "if": {
+                        "not": {
+                            "var": "run.city",
+                            "equals": "Москва"
+                        },
+                        "var": "run.country",
+                        "equals": "Россия"
+                    },
+                    "then": "done"
+                },
+                {
+                    "default": "done"
+                }
+            ]
+        },
+        "done": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 2 lite schema validation should reject mixed operator shapes.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Блок evaluate, ветка #0 должна содержать ровно один оператор условия.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
+    }
+
+    public function test_admin_cannot_publish_empty_draft_schema(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
         $scenario = app(CreateScenarioAction::class)->handle([
-            'code' => 'qualification',
-            'name' => 'Квалификация',
+            'code' => 'empty_publish',
+            'name' => 'Пустой publish',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('publishDraft', $scenario)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertSame(ScenarioVersion::STATUS_DRAFT, $scenario->draftVersion?->status);
+        $this->assertNull($scenario->publishedVersion);
+    }
+
+    public function test_admin_cannot_publish_legacy_draft_schema(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'legacy_publish',
+            'name' => 'Legacy publish',
             'is_active' => true,
         ]);
 
@@ -242,6 +614,35 @@ JSON,
             ->test(ManageScenarios::class)
             ->assertTableActionVisible('publishDraft', $scenario)
             ->callTableAction('publishDraft', $scenario)
+            ->assertHasTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertSame(ScenarioVersion::STATUS_DRAFT, $scenario->draftVersion?->status);
+        $this->assertNull($scenario->publishedVersion);
+    }
+
+    public function test_admin_can_publish_create_next_draft_and_archive_scenario(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'qualification',
+            'name' => 'Квалификация',
+            'is_active' => true,
+        ]);
+
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => $this->sliceOneSchema('qualification'),
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('publishDraft', $scenario)
+            ->callTableAction('publishDraft', $scenario)
             ->assertHasNoTableActionErrors();
 
         $scenario->refresh();
@@ -250,6 +651,7 @@ JSON,
         $this->assertNull($scenario->draftVersion);
         $this->assertSame(1, $scenario->publishedVersion?->version_number);
         $this->assertSame(ScenarioVersion::STATUS_PUBLISHED, $scenario->publishedVersion?->status);
+        $this->assertSame($this->sliceOneSchema('qualification'), $scenario->publishedVersion?->schema_payload);
 
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
@@ -306,5 +708,41 @@ JSON,
                 $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
                 $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
             });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sliceOneSchema(string $triggerValue): array
+    {
+        return [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => $triggerValue,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'text_format' => 'plain_text',
+                    'next' => 'ask_name',
+                ],
+                'ask_name' => [
+                    'type' => 'question',
+                    'text' => 'Как вас зовут?',
+                    'text_format' => 'plain_text',
+                    'expects' => 'text',
+                    'save_to' => 'run.first_name',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
     }
 }
