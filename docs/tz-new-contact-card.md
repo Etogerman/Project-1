@@ -482,14 +482,118 @@ Timeline включает только события состояния кон�
 
 Добавить write-модель для пользовательских и системных событий timeline.
 
+### Минимальный контракт событий v1
+
+Новая локальная write-модель хранит события в append-only таблице `contact_timeline_events`.
+
+Минимальный состав записи:
+- `id`
+- `contact_id`
+- `event_type`
+- `actor_user_id` nullable
+- `body` nullable
+- `payload` jsonb nullable
+- `occurred_at`
+- `created_at`
+
+### Scope этапа 3 v1
+
+В `Историю` добавляется только 1 новый тип события:
+1. `operator_comment`
+
+### Правила по типам событий
+
+#### `operator_comment`
+
+- ручной комментарий оператора
+- `body` обязателен
+- событие показывает автора, время и текст комментария
+
+### Out of scope этапа 3 v1
+
+- `ownership_changed`
+- `questionnaire_resumed`
+- история изменений профиля `old -> new`
+- phone CRUD события
+- tag change события
+- включение и выключение автоответов
+- Bitrix24 sync-события
+- удаление контакта
+- редактирование и удаление комментариев
+
+### Render-контракт этапа 3 v1
+
+- комментарий: автор, время, текст
+
+### Принцип записи событий
+
+- запись комментария может стартовать из page-level карточки
+- в этом шаге не требуется встраивать запись событий в action/service-слой для ownership и questionnaire flows
+
 ### Темы этапа
 
 - новое хранилище timeline events
 - комментарии оператора
-- системные события действий оператора
-- расширение состава timeline
+- смешивание comment events с уже существующим `История v1`
 
-Этот этап требует отдельного решения по модели хранения.
+### Следующий mini-step после этапа 3 v1
+
+- `ownership_changed`
+- `questionnaire_resumed`
+- другие system events поверх уже введённой timeline write-модели
+
+### Implementation slice: Этап 3 v1 (`operator_comment`)
+
+#### Scope
+
+- новая таблица `contact_timeline_events`
+- новая модель `ContactTimelineEvent`
+- пока только `event_type = operator_comment`
+- форма добавления комментария на вкладке `История`
+- сохранение комментария оператором
+- builder `Истории` смешивает:
+  - существующие lifecycle events
+  - comment events
+- порядок общий, обратный хронологический
+
+#### Out of scope
+
+- `ownership_changed`
+- `questionnaire_resumed`
+- любые другие system events
+- edit/delete comments
+- reactions, mentions, attachments
+- audit history `old -> new`
+- phone/tag/auto-reply/Bitrix events
+
+#### UI-контракт
+
+- на вкладке `История` сверху появляется компактная форма комментария
+- после сохранения комментарий появляется в том же timeline
+- item комментария показывает:
+  - автора
+  - время
+  - текст
+- пустой комментарий не сохраняется
+
+#### Минимальный write-set
+
+- migration для `contact_timeline_events`
+- relation helper на `Contact`
+- новая модель `ContactTimelineEvent`
+- action для записи комментария
+- builder `Истории`
+- page-level `ViewContact`
+- blade/partial вкладки `История`
+- feature-тесты карточки контакта
+
+#### Критерии приёмки
+
+- оператор может добавить комментарий к контакту
+- комментарий хранится локально в новой write-модели
+- timeline показывает и lifecycle events, и comments в одном порядке
+- `История v1` не ломается
+- system events в этот шаг ещё не добавляются
 
 ## История изменений полей
 
