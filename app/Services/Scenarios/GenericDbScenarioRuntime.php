@@ -5,6 +5,7 @@ namespace App\Services\Scenarios;
 use App\Data\Messages\PreparedMessageContentData;
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Models\Channel;
+use App\Models\Contact;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioRun;
@@ -21,6 +22,8 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         private readonly Scenario $scenario,
         private readonly ScenarioVersion $publishedVersion,
         private readonly ValidateScenarioSchemaPayloadAction $validateScenarioSchemaPayloadAction,
+        private readonly ScenarioConditionEvaluator $scenarioConditionEvaluator,
+        private readonly ApplyScenarioTagEffectsAction $applyScenarioTagEffectsAction,
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
         private readonly TelegramBotApiService $telegramBotApiService,
         private readonly MaxBotApiService $maxBotApiService,
@@ -182,12 +185,8 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         return match ($block['type'] ?? null) {
             'message' => $this->advanceAfterMessageBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1),
             'question' => $this->enterQuestionBlock($message, $nextBlockId, $block, $statePayload),
-            'complete' => [
-                'status' => ScenarioRun::STATUS_COMPLETED,
-                'current_step' => null,
-                'state_payload' => $statePayload,
-                'exit_outcome' => 'completed',
-            ],
+            'condition' => $this->advanceAfterConditionBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1),
+            'complete' => $this->completeScenario($message, $block, $statePayload),
             default => throw new RuntimeException("Scenario [{$this->code()}] uses unsupported block type."),
         };
     }
@@ -222,6 +221,8 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             (string) $block['text_format'],
         );
 
+        $statePayload = $this->applyBlockActions($message, $block, $statePayload);
+
         return $this->advanceFromBlock(
             $message,
             $schema,
@@ -229,6 +230,61 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             $statePayload,
             $remainingTransitions,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @param  array{
+     *     version: int,
+     *     start_block_id: string,
+     *     triggers: list<array{type: 'parameter', value: string}>,
+     *     blocks: array<string, array<string, mixed>>,
+     * }  $schema
+     * @return array{
+     *     status: string,
+     *     current_step: ?string,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: ?string,
+     * }
+     */
+    private function advanceAfterConditionBlock(
+        Message $message,
+        array $schema,
+        array $block,
+        array $statePayload,
+        int $remainingTransitions,
+    ): array
+    {
+        $defaultBlockId = null;
+
+        foreach ($block['branches'] as $branch) {
+            if (array_key_exists('if', $branch) && $this->scenarioConditionEvaluator->handle($branch['if'], $statePayload)) {
+                return $this->advanceFromBlock(
+                    $message,
+                    $schema,
+                    (string) $branch['then'],
+                    $statePayload,
+                    $remainingTransitions,
+                );
+            }
+
+            if (array_key_exists('default', $branch)) {
+                $defaultBlockId = (string) $branch['default'];
+            }
+        }
+
+        if ($defaultBlockId !== null) {
+            return $this->advanceFromBlock(
+                $message,
+                $schema,
+                $defaultBlockId,
+                $statePayload,
+                $remainingTransitions,
+            );
+        }
+
+        throw new RuntimeException("Scenario [{$this->code()}] condition block does not have a default branch.");
     }
 
     /**
@@ -254,6 +310,26 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             'current_step' => $blockId,
             'state_payload' => $statePayload,
             'exit_outcome' => null,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{
+     *     status: string,
+     *     current_step: null,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: 'completed',
+     * }
+     */
+    private function completeScenario(Message $message, array $block, array $statePayload): array
+    {
+        return [
+            'status' => ScenarioRun::STATUS_COMPLETED,
+            'current_step' => null,
+            'state_payload' => $this->applyBlockActions($message, $block, $statePayload),
+            'exit_outcome' => 'completed',
         ];
     }
 
@@ -344,6 +420,28 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
     private function normalizeStatePayload(mixed $statePayload): array
     {
         return is_array($statePayload) ? $statePayload : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function applyBlockActions(Message $message, array $block, array $statePayload): array
+    {
+        $actions = $block['actions'] ?? [];
+
+        if (! is_array($actions) || $actions === []) {
+            return $statePayload;
+        }
+
+        if (! $message->contact instanceof Contact) {
+            throw new RuntimeException("Scenario [{$this->code()}] action block requires a contact context.");
+        }
+
+        $this->applyScenarioTagEffectsAction->handle($message->contact, $actions);
+
+        return $statePayload;
     }
 
     private function systemCode(): string

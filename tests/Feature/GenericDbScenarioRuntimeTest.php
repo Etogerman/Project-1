@@ -13,6 +13,7 @@ use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
+use App\Models\Tag;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -175,6 +176,166 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSentCount(3);
     }
 
+    public function test_database_backed_scenario_branches_by_condition_and_applies_tag_effects(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7001]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7002]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7003]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $strongTag = Tag::factory()->create([
+            'name' => 'VIP strong',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'VIP weak',
+        ]);
+
+        $contact->tags()->attach($weakTag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $scenario = $this->createPublishedScenario(
+            'vip_ibiza_apply',
+            $this->conditionalSchema('vip_ibiza_apply', $strongTag->slug, $weakTag->slug),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_apply',
+            'message_parameter' => 'vip_ibiza_apply',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $budgetAnswer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'high',
+        ]);
+
+        (new ProcessScenarioInboundJob($budgetAnswer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $contact->refresh()->load('tags');
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertSame('high', data_get($run->state_payload, 'run.budget_tier'));
+        $this->assertSame(['vip-strong'], $contact->tags->pluck('slug')->all());
+        $this->assertCount(3, $outboundMessages);
+        $this->assertSame('Какой у вас бюджет?', $outboundMessages[1]->text);
+        $this->assertSame('Отлично, этот формат вам подходит.', $outboundMessages[2]->text);
+        Http::assertSentCount(3);
+    }
+
+    public function test_database_backed_scenario_uses_default_condition_branch_when_rule_is_false(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7001]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7002]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7003]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $strongTag = Tag::factory()->create([
+            'name' => 'VIP strong',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'VIP weak',
+        ]);
+
+        $scenario = $this->createPublishedScenario(
+            'vip_ibiza_apply',
+            $this->conditionalSchema('vip_ibiza_apply', $strongTag->slug, $weakTag->slug),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_apply',
+            'message_parameter' => 'vip_ibiza_apply',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $budgetAnswer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'low',
+        ]);
+
+        (new ProcessScenarioInboundJob($budgetAnswer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $contact->refresh()->load('tags');
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertSame(['vip-weak'], $contact->tags->pluck('slug')->all());
+        $this->assertSame('Спасибо, пока это не ваш уровень бюджета.', $outboundMessages[2]->text);
+        Http::assertSentCount(3);
+    }
+
     private function createTelegramChannel(): Channel
     {
         return Channel::factory()->create([
@@ -267,6 +428,80 @@ class GenericDbScenarioRuntimeTest extends TestCase
                     'next' => 'end',
                 ],
                 'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function conditionalSchema(string $parameter, string $strongTagSlug, string $weakTagSlug): array
+    {
+        return [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => $parameter,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать в сценарий.',
+                    'next' => 'ask_budget',
+                ],
+                'ask_budget' => [
+                    'type' => 'question',
+                    'text' => 'Какой у вас бюджет?',
+                    'save_to' => 'run.budget_tier',
+                    'next' => 'evaluate_budget',
+                ],
+                'evaluate_budget' => [
+                    'type' => 'condition',
+                    'branches' => [
+                        [
+                            'if' => [
+                                'var' => 'run.budget_tier',
+                                'in' => ['middle', 'high'],
+                            ],
+                            'then' => 'strong_branch',
+                        ],
+                        [
+                            'default' => 'weak_branch',
+                        ],
+                    ],
+                ],
+                'strong_branch' => [
+                    'type' => 'message',
+                    'text' => 'Отлично, этот формат вам подходит.',
+                    'actions' => [
+                        [
+                            'type' => 'set_tag',
+                            'value' => $strongTagSlug,
+                        ],
+                        [
+                            'type' => 'remove_tag',
+                            'value' => $weakTagSlug,
+                        ],
+                    ],
+                    'next' => 'done',
+                ],
+                'weak_branch' => [
+                    'type' => 'message',
+                    'text' => 'Спасибо, пока это не ваш уровень бюджета.',
+                    'actions' => [
+                        [
+                            'type' => 'set_tag',
+                            'value' => $weakTagSlug,
+                        ],
+                    ],
+                    'next' => 'done',
+                ],
+                'done' => [
                     'type' => 'complete',
                 ],
             ],
