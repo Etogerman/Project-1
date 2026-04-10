@@ -14,6 +14,7 @@ use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\ContactStartTag;
+use App\Models\ContactTimelineEvent;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Tag;
@@ -485,6 +486,21 @@ class FilamentContactsResourceTest extends TestCase
             ->assertDontSee('Уникальный текст сообщения для истории');
     }
 
+    public function test_contact_history_page_can_be_opened_directly_via_query_param(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+
+        $this->actingAs($admin)
+            ->get('/admin/contacts/'.$contact->id.'?tab=history')
+            ->assertOk()
+            ->assertSee('История событий контакта')
+            ->assertSee('Комментарий оператора');
+    }
+
     public function test_contact_history_tab_supports_load_more(): void
     {
         $admin = User::factory()->create([
@@ -498,6 +514,13 @@ class FilamentContactsResourceTest extends TestCase
                 'created_at' => now()->subDays(10),
                 'updated_at' => now()->subDays(10),
             ]);
+        ContactTimelineEvent::query()->create([
+            'contact_id' => $contact->id,
+            'event_type' => ContactTimelineEvent::EVENT_OPERATOR_COMMENT,
+            'actor_user_id' => $admin->id,
+            'body' => 'Первый комментарий в истории',
+            'occurred_at' => now(),
+        ]);
 
         foreach (range(1, 21) as $index) {
             $channel = Channel::factory()->create([
@@ -528,6 +551,8 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('Комментарий оператора')
+            ->assertSee('Первый комментарий в истории')
             ->assertSee('Показать ещё')
             ->assertDontSee('Канал 21')
             ->call('loadMoreHistory')
@@ -558,6 +583,113 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('История событий контакта')
             ->assertSee('По этому контакту пока нет событий для вкладки «История».')
             ->assertDontSee('Показать ещё');
+    }
+
+    public function test_admin_can_add_operator_comment_to_contact_history(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Герман Абрикосов',
+        ]);
+        $contact = Contact::factory()->create();
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->set('historyCommentBody', 'Нужно вернуться к контакту завтра утром.')
+            ->call('addHistoryComment')
+            ->assertHasNoErrors()
+            ->assertSee('Комментарий оператора')
+            ->assertSee('Герман Абрикосов')
+            ->assertSee('Нужно вернуться к контакту завтра утром.');
+
+        $this->assertDatabaseHas('contact_timeline_events', [
+            'contact_id' => $contact->id,
+            'event_type' => ContactTimelineEvent::EVENT_OPERATOR_COMMENT,
+            'actor_user_id' => $admin->id,
+            'body' => 'Нужно вернуться к контакту завтра утром.',
+        ]);
+    }
+
+    public function test_employee_can_add_operator_comment_to_contact_history(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+            'name' => 'Оператор истории',
+        ]);
+        $contact = Contact::factory()->create();
+
+        Livewire::actingAs($employee)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('Комментарий оператора')
+            ->set('historyCommentBody', 'Операторский комментарий без прав администратора.')
+            ->call('addHistoryComment')
+            ->assertHasNoErrors()
+            ->assertSee('Оператор истории')
+            ->assertSee('Операторский комментарий без прав администратора.');
+
+        $this->assertDatabaseHas('contact_timeline_events', [
+            'contact_id' => $contact->id,
+            'event_type' => ContactTimelineEvent::EVENT_OPERATOR_COMMENT,
+            'actor_user_id' => $employee->id,
+            'body' => 'Операторский комментарий без прав администратора.',
+        ]);
+    }
+
+    public function test_contact_history_comment_requires_non_empty_body(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->set('historyCommentBody', '   ')
+            ->call('addHistoryComment')
+            ->assertHasErrors(['historyCommentBody']);
+
+        $this->assertDatabaseCount('contact_timeline_events', 0);
+    }
+
+    public function test_contact_history_renders_comments_before_older_lifecycle_events(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Админ истории',
+        ]);
+        $contact = Contact::factory()->create();
+        DB::table('contacts')
+            ->where('id', $contact->id)
+            ->update([
+                'created_at' => now()->subDays(3),
+                'updated_at' => now()->subDays(3),
+            ]);
+
+        ContactTimelineEvent::query()->create([
+            'contact_id' => $contact->id,
+            'event_type' => ContactTimelineEvent::EVENT_OPERATOR_COMMENT,
+            'actor_user_id' => $admin->id,
+            'body' => 'Связаться после проверки анкеты.',
+            'occurred_at' => now()->subHour(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSeeInOrder([
+                'Комментарий оператора',
+                'Контакт создан',
+            ])
+            ->assertSee('Админ истории')
+            ->assertSee('Связаться после проверки анкеты.');
     }
 
     public function test_admin_can_update_contact_profile_from_contact_view_page(): void

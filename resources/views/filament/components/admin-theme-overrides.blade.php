@@ -1607,13 +1607,23 @@
     }
 
     .ac-button--warning {
-        border-color: color-mix(in srgb, var(--ac-warning) 45%, transparent);
+        border-color: color-mix(in srgb, #eab308 58%, transparent);
         background: linear-gradient(
             180deg,
-            color-mix(in srgb, var(--ac-warning) 86%, #ffffff 14%) 0%,
-            color-mix(in srgb, var(--ac-warning) 92%, #a16207 8%) 100%
+            #fde047 0%,
+            #facc15 56%,
+            #eab308 100%
         );
         color: #111111;
+    }
+
+    .ac-button--warning:hover {
+        border-color: color-mix(in srgb, #ca8a04 62%, transparent);
+        background: linear-gradient(
+            180deg,
+            #facc15 0%,
+            #eab308 100%
+        );
     }
 
     .ac-button--accent {
@@ -2750,10 +2760,27 @@
         color: var(--ac-text);
     }
 
+    .ac-history-timeline__meta {
+        margin: 0;
+        font-size: 0.86rem;
+        font-weight: 600;
+        line-height: 1.45;
+        color: var(--ac-text);
+    }
+
     .ac-history-timeline__description {
         font-size: 0.92rem;
         line-height: 1.55;
         color: var(--ac-text-muted);
+    }
+
+    .ac-history-timeline__comment-body {
+        margin: 0;
+        font-size: 0.92rem;
+        line-height: 1.55;
+        color: var(--ac-text);
+        white-space: pre-wrap;
+        word-break: break-word;
     }
 
     .ac-diagnostics-payload {

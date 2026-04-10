@@ -796,6 +796,21 @@ trait InteractsWithContactWorkspace
         return true;
     }
 
+    protected function abortIfContactHistoryCommentForbidden(string $title): bool
+    {
+        if ($this->canCurrentEmployeeAddContactHistoryComments()) {
+            return false;
+        }
+
+        Notification::make()
+            ->danger()
+            ->title($title)
+            ->body('Это действие недоступно текущему сотруднику.')
+            ->send();
+
+        return true;
+    }
+
     protected function abortIfContactProfileForbidden(string $title): bool
     {
         if ($this->canCurrentEmployeeManageContactProfile()) {
@@ -862,6 +877,14 @@ trait InteractsWithContactWorkspace
 
         return $employee instanceof User
             && $employee->canManageContactWorkspaceMutations();
+    }
+
+    protected function canCurrentEmployeeAddContactHistoryComments(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canAddContactTimelineComments();
     }
 
     protected function canCurrentEmployeeManageContactProfile(): bool
