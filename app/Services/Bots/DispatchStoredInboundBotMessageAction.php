@@ -52,7 +52,21 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
+        if ($this->isAutoReplyOnlyMaxBotStartedEvent($channel, $storedMessage)) {
+            if ($this->dispatchStoredInboundScenarioAction->handle($channel, $storedMessage)) {
+                return;
+            }
+
+            $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
+
+            return;
+        }
+
         if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
+            if ($this->dispatchStoredInboundScenarioAction->handle($channel, $storedMessage)) {
+                return;
+            }
+
             $this->dispatchContactShareFollowUp($channel, $storedMessage, $storedResult, $deliveryLagSeconds);
 
             return;
@@ -63,12 +77,6 @@ class DispatchStoredInboundBotMessageAction
         }
 
         $storedMessage->loadMissing('contact');
-
-        if ($this->isAutoReplyOnlyMaxBotStartedEvent($channel, $storedMessage)) {
-            $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
-
-            return;
-        }
 
         if (! $storedMessage->wasRecentlyCreated && $storedMessage->contact?->isInDataCollection()) {
             $this->channelActivityLogger->info(

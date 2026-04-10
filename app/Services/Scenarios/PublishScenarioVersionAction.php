@@ -31,7 +31,7 @@ class PublishScenarioVersionAction
             ]);
         }
 
-        return DB::transaction(function () use ($version): ScenarioVersion {
+        $publishedVersion = DB::transaction(function () use ($version): ScenarioVersion {
             ScenarioVersion::query()
                 ->where('scenario_id', $version->scenario_id)
                 ->where('status', ScenarioVersion::STATUS_PUBLISHED)
@@ -46,5 +46,9 @@ class PublishScenarioVersionAction
 
             return $version->fresh();
         });
+
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        return $publishedVersion;
     }
 }

@@ -4,7 +4,6 @@ namespace App\Jobs;
 
 use App\Models\Message;
 use App\Models\ScenarioRun;
-use App\Services\Scenarios\ScenarioHandler;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -64,14 +63,14 @@ class ProcessScenarioInboundJob implements ShouldQueue
             return;
         }
 
-        $handler = $scenarioRegistry->make($run->scenario_code);
+        $runtime = $scenarioRegistry->makeRuntime($run->scenario_code);
 
-        if (! $handler instanceof ScenarioHandler) {
+        if ($runtime === null) {
             return;
         }
 
         try {
-            $result = $handler->handleInbound($run, $message);
+            $result = $runtime->handleInbound($run, $message);
         } catch (Throwable $throwable) {
             $message->channel?->markError($throwable);
 

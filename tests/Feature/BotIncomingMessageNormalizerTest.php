@@ -258,6 +258,44 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('93', $message->providerEventKey);
     }
 
+    public function test_telegram_generic_scenario_callback_query_is_normalized(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 94,
+            'callback_query' => [
+                'id' => 'callback-94',
+                'data' => 'scenario:17:start_selection',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'first_name' => 'Герман',
+                    'is_bot' => false,
+                ],
+                'message' => [
+                    'message_id' => 91,
+                    'date' => 1_711_539_200,
+                    'chat' => [
+                        'id' => 300,
+                        'type' => 'private',
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
+        $this->assertSame('scenario:start_selection', $message->text);
+        $this->assertNull($message->messageParameter);
+        $this->assertSame('callback-94', $message->externalMessageId);
+        $this->assertSame('94', $message->providerEventKey);
+    }
+
     public function test_max_bot_started_payload_is_normalized_as_store_only_inbound_event(): void
     {
         $channel = Channel::factory()->create([

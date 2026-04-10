@@ -7,17 +7,24 @@ use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
+use App\Jobs\ProcessScenarioInboundJob;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\Scenario;
+use App\Models\ScenarioRun;
+use App\Models\ScenarioVersion;
+use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
 use Tests\TestCase;
 
 class BotWebhookAutoReplyTest extends TestCase
@@ -260,6 +267,37 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertSame('bot_started', data_get($storedMessage->raw_payload, 'update_type'));
     }
 
+    public function test_max_bot_started_with_parameter_skips_auto_reply_when_scenario_dispatcher_consumes_message(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $dispatcher = Mockery::mock(DispatchStoredInboundScenarioAction::class);
+        $dispatcher->shouldReceive('handle')->once()->andReturn(true);
+        $this->app->instance(DispatchStoredInboundScenarioAction::class, $dispatcher);
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $this->maxBotStartedPayload(payload: 'promo_123'));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
     public function test_max_bot_started_webhook_queues_only_auto_reply_for_contact_in_active_data_collection(): void
     {
         Queue::fake();
@@ -478,6 +516,104 @@ class BotWebhookAutoReplyTest extends TestCase
             'channel_id' => $channel->id,
             'event' => 'contact.phone_capture_confirmation_queued',
         ]);
+    }
+
+    public function test_telegram_contact_share_skips_follow_up_when_scenario_dispatcher_consumes_message(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $dispatcher = Mockery::mock(DispatchStoredInboundScenarioAction::class);
+        $dispatcher->shouldReceive('handle')->once()->andReturn(true);
+        $this->app->instance(DispatchStoredInboundScenarioAction::class, $dispatcher);
+
+        $payload = $this->telegramPayload(messageId: 91, text: null);
+        $payload['message']['contact'] = [
+            'phone_number' => '+7 999 123 45 67',
+            'user_id' => 200,
+        ];
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_telegram_generic_scenario_callback_queues_inbound_job_for_database_backed_run(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '300',
+        ]);
+
+        $scenario = $this->createPublishedScenario(code: 'vip_ibiza_apply');
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'welcome',
+            'state_payload' => [],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $payload = $this->telegramCallbackPayload(
+            callbackId: 'callback-94',
+            callbackData: "scenario:{$run->id}:start_selection",
+            messageId: 91,
+        );
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessScenarioInboundJob::class, function (ProcessScenarioInboundJob $job) use ($storedMessage, $run): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->scenarioRunId === $run->id;
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+
+        $this->assertSame('scenario:start_selection', $storedMessage->text);
     }
 
     public function test_max_contact_share_webhook_saves_phone_and_queues_confirmation_follow_up(): void
@@ -2157,6 +2293,27 @@ class BotWebhookAutoReplyTest extends TestCase
         }
 
         return $update;
+    }
+
+    protected function createPublishedScenario(string $code): Scenario
+    {
+        $scenario = Scenario::query()->create([
+            'code' => $code,
+            'name' => 'VIP Ibiza',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => [
+                'version' => 1,
+            ],
+        ]);
+
+        return $scenario->fresh('publishedVersion');
     }
 
     protected function assertMessageDirectionCount(string $direction, int $expectedCount): void

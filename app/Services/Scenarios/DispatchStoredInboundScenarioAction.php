@@ -8,6 +8,7 @@ use App\Models\Channel;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
+use App\Services\Scenarios\Adapters\BuiltinScenarioAdapter;
 
 class DispatchStoredInboundScenarioAction
 {
@@ -17,7 +18,13 @@ class DispatchStoredInboundScenarioAction
 
     public function handle(Channel $channel, Message $storedMessage): bool
     {
-        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER || $storedMessage->dialog_id === null) {
+        if (
+            ! in_array($storedMessage->message_kind, [
+                Message::KIND_INBOUND_USER,
+                Message::KIND_INBOUND_CONTACT_SHARE,
+            ], true)
+            || $storedMessage->dialog_id === null
+        ) {
             return false;
         }
 
@@ -28,9 +35,20 @@ class DispatchStoredInboundScenarioAction
             ->first();
 
         if ($activeRun instanceof ScenarioRun) {
+            if (
+                $storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE
+                && ! $this->activeRunSupportsContactShare($activeRun)
+            ) {
+                return false;
+            }
+
             ProcessScenarioInboundJob::dispatch($storedMessage->id, $activeRun->id)->afterCommit();
 
             return true;
+        }
+
+        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
+            return false;
         }
 
         if ($this->isStoredTelegramScenarioCallback($channel, $storedMessage)) {
@@ -40,13 +58,13 @@ class DispatchStoredInboundScenarioAction
         $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog']);
 
         foreach ($this->activeBindingsForChannel($channel->id) as $binding) {
-            $handler = $this->scenarioRegistry->make($binding->scenario_code);
+            $runtime = $this->scenarioRegistry->makeRuntime($binding->scenario_code);
 
-            if (! $handler instanceof ScenarioHandler) {
+            if ($runtime === null) {
                 continue;
             }
 
-            if (! $handler->shouldStart($storedMessage)) {
+            if (! $runtime->shouldStart($storedMessage)) {
                 continue;
             }
 
@@ -60,6 +78,13 @@ class DispatchStoredInboundScenarioAction
         }
 
         return false;
+    }
+
+    private function activeRunSupportsContactShare(ScenarioRun $activeRun): bool
+    {
+        $runtime = $this->scenarioRegistry->makeRuntime($activeRun->scenario_code);
+
+        return $runtime !== null && ! $runtime instanceof BuiltinScenarioAdapter;
     }
 
     /**

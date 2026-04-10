@@ -9,6 +9,7 @@ use App\Services\Scenarios\ArchiveScenarioAction;
 use App\Services\Scenarios\CreateNextScenarioDraftAction;
 use App\Services\Scenarios\CreateScenarioAction;
 use App\Services\Scenarios\PublishScenarioVersionAction;
+use App\Services\Scenarios\ScenarioRegistry;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -311,7 +312,7 @@ class ScenarioResource extends Resource
             ]);
         }
 
-        return DB::transaction(function () use ($data, $record): Scenario {
+        $scenario = DB::transaction(function () use ($data, $record): Scenario {
             $record->fill([
                 'name' => (string) ($data['name'] ?? $record->name),
                 'is_active' => (bool) ($record->is_archived ? false : ($data['is_active'] ?? $record->is_active)),
@@ -330,6 +331,10 @@ class ScenarioResource extends Resource
 
             return $record->fresh(['draftVersion', 'publishedVersion', 'versions']);
         });
+
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        return $scenario;
     }
 
     protected static function formatScenarioStatus(?Scenario $record): string
