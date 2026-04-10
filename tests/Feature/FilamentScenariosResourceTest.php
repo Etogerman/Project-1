@@ -450,6 +450,121 @@ JSON,
         }
     }
 
+    public function test_save_scenario_rejects_default_branch_with_extra_keys(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_two_lite_default_shape',
+            'name' => 'Проверка default-ветки',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "evaluate",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_two_lite_default_shape"
+        }
+    ],
+    "blocks": {
+        "evaluate": {
+            "type": "condition",
+            "branches": [
+                {
+                    "if": {
+                        "var": "run.city",
+                        "equals": "Москва"
+                    },
+                    "then": "done"
+                },
+                {
+                    "default": "done",
+                    "then": "unexpected"
+                }
+            ]
+        },
+        "done": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 2 lite schema validation should reject ambiguous default branches.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Ветка #1 блока evaluate содержит неподдерживаемые ключи: then.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
+    }
+
+    public function test_save_scenario_rejects_condition_with_mixed_operator_shapes(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_two_lite_mixed_condition',
+            'name' => 'Проверка mixed-condition',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "evaluate",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_two_lite_mixed_condition"
+        }
+    ],
+    "blocks": {
+        "evaluate": {
+            "type": "condition",
+            "branches": [
+                {
+                    "if": {
+                        "not": {
+                            "var": "run.city",
+                            "equals": "Москва"
+                        },
+                        "var": "run.country",
+                        "equals": "Россия"
+                    },
+                    "then": "done"
+                },
+                {
+                    "default": "done"
+                }
+            ]
+        },
+        "done": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 2 lite schema validation should reject mixed operator shapes.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Блок evaluate, ветка #0 должна содержать ровно один оператор условия.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
+    }
+
     public function test_admin_cannot_publish_empty_draft_schema(): void
     {
         $admin = User::factory()->create([

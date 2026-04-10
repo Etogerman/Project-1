@@ -22,9 +22,7 @@ class ApplyScenarioTagEffectsAction
         }
 
         $contact = $this->resolveRootContactAction->handle($contact);
-
-        $assignSlugs = collect($actions)
-            ->where('type', 'set_tag')
+        $actionSlugs = collect($actions)
             ->pluck('value')
             ->filter(fn (mixed $value): bool => is_string($value) && trim($value) !== '')
             ->map(fn (string $value): string => trim($value))
@@ -32,57 +30,55 @@ class ApplyScenarioTagEffectsAction
             ->values()
             ->all();
 
-        $removeSlugs = collect($actions)
-            ->where('type', 'remove_tag')
-            ->pluck('value')
-            ->filter(fn (mixed $value): bool => is_string($value) && trim($value) !== '')
-            ->map(fn (string $value): string => trim($value))
-            ->unique()
-            ->values()
+        $tagsBySlug = Tag::query()
+            ->active()
+            ->whereIn('slug', $actionSlugs)
+            ->get(['id', 'slug'])
+            ->keyBy('slug');
+
+        $assignedTagIds = $contact->tags()
+            ->whereIn('tags.slug', $actionSlugs)
+            ->pluck('tags.id')
+            ->map(fn (mixed $tagId): int => (int) $tagId)
             ->all();
 
-        if ($assignSlugs !== []) {
-            $assignTags = Tag::query()
-                ->active()
-                ->whereIn('slug', $assignSlugs)
-                ->get(['id', 'slug']);
+        foreach ($actions as $action) {
+            $tagSlug = is_string($action['value'] ?? null)
+                ? trim((string) $action['value'])
+                : '';
 
-            $assignTagIds = $assignTags
-                ->pluck('id')
-                ->map(fn (mixed $tagId): int => (int) $tagId)
-                ->all();
+            if ($tagSlug === '') {
+                continue;
+            }
 
-            $existingAssignedTagIds = $contact->tags()
-                ->whereIn('tags.id', $assignTagIds)
-                ->pluck('tags.id')
-                ->map(fn (mixed $tagId): int => (int) $tagId)
-                ->all();
+            $tag = $tagsBySlug->get($tagSlug);
 
-            $tagIdsToAttach = array_values(array_diff($assignTagIds, $existingAssignedTagIds));
+            if (! $tag instanceof Tag) {
+                continue;
+            }
 
-            if ($tagIdsToAttach !== []) {
-                $timestamp = now();
+            $tagId = (int) $tag->id;
 
-                $contact->tags()->attach(collect($tagIdsToAttach)
-                    ->mapWithKeys(fn (int $tagId): array => [$tagId => [
+            if (($action['type'] ?? null) === 'set_tag') {
+                if (! in_array($tagId, $assignedTagIds, true)) {
+                    $timestamp = now();
+
+                    $contact->tags()->attach($tagId, [
                         'assigned_at' => $timestamp,
                         'assigned_by_user_id' => null,
                         'created_at' => $timestamp,
                         'updated_at' => $timestamp,
-                    ]])
-                    ->all());
+                    ]);
+
+                    $assignedTagIds[] = $tagId;
+                }
+
+                continue;
             }
-        }
 
-        if ($removeSlugs !== []) {
-            $removeTagIds = Tag::query()
-                ->whereIn('slug', $removeSlugs)
-                ->pluck('id')
-                ->map(fn (mixed $tagId): int => (int) $tagId)
-                ->all();
-
-            if ($removeTagIds !== []) {
-                $contact->tags()->detach($removeTagIds);
+            if (($action['type'] ?? null) === 'remove_tag' && in_array($tagId, $assignedTagIds, true)) {
+                $contact->tags()->detach($tagId);
+                $assignedTagIds = array_values(array_diff($assignedTagIds, [$tagId]));
             }
         }
 

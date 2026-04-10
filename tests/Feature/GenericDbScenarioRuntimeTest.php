@@ -336,6 +336,85 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSentCount(3);
     }
 
+    public function test_database_backed_scenario_applies_tag_actions_in_declared_order(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7101]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $vipTag = Tag::factory()->create([
+            'name' => 'VIP status',
+        ]);
+
+        $contact->tags()->attach($vipTag->id, [
+            'assigned_at' => now(),
+            'assigned_by_user_id' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_retag', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_retag',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Переназначаем тег.',
+                    'actions' => [
+                        [
+                            'type' => 'remove_tag',
+                            'value' => $vipTag->slug,
+                        ],
+                        [
+                            'type' => 'set_tag',
+                            'value' => $vipTag->slug,
+                        ],
+                    ],
+                    'next' => 'done',
+                ],
+                'done' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_retag',
+            'message_parameter' => 'vip_retag',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $contact->refresh()->load('tags');
+
+        $this->assertSame(['vip-status'], $contact->tags->pluck('slug')->all());
+        Http::assertSentCount(1);
+    }
+
     private function createTelegramChannel(): Channel
     {
         return Channel::factory()->create([

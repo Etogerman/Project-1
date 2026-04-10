@@ -263,6 +263,13 @@ class ValidateScenarioSchemaPayloadAction
             }
 
             if (array_key_exists('default', $branch)) {
+                $this->guardUnexpectedConditionKeys(
+                    $errorKey,
+                    array_keys($branch),
+                    ['default'],
+                    "Ветка #{$branchIndex} блока {$blockId}",
+                );
+
                 $defaultBranchCount++;
 
                 $normalizedBranches[] = [
@@ -275,6 +282,13 @@ class ValidateScenarioSchemaPayloadAction
 
                 continue;
             }
+
+            $this->guardUnexpectedConditionKeys(
+                $errorKey,
+                array_keys($branch),
+                ['if', 'then'],
+                "Ветка #{$branchIndex} блока {$blockId}",
+            );
 
             $conditionalBranchCount++;
 
@@ -404,19 +418,51 @@ class ValidateScenarioSchemaPayloadAction
             $this->fail($errorKey, "{$context} должна содержать JSON-объект условия.");
         }
 
-        if (array_key_exists('all', $condition)) {
+        $operatorKeys = array_values(array_filter(
+            ['all', 'any', 'not', 'equals', 'not_equals', 'in', 'not_in'],
+            fn (string $operator): bool => array_key_exists($operator, $condition),
+        ));
+
+        if (count($operatorKeys) !== 1) {
+            $this->fail($errorKey, "{$context} должна содержать ровно один оператор условия.");
+        }
+
+        $operator = $operatorKeys[0];
+
+        if ($operator === 'all') {
+            $this->guardUnexpectedConditionKeys(
+                $errorKey,
+                array_keys($condition),
+                ['all'],
+                $context,
+            );
+
             return [
                 'all' => $this->normalizeNestedConditionList($blockId, $condition['all'], $errorKey, "{$context}.all"),
             ];
         }
 
-        if (array_key_exists('any', $condition)) {
+        if ($operator === 'any') {
+            $this->guardUnexpectedConditionKeys(
+                $errorKey,
+                array_keys($condition),
+                ['any'],
+                $context,
+            );
+
             return [
                 'any' => $this->normalizeNestedConditionList($blockId, $condition['any'], $errorKey, "{$context}.any"),
             ];
         }
 
-        if (array_key_exists('not', $condition)) {
+        if ($operator === 'not') {
+            $this->guardUnexpectedConditionKeys(
+                $errorKey,
+                array_keys($condition),
+                ['not'],
+                $context,
+            );
+
             return [
                 'not' => $this->normalizeCondition(
                     $blockId,
@@ -437,16 +483,12 @@ class ValidateScenarioSchemaPayloadAction
             $this->fail($errorKey, "{$context} может читать только run.*.");
         }
 
-        $leafOperators = array_values(array_filter(
-            ['equals', 'not_equals', 'in', 'not_in'],
-            fn (string $operator): bool => array_key_exists($operator, $condition),
-        ));
-
-        if (count($leafOperators) !== 1) {
-            $this->fail($errorKey, "{$context} должна содержать ровно один оператор сравнения.");
-        }
-
-        $operator = $leafOperators[0];
+        $this->guardUnexpectedConditionKeys(
+            $errorKey,
+            array_keys($condition),
+            ['var', $operator],
+            $context,
+        );
 
         return match ($operator) {
             'equals', 'not_equals' => [
@@ -505,6 +547,28 @@ class ValidateScenarioSchemaPayloadAction
             fn (mixed $item): string => $this->normalizeRequiredString($item, $errorKey, $message),
             $value,
         ));
+    }
+
+    /**
+     * @param  list<int, string>  $actualKeys
+     * @param  list<int, string>  $allowedKeys
+     */
+    private function guardUnexpectedConditionKeys(string $errorKey, array $actualKeys, array $allowedKeys, string $context): void
+    {
+        $unexpectedKeys = array_values(array_diff($actualKeys, $allowedKeys));
+
+        if ($unexpectedKeys === []) {
+            return;
+        }
+
+        $this->fail(
+            $errorKey,
+            sprintf(
+                '%s содержит неподдерживаемые ключи: %s.',
+                $context,
+                implode(', ', $unexpectedKeys),
+            ),
+        );
     }
 
     private function normalizeRequiredString(mixed $value, string $errorKey, string $message): string
