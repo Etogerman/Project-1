@@ -2,53 +2,44 @@
 
 namespace App\Services\Scenarios;
 
+use App\Models\Scenario;
 use App\Models\Channel;
+use App\Models\ScenarioVersion;
+use App\Services\Scenarios\Adapters\BuiltinScenarioAdapter;
+use Illuminate\Support\Facades\Cache;
 
 class ScenarioRegistry
 {
+    private const DB_DEFINITIONS_CACHE_KEY = 'scenarios:db-definitions:v1';
+
     /**
-     * @return array<string, array{handler: class-string, label: string, platforms: list<string>|null}>
+     * @return array<string, array{type: 'builtin'|'database', handler: class-string|null, label: string, platforms: list<string>|null}>
      */
     public function definitions(): array
     {
-        $configured = config('scenarios', []);
+        $resolved = $this->builtInDefinitions();
 
-        if (! is_array($configured)) {
-            return [];
-        }
-
-        $resolved = [];
-
-        foreach ($configured as $scenarioCode => $definition) {
-            if (! is_string($scenarioCode)) {
-                continue;
+        foreach ($this->databaseDefinitions() as $scenarioCode => $definition) {
+            if (! array_key_exists($scenarioCode, $resolved)) {
+                $resolved[$scenarioCode] = $definition;
             }
-
-            $normalizedScenarioCode = trim($scenarioCode);
-
-            if ($normalizedScenarioCode === '') {
-                continue;
-            }
-
-            $normalizedDefinition = $this->normalizeDefinition($definition);
-
-            if ($normalizedDefinition === null) {
-                continue;
-            }
-
-            $resolved[$normalizedScenarioCode] = $normalizedDefinition;
         }
 
         return $resolved;
     }
 
+    public function forgetCachedDefinitions(): void
+    {
+        Cache::forget(self::DB_DEFINITIONS_CACHE_KEY);
+    }
+
     /**
-     * @return array<string, class-string>
+     * @return array<string, class-string|null>
      */
     public function all(): array
     {
         return array_map(
-            static fn (array $definition): string => $definition['handler'],
+            static fn (array $definition): ?string => $definition['handler'],
             $this->definitions(),
         );
     }
@@ -65,12 +56,17 @@ class ScenarioRegistry
             return false;
         }
 
-        return array_key_exists($normalizedScenarioCode, $this->all());
+        return $this->definition($normalizedScenarioCode) !== null;
     }
 
     public function handlerClass(?string $scenarioCode): ?string
     {
         return $this->definition($scenarioCode)['handler'] ?? null;
+    }
+
+    public function type(?string $scenarioCode): ?string
+    {
+        return $this->definition($scenarioCode)['type'] ?? null;
     }
 
     public function label(?string $scenarioCode): ?string
@@ -87,6 +83,42 @@ class ScenarioRegistry
         }
 
         return app($handlerClass);
+    }
+
+    public function makeRuntime(?string $scenarioCode): ?ResolvedScenarioRuntime
+    {
+        $definition = $this->definition($scenarioCode);
+
+        if ($definition === null) {
+            return null;
+        }
+
+        if ($definition['type'] === 'builtin') {
+            $handlerClass = $definition['handler'];
+
+            if (! is_string($handlerClass)) {
+                return null;
+            }
+
+            $handler = app($handlerClass);
+
+            if (! $handler instanceof ScenarioHandler) {
+                return null;
+            }
+
+            return new BuiltinScenarioAdapter(
+                $this->normalizeScenarioCode($scenarioCode),
+                $handler,
+            );
+        }
+
+        $scenario = $this->publishedScenarioModel($this->normalizeScenarioCode($scenarioCode));
+
+        if (! $scenario instanceof Scenario || ! $scenario->publishedVersion instanceof ScenarioVersion) {
+            return null;
+        }
+
+        return new GenericDbScenarioRuntime($scenario, $scenario->publishedVersion);
     }
 
     /**
@@ -137,9 +169,20 @@ class ScenarioRegistry
     }
 
     /**
-     * @return array{handler: class-string, label: string, platforms: list<string>|null}|null
+     * @return array{type: 'builtin'|'database', handler: class-string|null, label: string, platforms: list<string>|null}|null
      */
     private function definition(?string $scenarioCode): ?array
+    {
+        $normalizedScenarioCode = $this->normalizeScenarioCode($scenarioCode);
+
+        if ($normalizedScenarioCode === null) {
+            return null;
+        }
+
+        return $this->definitions()[$normalizedScenarioCode] ?? null;
+    }
+
+    private function normalizeScenarioCode(?string $scenarioCode): ?string
     {
         if (! is_string($scenarioCode)) {
             return null;
@@ -147,15 +190,87 @@ class ScenarioRegistry
 
         $normalizedScenarioCode = trim($scenarioCode);
 
-        if ($normalizedScenarioCode === '') {
-            return null;
-        }
-
-        return $this->definitions()[$normalizedScenarioCode] ?? null;
+        return $normalizedScenarioCode !== '' ? $normalizedScenarioCode : null;
     }
 
     /**
-     * @return array{handler: class-string, label: string, platforms: list<string>|null}|null
+     * @return array<string, array{type: 'builtin', handler: class-string|null, label: string, platforms: list<string>|null}>
+     */
+    private function builtInDefinitions(): array
+    {
+        $configured = config('scenarios', []);
+
+        if (! is_array($configured)) {
+            return [];
+        }
+
+        $resolved = [];
+
+        foreach ($configured as $scenarioCode => $definition) {
+            if (! is_string($scenarioCode)) {
+                continue;
+            }
+
+            $normalizedScenarioCode = $this->normalizeScenarioCode($scenarioCode);
+
+            if ($normalizedScenarioCode === null) {
+                continue;
+            }
+
+            $normalizedDefinition = $this->normalizeDefinition($definition);
+
+            if ($normalizedDefinition === null) {
+                continue;
+            }
+
+            $resolved[$normalizedScenarioCode] = $normalizedDefinition;
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * @return array<string, array{type: 'database', handler: null, label: string, platforms: null}>
+     */
+    private function databaseDefinitions(): array
+    {
+        if (app()->runningUnitTests()) {
+            return $this->queryDatabaseDefinitions();
+        }
+
+        /** @var array<string, array{type: 'database', handler: null, label: string, platforms: null}> $definitions */
+        $definitions = Cache::rememberForever(
+            self::DB_DEFINITIONS_CACHE_KEY,
+            fn (): array => $this->queryDatabaseDefinitions(),
+        );
+
+        return $definitions;
+    }
+
+    /**
+     * @return array<string, array{type: 'database', handler: null, label: string, platforms: null}>
+     */
+    private function queryDatabaseDefinitions(): array
+    {
+        return Scenario::query()
+            ->where('is_active', true)
+            ->where('is_archived', false)
+            ->whereHas('publishedVersion')
+            ->orderBy('code')
+            ->get()
+            ->mapWithKeys(fn (Scenario $scenario): array => [
+                (string) $scenario->code => [
+                    'type' => 'database',
+                    'handler' => null,
+                    'label' => (string) $scenario->name,
+                    'platforms' => null,
+                ],
+            ])
+            ->all();
+    }
+
+    /**
+     * @return array{type: 'builtin', handler: class-string|null, label: string, platforms: list<string>|null}|null
      */
     private function normalizeDefinition(mixed $definition): ?array
     {
@@ -198,9 +313,21 @@ class ScenarioRegistry
         }
 
         return [
+            'type' => 'builtin',
             'handler' => $handlerClass,
             'label' => is_string($label) && $label !== '' ? $label : class_basename($handlerClass),
             'platforms' => $platforms === [] ? null : $platforms,
         ];
+    }
+
+    private function publishedScenarioModel(string $scenarioCode): ?Scenario
+    {
+        return Scenario::query()
+            ->with('publishedVersion')
+            ->where('code', $scenarioCode)
+            ->where('is_active', true)
+            ->where('is_archived', false)
+            ->whereHas('publishedVersion')
+            ->first();
     }
 }

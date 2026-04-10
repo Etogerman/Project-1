@@ -5,7 +5,6 @@ namespace App\Jobs;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
-use App\Services\Scenarios\ScenarioHandler;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Database\QueryException;
 use Illuminate\Bus\Queueable;
@@ -80,9 +79,9 @@ class ProcessScenarioStartJob implements ShouldQueue
             return;
         }
 
-        $handler = $scenarioRegistry->make($binding->scenario_code);
+        $runtime = $scenarioRegistry->makeRuntime($binding->scenario_code);
 
-        if (! $handler instanceof ScenarioHandler || ! $handler->shouldStart($message)) {
+        if ($runtime === null || ! $runtime->shouldStart($message)) {
             return;
         }
 
@@ -108,7 +107,7 @@ class ProcessScenarioStartJob implements ShouldQueue
         }
 
         try {
-            $handler->start($run, $message);
+            $runtime->start($run, $message);
         } catch (Throwable $throwable) {
             $message->channel?->markError($throwable);
 

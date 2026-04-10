@@ -13,7 +13,7 @@ class CreateScenarioAction
      */
     public function handle(array $data): Scenario
     {
-        return DB::transaction(function () use ($data): Scenario {
+        $scenario = DB::transaction(function () use ($data): Scenario {
             $scenario = Scenario::query()->create([
                 'code' => $data['code'],
                 'name' => $data['name'],
@@ -30,5 +30,9 @@ class CreateScenarioAction
 
             return $scenario->fresh(['draftVersion', 'publishedVersion']);
         });
+
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        return $scenario;
     }
 }
