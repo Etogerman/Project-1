@@ -183,7 +183,14 @@
             </div>
         @else
             <div data-role="contact-history-tab" class="ac-contact-page__full-width">
-                @include('filament.contacts.partials.contact-history-timeline', $historyViewData)
+                @include('filament.contacts.partials.contact-history-timeline', array_merge($historyViewData ?? [
+                    'items' => [],
+                    'hasMore' => false,
+                    'visibleCount' => 0,
+                    'totalCount' => 0,
+                ], [
+                    'commentForm' => $historyCommentViewData ?? ['canAddComment' => false],
+                ]))
             </div>
         @endif
     </div>
