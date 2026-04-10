@@ -11,17 +11,16 @@ use RuntimeException;
 
 class AddContactTimelineCommentAction
 {
-    public function __construct(
-        private readonly ResolveRootContactAction $resolveRootContactAction,
-    ) {}
-
     public function handle(Contact $contact, User $actor, string $body, ?Carbon $occurredAt = null): ContactTimelineEvent
     {
         if (! $actor->canAddContactTimelineComments()) {
             throw new AuthorizationException();
         }
 
-        $contact = $this->resolveRootContactAction->handle($contact);
+        if ($contact->isMerged()) {
+            throw new RuntimeException('Комментарий можно добавить только на основном контакте.');
+        }
+
         $body = trim($body);
 
         if ($body === '') {

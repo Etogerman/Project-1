@@ -638,7 +638,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
-    public function test_employee_can_add_operator_comment_to_contact_history(): void
+    public function test_employee_cannot_add_operator_comment_to_contact_history(): void
     {
         $employee = User::factory()->create([
             'is_active' => true,
@@ -651,19 +651,14 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($employee)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->set('activeTab', ViewContact::TAB_HISTORY)
-            ->assertSee('Комментарий оператора')
+            ->assertDontSee('Добавить комментарий')
             ->set('historyCommentBody', 'Операторский комментарий без прав администратора.')
             ->call('addHistoryComment')
             ->assertHasNoErrors()
-            ->assertSee('Оператор истории')
-            ->assertSee('Операторский комментарий без прав администратора.');
+            ->assertDontSee('Оператор истории')
+            ->assertDontSee('Операторский комментарий без прав администратора.');
 
-        $this->assertDatabaseHas('contact_timeline_events', [
-            'contact_id' => $contact->id,
-            'event_type' => ContactTimelineEvent::EVENT_OPERATOR_COMMENT,
-            'actor_user_id' => $employee->id,
-            'body' => 'Операторский комментарий без прав администратора.',
-        ]);
+        $this->assertDatabaseCount('contact_timeline_events', 0);
     }
 
     public function test_contact_history_comment_requires_non_empty_body(): void
@@ -716,6 +711,38 @@ class FilamentContactsResourceTest extends TestCase
             ])
             ->assertSee('Админ истории')
             ->assertSee('Связаться после проверки анкеты.');
+    }
+
+    public function test_merged_contact_cannot_add_operator_comment_via_direct_action_call(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $root = Contact::factory()->create([
+            'name' => 'Основной контакт',
+        ]);
+        $merged = Contact::factory()->create([
+            'name' => 'Архивный дубль',
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $merged->getRouteKey()])
+            ->set('historyCommentBody', 'Не должен записаться из архивного дубля.')
+            ->call('addHistoryComment')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseMissing('contact_timeline_events', [
+            'contact_id' => $root->id,
+            'body' => 'Не должен записаться из архивного дубля.',
+        ]);
+
+        $this->assertDatabaseMissing('contact_timeline_events', [
+            'contact_id' => $merged->id,
+            'body' => 'Не должен записаться из архивного дубля.',
+        ]);
     }
 
     public function test_admin_can_update_contact_profile_from_contact_view_page(): void
