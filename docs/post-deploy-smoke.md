@@ -8,7 +8,8 @@
 ## Обязательное правило
 
 - auto-deploy сам по себе не означает, что релиз принят
-- если staging реально не функционирует, автоматический smoke идёт только по production
+- automatic smoke должен проверять то окружение, куда реально попал новый код
+- production smoke без нового production deploy не считается подтверждением релиза
 - destructive maintenance-команды не запускаются просто ради smoke-check
 
 ## Автоматизация
@@ -16,12 +17,15 @@
 В репозитории можно запускать тот же smoke автоматически через:
 
 - `.github/workflows/post-deploy-smoke.yml`
+- `.github/workflows/production-post-deploy-smoke.yml`
 
-Сейчас для этого в GitHub должен быть настроен environment:
+Если staging автодеплоится после merge в `main`, основной post-merge workflow
+должен быть привязан к staging environment.
 
-- `production`
+`production` environment нужен отдельно для manual smoke после ручного
+production deploy.
 
-И secrets в нём:
+Для каждого реально используемого environment нужны свои secrets:
 
 - `PLAYWRIGHT_BASE_URL`
 - `PLAYWRIGHT_ADMIN_EMAIL`
@@ -40,18 +44,20 @@
 - в checks у merge-коммита в `main`
 
 До merge удобнее смотреть checks прямо в PR. После merge надёжнее смотреть
-конкретный workflow run или checks merge-коммита в `main`.
+конкретный workflow run или checks merge-коммита в `main`, но всегда с учётом
+того, в какое окружение реально ушёл текущий change-set.
 
 ## Staging
 
-Если отдельный staging отсутствует или не поддерживает нужный интеграционный
-контур, staging не должен оставаться формально включённым в автоматический smoke.
+Если staging реально участвует в release flow:
 
-В таком случае:
+- merge в `main` должен проверяться staging smoke
+- staging становится главным автоматическим acceptance gate
 
-- workflow проверяет только `production`
-- staging остаётся отдельным follow-up шагом
-- staging добавляется обратно только после появления реально рабочего окружения
+Если staging не работает или не участвует в приёмке:
+
+- staging не должен оставаться формально включённым в автоматический smoke
+- workflow может временно проверять другое реально используемое окружение
 
 ## Production
 
@@ -61,6 +67,8 @@
 - `/admin/login`
 - безопасный admin smoke
 - отсутствие новых `500` в логах после проверки, если доступ к логам есть
+
+Production smoke делать только после фактического production deploy.
 
 На production не делать ради проверки:
 
@@ -82,7 +90,7 @@
 
 - это ограничение явно фиксируется в результате smoke-check
 - шаг всё равно может считаться закрытым при `Tests = success`
-  и `Post-Deploy Smoke = success`
+  и success smoke по тому окружению, куда реально ушёл новый код
 - отсутствие явных новых ошибок в проверяемом released flow считается
   достаточным минимальным сигналом успеха
 

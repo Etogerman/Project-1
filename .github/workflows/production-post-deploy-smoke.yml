@@ -1,29 +1,32 @@
-name: Post-Deploy Smoke
+name: Production Post-Deploy Smoke
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      release_ref:
+        description: "Deploy ref or release note"
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: post-deploy-smoke-staging-${{ github.ref }}
-  cancel-in-progress: true
+  group: post-deploy-smoke-production
+  cancel-in-progress: false
 
 jobs:
   playwright-smoke:
-    name: post-deploy-smoke (staging)
+    name: post-deploy-smoke (production)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: staging
+    environment: production
 
     env:
       PLAYWRIGHT_BASE_URL: ${{ secrets.PLAYWRIGHT_BASE_URL }}
       PLAYWRIGHT_ADMIN_EMAIL: ${{ secrets.PLAYWRIGHT_ADMIN_EMAIL }}
       PLAYWRIGHT_ADMIN_PASSWORD: ${{ secrets.PLAYWRIGHT_ADMIN_PASSWORD }}
+      RELEASE_REF: ${{ inputs.release_ref }}
 
     steps:
       - name: Checkout repository
@@ -45,6 +48,10 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Log release context
+        run: |
+          echo "Production smoke for ref: ${RELEASE_REF:-not-provided}"
 
       - name: Install npm dependencies
         run: npm ci
@@ -83,7 +90,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-smoke-staging
+          name: playwright-smoke-production
           path: |
             playwright-report/
             test-results/

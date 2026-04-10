@@ -140,16 +140,19 @@ scope с drift относительно `origin/main`.
 Когда integration branch не нужна:
 
 - поток один и он уже проверяется отдельно
-- staging и production auto-deploy идут прямо из отдельных PR после merge
+- merge в `main` уже даёт staging candidate через auto-deploy
+- production остаётся отдельным ручным шагом
 
 ## Post-deploy rule
 
-Даже если deploy уходит автоматически в staging и production:
+Даже если staging deploy уходит автоматически после merge в `main`:
 
 - релиз не считается закрытым, пока не пройден post-deploy smoke-check
 - smoke-check проводится по реально рабочим окружениям текущего release flow
-- если staging отсутствует или не поддерживает нужный интеграционный контур,
-  production-only smoke считается корректным временным режимом
+- если production не автодеплоится, production smoke запускается только после
+  фактического production deploy
+- automatic smoke по production без нового deploy не должен считаться
+  подтверждением релиза
 - destructive maintenance-команды не запускаются просто ради проверки
 
 Подробный checklist см. в `docs/post-deploy-smoke.md`.

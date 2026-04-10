@@ -209,7 +209,7 @@
 
 1. Merge — отдельное действие.
 2. Merge публикует изменения в `main`.
-3. Merge запускает deploy.
+3. Merge запускает только те auto-deploy шаги, которые реально включены в текущем контуре.
 4. Merge не выполняется автоматически только потому, что код готов.
 
 Результат:
@@ -220,24 +220,28 @@
 После merge шаг ещё не считается закрытым.
 
 Нужно проверить:
-1. запустился ли deploy
-2. завершился ли deploy успешно
-3. прошёл ли post-deploy smoke
+1. запустился ли staging auto-deploy, если он включён
+2. завершился ли staging deploy успешно
+3. прошёл ли staging smoke
+4. если production выкатывается вручную — выполнен ли production deploy
+5. прошёл ли production smoke после фактического production deploy
 
 Пока smoke не завершён:
 - step считается незакрытым
 - новый кодовый шаг не начинается
 
 Результат:
-- production-подтверждение шага.
+- staging-подтверждение и, если применимо, production-подтверждение шага.
 
 ## Этап 18. Закрытие issue
 
 Issue закрывается только если одновременно выполнено всё:
 1. код смержен
-2. deploy завершён
-3. post-deploy smoke зелёный
-4. результат соответствует задаче
+2. staging deploy завершён, если staging входит в активный release flow
+3. staging smoke зелёный, если staging входит в активный release flow
+4. production deploy завершён, если шаг реально выкатывается в production
+5. production smoke зелёный после фактического production deploy
+6. результат соответствует задаче
 
 Если задача закрывалась несколькими PR:
 - в issue желательно оставить комментарий со списком закрывающих PR
@@ -298,12 +302,15 @@ Branch активна, пока существует хотя бы одно из
 
 ## Короткая формула процесса
 
-`Задача -> Уточнение -> Read-only анализ -> ТЗ -> Проверка ТЗ -> Улучшение ТЗ -> Slices -> Preflight -> Branch -> Реализация -> Review -> Commit -> Push -> Draft PR в staging -> CI -> Self-review -> Merge в staging -> Staging deploy -> Staging smoke -> PR в main из validated diff -> CI -> Self-review -> Merge в main -> Production deploy -> Production smoke -> Close issue -> Cleanup`
+`Задача -> Уточнение -> Read-only анализ -> ТЗ -> Проверка ТЗ -> Улучшение ТЗ -> Slices -> Preflight -> Branch -> Реализация -> Review -> Commit -> Push -> Draft PR -> CI -> Self-review -> Ready for review -> Merge в main -> Staging autodeploy -> Staging smoke -> Manual production deploy -> Production smoke -> Close issue -> Cleanup`
+
+Если production deploy для конкретного шага не выполняется сразу, stream не
+считается полностью закрытым только по merge и staging smoke.
 
 ## Практическое правило
 
 Новый кодовый шаг можно начинать только тогда, когда предыдущий шаг:
 - смержен
-- выкачен в production
-- прошёл post-deploy smoke
+- выкачен в то окружение, которое реально является release gate для этого шага
+- прошёл релевантный post-deploy smoke
 - формально закрыт

@@ -1,5 +1,16 @@
 # Staging on Laravel Cloud
 
+## Текущий статус
+
+Этот документ описывает staging как реальное интеграционное окружение.
+
+При текущем контуре:
+
+- merge в `main` должен давать staging candidate через auto-deploy
+- staging используется для интеграционной приёмки после merge
+- production выкатывается отдельно, вручную
+- production smoke имеет смысл только после фактического production deploy
+
 ## Goal
 
 Get a stable HTTPS staging domain for Abrikosoff Connector so Telegram and MAX webhooks can target a permanent URL instead of a temporary tunnel.
@@ -68,15 +79,19 @@ The application needs the following tables in staging:
 
 ## Solo developer workflow
 
-For a solo workflow, keep the setup intentionally simple:
+Если staging реально поднят и участвует в приёмке, solo workflow может быть
+таким:
 
 1. Write code locally.
 2. Run PHPUnit locally before pushing.
 3. Push to `main`.
-4. Deploy `staging` from `main`.
-5. Verify all webhook and bot behavior only on staging.
+4. Дождаться staging auto-deploy от `main`.
+5. Verify all webhook and bot behavior on staging.
+6. Отдельно решать, нужен ли production deploy для этого шага.
 
 This keeps local development fast while avoiding multiple temporary bot setups.
+Production smoke не должен использоваться как release confirmation, если
+production deploy для нового merge фактически не выполнялся.
 
 Use the staging environment as the main integration environment for:
 
