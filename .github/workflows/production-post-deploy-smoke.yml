@@ -20,7 +20,7 @@ jobs:
     name: post-deploy-smoke (production)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: production
+    environment: Production
 
     env:
       PLAYWRIGHT_BASE_URL: ${{ secrets.PLAYWRIGHT_BASE_URL }}
