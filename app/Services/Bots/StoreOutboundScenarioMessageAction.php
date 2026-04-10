@@ -3,6 +3,7 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\AutoReplyDeliveryResult;
+use App\Data\Messages\PreparedMessageContentData;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
@@ -19,8 +20,9 @@ class StoreOutboundScenarioMessageAction
         Message $inboundMessage,
         AutoReplyDeliveryResult $deliveryResult,
         string $systemCode,
+        ?PreparedMessageContentData $content = null,
     ): Message {
-        return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult, $systemCode): Message {
+        return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult, $systemCode, $content): Message {
             $inboundMessage->forceFill([
                 'auto_reply_sent_at' => now(),
             ])->save();
@@ -35,7 +37,9 @@ class StoreOutboundScenarioMessageAction
                 'provider_event_key' => null,
                 'external_chat_id' => $inboundMessage->external_chat_id,
                 'external_message_id' => $deliveryResult->externalMessageId,
-                'text' => $deliveryResult->text,
+                'text' => $content?->plainText ?? $deliveryResult->text,
+                'text_format' => $content?->textFormat ?? Message::TEXT_FORMAT_PLAIN_TEXT,
+                'source_text' => $content?->sourceText,
                 'raw_payload' => $deliveryResult->rawPayload,
                 'received_at' => now(),
             ]);

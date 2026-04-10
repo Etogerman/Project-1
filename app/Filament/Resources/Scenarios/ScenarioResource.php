@@ -10,6 +10,7 @@ use App\Services\Scenarios\CreateNextScenarioDraftAction;
 use App\Services\Scenarios\CreateScenarioAction;
 use App\Services\Scenarios\PublishScenarioVersionAction;
 use App\Services\Scenarios\ScenarioRegistry;
+use App\Services\Scenarios\ValidateScenarioSchemaPayloadAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -447,6 +448,9 @@ class ScenarioResource extends Resource
             ]);
         }
 
-        return $decodedPayload;
+        return app(ValidateScenarioSchemaPayloadAction::class)->handle(
+            $decodedPayload,
+            'draft_schema_payload_json',
+        );
     }
 }

@@ -118,7 +118,10 @@ class ScenarioRegistry
             return null;
         }
 
-        return new GenericDbScenarioRuntime($scenario, $scenario->publishedVersion);
+        return app()->make(GenericDbScenarioRuntime::class, [
+            'scenario' => $scenario,
+            'publishedVersion' => $scenario->publishedVersion,
+        ]);
     }
 
     /**
