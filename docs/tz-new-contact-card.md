@@ -414,6 +414,167 @@ Timeline включает только события состояния кон�
 
 Этот этап требует отдельного решения по модели хранения.
 
+### Следующий mini-step после этапа 3 v1
+
+- `ownership_changed`
+- `questionnaire_resumed`
+- другие system events поверх уже введённой timeline write-модели
+
+### Implementation slice: mini-step после этапа 3 v1 (`ownership_changed` + `questionnaire_resumed`)
+
+#### Цель
+
+- расширить вкладку `История` двумя системными событиями поверх уже существующей timeline write-модели:
+  - `ownership_changed`
+  - `questionnaire_resumed`
+
+#### Scope
+
+- новые event types в `ContactTimelineEvent`
+- запись `ownership_changed` из action/service-слоя:
+  - `ClaimContactAction`
+  - `ReleaseContactAssignmentAction`
+  - `SetContactAssigneeAction`
+- запись `questionnaire_resumed` из `ResumeContactDataCollectionAction`
+- builder `Истории` начинает рендерить:
+  - lifecycle events
+  - `operator_comment`
+  - новые system events
+
+#### Out of scope
+
+- новая таблица или новая миграция
+- edit/delete timeline events
+- phone/tag/auto-reply события
+- profile field history `old -> new`
+- Bitrix24 sync/history события
+- новые UI entrypoints
+- изменение текущего permission contract
+
+#### Data contract
+
+##### `ownership_changed`
+
+- `event_type = ownership_changed`
+- `actor_user_id` = сотрудник, выполнивший действие
+- `payload = { from_user_id: ?int, to_user_id: ?int }`
+- `body = null`
+- событие не создаётся, если `from_user_id === to_user_id`
+
+##### `questionnaire_resumed`
+
+- `event_type = questionnaire_resumed`
+- `actor_user_id` = сотрудник, выполнивший действие
+- `payload = { field: string }`
+- `body = null`
+- событие создаётся только если `ResumeContactDataCollectionAction` реально вернул `nextField`
+
+#### Правила записи
+
+- merged-contact не хранит эти события сам; запись идёт только в root-contact
+- запись событий живёт в action/service-слое, а не в page-level или modal UI
+- `ownership_changed` пишется для:
+  - `null -> actor.id` при `claim`
+  - `current_owner_id -> null` при `release`
+  - `from_user_id -> to_user_id` при `assign/reassign`
+- `questionnaire_resumed` пишется только после успешного `startDataCollection()`
+
+#### UI-контракт
+
+- `ownership_changed`
+  - title: `Ответственный изменён`
+  - description:
+    - `Контакт взят в работу`
+    - `Контакт освобождён`
+    - `Ответственный изменён: A -> B`
+- `questionnaire_resumed`
+  - title: `Анкета возобновлена`
+  - description: `Анкета возобновлена с шага: ...`
+- `actorName` рендерится так же, как уже рендерится у `operator_comment`
+
+#### Минимальный write-set
+
+- `ContactTimelineEvent`
+- `ClaimContactAction`
+- `ReleaseContactAssignmentAction`
+- `SetContactAssigneeAction`
+- `ResumeContactDataCollectionAction`
+- `BuildContactHistoryTimelineAction`
+- feature-тесты ownership/resume/history
+
+#### Тестовая стратегия
+
+- claim пишет `ownership_changed`
+- release пишет `ownership_changed`
+- assign/reassign пишет `ownership_changed`
+- сохранение того же самого `assignee` не пишет событие
+- merged-contact path пишет событие в root-contact
+- успешный resume пишет `questionnaire_resumed`
+- `nextField = null` не пишет событие
+- merged-contact resume пишет событие в root-contact
+- `История` рендерит оба новых event types
+- mixed ordering остаётся обратным хронологическим
+
+#### Критерии приёмки
+
+- `История` показывает lifecycle events, comments и ключевые system events в одном timeline
+- ownership и resume пишут события один раз в action/service-слое и не зависят от конкретной UI-оболочки
+- merged/root поведение остаётся корректным
+- новый storage для timeline не добавляется
+
+### Implementation slice: Этап 3 v1 (`operator_comment`)
+
+#### Scope
+
+- новая таблица `contact_timeline_events`
+- новая модель `ContactTimelineEvent`
+- пока только `event_type = operator_comment`
+- форма добавления комментария на вкладке `История`
+- сохранение комментария оператором
+- builder `Истории` смешивает:
+  - существующие lifecycle events
+  - comment events
+- порядок общий, обратный хронологический
+
+#### Out of scope
+
+- `ownership_changed`
+- `questionnaire_resumed`
+- любые другие system events
+- edit/delete comments
+- reactions, mentions, attachments
+- audit history `old -> new`
+- phone/tag/auto-reply/Bitrix events
+
+#### UI-контракт
+
+- на вкладке `История` сверху появляется компактная форма комментария
+- после сохранения комментарий появляется в том же timeline
+- item комментария показывает:
+  - автора
+  - время
+  - текст
+- пустой комментарий не сохраняется
+
+#### Минимальный write-set
+
+- migration для `contact_timeline_events`
+- relation helper на `Contact`
+- новая модель `ContactTimelineEvent`
+- action для записи комментария
+- builder `Истории`
+- page-level `ViewContact`
+- blade/partial вкладки `История`
+- feature-тесты карточки контакта
+
+#### Критерии приёмки
+
+- оператор может добавить комментарий к контакту
+- комментарий хранится локально в новой write-модели
+- timeline показывает и lifecycle events, и comments в одном порядке
+- `История v1` не ломается
+- system events в этот шаг ещё не добавляются
+
 ## История изменений полей
 
 Полная история изменений полей оформляется отдельным ТЗ.
