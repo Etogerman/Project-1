@@ -298,15 +298,40 @@ JSON,
         }
     }
 
-    public function test_admin_can_publish_create_next_draft_and_archive_scenario(): void
+    public function test_admin_cannot_publish_empty_draft_schema(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
         $scenario = app(CreateScenarioAction::class)->handle([
-            'code' => 'qualification',
-            'name' => 'Квалификация',
+            'code' => 'empty_publish',
+            'name' => 'Пустой publish',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('publishDraft', $scenario)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertSame(ScenarioVersion::STATUS_DRAFT, $scenario->draftVersion?->status);
+        $this->assertNull($scenario->publishedVersion);
+    }
+
+    public function test_admin_cannot_publish_legacy_draft_schema(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'legacy_publish',
+            'name' => 'Legacy publish',
             'is_active' => true,
         ]);
 
@@ -322,6 +347,35 @@ JSON,
             ->test(ManageScenarios::class)
             ->assertTableActionVisible('publishDraft', $scenario)
             ->callTableAction('publishDraft', $scenario)
+            ->assertHasTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertSame(ScenarioVersion::STATUS_DRAFT, $scenario->draftVersion?->status);
+        $this->assertNull($scenario->publishedVersion);
+    }
+
+    public function test_admin_can_publish_create_next_draft_and_archive_scenario(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'qualification',
+            'name' => 'Квалификация',
+            'is_active' => true,
+        ]);
+
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => $this->sliceOneSchema('qualification'),
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('publishDraft', $scenario)
+            ->callTableAction('publishDraft', $scenario)
             ->assertHasNoTableActionErrors();
 
         $scenario->refresh();
@@ -330,6 +384,7 @@ JSON,
         $this->assertNull($scenario->draftVersion);
         $this->assertSame(1, $scenario->publishedVersion?->version_number);
         $this->assertSame(ScenarioVersion::STATUS_PUBLISHED, $scenario->publishedVersion?->status);
+        $this->assertSame($this->sliceOneSchema('qualification'), $scenario->publishedVersion?->schema_payload);
 
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
@@ -386,5 +441,41 @@ JSON,
                 $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
                 $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
             });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sliceOneSchema(string $triggerValue): array
+    {
+        return [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => $triggerValue,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'text_format' => 'plain_text',
+                    'next' => 'ask_name',
+                ],
+                'ask_name' => [
+                    'type' => 'question',
+                    'text' => 'Как вас зовут?',
+                    'text_format' => 'plain_text',
+                    'expects' => 'text',
+                    'save_to' => 'run.first_name',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
     }
 }

@@ -40,11 +40,26 @@ class ScenarioVersionLifecycleTest extends TestCase
         ]);
 
         $draftVersion = $scenario->fresh()->draftVersion;
+        $draftVersion->forceFill([
+            'schema_payload' => $this->sliceOneSchema('warmup_builder'),
+        ])->save();
         $publishedVersion = app(PublishScenarioVersionAction::class)->handle($draftVersion);
 
         $this->expectException(ValidationException::class);
 
         app(PublishScenarioVersionAction::class)->handle($publishedVersion);
+    }
+
+    public function test_publish_scenario_version_rejects_empty_schema_payload(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'empty_builder',
+            'name' => 'Пустой сценарий',
+        ]);
+
+        $this->expectException(ValidationException::class);
+
+        app(PublishScenarioVersionAction::class)->handle($scenario->fresh()->draftVersion);
     }
 
     public function test_publish_scenario_version_archives_previous_published_version(): void
@@ -56,23 +71,14 @@ class ScenarioVersionLifecycleTest extends TestCase
 
         $firstDraft = $scenario->fresh()->draftVersion;
         $firstDraft->forceFill([
-            'schema_payload' => [
-                'steps' => [
-                    ['id' => 'step_1'],
-                ],
-            ],
+            'schema_payload' => $this->sliceOneSchema('warmup_builder'),
         ])->save();
 
         $firstPublished = app(PublishScenarioVersionAction::class)->handle($firstDraft);
 
         $secondDraft = app(CreateNextScenarioDraftAction::class)->handle($scenario->fresh());
         $secondDraft->forceFill([
-            'schema_payload' => [
-                'steps' => [
-                    ['id' => 'step_1'],
-                    ['id' => 'step_2'],
-                ],
-            ],
+            'schema_payload' => $this->sliceOneSchema('warmup_builder', 'Какую тему обсудим?'),
         ])->save();
 
         $secondPublished = app(PublishScenarioVersionAction::class)->handle($secondDraft);
@@ -97,11 +103,7 @@ class ScenarioVersionLifecycleTest extends TestCase
 
         $draftVersion = $scenario->fresh()->draftVersion;
         $draftVersion->forceFill([
-            'schema_payload' => [
-                'steps' => [
-                    ['id' => 'intro', 'type' => 'message'],
-                ],
-            ],
+            'schema_payload' => $this->sliceOneSchema('needs_discovery_builder'),
         ])->save();
 
         app(PublishScenarioVersionAction::class)->handle($draftVersion);
@@ -110,11 +112,7 @@ class ScenarioVersionLifecycleTest extends TestCase
 
         $this->assertSame(2, $nextDraft->version_number);
         $this->assertSame(ScenarioVersion::STATUS_DRAFT, $nextDraft->status);
-        $this->assertSame([
-            'steps' => [
-                ['id' => 'intro', 'type' => 'message'],
-            ],
-        ], $nextDraft->schema_payload);
+        $this->assertSame($this->sliceOneSchema('needs_discovery_builder'), $nextDraft->schema_payload);
     }
 
     public function test_create_next_draft_rejects_when_draft_already_exists(): void
@@ -174,5 +172,41 @@ class ScenarioVersionLifecycleTest extends TestCase
         $this->expectException(ValidationException::class);
 
         app(CreateNextScenarioDraftAction::class)->handle($archivedScenario);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sliceOneSchema(string $triggerValue, string $questionText = 'Как вас зовут?'): array
+    {
+        return [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => $triggerValue,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'text_format' => 'plain_text',
+                    'next' => 'ask_name',
+                ],
+                'ask_name' => [
+                    'type' => 'question',
+                    'text' => $questionText,
+                    'text_format' => 'plain_text',
+                    'expects' => 'text',
+                    'save_to' => 'run.first_name',
+                    'next' => 'done',
+                ],
+                'done' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
     }
 }
