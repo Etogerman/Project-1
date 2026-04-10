@@ -28,6 +28,29 @@ class DispatchStoredInboundScenarioAction
             return false;
         }
 
+        if ($this->continueActiveRun($storedMessage)) {
+            return true;
+        }
+
+        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
+            return false;
+        }
+
+        return $this->startMatchingScenario($channel, $storedMessage);
+    }
+
+    public function continueActiveRun(Message $storedMessage): bool
+    {
+        if (
+            ! in_array($storedMessage->message_kind, [
+                Message::KIND_INBOUND_USER,
+                Message::KIND_INBOUND_CONTACT_SHARE,
+            ], true)
+            || $storedMessage->dialog_id === null
+        ) {
+            return false;
+        }
+
         $activeRun = ScenarioRun::query()
             ->active()
             ->where('dialog_id', $storedMessage->dialog_id)
@@ -47,7 +70,12 @@ class DispatchStoredInboundScenarioAction
             return true;
         }
 
-        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
+        return false;
+    }
+
+    public function startMatchingScenario(Channel $channel, Message $storedMessage): bool
+    {
+        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER || $storedMessage->dialog_id === null) {
             return false;
         }
 
@@ -84,7 +112,12 @@ class DispatchStoredInboundScenarioAction
     {
         $runtime = $this->scenarioRegistry->makeRuntime($activeRun->scenario_code);
 
-        return $runtime !== null && ! $runtime instanceof BuiltinScenarioAdapter;
+        if ($runtime === null || $runtime instanceof BuiltinScenarioAdapter) {
+            return false;
+        }
+
+        // Slice 0 wires DB-backed runtimes into discovery only.
+        return ! $runtime instanceof GenericDbScenarioRuntime;
     }
 
     /**

@@ -63,7 +63,7 @@ class DispatchStoredInboundBotMessageAction
         }
 
         if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
-            if ($this->dispatchStoredInboundScenarioAction->handle($channel, $storedMessage)) {
+            if ($this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)) {
                 return;
             }
 
@@ -73,6 +73,10 @@ class DispatchStoredInboundBotMessageAction
         }
 
         if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
+            return;
+        }
+
+        if ($this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)) {
             return;
         }
 
@@ -114,7 +118,7 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if ($this->dispatchStoredInboundScenarioAction->handle($channel, $storedMessage)) {
+        if ($this->dispatchStoredInboundScenarioAction->startMatchingScenario($channel, $storedMessage)) {
             return;
         }
 

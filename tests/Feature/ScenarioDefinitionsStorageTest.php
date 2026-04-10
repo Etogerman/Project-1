@@ -70,6 +70,19 @@ class ScenarioDefinitionsStorageTest extends TestCase
         ]);
     }
 
+    public function test_scenario_code_cannot_reuse_built_in_runtime_code(): void
+    {
+        $this->expectException(ValidationException::class);
+        $this->expectExceptionMessage('Код сценария зарезервирован встроенным сценарием.');
+
+        Scenario::query()->create([
+            'code' => 'warmup',
+            'name' => 'Прогрев через БД',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+    }
+
     public function test_scenario_code_cannot_be_changed_after_creation(): void
     {
         $scenario = Scenario::query()->create([

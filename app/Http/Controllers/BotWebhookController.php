@@ -9,7 +9,6 @@ use App\Services\Bots\BotWebhookRateLimiter;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
-use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Http\JsonResponse;
@@ -427,10 +426,7 @@ class BotWebhookController extends Controller
             return false;
         }
 
-        $run = $this->findTelegramScenarioRun($channel, $payload, (int) ($matches[1] ?? 0));
-
-        return $run instanceof ScenarioRun
-            && app(ScenarioRegistry::class)->type($run->scenario_code) === 'database';
+        return $this->findTelegramScenarioRun($channel, $payload, (int) ($matches[1] ?? 0)) instanceof ScenarioRun;
     }
 
     /**
