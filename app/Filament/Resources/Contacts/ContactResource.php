@@ -1509,7 +1509,9 @@ class ContactResource extends Resource
      *     items:list<array{
      *         type:string,
      *         title:string,
-     *         description:string,
+     *         description:?string,
+     *         body:?string,
+     *         actorName:?string,
      *         timestampLabel:string
      *     }>,
      *     hasMore:bool,

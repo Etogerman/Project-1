@@ -329,6 +329,13 @@ class Contact extends Model
         return $this->hasMany(Dialog::class);
     }
 
+    public function timelineEvents(): HasMany
+    {
+        return $this->hasMany(ContactTimelineEvent::class)
+            ->orderByDesc('occurred_at')
+            ->orderByDesc('id');
+    }
+
     public function phoneNumbers(): HasMany
     {
         return $this->hasMany(ContactPhoneNumber::class)

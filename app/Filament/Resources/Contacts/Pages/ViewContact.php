@@ -5,10 +5,13 @@ namespace App\Filament\Resources\Contacts\Pages;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\Concerns\InteractsWithContactWorkspace;
 use App\Models\Contact;
+use App\Services\Contacts\AddContactTimelineCommentAction;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Model;
+use Throwable;
 
 class ViewContact extends ViewRecord
 {
@@ -34,6 +37,8 @@ class ViewContact extends ViewRecord
 
     public int $historyVisibleCount = 20;
 
+    public string $historyCommentBody = '';
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
@@ -45,6 +50,56 @@ class ViewContact extends ViewRecord
     public function loadMoreHistory(): void
     {
         $this->historyVisibleCount += 20;
+    }
+
+    public function addHistoryComment(): void
+    {
+        if ($this->abortIfContactHistoryCommentForbidden('Не удалось добавить комментарий')) {
+            return;
+        }
+
+        $record = $this->resolveWorkspaceContactOrNotify('Не удалось добавить комментарий');
+
+        if (! $record instanceof Contact) {
+            return;
+        }
+
+        $this->validate([
+            'historyCommentBody' => [
+                'required',
+                'string',
+                'max:2000',
+                static function (string $attribute, mixed $value, \Closure $fail): void {
+                    if (! is_string($value) || trim($value) === '') {
+                        $fail('Введите комментарий.');
+                    }
+                },
+            ],
+        ], [
+            'historyCommentBody.max' => 'Комментарий не должен быть длиннее 2000 символов.',
+        ]);
+
+        try {
+            $employee = $this->resolveCurrentEmployee();
+
+            app(AddContactTimelineCommentAction::class)->handle($record, $employee, $this->historyCommentBody);
+
+            $this->historyCommentBody = '';
+            $this->resetErrorBag('historyCommentBody');
+            $this->replaceWorkspaceContactWithEffectiveContact($record);
+
+            Notification::make()
+                ->success()
+                ->title('Комментарий добавлен')
+                ->body('Комментарий сохранён во внутренней истории контакта.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось добавить комментарий')
+                ->body($throwable->getMessage())
+                ->send();
+        }
     }
 
     public function updatedActiveTab(string $value): void
@@ -107,6 +162,7 @@ class ViewContact extends ViewRecord
         $diagnosticsViewData = $this->activeTab === self::TAB_DIAGNOSTICS
             ? ContactResource::buildDiagnosticsViewData($record)
             : null;
+        $canAddHistoryComment = $this->canCurrentEmployeeAddContactHistoryComments();
 
         return [
             'activeTab' => $this->activeTab,
@@ -135,7 +191,15 @@ class ViewContact extends ViewRecord
             'dialogsViewData' => $dialogsViewData,
             'historyViewData' => $this->activeTab === self::TAB_HISTORY
                 ? ContactResource::buildHistoryTimelineViewData($record, $this->historyVisibleCount)
-                : null,
+                : [
+                    'items' => [],
+                    'hasMore' => false,
+                    'visibleCount' => 0,
+                    'totalCount' => 0,
+                ],
+            'historyCommentViewData' => [
+                'canAddComment' => $canAddHistoryComment,
+            ],
         ];
     }
 
