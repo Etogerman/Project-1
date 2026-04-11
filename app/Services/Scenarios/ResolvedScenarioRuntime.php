@@ -14,5 +14,7 @@ interface ResolvedScenarioRuntime
 
     public function start(ScenarioRun $run, Message $message): void;
 
+    public function supportsContactShareContinuation(ScenarioRun $run): bool;
+
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult;
 }

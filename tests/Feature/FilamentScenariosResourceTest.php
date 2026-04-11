@@ -43,6 +43,26 @@ class FilamentScenariosResourceTest extends TestCase
             ->assertSee('Сценарии');
     }
 
+    public function test_active_admin_can_open_scenarios_page_with_existing_scenario(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        app(CreateScenarioAction::class)->handle([
+            'code' => 'slice3_page_open',
+            'name' => 'Проверка страницы сценариев',
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(ScenarioResource::getUrl())
+            ->assertOk()
+            ->assertSee('Сценарии')
+            ->assertSee('Проверка страницы сценариев');
+    }
+
     public function test_employee_cannot_open_scenarios_page(): void
     {
         $employee = User::factory()->create([
@@ -565,6 +585,98 @@ JSON,
         }
     }
 
+    public function test_admin_can_save_slice_three_schema_with_phone_capture(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_three_phone_capture',
+            'name' => 'Проверка slice 3',
+            'is_active' => true,
+        ]);
+
+        ScenarioResource::saveScenario([
+            'name' => $scenario->name,
+            'is_active' => true,
+            'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_three_phone_capture"
+        }
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "message",
+            "text": "Старт",
+            "next": "capture_phone"
+        },
+        "capture_phone": {
+            "type": "phone_capture",
+            "text": "Поделитесь номером телефона.",
+            "next": "done"
+        },
+        "done": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+        ], $scenario);
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $this->assertSame($this->sliceThreeSchema('slice_three_phone_capture'), $scenario->draftVersion?->schema_payload);
+    }
+
+    public function test_save_scenario_rejects_phone_capture_with_save_to(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_three_phone_capture_invalid',
+            'name' => 'Проверка slice 3 invalid',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "capture_phone",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_three_phone_capture_invalid"
+        }
+    ],
+    "blocks": {
+        "capture_phone": {
+            "type": "phone_capture",
+            "text": "Поделитесь номером телефона.",
+            "save_to": "run.phone",
+            "next": "done"
+        },
+        "done": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 3 schema validation should reject phone_capture with save_to.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Блок capture_phone использует save_to, это не входит в текущий DB-runtime.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
+    }
+
     public function test_admin_cannot_publish_empty_draft_schema(): void
     {
         $admin = User::factory()->create([
@@ -740,6 +852,40 @@ JSON,
                     'next' => 'end',
                 ],
                 'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sliceThreeSchema(string $triggerValue): array
+    {
+        return [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => $triggerValue,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Старт',
+                    'text_format' => 'plain_text',
+                    'next' => 'capture_phone',
+                ],
+                'capture_phone' => [
+                    'type' => 'phone_capture',
+                    'text' => 'Поделитесь номером телефона.',
+                    'text_format' => 'plain_text',
+                    'next' => 'done',
+                ],
+                'done' => [
                     'type' => 'complete',
                 ],
             ],

@@ -845,9 +845,11 @@ class AutoReplyRuleResource extends Resource
         $channelSettings = static::buildChannelSettingsFromSharedButtonConfig($channelIds, $sharedButtonConfig);
         $legacyBridgeData = static::buildLegacyBridgeData($channelIds, $sharedButtonConfig);
         $ruleData = static::mutateAutoReplyRuleData(
-            Arr::except($data, ['assign_tag_ids', 'remove_tag_ids', 'required_tag_ids', 'excluded_tag_ids', 'channel_ids', 'button_kind', 'button_text', 'button_url'])
-                + ['channel_ids' => $channelIds]
-                + $legacyBridgeData,
+            array_replace(
+                Arr::except($data, ['assign_tag_ids', 'remove_tag_ids', 'required_tag_ids', 'excluded_tag_ids', 'channel_ids', 'button_kind', 'button_text', 'button_url']),
+                ['channel_ids' => $channelIds],
+                $legacyBridgeData,
+            ),
             $record,
         );
 
@@ -1199,15 +1201,30 @@ class AutoReplyRuleResource extends Resource
         $telegramButtonType = null;
         $maxButtonType = null;
 
-        if ($primaryChannelId !== null && $sharedButtonConfig['button_kind'] === static::BUTTON_KIND_REQUEST_PHONE) {
-            $primaryChannel = Channel::query()->find($primaryChannelId);
+        if ($sharedButtonConfig['button_kind'] === static::BUTTON_KIND_REQUEST_PHONE) {
+            $channels = Channel::query()
+                ->whereIn('id', $channelIds)
+                ->get()
+                ->keyBy('id');
+
+            $primaryChannel = collect($channelIds)
+                ->map(fn (int $channelId): ?Channel => $channels->get($channelId))
+                ->filter(fn (?Channel $channel): bool => $channel instanceof Channel)
+                ->first(fn (Channel $channel): bool => $channel->platform === Channel::PLATFORM_TELEGRAM);
+
+            if (! $primaryChannel instanceof Channel) {
+                $primaryChannel = collect($channelIds)
+                    ->map(fn (int $channelId): ?Channel => $channels->get($channelId))
+                    ->filter(fn (?Channel $channel): bool => $channel instanceof Channel)
+                    ->first(fn (Channel $channel): bool => $channel->platform === Channel::PLATFORM_MAX);
+            }
 
             if ($primaryChannel instanceof Channel) {
+                $primaryChannelId = (int) $primaryChannel->id;
+
                 if ($primaryChannel->platform === Channel::PLATFORM_TELEGRAM) {
                     $telegramButtonType = AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE;
-                }
-
-                if ($primaryChannel->platform === Channel::PLATFORM_MAX) {
+                } elseif ($primaryChannel->platform === Channel::PLATFORM_MAX) {
                     $maxButtonType = AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE;
                 }
             }

@@ -63,7 +63,10 @@ class DispatchStoredInboundBotMessageAction
         }
 
         if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
-            if ($this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)) {
+            if (
+                $storedResult->shouldQueuePhoneCaptureFollowUp()
+                && $this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)
+            ) {
                 return;
             }
 

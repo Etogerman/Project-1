@@ -176,6 +176,164 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSentCount(3);
     }
 
+    public function test_database_backed_scenario_waits_for_contact_share_and_completes_phone_capture_flow(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7201]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7202]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7203]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('vip_phone_capture', $this->phoneCaptureSchema('vip_phone_capture'));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_phone_capture',
+            'message_parameter' => 'vip_phone_capture',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('capture_phone', $run->current_step);
+        $this->assertCount(2, $outboundMessages);
+        $this->assertSame('Добро пожаловать в сценарий.', $outboundMessages[0]->text);
+        $this->assertSame('Поделитесь номером телефона.', $outboundMessages[1]->text);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Поделитесь номером телефона.'
+            && data_get($request->data(), 'reply_markup.keyboard.0.0.request_contact') === true
+            && data_get($request->data(), 'reply_markup.keyboard.0.0.text') === 'Поделиться номером телефона');
+
+        $phoneShare = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'raw_payload' => [
+                'message' => [
+                    'contact' => [
+                        'phone_number' => '+7 999 123 45 67',
+                    ],
+                ],
+            ],
+        ]);
+
+        (new ProcessScenarioInboundJob($phoneShare->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertNull($run->current_step);
+        $this->assertSame('completed', $run->exit_outcome);
+        $this->assertCount(3, $outboundMessages);
+        $this->assertSame('Спасибо, номер получили.', $outboundMessages[2]->text);
+        Http::assertSentCount(3);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Спасибо, номер получили.'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
+    }
+
+    public function test_database_backed_scenario_keeps_waiting_when_text_arrives_on_phone_capture_step(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7301]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7302]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('vip_phone_capture', $this->phoneCaptureSchema('vip_phone_capture'));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_phone_capture',
+            'message_parameter' => 'vip_phone_capture',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $textReply = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Не хочу делиться номером',
+        ]);
+
+        (new ProcessScenarioInboundJob($textReply->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('capture_phone', $run->current_step);
+        $this->assertNull($run->exit_outcome);
+        $this->assertSame([], $run->state_payload);
+        $this->assertCount(2, $outboundMessages);
+        Http::assertSentCount(2);
+    }
+
     public function test_database_backed_scenario_branches_by_condition_and_applies_tag_effects(): void
     {
         Http::fake([
@@ -504,6 +662,43 @@ class GenericDbScenarioRuntimeTest extends TestCase
                     'type' => 'question',
                     'text' => 'Какой у вас бюджет?',
                     'save_to' => 'run.budget_tier',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function phoneCaptureSchema(string $parameter): array
+    {
+        return [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => $parameter,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать в сценарий.',
+                    'next' => 'capture_phone',
+                ],
+                'capture_phone' => [
+                    'type' => 'phone_capture',
+                    'text' => 'Поделитесь номером телефона.',
+                    'next' => 'thank_you',
+                ],
+                'thank_you' => [
+                    'type' => 'message',
+                    'text' => 'Спасибо, номер получили.',
                     'next' => 'end',
                 ],
                 'end' => [

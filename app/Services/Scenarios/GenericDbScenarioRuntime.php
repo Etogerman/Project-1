@@ -18,6 +18,8 @@ use RuntimeException;
 
 class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 {
+    private const PHONE_CAPTURE_BUTTON_TEXT = 'Поделиться номером телефона';
+
     public function __construct(
         private readonly Scenario $scenario,
         private readonly ScenarioVersion $publishedVersion,
@@ -88,6 +90,20 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         ])->save();
     }
 
+    public function supportsContactShareContinuation(ScenarioRun $run): bool
+    {
+        $currentStep = filled($run->current_step) ? trim((string) $run->current_step) : null;
+
+        if ($currentStep === null) {
+            return false;
+        }
+
+        $schema = $this->validatedSchemaOrNull();
+        $block = $schema['blocks'][$currentStep] ?? null;
+
+        return is_array($block) && ($block['type'] ?? null) === 'phone_capture';
+    }
+
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
     {
         $schema = $this->validatedSchema();
@@ -106,44 +122,17 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
         $block = $schema['blocks'][$currentStep];
 
-        if (($block['type'] ?? null) !== 'question') {
-            return new ScenarioInboundResult(
+        return match ($block['type'] ?? null) {
+            'question' => $this->handleQuestionInbound($message, $schema, $block, $currentStep, $statePayload),
+            'phone_capture' => $this->handlePhoneCaptureInbound($message, $schema, $block, $currentStep, $statePayload),
+            default => new ScenarioInboundResult(
                 consumed: true,
                 status: ScenarioRun::STATUS_CANCELLED,
                 currentStep: null,
                 statePayload: $statePayload,
                 exitOutcome: 'invalid_current_step',
-            );
-        }
-
-        $answer = is_string($message->text) ? trim($message->text) : '';
-
-        if ($answer === '') {
-            return new ScenarioInboundResult(
-                consumed: true,
-                status: ScenarioRun::STATUS_CANCELLED,
-                currentStep: null,
-                statePayload: $statePayload,
-                exitOutcome: 'unsupported_inbound',
-            );
-        }
-
-        data_set($statePayload, (string) $block['save_to'], $answer);
-
-        $progress = $this->advanceFromBlock(
-            $message,
-            $schema,
-            (string) $block['next'],
-            $statePayload,
-        );
-
-        return new ScenarioInboundResult(
-            consumed: true,
-            status: $progress['status'],
-            currentStep: $progress['current_step'],
-            statePayload: $progress['state_payload'],
-            exitOutcome: $progress['exit_outcome'],
-        );
+            ),
+        };
     }
 
     /**
@@ -167,6 +156,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         string $blockId,
         array $statePayload,
         ?int $remainingTransitions = null,
+        bool $removeTelegramKeyboard = false,
     ): array
     {
         $nextBlockId = $blockId;
@@ -183,9 +173,10 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         }
 
         return match ($block['type'] ?? null) {
-            'message' => $this->advanceAfterMessageBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1),
-            'question' => $this->enterQuestionBlock($message, $nextBlockId, $block, $statePayload),
-            'condition' => $this->advanceAfterConditionBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1),
+            'message' => $this->advanceAfterMessageBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1, $removeTelegramKeyboard),
+            'question' => $this->enterQuestionBlock($message, $nextBlockId, $block, $statePayload, $removeTelegramKeyboard),
+            'condition' => $this->advanceAfterConditionBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1, $removeTelegramKeyboard),
+            'phone_capture' => $this->enterPhoneCaptureBlock($message, $nextBlockId, $block, $statePayload),
             'complete' => $this->completeScenario($message, $block, $statePayload),
             default => throw new RuntimeException("Scenario [{$this->code()}] uses unsupported block type."),
         };
@@ -213,12 +204,14 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         array $block,
         array $statePayload,
         int $remainingTransitions,
+        bool $removeTelegramKeyboard = false,
     ): array
     {
         $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
             (string) $block['text_format'],
+            removeTelegramKeyboard: $removeTelegramKeyboard,
         );
 
         $statePayload = $this->applyBlockActions($message, $block, $statePayload);
@@ -229,6 +222,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             (string) $block['next'],
             $statePayload,
             $remainingTransitions,
+            false,
         );
     }
 
@@ -254,6 +248,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         array $block,
         array $statePayload,
         int $remainingTransitions,
+        bool $removeTelegramKeyboard = false,
     ): array
     {
         $defaultBlockId = null;
@@ -266,6 +261,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                     (string) $branch['then'],
                     $statePayload,
                     $remainingTransitions,
+                    $removeTelegramKeyboard,
                 );
             }
 
@@ -281,6 +277,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                 $defaultBlockId,
                 $statePayload,
                 $remainingTransitions,
+                $removeTelegramKeyboard,
             );
         }
 
@@ -297,12 +294,46 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
      *     exit_outcome: null,
      * }
      */
-    private function enterQuestionBlock(Message $message, string $blockId, array $block, array $statePayload): array
+    private function enterQuestionBlock(
+        Message $message,
+        string $blockId,
+        array $block,
+        array $statePayload,
+        bool $removeTelegramKeyboard = false,
+    ): array
     {
         $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
             (string) $block['text_format'],
+            removeTelegramKeyboard: $removeTelegramKeyboard,
+        );
+
+        return [
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => $blockId,
+            'state_payload' => $statePayload,
+            'exit_outcome' => null,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{
+     *     status: string,
+     *     current_step: string,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: null,
+     * }
+     */
+    private function enterPhoneCaptureBlock(Message $message, string $blockId, array $block, array $statePayload): array
+    {
+        $this->dispatchScenarioMessage(
+            $message,
+            (string) $block['text'],
+            (string) $block['text_format'],
+            requestPhone: true,
         );
 
         return [
@@ -333,7 +364,13 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         ];
     }
 
-    private function dispatchScenarioMessage(Message $message, string $text, string $textFormat): void
+    private function dispatchScenarioMessage(
+        Message $message,
+        string $text,
+        string $textFormat,
+        bool $requestPhone = false,
+        bool $removeTelegramKeyboard = false,
+    ): void
     {
         $channel = $message->channel;
 
@@ -342,7 +379,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         }
 
         $content = $this->prepareMessageContentAction->handle($text, $textFormat);
-        $deliveryResult = $this->deliverScenarioMessage($channel, $message, $content);
+        $deliveryResult = $this->deliverScenarioMessage($channel, $message, $content, $requestPhone, $removeTelegramKeyboard);
 
         $this->storeOutboundScenarioMessageAction->handle(
             $channel,
@@ -359,6 +396,8 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         Channel $channel,
         Message $message,
         PreparedMessageContentData $content,
+        bool $requestPhone = false,
+        bool $removeTelegramKeyboard = false,
     ): \App\Data\Bots\AutoReplyDeliveryResult {
         return match ($channel->platform) {
             Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
@@ -366,7 +405,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                 $message->external_chat_id,
                 $message->contactIdentity?->external_user_id,
                 $content->transportText,
-                null,
+                $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard),
                 $content->textFormat,
             ),
             Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
@@ -374,7 +413,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                 $message->external_chat_id,
                 $message->contactIdentity?->external_user_id,
                 $content->transportText,
-                null,
+                $requestPhone ? $this->maxPhoneCaptureAttachments() : null,
                 $content->textFormat,
             ),
             default => throw new RuntimeException("Scenario [{$this->code()}] does not support channel platform [{$channel->platform}]."),
@@ -442,6 +481,148 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         $this->applyScenarioTagEffectsAction->handle($message->contact, $actions);
 
         return $statePayload;
+    }
+
+    /**
+     * @param  array{
+     *     version: int,
+     *     start_block_id: string,
+     *     triggers: list<array{type: 'parameter', value: string}>,
+     *     blocks: array<string, array<string, mixed>>,
+     * }  $schema
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function handleQuestionInbound(
+        Message $message,
+        array $schema,
+        array $block,
+        string $currentStep,
+        array $statePayload,
+    ): ScenarioInboundResult {
+        $answer = is_string($message->text) ? trim($message->text) : '';
+
+        if ($answer === '') {
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_CANCELLED,
+                currentStep: null,
+                statePayload: $statePayload,
+                exitOutcome: 'unsupported_inbound',
+            );
+        }
+
+        data_set($statePayload, (string) $block['save_to'], $answer);
+
+        $progress = $this->advanceFromBlock(
+            $message,
+            $schema,
+            (string) $block['next'],
+            $statePayload,
+            removeTelegramKeyboard: $message->channel?->platform === Channel::PLATFORM_TELEGRAM,
+        );
+
+        return new ScenarioInboundResult(
+            consumed: true,
+            status: $progress['status'],
+            currentStep: $progress['current_step'],
+            statePayload: $progress['state_payload'],
+            exitOutcome: $progress['exit_outcome'],
+        );
+    }
+
+    /**
+     * @param  array{
+     *     version: int,
+     *     start_block_id: string,
+     *     triggers: list<array{type: 'parameter', value: string}>,
+     *     blocks: array<string, array<string, mixed>>,
+     * }  $schema
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function handlePhoneCaptureInbound(
+        Message $message,
+        array $schema,
+        array $block,
+        string $currentStep,
+        array $statePayload,
+    ): ScenarioInboundResult {
+        if ($message->message_kind !== Message::KIND_INBOUND_CONTACT_SHARE) {
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_ACTIVE,
+                currentStep: $currentStep,
+                statePayload: $statePayload,
+                exitOutcome: null,
+            );
+        }
+
+        $progress = $this->advanceFromBlock(
+            $message,
+            $schema,
+            (string) $block['next'],
+            $statePayload,
+        );
+
+        return new ScenarioInboundResult(
+            consumed: true,
+            status: $progress['status'],
+            currentStep: $progress['current_step'],
+            statePayload: $progress['state_payload'],
+            exitOutcome: $progress['exit_outcome'],
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function telegramPhoneCaptureReplyMarkup(): array
+    {
+        return [
+            'keyboard' => [
+                [[
+                    'text' => self::PHONE_CAPTURE_BUTTON_TEXT,
+                    'request_contact' => true,
+                ]],
+            ],
+            'resize_keyboard' => true,
+            'one_time_keyboard' => true,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function telegramReplyMarkup(bool $requestPhone, bool $removeTelegramKeyboard): ?array
+    {
+        if ($requestPhone) {
+            return $this->telegramPhoneCaptureReplyMarkup();
+        }
+
+        if ($removeTelegramKeyboard) {
+            return [
+                'remove_keyboard' => true,
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function maxPhoneCaptureAttachments(): array
+    {
+        return [[
+            'type' => 'inline_keyboard',
+            'payload' => [
+                'buttons' => [[[
+                    'type' => 'request_contact',
+                    'text' => self::PHONE_CAPTURE_BUTTON_TEXT,
+                ]]],
+            ],
+        ]];
     }
 
     private function systemCode(): string

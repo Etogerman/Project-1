@@ -57,7 +57,7 @@ class ScenarioResource extends Resource
         return parent::getEloquentQuery()->with([
             'draftVersion',
             'publishedVersion',
-            'versions' => fn (Builder $query): Builder => $query->orderByDesc('version_number'),
+            'versions' => fn ($query) => $query->orderByDesc('version_number'),
         ]);
     }
 

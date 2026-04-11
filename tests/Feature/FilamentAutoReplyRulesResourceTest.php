@@ -418,6 +418,116 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
     }
 
+    public function test_admin_can_edit_multichannel_rule_with_shared_request_phone_button(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Telegram Sales',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Мульти',
+                    'reply_text' => 'Общий ответ',
+                ],
+                [
+                    'button_kind' => 'request_phone',
+                ],
+            ))
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('edit', $rule, $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Мульти',
+                    'reply_text' => 'Обновлённый ответ',
+                    'is_active' => true,
+                ],
+                [
+                    'button_kind' => 'request_phone',
+                ],
+            ))
+            ->assertHasNoTableActionErrors();
+
+        $rule = $rule->fresh()->load('channels');
+
+        $this->assertSame('Обновлённый ответ', $rule->reply_text);
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($telegramChannel));
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
+    }
+
+    public function test_admin_can_disable_multichannel_rule_with_shared_request_phone_button(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Telegram Sales',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Мульти',
+                    'reply_text' => 'Общий ответ',
+                ],
+                [
+                    'button_kind' => 'request_phone',
+                ],
+            ))
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('edit', $rule, $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Мульти',
+                    'reply_text' => 'Общий ответ',
+                    'is_active' => false,
+                ],
+                [
+                    'button_kind' => 'request_phone',
+                ],
+            ))
+            ->assertHasNoTableActionErrors();
+
+        $rule = $rule->fresh()->load('channels');
+
+        $this->assertFalse($rule->is_active);
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($telegramChannel));
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
+    }
+
     public function test_admin_can_create_telegram_rule_with_shared_link_button(): void
     {
         $admin = User::factory()->create([
