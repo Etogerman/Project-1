@@ -43,6 +43,26 @@ class FilamentScenariosResourceTest extends TestCase
             ->assertSee('Сценарии');
     }
 
+    public function test_active_admin_can_open_scenarios_page_with_existing_scenario(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        app(CreateScenarioAction::class)->handle([
+            'code' => 'slice3_page_open',
+            'name' => 'Проверка страницы сценариев',
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(ScenarioResource::getUrl())
+            ->assertOk()
+            ->assertSee('Сценарии')
+            ->assertSee('Проверка страницы сценариев');
+    }
+
     public function test_employee_cannot_open_scenarios_page(): void
     {
         $employee = User::factory()->create([
