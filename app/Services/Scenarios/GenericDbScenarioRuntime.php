@@ -104,6 +104,11 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         return is_array($block) && ($block['type'] ?? null) === 'phone_capture';
     }
 
+    public function supportsTelegramCallbackContinuation(ScenarioRun $run, string $callbackData): bool
+    {
+        return false;
+    }
+
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
     {
         $schema = $this->validatedSchema();

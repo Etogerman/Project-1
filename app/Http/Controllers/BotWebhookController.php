@@ -11,6 +11,7 @@ use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
+use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -419,7 +420,8 @@ class BotWebhookController extends Controller
         if (preg_match('/^scenario:warmup:(\d+):([a-z_]+)$/', $callbackData, $matches)) {
             $run = $this->findTelegramScenarioRun($channel, $payload, (int) ($matches[1] ?? 0));
 
-            return $run instanceof ScenarioRun && $run->scenario_code === 'warmup';
+            return $run instanceof ScenarioRun
+                && $this->activeRunSupportsTelegramScenarioCallback($run, $callbackData);
         }
 
         if (! preg_match('/^scenario:(\d+):([A-Za-z0-9_-]{1,32})$/', $callbackData, $matches)) {
@@ -432,7 +434,7 @@ class BotWebhookController extends Controller
             return false;
         }
 
-        return true;
+        return $this->activeRunSupportsTelegramScenarioCallback($run, $callbackData);
     }
 
     /**
@@ -466,6 +468,17 @@ class BotWebhookController extends Controller
         }
 
         return $run;
+    }
+
+    protected function activeRunSupportsTelegramScenarioCallback(ScenarioRun $run, string $callbackData): bool
+    {
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($run->scenario_code);
+
+        if ($runtime === null) {
+            return false;
+        }
+
+        return $runtime->supportsTelegramCallbackContinuation($run, $callbackData);
     }
 
     /**
