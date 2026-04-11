@@ -10,7 +10,7 @@ use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\Bots\TelegramBotApiService;
 
-class WarmupScenario implements ScenarioHandler
+class WarmupScenario implements ScenarioHandler, SupportsTelegramScenarioCallbackContinuation
 {
     public const STEP_AWAITING_REACTION = 'awaiting_reaction';
 
@@ -193,6 +193,20 @@ class WarmupScenario implements ScenarioHandler
             ]),
             exitOutcome: $this->exitOutcomeForAction($action),
         );
+    }
+
+    public function supportsTelegramScenarioCallbackContinuation(ScenarioRun $run, string $callbackData): bool
+    {
+        $callback = $this->parseTelegramCallbackData($callbackData);
+
+        if ($callback === null || (int) $callback['run_id'] !== (int) $run->id) {
+            return false;
+        }
+
+        $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
+        $expectedLabels = $this->expectedLabelsFromStatePayload($statePayload, Channel::PLATFORM_TELEGRAM);
+
+        return array_key_exists($callback['action'], $expectedLabels);
     }
 
     /**
