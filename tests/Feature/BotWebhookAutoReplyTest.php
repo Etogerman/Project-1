@@ -758,6 +758,8 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
 
         $storedMessage = $this->inboundMessages()->firstOrFail();
+        $contact->refresh();
+        $dialog->refresh();
 
         Queue::assertPushed(ProcessScenarioInboundJob::class, function (ProcessScenarioInboundJob $job) use ($storedMessage, $run): bool {
             return $job->inboundMessageId === $storedMessage->id
@@ -765,6 +767,14 @@ class BotWebhookAutoReplyTest extends TestCase
         });
         Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertSame(Message::KIND_INBOUND_CONTACT_SHARE, $storedMessage->message_kind);
+        $this->assertDatabaseHas('contact_phone_numbers', [
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+        ]);
+        $this->assertSame('+7 999 123 45 67', $dialog->confirmed_phone_raw);
+        $this->assertSame('+79991234567', $dialog->confirmed_phone_normalized);
     }
 
     public function test_telegram_contact_share_with_active_database_run_on_phone_capture_and_sender_mismatch_does_not_queue_scenario_inbound_job(): void

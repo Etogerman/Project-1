@@ -46,7 +46,7 @@ trait BuildsIbizaMvpSchema
                 ],
                 'ask_dates' => [
                     'type' => 'question',
-                    'text' => 'Готовы ли вы участвовать в выездной VIP-группе на Ибице?',
+                    'text' => 'Готовы ли вы участвовать в выездной VIP-группе на Ибице? Напишите, например: "Да, готова" или "Пока нет".',
                     'text_format' => 'plain_text',
                     'expects' => 'text',
                     'save_to' => 'run.dates_response',
@@ -62,7 +62,7 @@ trait BuildsIbizaMvpSchema
                 ],
                 'ask_commitment' => [
                     'type' => 'question',
-                    'text' => 'Готовы ли вы включиться в программу полностью?',
+                    'text' => 'Готовы ли вы включиться в программу полностью? Напишите, например: "Полностью" или "Частично".',
                     'text_format' => 'plain_text',
                     'expects' => 'text',
                     'save_to' => 'run.commitment',
@@ -70,7 +70,7 @@ trait BuildsIbizaMvpSchema
                 ],
                 'ask_budget' => [
                     'type' => 'question',
-                    'text' => 'Какой у вас ориентир по бюджету?',
+                    'text' => 'Какой у вас ориентир по бюджету? Напишите, например: "Низкий", "Средний" или "Высокий".',
                     'text_format' => 'plain_text',
                     'expects' => 'text',
                     'save_to' => 'run.budget_tier',
@@ -92,15 +92,15 @@ trait BuildsIbizaMvpSchema
                                 'all' => [
                                     [
                                         'var' => 'run.dates_response',
-                                        'equals' => 'ready',
+                                        'in' => ['Да', 'да', 'Да, готова', 'Да, готов', 'Готова', 'готова', 'Готов', 'готов'],
                                     ],
                                     [
                                         'var' => 'run.commitment',
-                                        'equals' => 'full_commitment',
+                                        'in' => ['Полностью', 'полностью', 'Готова полностью', 'Готов полностью'],
                                     ],
                                     [
                                         'var' => 'run.budget_tier',
-                                        'in' => ['middle', 'high'],
+                                        'in' => ['Средний', 'средний', 'Выше среднего', 'выше среднего', 'Высокий', 'высокий'],
                                     ],
                                 ],
                             ],
@@ -111,11 +111,11 @@ trait BuildsIbizaMvpSchema
                                 'all' => [
                                     [
                                         'var' => 'run.dates_response',
-                                        'equals' => 'ready',
+                                        'in' => ['Да', 'да', 'Да, готова', 'Да, готов', 'Готова', 'готова', 'Готов', 'готов'],
                                     ],
                                     [
                                         'var' => 'run.budget_tier',
-                                        'equals' => 'low',
+                                        'in' => ['Низкий', 'низкий', 'Ниже среднего', 'ниже среднего'],
                                     ],
                                 ],
                             ],
@@ -146,6 +146,14 @@ trait BuildsIbizaMvpSchema
                     'text_format' => 'plain_text',
                     'actions' => [
                         [
+                            'type' => 'remove_tag',
+                            'value' => $borderlineTagSlug,
+                        ],
+                        [
+                            'type' => 'remove_tag',
+                            'value' => $weakTagSlug,
+                        ],
+                        [
                             'type' => 'set_tag',
                             'value' => $strongTagSlug,
                         ],
@@ -164,6 +172,14 @@ trait BuildsIbizaMvpSchema
                     'text_format' => 'plain_text',
                     'actions' => [
                         [
+                            'type' => 'remove_tag',
+                            'value' => $strongTagSlug,
+                        ],
+                        [
+                            'type' => 'remove_tag',
+                            'value' => $weakTagSlug,
+                        ],
+                        [
                             'type' => 'set_tag',
                             'value' => $borderlineTagSlug,
                         ],
@@ -175,6 +191,14 @@ trait BuildsIbizaMvpSchema
                     'text' => 'Спасибо! Пока предложим более мягкий формат участия.',
                     'text_format' => 'plain_text',
                     'actions' => [
+                        [
+                            'type' => 'remove_tag',
+                            'value' => $strongTagSlug,
+                        ],
+                        [
+                            'type' => 'remove_tag',
+                            'value' => $borderlineTagSlug,
+                        ],
                         [
                             'type' => 'set_tag',
                             'value' => $weakTagSlug,

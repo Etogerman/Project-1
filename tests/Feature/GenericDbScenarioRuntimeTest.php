@@ -602,6 +602,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
             $weakTag->slug,
         ));
 
+        $this->attachContactTags($contact, $borderlineTag, $weakTag);
+
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
             'scenario_code' => $scenario->code,
@@ -627,10 +629,10 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
 
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Герман');
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'ready');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Да, готова');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Новые знакомства');
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'full_commitment');
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'high');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Полностью');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Высокий');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Москва');
 
         $run->refresh();
@@ -642,8 +644,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
         $this->assertSame('capture_phone_strong', $run->current_step);
         $this->assertSame('Герман', data_get($run->state_payload, 'run.first_name'));
-        $this->assertSame('ready', data_get($run->state_payload, 'run.dates_response'));
-        $this->assertSame('high', data_get($run->state_payload, 'run.budget_tier'));
+        $this->assertSame('Да, готова', data_get($run->state_payload, 'run.dates_response'));
+        $this->assertSame('Высокий', data_get($run->state_payload, 'run.budget_tier'));
         $this->assertCount(8, $outboundMessages);
         $this->assertSame('Поделитесь номером телефона.', $outboundMessages->last()?->text);
 
@@ -706,6 +708,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
             $weakTag->slug,
         ));
 
+        $this->attachContactTags($contact, $strongTag, $weakTag);
+
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
             'scenario_code' => $scenario->code,
@@ -731,10 +735,10 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
 
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Анна');
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'ready');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Да, готова');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Новые впечатления');
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'partial_commitment');
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'low');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Частично');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Низкий');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Санкт-Петербург');
 
         $run->refresh();
@@ -793,6 +797,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
             $weakTag->slug,
         ));
 
+        $this->attachContactTags($contact, $strongTag, $borderlineTag);
+
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
             'scenario_code' => $scenario->code,
@@ -818,10 +824,10 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
 
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Мария');
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'not_ready');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Пока нет');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Посмотреть формат');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'exploring');
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'middle');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Средний');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Казань');
 
         $run->refresh();
@@ -839,6 +845,18 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('Спасибо! Пока предложим более мягкий формат участия.', $outboundMessages->last()?->text);
         $this->assertNotContains('Поделитесь номером телефона.', $outboundMessages->pluck('text')->all());
         Http::assertSentCount(8);
+    }
+
+    private function attachContactTags(Contact $contact, Tag ...$tags): void
+    {
+        foreach ($tags as $tag) {
+            $contact->tags()->attach($tag->id, [
+                'assigned_at' => now(),
+                'assigned_by_user_id' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
     }
 
     private function createTelegramChannel(): Channel
