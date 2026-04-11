@@ -12,12 +12,19 @@ use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Bots\TelegramBotApiService;
 use App\Services\Messages\PrepareMessageContentAction;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Throwable;
 
 class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 {
+    private const IBIZA_SCENARIO_CODE = 'vip_ibiza';
+
     private const PHONE_CAPTURE_BUTTON_TEXT = 'Поделиться номером телефона';
 
     public function __construct(
@@ -30,6 +37,9 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         private readonly TelegramBotApiService $telegramBotApiService,
         private readonly MaxBotApiService $maxBotApiService,
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
+        private readonly ExtractFirstNameAction $extractFirstNameAction,
+        private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ) {}
 
     public function code(): string
@@ -361,12 +371,69 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
      */
     private function completeScenario(Message $message, array $block, array $statePayload): array
     {
+        $statePayload = $this->applyBlockActions($message, $block, $statePayload);
+        $this->fillEmptyIbizaFirstName($message, $statePayload);
+
         return [
             'status' => ScenarioRun::STATUS_COMPLETED,
             'current_step' => null,
-            'state_payload' => $this->applyBlockActions($message, $block, $statePayload),
+            'state_payload' => $statePayload,
             'exit_outcome' => 'completed',
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function fillEmptyIbizaFirstName(Message $message, array $statePayload): void
+    {
+        if ($this->code() !== self::IBIZA_SCENARIO_CODE || ! $message->contact instanceof Contact) {
+            return;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+
+        if (filled($contact->first_name)) {
+            return;
+        }
+
+        $rawFirstName = data_get($statePayload, 'run.first_name');
+
+        if (! is_string($rawFirstName) || trim($rawFirstName) === '') {
+            return;
+        }
+
+        try {
+            $extraction = $this->extractFirstNameAction->handle($rawFirstName, $contact->name);
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.ibiza_first_name_enrichment_failed', [
+                'scenario_code' => $this->code(),
+                'contact_id' => $contact->id,
+                'message_id' => $message->id,
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return;
+        }
+
+        if (($extraction['decision'] ?? null) !== ExtractFirstNameAction::DECISION_ACCEPT) {
+            return;
+        }
+
+        $firstName = is_string($extraction['first_name'] ?? null)
+            ? trim((string) $extraction['first_name'])
+            : '';
+
+        if ($firstName === '') {
+            return;
+        }
+
+        $contact->forceFill([
+            'first_name' => $firstName,
+        ])->save();
+
+        $this->queueBitrix24ContactSyncAction->handle($contact);
     }
 
     private function dispatchScenarioMessage(
