@@ -7,6 +7,7 @@ use App\Models\Message;
 use App\Models\ScenarioRun;
 use App\Services\Scenarios\ResolvedScenarioRuntime;
 use App\Services\Scenarios\ScenarioHandler;
+use App\Services\Scenarios\SupportsTelegramScenarioCallbackContinuation;
 
 class BuiltinScenarioAdapter implements ResolvedScenarioRuntime
 {
@@ -33,6 +34,15 @@ class BuiltinScenarioAdapter implements ResolvedScenarioRuntime
     public function supportsContactShareContinuation(ScenarioRun $run): bool
     {
         return false;
+    }
+
+    public function supportsTelegramCallbackContinuation(ScenarioRun $run, string $callbackData): bool
+    {
+        if (! $this->handler instanceof SupportsTelegramScenarioCallbackContinuation) {
+            return false;
+        }
+
+        return $this->handler->supportsTelegramScenarioCallbackContinuation($run, $callbackData);
     }
 
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult

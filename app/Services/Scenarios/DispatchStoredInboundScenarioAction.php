@@ -64,6 +64,14 @@ class DispatchStoredInboundScenarioAction
                 return false;
             }
 
+            if (
+                $storedMessage->message_kind === Message::KIND_INBOUND_USER
+                && $this->isTelegramScenarioCallbackMessage($storedMessage)
+                && ! $this->activeRunSupportsTelegramScenarioCallback($activeRun, $storedMessage)
+            ) {
+                return false;
+            }
+
             ProcessScenarioInboundJob::dispatch($storedMessage->id, $activeRun->id)->afterCommit();
 
             return true;
@@ -118,6 +126,20 @@ class DispatchStoredInboundScenarioAction
         return $runtime->supportsContactShareContinuation($activeRun);
     }
 
+    private function activeRunSupportsTelegramScenarioCallback(ScenarioRun $activeRun, Message $storedMessage): bool
+    {
+        $runtime = $this->scenarioRegistry->makeRuntime($activeRun->scenario_code);
+
+        if ($runtime === null) {
+            return false;
+        }
+
+        return $runtime->supportsTelegramCallbackContinuation(
+            $activeRun,
+            (string) data_get($storedMessage->raw_payload, 'callback_query.data', ''),
+        );
+    }
+
     /**
      * @return iterable<int, ScenarioChannelBinding>
      */
@@ -133,7 +155,12 @@ class DispatchStoredInboundScenarioAction
     private function isStoredTelegramScenarioCallback(Channel $channel, Message $storedMessage): bool
     {
         return $channel->platform === Channel::PLATFORM_TELEGRAM
-            && is_array($storedMessage->raw_payload)
+            && $this->isTelegramScenarioCallbackMessage($storedMessage);
+    }
+
+    private function isTelegramScenarioCallbackMessage(Message $storedMessage): bool
+    {
+        return is_array($storedMessage->raw_payload)
             && is_array(data_get($storedMessage->raw_payload, 'callback_query'))
             && str_starts_with((string) data_get($storedMessage->raw_payload, 'callback_query.data', ''), 'scenario:');
     }

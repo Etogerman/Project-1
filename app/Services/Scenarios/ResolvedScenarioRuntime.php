@@ -16,5 +16,7 @@ interface ResolvedScenarioRuntime
 
     public function supportsContactShareContinuation(ScenarioRun $run): bool;
 
+    public function supportsTelegramCallbackContinuation(ScenarioRun $run, string $callbackData): bool;
+
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult;
 }

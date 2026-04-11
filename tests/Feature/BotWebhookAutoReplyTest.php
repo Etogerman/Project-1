@@ -855,10 +855,15 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseCount('contact_phone_numbers', 0);
     }
 
-    public function test_telegram_generic_scenario_callback_is_ignored_for_database_backed_run(): void
+    public function test_telegram_generic_scenario_callback_is_answered_and_ignored_for_database_backed_run(): void
     {
         Queue::fake();
-        Http::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => true,
+            ]),
+        ]);
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -909,6 +914,102 @@ class BotWebhookAutoReplyTest extends TestCase
         Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
         $this->assertDatabaseCount('messages', 0);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/answerCallbackQuery'
+            && $request['callback_query_id'] === 'callback-94');
+    }
+
+    public function test_stale_telegram_generic_scenario_callback_is_answered_and_ignored(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $payload = $this->telegramCallbackPayload(
+            callbackId: 'callback-941',
+            callbackData: 'scenario:999:start_selection',
+            messageId: 93,
+        );
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertDatabaseCount('messages', 0);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/answerCallbackQuery'
+            && $request['callback_query_id'] === 'callback-941');
+    }
+
+    public function test_dispatch_ignores_stored_generic_scenario_callback_for_database_backed_run(): void
+    {
+        Queue::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '300',
+        ]);
+
+        $scenario = $this->createPublishedScenario(code: 'vip_ibiza_apply');
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'welcome',
+            'state_payload' => [],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $storedMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'external_chat_id' => '300',
+            'external_message_id' => 'callback-942',
+            'text' => 'scenario:start_selection',
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'raw_payload' => [
+                'callback_query' => [
+                    'id' => 'callback-942',
+                    'data' => "scenario:{$run->id}:start_selection",
+                ],
+            ],
+        ]);
+
+        $handled = app(DispatchStoredInboundScenarioAction::class)->continueActiveRun($storedMessage);
+
+        $this->assertFalse($handled);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
     }
 
     public function test_telegram_generic_scenario_callback_queues_inbound_job_for_builtin_run(): void
