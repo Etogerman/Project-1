@@ -19,8 +19,8 @@
 - `.github/workflows/post-deploy-smoke.yml`
 - `.github/workflows/production-post-deploy-smoke.yml`
 
-Если staging автодеплоится после merge в `main`, основной post-merge workflow
-должен быть привязан к staging environment.
+Если staging автодеплоится из ветки `staging`, основной automatic smoke
+должен запускаться после `push` в `staging`, а не после `push` в `main`.
 
 `production` environment нужен отдельно для manual smoke после ручного
 production deploy.
@@ -37,21 +37,21 @@ production deploy.
 
 ## Где смотреть статус
 
-Статус `Post-Deploy Smoke` проверяется в GitHub, а не в админке приложения:
+Статус staging smoke проверяется в GitHub, а не в админке приложения:
 
 - во вкладке `Actions` репозитория
-- в конкретном workflow `Post-Deploy Smoke`
-- в checks у merge-коммита в `main`
+- в конкретном workflow `Staging Post-Deploy Smoke`
+- в checks у push/merge-коммита в ветке `staging`
 
 До merge удобнее смотреть checks прямо в PR. После merge надёжнее смотреть
-конкретный workflow run или checks merge-коммита в `main`, но всегда с учётом
+конкретный workflow run или checks коммита в `staging`, но всегда с учётом
 того, в какое окружение реально ушёл текущий change-set.
 
 ## Staging
 
 Если staging реально участвует в release flow:
 
-- merge в `main` должен проверяться staging smoke
+- merge или push в `staging` должен проверяться staging smoke
 - staging становится главным автоматическим acceptance gate
 
 Если staging не работает или не участвует в приёмке:

@@ -73,7 +73,7 @@ npm run test:e2e:report
 
 Staging smoke запускается:
 
-- после каждого `push` в `main`
+- после каждого `push` в `staging`
 - вручную через `workflow_dispatch`
 
 Production smoke запускается:
