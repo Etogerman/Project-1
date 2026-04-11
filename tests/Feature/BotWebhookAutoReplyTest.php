@@ -680,6 +680,93 @@ class BotWebhookAutoReplyTest extends TestCase
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
     }
 
+    public function test_telegram_contact_share_with_active_database_run_on_phone_capture_queues_scenario_inbound_job(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '300',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza_apply', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_apply',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'next' => 'capture_phone',
+                ],
+                'capture_phone' => [
+                    'type' => 'phone_capture',
+                    'text' => 'Поделитесь номером телефона.',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'capture_phone',
+            'state_payload' => [],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $payload = $this->telegramPayload(messageId: 94, text: null);
+        $payload['message']['contact'] = [
+            'phone_number' => '+7 999 123 45 67',
+            'user_id' => 200,
+        ];
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessScenarioInboundJob::class, function (ProcessScenarioInboundJob $job) use ($storedMessage, $run): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->scenarioRunId === $run->id;
+        });
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+    }
+
     public function test_telegram_generic_scenario_callback_is_ignored_for_database_backed_run(): void
     {
         Queue::fake();
@@ -2476,7 +2563,10 @@ class BotWebhookAutoReplyTest extends TestCase
         return $update;
     }
 
-    protected function createPublishedScenario(string $code): Scenario
+    /**
+     * @param  array<string, mixed>|null  $schemaPayload
+     */
+    protected function createPublishedScenario(string $code, ?array $schemaPayload = null): Scenario
     {
         $scenario = Scenario::query()->create([
             'code' => $code,
@@ -2489,7 +2579,7 @@ class BotWebhookAutoReplyTest extends TestCase
             'scenario_id' => $scenario->id,
             'version_number' => 1,
             'status' => ScenarioVersion::STATUS_PUBLISHED,
-            'schema_payload' => [
+            'schema_payload' => $schemaPayload ?? [
                 'version' => 1,
                 'start_block_id' => 'welcome',
                 'triggers' => [

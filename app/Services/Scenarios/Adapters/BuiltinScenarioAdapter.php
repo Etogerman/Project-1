@@ -30,6 +30,11 @@ class BuiltinScenarioAdapter implements ResolvedScenarioRuntime
         $this->handler->start($run, $message);
     }
 
+    public function supportsContactShareContinuation(ScenarioRun $run): bool
+    {
+        return false;
+    }
+
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
     {
         return $this->handler->handleInbound($run, $message);

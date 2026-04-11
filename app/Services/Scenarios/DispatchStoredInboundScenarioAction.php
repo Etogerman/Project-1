@@ -8,7 +8,6 @@ use App\Models\Channel;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
-use App\Services\Scenarios\Adapters\BuiltinScenarioAdapter;
 
 class DispatchStoredInboundScenarioAction
 {
@@ -112,12 +111,11 @@ class DispatchStoredInboundScenarioAction
     {
         $runtime = $this->scenarioRegistry->makeRuntime($activeRun->scenario_code);
 
-        if ($runtime === null || $runtime instanceof BuiltinScenarioAdapter) {
+        if ($runtime === null) {
             return false;
         }
 
-        // Slice 0 wires DB-backed runtimes into discovery only.
-        return ! $runtime instanceof GenericDbScenarioRuntime;
+        return $runtime->supportsContactShareContinuation($activeRun);
     }
 
     /**
