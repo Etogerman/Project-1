@@ -855,7 +855,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseCount('contact_phone_numbers', 0);
     }
 
-    public function test_telegram_generic_scenario_callback_is_ignored_for_database_backed_run(): void
+    public function test_telegram_generic_scenario_callback_queues_inbound_job_for_database_backed_run(): void
     {
         Queue::fake();
         Http::fake();
@@ -906,9 +906,53 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessScenarioInboundJob::class, function (ProcessScenarioInboundJob $job) use ($storedMessage, $run): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->scenarioRunId === $run->id;
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertSame('scenario:start_selection', $storedMessage->text);
+    }
+
+    public function test_stale_telegram_generic_scenario_callback_is_answered_and_ignored(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $payload = $this->telegramCallbackPayload(
+            callbackId: 'callback-941',
+            callbackData: 'scenario:999:start_selection',
+            messageId: 93,
+        );
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
         Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
         $this->assertDatabaseCount('messages', 0);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/answerCallbackQuery'
+            && $request['callback_query_id'] === 'callback-941');
     }
 
     public function test_telegram_generic_scenario_callback_queues_inbound_job_for_builtin_run(): void
