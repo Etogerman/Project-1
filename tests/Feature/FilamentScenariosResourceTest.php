@@ -17,10 +17,12 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
+use Tests\Feature\Concerns\BuildsIbizaMvpSchema;
 
 class FilamentScenariosResourceTest extends TestCase
 {
     use RefreshDatabase;
+    use BuildsIbizaMvpSchema;
 
     protected function setUp(): void
     {
@@ -663,6 +665,61 @@ JSON,
         "done": {
             "type": "complete"
         }
+    }
+
+    public function test_admin_can_save_and_publish_ibiza_mvp_schema(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'vip_ibiza',
+            'name' => 'VIP Ibiza',
+            'is_active' => true,
+        ]);
+        $schema = $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        );
+
+        ScenarioResource::saveScenario([
+            'name' => $scenario->name,
+            'is_active' => true,
+            'draft_schema_payload_json' => json_encode(
+                $schema,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            ),
+        ], $scenario);
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $this->assertSame($schema, $scenario->draftVersion?->schema_payload);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('publishDraft', $scenario)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertNull($scenario->draftVersion);
+        $this->assertSame(1, $scenario->publishedVersion?->version_number);
+        $this->assertSame(ScenarioVersion::STATUS_PUBLISHED, $scenario->publishedVersion?->status);
+        $this->assertSame($schema, $scenario->publishedVersion?->schema_payload);
     }
 }
 JSON,
