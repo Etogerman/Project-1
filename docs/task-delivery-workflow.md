@@ -105,13 +105,11 @@
 
 Перед началом нового кода обязательно проверить:
 1. есть ли локальный незавершённый diff
-2. есть ли открытый draft PR в `staging` или `main`
-3. есть ли открытый обычный PR в `staging` или `main`
-4. есть ли смерженный PR в `staging` без завершённого staging deploy или staging smoke
-5. есть ли staging smoke без отдельного PR в `main` для того же diff
-6. есть ли смерженный PR в `main` без завершённого production deploy, если production входит в release flow
-7. есть ли production deploy без завершённого post-deploy smoke
-8. есть ли другой активный implementation stream
+2. есть ли открытый draft PR
+3. есть ли открытый обычный PR
+4. есть ли смерженный PR без завершённого deploy
+5. есть ли deploy без завершённого post-deploy smoke
+6. есть ли другой активный implementation stream
 
 Если найден хотя бы один хвост:
 - новый кодовый шаг не начинается
@@ -188,7 +186,7 @@
 Результат:
 - опубликованная ветка.
 
-## Этап 14. Draft PR в `staging`
+## Этап 14. Draft PR
 
 1. После push создаётся draft PR.
 2. Draft PR нужен для:
@@ -199,7 +197,7 @@
 Даже если внешний reviewer отсутствует, draft PR всё равно используется.
 
 Результат:
-- опубликованный stream в GitHub для интеграционной проверки.
+- опубликованный stream в GitHub.
 
 ## Этап 15. CI и финальный self-review для `staging`
 
