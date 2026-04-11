@@ -263,6 +263,10 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertCount(3, $outboundMessages);
         $this->assertSame('Спасибо, номер получили.', $outboundMessages[2]->text);
         Http::assertSentCount(3);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Спасибо, номер получили.'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
     }
 
     public function test_database_backed_scenario_keeps_waiting_when_text_arrives_on_phone_capture_step(): void

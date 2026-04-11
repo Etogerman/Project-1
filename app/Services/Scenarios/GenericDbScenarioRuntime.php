@@ -156,6 +156,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         string $blockId,
         array $statePayload,
         ?int $remainingTransitions = null,
+        bool $removeTelegramKeyboard = false,
     ): array
     {
         $nextBlockId = $blockId;
@@ -172,9 +173,9 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         }
 
         return match ($block['type'] ?? null) {
-            'message' => $this->advanceAfterMessageBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1),
-            'question' => $this->enterQuestionBlock($message, $nextBlockId, $block, $statePayload),
-            'condition' => $this->advanceAfterConditionBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1),
+            'message' => $this->advanceAfterMessageBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1, $removeTelegramKeyboard),
+            'question' => $this->enterQuestionBlock($message, $nextBlockId, $block, $statePayload, $removeTelegramKeyboard),
+            'condition' => $this->advanceAfterConditionBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1, $removeTelegramKeyboard),
             'phone_capture' => $this->enterPhoneCaptureBlock($message, $nextBlockId, $block, $statePayload),
             'complete' => $this->completeScenario($message, $block, $statePayload),
             default => throw new RuntimeException("Scenario [{$this->code()}] uses unsupported block type."),
@@ -203,12 +204,14 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         array $block,
         array $statePayload,
         int $remainingTransitions,
+        bool $removeTelegramKeyboard = false,
     ): array
     {
         $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
             (string) $block['text_format'],
+            removeTelegramKeyboard: $removeTelegramKeyboard,
         );
 
         $statePayload = $this->applyBlockActions($message, $block, $statePayload);
@@ -219,6 +222,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             (string) $block['next'],
             $statePayload,
             $remainingTransitions,
+            false,
         );
     }
 
@@ -244,6 +248,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         array $block,
         array $statePayload,
         int $remainingTransitions,
+        bool $removeTelegramKeyboard = false,
     ): array
     {
         $defaultBlockId = null;
@@ -256,6 +261,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                     (string) $branch['then'],
                     $statePayload,
                     $remainingTransitions,
+                    $removeTelegramKeyboard,
                 );
             }
 
@@ -271,6 +277,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                 $defaultBlockId,
                 $statePayload,
                 $remainingTransitions,
+                $removeTelegramKeyboard,
             );
         }
 
@@ -287,12 +294,19 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
      *     exit_outcome: null,
      * }
      */
-    private function enterQuestionBlock(Message $message, string $blockId, array $block, array $statePayload): array
+    private function enterQuestionBlock(
+        Message $message,
+        string $blockId,
+        array $block,
+        array $statePayload,
+        bool $removeTelegramKeyboard = false,
+    ): array
     {
         $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
             (string) $block['text_format'],
+            removeTelegramKeyboard: $removeTelegramKeyboard,
         );
 
         return [
@@ -355,6 +369,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         string $text,
         string $textFormat,
         bool $requestPhone = false,
+        bool $removeTelegramKeyboard = false,
     ): void
     {
         $channel = $message->channel;
@@ -364,7 +379,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         }
 
         $content = $this->prepareMessageContentAction->handle($text, $textFormat);
-        $deliveryResult = $this->deliverScenarioMessage($channel, $message, $content, $requestPhone);
+        $deliveryResult = $this->deliverScenarioMessage($channel, $message, $content, $requestPhone, $removeTelegramKeyboard);
 
         $this->storeOutboundScenarioMessageAction->handle(
             $channel,
@@ -382,6 +397,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         Message $message,
         PreparedMessageContentData $content,
         bool $requestPhone = false,
+        bool $removeTelegramKeyboard = false,
     ): \App\Data\Bots\AutoReplyDeliveryResult {
         return match ($channel->platform) {
             Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
@@ -389,7 +405,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                 $message->external_chat_id,
                 $message->contactIdentity?->external_user_id,
                 $content->transportText,
-                $requestPhone ? $this->telegramPhoneCaptureReplyMarkup() : null,
+                $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard),
                 $content->textFormat,
             ),
             Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
@@ -503,6 +519,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             $schema,
             (string) $block['next'],
             $statePayload,
+            removeTelegramKeyboard: $message->channel?->platform === Channel::PLATFORM_TELEGRAM,
         );
 
         return new ScenarioInboundResult(
@@ -572,6 +589,24 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             'resize_keyboard' => true,
             'one_time_keyboard' => true,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function telegramReplyMarkup(bool $requestPhone, bool $removeTelegramKeyboard): ?array
+    {
+        if ($requestPhone) {
+            return $this->telegramPhoneCaptureReplyMarkup();
+        }
+
+        if ($removeTelegramKeyboard) {
+            return [
+                'remove_keyboard' => true,
+            ];
+        }
+
+        return null;
     }
 
     /**
