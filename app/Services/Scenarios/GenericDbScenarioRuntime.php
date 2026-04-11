@@ -563,6 +563,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             $schema,
             (string) $block['next'],
             $statePayload,
+            removeTelegramKeyboard: $message->channel?->platform === Channel::PLATFORM_TELEGRAM,
         );
 
         return new ScenarioInboundResult(
