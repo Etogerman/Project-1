@@ -107,6 +107,22 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Telegram Клиент');
     }
 
+    public function test_dialog_view_renders_current_dialog_messenger_name_in_technical_context(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$telegramDialog] = $this->createMultiChannelDialogsForContactLabel();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
+            ->assertOk()
+            ->assertSee('Имя из мессенджера')
+            ->assertSee('data-role="dialog-messenger-name"', false)
+            ->assertSee('Telegram Клиент');
+    }
+
     public function test_employee_can_open_dialogs_inbox_page(): void
     {
         $user = User::factory()->create([
