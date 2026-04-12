@@ -540,22 +540,28 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Нет токена');
     }
 
-    public function test_dialogs_inbox_searches_contact_identity_chat_and_phone(): void
+    public function test_dialogs_inbox_searches_contact_profile_identity_chat_and_phone_without_legacy_name(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
         $targetDialog = $this->createInboxDialog([
-            'contactName' => 'Герман Абрикосов',
+            'contactName' => 'Legacy target name',
+            'contactFirstName' => 'Герман',
+            'contactLastName' => 'Абрикосов',
             'externalUserId' => 'target-user-100',
             'externalUsername' => 'german_target',
+            'displayName' => 'Telegram Клиент',
             'externalChatId' => 'target-chat-100',
         ]);
         $otherDialog = $this->createInboxDialog([
-            'contactName' => 'Другой контакт',
+            'contactName' => 'Legacy other name',
+            'contactFirstName' => 'Другой',
+            'contactLastName' => 'Контакт',
             'externalUserId' => 'other-user-200',
             'externalUsername' => 'other_target',
+            'displayName' => 'MAX Клиент',
             'externalChatId' => 'other-chat-200',
         ]);
 
@@ -568,13 +574,19 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->searchTable('Герман Абрикосов')
+            ->searchTable('Герман')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
             ->searchTable('german_target')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('Telegram Клиент')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
 
@@ -589,6 +601,11 @@ class FilamentDialogsResourceTest extends TestCase
             ->searchTable('3527111')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('Legacy target name')
+            ->assertCanNotSeeTableRecords([$targetDialog, $otherDialog]);
     }
 
     public function test_dialogs_inbox_queries_messages_by_dialog_id_not_contact_id(): void
@@ -1312,6 +1329,7 @@ class FilamentDialogsResourceTest extends TestCase
      *     platform?:string,
      *     externalUserId?:string,
      *     externalUsername?:?string,
+     *     displayName?:?string,
      *     externalChatId?:?string,
      *     hasToken?:bool
      * }  $attributes
@@ -1328,6 +1346,8 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $contact = Contact::factory()->create([
             'name' => $attributes['contactName'] ?? 'Inbox contact',
+            'first_name' => $attributes['contactFirstName'] ?? null,
+            'last_name' => $attributes['contactLastName'] ?? null,
             'assigned_user_id' => $attributes['assignedUserId'] ?? null,
         ]);
         $identity = ContactIdentity::factory()->create([
@@ -1335,6 +1355,7 @@ class FilamentDialogsResourceTest extends TestCase
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
             'external_user_id' => $attributes['externalUserId'] ?? 'external-user-'.fake()->unique()->numerify('###'),
+            'display_name' => $attributes['displayName'] ?? null,
             'external_username' => $attributes['externalUsername'] ?? null,
         ]);
         $dialog = Dialog::factory()->create([

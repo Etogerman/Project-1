@@ -291,8 +291,14 @@ class ViewContact extends ViewRecord
             : null;
 
         return [
-            $this->makeRow('Имя (мессенджер)', 'name', $record->name ?? '—'),
-            $this->makeRow('Имя', 'first_name', $record->first_name ?? '—', $profileAction),
+            $this->makeRow(
+                'Имя',
+                'first_name',
+                $record->first_name ?? '—',
+                $profileAction,
+                [],
+                $this->buildFirstNameSourceBadges($record),
+            ),
             $this->makeRow('Фамилия', 'last_name', $record->last_name ?? '—', $profileAction),
             $this->makeRow('Пол', 'gender', Contact::formatGender($record->gender), $profileAction),
             $this->makeRow('Возраст', 'effective_age_years', $record->effective_age_years !== null ? (string) $record->effective_age_years : '—'),
@@ -493,6 +499,7 @@ class ViewContact extends ViewRecord
         string $value,
         ?array $action = null,
         array $items = [],
+        array $badges = [],
     ): array
     {
         return [
@@ -501,6 +508,7 @@ class ViewContact extends ViewRecord
             'value' => $value !== '' ? $value : '—',
             'action' => $action,
             'items' => $items,
+            'badges' => $badges,
         ];
     }
 
@@ -558,11 +566,35 @@ class ViewContact extends ViewRecord
             return implode(' ', $parts);
         }
 
-        if (filled($record->name)) {
-            return (string) $record->name;
+        $displayName = trim((string) $record->display_name);
+
+        if ($displayName !== '') {
+            return $displayName;
         }
 
         return 'Контакт #'.$record->id;
+    }
+
+    /**
+     * @return list<array{label:string,tone:string}>
+     */
+    protected function buildFirstNameSourceBadges(Contact $record): array
+    {
+        if (! filled($record->first_name)) {
+            return [];
+        }
+
+        $label = Contact::formatFirstNameSourceBadgeLabel($record->first_name_source);
+        $tone = Contact::firstNameSourceBadgeTone($record->first_name_source);
+
+        if ($label === null || $tone === null) {
+            return [];
+        }
+
+        return [[
+            'label' => $label,
+            'tone' => $tone,
+        ]];
     }
 
     protected function formatDate(mixed $value): string

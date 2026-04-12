@@ -31,6 +31,16 @@
                         'ac-contact-form-row__value--with-action' => filled($row['action']['method'] ?? null),
                     ])>{{ $row['value'] }}</p>
 
+                    @if (($row['badges'] ?? []) !== [])
+                        <div class="flex flex-wrap items-center gap-2">
+                            @foreach ($row['badges'] as $badge)
+                                <span class="ac-pill" data-tone="{{ $badge['tone'] ?? 'gray' }}">
+                                    {{ $badge['label'] }}
+                                </span>
+                            @endforeach
+                        </div>
+                    @endif
+
                     @if (filled($row['action']['method'] ?? null))
                         <button
                             type="button"
