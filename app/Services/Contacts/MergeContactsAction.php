@@ -264,6 +264,11 @@ class MergeContactsAction
                 $payload[$field] = $secondaryValue;
                 $fieldsCopied[$field] = $this->serializeValue($secondaryValue);
 
+                if ($field === 'first_name') {
+                    $payload['first_name_source'] = $secondary->first_name_source;
+                    $fieldsCopied['first_name_source'] = $this->serializeValue($secondary->first_name_source);
+                }
+
                 continue;
             }
 

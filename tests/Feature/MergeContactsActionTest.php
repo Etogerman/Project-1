@@ -346,6 +346,44 @@ class MergeContactsActionTest extends TestCase
         $this->assertDatabaseCount('contact_merge_logs', 0);
     }
 
+    public function test_it_copies_first_name_source_when_first_name_is_adopted_from_secondary(): void
+    {
+        $channel = Channel::factory()->create();
+        $primary = Contact::factory()->create([
+            'first_name' => null,
+            'first_name_source' => null,
+        ]);
+        $secondary = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_MANUAL,
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'primary-user',
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'secondary-user',
+        ]);
+
+        $result = app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $primary->refresh();
+        $secondary->refresh();
+
+        $this->assertTrue($result->wasMerged);
+        $this->assertSame('Герман', $primary->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $primary->first_name_source);
+        $this->assertSame($primary->id, $secondary->merged_into_contact_id);
+        $this->assertSame('Герман', data_get($result->fieldsCopied, 'first_name'));
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, data_get($result->fieldsCopied, 'first_name_source'));
+    }
+
     public function test_it_preserves_secondary_pending_auto_reply_source_message_when_merging_dialogs(): void
     {
         $channel = Channel::factory()->create();
