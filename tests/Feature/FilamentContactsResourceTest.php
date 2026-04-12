@@ -190,6 +190,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('История')
             ->assertSee('Диагностика')
             ->assertSee('Данные клиента')
+            ->assertSee('Откуда знаем имя?')
             ->assertSee('Клиент назвал')
             ->assertDontSee('Имя (мессенджер)')
             ->assertSee('Работа с контактом')
