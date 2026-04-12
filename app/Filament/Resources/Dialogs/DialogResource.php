@@ -430,14 +430,16 @@ class DialogResource extends Resource
     {
         $normalizedPhoneSearch = AddContactPhoneAction::normalizePhone($search);
 
-        return $query->where(function (Builder $query) use ($search, $normalizedPhoneSearch): void {
+        $likeSearch = "%{$search}%";
+
+        return $query->where(function (Builder $query) use ($search, $normalizedPhoneSearch, $likeSearch): void {
             $query
-                ->where('external_chat_id', 'ilike', "%{$search}%")
-                ->orWhereHas('contact', function (Builder $contactQuery) use ($search, $normalizedPhoneSearch): void {
+                ->where('external_chat_id', 'ilike', $likeSearch)
+                ->orWhereHas('contact', function (Builder $contactQuery) use ($search, $normalizedPhoneSearch, $likeSearch): void {
                     $contactQuery
-                        ->where('name', 'ilike', "%{$search}%")
-                        ->orWhere('first_name', 'ilike', "%{$search}%")
-                        ->orWhere('last_name', 'ilike', "%{$search}%");
+                        ->where('first_name', 'ilike', $likeSearch)
+                        ->orWhere('last_name', 'ilike', $likeSearch)
+                        ->orWhereRaw("trim(concat_ws(' ', first_name, last_name)) ilike ?", [$likeSearch]);
 
                     if ($normalizedPhoneSearch !== '') {
                         $contactQuery->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($normalizedPhoneSearch): void {
@@ -445,11 +447,11 @@ class DialogResource extends Resource
                         });
                     }
                 })
-                ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($search): void {
+                ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($likeSearch): void {
                     $identityQuery
-                        ->where('display_name', 'ilike', "%{$search}%")
-                        ->orWhere('external_user_id', 'ilike', "%{$search}%")
-                        ->orWhere('external_username', 'ilike', "%{$search}%");
+                        ->where('display_name', 'ilike', $likeSearch)
+                        ->orWhere('external_user_id', 'ilike', $likeSearch)
+                        ->orWhere('external_username', 'ilike', $likeSearch);
                 });
         });
     }
