@@ -78,9 +78,15 @@ class StoreInboundMessageAction
                 }
             }
 
-            $this->syncInboundIdentityProfile($identity, $message);
+            if ($this->shouldSyncInboundIdentityProfile($identity, $message)) {
+                $this->syncInboundIdentityProfile($identity, $message);
+            }
 
-            if ($contact instanceof Contact && filled($message->contactName)) {
+            if (
+                $contact instanceof Contact
+                && filled($message->contactName)
+                && $this->shouldApplyAutoFirstName($contact, $message)
+            ) {
                 $this->applyContactFirstNameAction->handle(
                     $contact,
                     $message->contactName,
@@ -336,6 +342,64 @@ class StoreInboundMessageAction
         }
 
         $identity->forceFill($updates)->save();
+    }
+
+    protected function shouldSyncInboundIdentityProfile(ContactIdentity $identity, IncomingBotMessage $message): bool
+    {
+        $latestInbound = Message::query()
+            ->where('contact_identity_id', $identity->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->orderByDesc('received_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $latestInbound instanceof Message) {
+            return true;
+        }
+
+        return $this->isSameOrNewerInboundProfileCandidate($message, $latestInbound);
+    }
+
+    protected function shouldApplyAutoFirstName(Contact $contact, IncomingBotMessage $message): bool
+    {
+        $rootContact = $this->resolveRootContactAction->handle($contact);
+
+        $latestInbound = Message::query()
+            ->where('contact_id', $rootContact->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->orderByDesc('received_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $latestInbound instanceof Message) {
+            return true;
+        }
+
+        return $this->isSameOrNewerInboundProfileCandidate($message, $latestInbound);
+    }
+
+    protected function isSameOrNewerInboundProfileCandidate(
+        IncomingBotMessage $candidate,
+        Message $current,
+    ): bool {
+        $candidateReceivedAt = $candidate->receivedAt;
+        $currentReceivedAt = $current->received_at;
+
+        if ($candidateReceivedAt !== null && $currentReceivedAt !== null) {
+            if ($candidateReceivedAt->gt($currentReceivedAt)) {
+                return true;
+            }
+
+            if ($candidateReceivedAt->lt($currentReceivedAt)) {
+                return false;
+            }
+        } elseif ($candidateReceivedAt !== null) {
+            return true;
+        } elseif ($currentReceivedAt !== null) {
+            return false;
+        }
+
+        return true;
     }
 
     protected function resolveInboundMessageKind(IncomingBotMessage $message): string
