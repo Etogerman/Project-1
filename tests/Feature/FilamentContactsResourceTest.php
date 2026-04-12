@@ -2766,12 +2766,14 @@ class FilamentContactsResourceTest extends TestCase
             'channel_id' => $telegramChannel->id,
             'platform' => $telegramChannel->platform,
             'external_user_id' => 'telegram-dialog-1',
+            'display_name' => 'Telegram Клиент',
             'external_username' => 'telegram_customer',
         ]);
         $maxIdentity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $maxChannel->id,
             'platform' => $maxChannel->platform,
+            'display_name' => 'MAX Клиент',
             'external_user_id' => '',
         ]);
 
@@ -2830,8 +2832,11 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertStringContainsString('data-role="contact-dialogs"', $dialogsHtml);
         $this->assertStringContainsString('data-role="contact-dialog"', $dialogsHtml);
+        $this->assertStringContainsString('data-role="dialog-messenger-name"', $dialogsHtml);
         $this->assertStringContainsString('Telegram Support', $dialogsHtml);
         $this->assertStringContainsString('MAX Sales', $dialogsHtml);
+        $this->assertStringContainsString('Telegram Клиент', $dialogsHtml);
+        $this->assertStringContainsString('MAX Клиент', $dialogsHtml);
         $this->assertStringContainsString('Маршрут готов', $dialogsHtml);
         $this->assertStringContainsString('Нет route source', $dialogsHtml);
         $this->assertStringContainsString('+7 999 111-11-11', $dialogsHtml);
