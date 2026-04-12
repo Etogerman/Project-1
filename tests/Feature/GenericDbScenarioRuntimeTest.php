@@ -858,6 +858,302 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSentCount(8);
     }
 
+    public function test_ibiza_mvp_skips_name_question_when_contact_first_name_is_already_confirmed(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7554],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, contactOverrides: [
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+        ]);
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        ));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_apply',
+            'message_parameter' => 'vip_ibiza_apply',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('dialog_id', $dialog->id)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('ask_dates', $run->current_step);
+        $this->assertSame([], $run->state_payload);
+        $this->assertCount(2, $outboundMessages);
+        $this->assertSame('Добро пожаловать', $outboundMessages[0]->text);
+        $this->assertStringStartsWith('Готовы ли вы участвовать', (string) $outboundMessages[1]->text);
+        $this->assertNotContains('Как вас зовут?', $outboundMessages->pluck('text')->all());
+    }
+
+    public function test_ibiza_mvp_does_not_skip_name_question_for_manual_auto_or_unknown_source(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7555],
+            ]),
+        ]);
+
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        ));
+
+        foreach ([Contact::FIRST_NAME_SOURCE_MANUAL, Contact::FIRST_NAME_SOURCE_AUTO, null] as $source) {
+            $channel = $this->createTelegramChannel();
+            [$contact, $identity, $dialog] = $this->createDialogContext($channel, contactOverrides: [
+                'first_name' => 'Уже есть',
+                'first_name_source' => $source,
+            ]);
+
+            ScenarioChannelBinding::query()->create([
+                'channel_id' => $channel->id,
+                'scenario_code' => $scenario->code,
+                'is_active' => true,
+            ]);
+
+            $startMessage = Message::factory()->create([
+                'contact_id' => $contact->id,
+                'contact_identity_id' => $identity->id,
+                'channel_id' => $channel->id,
+                'dialog_id' => $dialog->id,
+                'direction' => Message::DIRECTION_INBOUND,
+                'message_kind' => Message::KIND_INBOUND_USER,
+                'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+                'external_chat_id' => $dialog->external_chat_id,
+                'text' => '/start vip_ibiza_inst1',
+                'message_parameter' => 'vip_ibiza_inst1',
+            ]);
+
+            (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+                ->handle(app(ScenarioRegistry::class));
+
+            $run = ScenarioRun::query()
+                ->where('scenario_code', $scenario->code)
+                ->where('dialog_id', $dialog->id)
+                ->firstOrFail();
+            $outboundMessages = Message::query()
+                ->where('direction', Message::DIRECTION_OUTBOUND)
+                ->where('dialog_id', $dialog->id)
+                ->orderBy('id')
+                ->get();
+
+            $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+            $this->assertSame('ask_name', $run->current_step);
+            $this->assertSame('Как вас зовут?', $outboundMessages->last()?->text);
+        }
+    }
+
+    public function test_ibiza_mvp_skips_phone_capture_when_contact_already_has_phone_number(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7556],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->phoneNumbers()->create([
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+            'source' => 'manual',
+            'is_primary' => true,
+        ]);
+
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        ));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_apply',
+            'message_parameter' => 'vip_ibiza_apply',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Герман');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Да, готова');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Новые знакомства');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Полностью');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Высокий');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Москва');
+
+        $run->refresh();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('dialog_id', $dialog->id)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('ask_instagram', $run->current_step);
+        $this->assertCount(8, $outboundMessages);
+        $this->assertSame('Какой у вас Instagram?', $outboundMessages->last()?->text);
+        $this->assertNotContains('Поделитесь номером телефона.', $outboundMessages->pluck('text')->all());
+    }
+
+    public function test_ibiza_mvp_skips_phone_capture_when_dialog_already_has_confirmed_phone(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7557],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, dialogOverrides: [
+            'confirmed_phone_raw' => '+7 926 352 71 11',
+            'confirmed_phone_normalized' => '+79263527111',
+        ]);
+
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        ));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_tg1',
+            'message_parameter' => 'vip_ibiza_tg1',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Анна');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Да, готова');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Новые впечатления');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Частично');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Низкий');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Санкт-Петербург');
+
+        $run->refresh();
+        $contact->refresh()->load('tags');
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('dialog_id', $dialog->id)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertNull($run->current_step);
+        $this->assertSame('completed', $run->exit_outcome);
+        $this->assertSame(['vip-borderline'], $contact->tags->pluck('slug')->all());
+        $this->assertCount(8, $outboundMessages);
+        $this->assertSame('Спасибо, посмотрим формат полегче.', $outboundMessages->last()?->text);
+        $this->assertNotContains('Поделитесь номером телефона.', $outboundMessages->pluck('text')->all());
+    }
+
     public function test_ibiza_mvp_completion_dispatches_gender_job_and_bitrix_queue_when_first_name_changes(): void
     {
         Http::fake([
