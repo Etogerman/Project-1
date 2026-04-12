@@ -398,7 +398,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         try {
             $contact = $this->resolveRootContactAction->handle($message->contact);
 
-            if (filled($contact->first_name)) {
+            if ($contact->first_name_source === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED) {
                 return;
             }
 
@@ -487,7 +487,6 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                 return trim((string) $displayName);
             }
         }
-
         return null;
     }
 
