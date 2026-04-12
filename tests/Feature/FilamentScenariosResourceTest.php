@@ -850,6 +850,196 @@ JSON,
         $this->assertFalse($scenario->is_active);
     }
 
+    public function test_admin_can_restore_archived_published_scenario_and_it_remains_inactive(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'restore_published',
+            'name' => 'Restore published',
+            'is_active' => true,
+        ]);
+
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => $this->sliceOneSchema('restore_published'),
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('archiveScenario', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertTrue($scenario->is_archived);
+        $this->assertFalse($scenario->is_active);
+        $this->assertNull($scenario->draftVersion);
+        $this->assertSame(1, $scenario->publishedVersion?->version_number);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('restoreScenario', $scenario)
+            ->assertTableActionHidden('edit', $scenario)
+            ->callTableAction('restoreScenario', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertFalse($scenario->is_archived);
+        $this->assertFalse($scenario->is_active);
+        $this->assertNull($scenario->draftVersion);
+        $this->assertSame(1, $scenario->publishedVersion?->version_number);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('edit', $scenario)
+            ->assertTableActionVisible('createNextDraft', $scenario);
+    }
+
+    public function test_admin_can_restore_archived_draft_only_scenario_and_continue_editing_same_draft(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'restore_draft_only',
+            'name' => 'Restore draft only',
+            'is_active' => true,
+        ]);
+
+        $draftVersion = $scenario->draftVersion()->firstOrFail();
+
+        $draftVersion->forceFill([
+            'schema_payload' => $this->sliceOneSchema('restore_draft_only'),
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('archiveScenario', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertTrue($scenario->is_archived);
+        $this->assertSame($draftVersion->id, $scenario->draftVersion?->id);
+        $this->assertNull($scenario->publishedVersion);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('restoreScenario', $scenario)
+            ->assertTableActionHidden('edit', $scenario)
+            ->callTableAction('restoreScenario', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertFalse($scenario->is_archived);
+        $this->assertFalse($scenario->is_active);
+        $this->assertSame($draftVersion->id, $scenario->draftVersion?->id);
+        $this->assertNull($scenario->publishedVersion);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('edit', $scenario)
+            ->assertTableActionHidden('createNextDraft', $scenario)
+            ->callTableAction('edit', $scenario, [
+                'name' => 'Restore draft only updated',
+                'is_active' => false,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "restore_draft_only"
+        }
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "message",
+            "text": "Привет",
+            "next": "end"
+        },
+        "end": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertSame('Restore draft only updated', $scenario->name);
+        $this->assertSame(
+            [
+                'version' => 1,
+                'start_block_id' => 'welcome',
+                'triggers' => [
+                    [
+                        'type' => 'parameter',
+                        'value' => 'restore_draft_only',
+                    ],
+                ],
+                'blocks' => [
+                    'welcome' => [
+                        'type' => 'message',
+                        'text' => 'Привет',
+                        'text_format' => 'plain_text',
+                        'next' => 'end',
+                    ],
+                    'end' => [
+                        'type' => 'complete',
+                    ],
+                ],
+            ],
+            $scenario->draftVersion?->schema_payload,
+        );
+    }
+
+    public function test_archived_scenario_cannot_be_mutated_via_save_scenario_before_restore(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'archived_save_guard',
+            'name' => 'Archived save guard',
+            'is_active' => true,
+        ]);
+
+        $scenario->forceFill([
+            'is_active' => false,
+            'is_archived' => true,
+        ])->save();
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => 'Changed after archive',
+                'is_active' => true,
+            ], $scenario->fresh());
+
+            $this->fail('Archived scenario save should require restore first.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Архивный сценарий сначала нужно восстановить.',
+                $exception->errors()['scenario'][0] ?? null,
+            );
+        }
+    }
+
     public function test_scenarios_table_uses_inline_list_page_standard(): void
     {
         $admin = User::factory()->create([
