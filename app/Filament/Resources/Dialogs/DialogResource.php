@@ -439,8 +439,7 @@ class DialogResource extends Resource
                     $contactQuery
                         ->where('first_name', 'ilike', $likeSearch)
                         ->orWhere('last_name', 'ilike', $likeSearch)
-                        ->orWhereRaw("trim(concat_ws(' ', first_name, last_name)) ilike ?", [$likeSearch])
-                        ->orWhere('name', 'ilike', $likeSearch);
+                        ->orWhereRaw("trim(concat_ws(' ', first_name, last_name)) ilike ?", [$likeSearch]);
 
                     if ($normalizedPhoneSearch !== '') {
                         $contactQuery->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($normalizedPhoneSearch): void {
