@@ -27,12 +27,6 @@ class ResolveContactDisplayNameAction
             }
         }
 
-        $legacyName = $this->normalizeString($contact->name);
-
-        if ($legacyName !== null) {
-            return $legacyName;
-        }
-
         $identity = $this->resolveRelevantIdentity($contact);
 
         if ($identity instanceof ContactIdentity) {
@@ -41,6 +35,12 @@ class ResolveContactDisplayNameAction
             if ($identityLabel !== null) {
                 return $identityLabel;
             }
+        }
+
+        $legacyName = $this->normalizeString($contact->name);
+
+        if ($legacyName !== null) {
+            return $legacyName;
         }
 
         return sprintf('Контакт #%d', $contact->id);
@@ -58,9 +58,9 @@ class ResolveContactDisplayNameAction
             return $dialog->currentContactIdentity;
         }
 
-        $identity = $contact->relationLoaded('primaryIdentity')
-            ? $contact->primaryIdentity
-            : $contact->primaryIdentity()->first();
+        $identity = $contact->relationLoaded('identities')
+            ? $contact->identities->sortByDesc('id')->first()
+            : $contact->identities()->orderByDesc('id')->first();
 
         return $identity instanceof ContactIdentity ? $identity : null;
     }

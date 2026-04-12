@@ -19,6 +19,7 @@ use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
 use App\Services\Contacts\MergeContactsAction;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
@@ -35,6 +36,7 @@ class StoreInboundMessageAction
         protected FindDuplicateContactRootsByPhoneAction $findDuplicateContactRootsByPhoneAction,
         protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
         protected MergeContactsAction $mergeContactsAction,
+        protected ApplyContactFirstNameAction $applyContactFirstNameAction,
         protected ResolveRootContactAction $resolveRootContactAction,
         protected ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
         protected ChannelActivityLogger $channelActivityLogger,
@@ -51,25 +53,6 @@ class StoreInboundMessageAction
                 ?? $this->resolveOrCreateContactIdentity($channel, $message);
 
             $contact = $identity->contact;
-
-            if (
-                $contact !== null
-                && filled($message->contactName)
-                && $contact->name !== $message->contactName
-            ) {
-                $contact->forceFill([
-                    'name' => $message->contactName,
-                ])->save();
-            }
-
-            if (
-                filled($message->externalUsername)
-                && $identity->external_username !== $message->externalUsername
-            ) {
-                $identity->forceFill([
-                    'external_username' => $message->externalUsername,
-                ])->save();
-            }
 
             if (filled($message->providerEventKey)) {
                 $existingMessage = $this->findExistingInboundMessage($channel, $message->providerEventKey);
@@ -93,6 +76,23 @@ class StoreInboundMessageAction
                         phoneCaptureStatus: $phoneCaptureStatus,
                     );
                 }
+            }
+
+            if ($this->shouldSyncInboundIdentityProfile($identity, $message)) {
+                $this->syncInboundIdentityProfile($identity, $message);
+            }
+
+            if (
+                $contact instanceof Contact
+                && filled($message->contactName)
+                && $this->shouldApplyAutoFirstName($contact, $message)
+            ) {
+                $this->applyContactFirstNameAction->handle(
+                    $contact,
+                    $message->contactName,
+                    Contact::FIRST_NAME_SOURCE_AUTO,
+                    ApplyContactFirstNameAction::REASON_AUTO_INBOUND,
+                );
             }
 
             try {
@@ -286,15 +286,14 @@ class StoreInboundMessageAction
             'channel_id' => $channel->id,
             'platform' => $message->platform,
             'external_user_id' => $message->externalUserId,
+            'display_name' => $message->contactName,
             'external_username' => $message->externalUsername,
         ])->load('contact');
     }
 
     protected function createNewContactWithIdentity(Channel $channel, IncomingBotMessage $message): ContactIdentity
     {
-        $contact = Contact::query()->create([
-            'name' => $message->contactName,
-        ]);
+        $contact = Contact::query()->create([]);
 
         try {
             return $this->createContactIdentityForChannel($contact, $channel, $message);
@@ -321,6 +320,86 @@ class StoreInboundMessageAction
     protected function wasUniqueConstraintViolation(QueryException $exception): bool
     {
         return ($exception->errorInfo[0] ?? null) === '23505';
+    }
+
+    protected function syncInboundIdentityProfile(ContactIdentity $identity, IncomingBotMessage $message): void
+    {
+        $updates = [];
+
+        if (filled($message->contactName) && $identity->display_name !== $message->contactName) {
+            $updates['display_name'] = $message->contactName;
+        }
+
+        if (
+            filled($message->externalUsername)
+            && $identity->external_username !== $message->externalUsername
+        ) {
+            $updates['external_username'] = $message->externalUsername;
+        }
+
+        if ($updates === []) {
+            return;
+        }
+
+        $identity->forceFill($updates)->save();
+    }
+
+    protected function shouldSyncInboundIdentityProfile(ContactIdentity $identity, IncomingBotMessage $message): bool
+    {
+        $latestInbound = Message::query()
+            ->where('contact_identity_id', $identity->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->orderByDesc('received_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $latestInbound instanceof Message) {
+            return true;
+        }
+
+        return $this->isSameOrNewerInboundProfileCandidate($message, $latestInbound);
+    }
+
+    protected function shouldApplyAutoFirstName(Contact $contact, IncomingBotMessage $message): bool
+    {
+        $rootContact = $this->resolveRootContactAction->handle($contact);
+
+        $latestInbound = Message::query()
+            ->where('contact_id', $rootContact->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->orderByDesc('received_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $latestInbound instanceof Message) {
+            return true;
+        }
+
+        return $this->isSameOrNewerInboundProfileCandidate($message, $latestInbound);
+    }
+
+    protected function isSameOrNewerInboundProfileCandidate(
+        IncomingBotMessage $candidate,
+        Message $current,
+    ): bool {
+        $candidateReceivedAt = $candidate->receivedAt;
+        $currentReceivedAt = $current->received_at;
+
+        if ($candidateReceivedAt !== null && $currentReceivedAt !== null) {
+            if ($candidateReceivedAt->gt($currentReceivedAt)) {
+                return true;
+            }
+
+            if ($candidateReceivedAt->lte($currentReceivedAt)) {
+                return false;
+            }
+        } elseif ($candidateReceivedAt !== null) {
+            return true;
+        } elseif ($currentReceivedAt !== null) {
+            return false;
+        }
+
+        return true;
     }
 
     protected function resolveInboundMessageKind(IncomingBotMessage $message): string

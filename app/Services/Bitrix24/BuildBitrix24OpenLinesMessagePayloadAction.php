@@ -5,6 +5,7 @@ namespace App\Services\Bitrix24;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\MessageChronology;
 
@@ -12,6 +13,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly ResolveContactDisplayNameAction $resolveContactDisplayNameAction,
         private readonly CollectBitrix24ContactPhonesAction $collectBitrix24ContactPhonesAction,
         private readonly ResolveBitrix24LiveChatKeyAction $resolveBitrix24LiveChatKeyAction,
         private readonly MessageChronology $messageChronology,
@@ -37,7 +39,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $text = $this->resolveMessageText($message);
         $chatKey = $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
         $userId = $this->resolveUserId($channel, $identity?->external_user_id, $rootContact->id);
-        $userName = $rootContact->display_name;
+        $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 
         $probePayload = $this->resolveRetryAfterSyncProbePayload($retryAfterSync, $rootContact->bitrix24_contact_id);
