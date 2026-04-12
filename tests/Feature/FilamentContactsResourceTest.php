@@ -1148,6 +1148,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Герман');
 
         $this->assertSame('Герман', $root->fresh()->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $root->fresh()->first_name_source);
         $this->assertNull($merged->fresh()->first_name);
     }
 
@@ -1917,6 +1918,7 @@ class FilamentContactsResourceTest extends TestCase
         $contact->refresh();
 
         $this->assertSame('Герман', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $contact->first_name_source);
         $this->assertSame('Абрикосов', $contact->last_name);
         $this->assertSame('male', $contact->gender);
         $this->assertSame('Россия', $contact->country);
@@ -1958,6 +1960,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Герман');
 
         $this->assertSame('Герман', $root->fresh()->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $root->fresh()->first_name_source);
         $this->assertNull($merged->fresh()->first_name);
     }
 

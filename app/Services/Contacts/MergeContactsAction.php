@@ -8,6 +8,7 @@ use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactTimelineEvent;
 use App\Models\Message;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Dialogs\ConsolidateDialogsForRootContactAction;
@@ -190,6 +191,8 @@ class MergeContactsAction
                 'created_by_type' => $createdByType,
             ]);
 
+            $this->logFirstNameConflict($lockedPrimary->fresh(), $lockedSecondary, $fieldsConflicted);
+
             return new MergeContactsResult(
                 primaryContactId: $lockedPrimary->id,
                 secondaryContactId: $lockedSecondary->id,
@@ -294,6 +297,32 @@ class MergeContactsAction
         }
 
         return [$fieldsCopied, $fieldsConflicted];
+    }
+
+    /**
+     * @param  array<string, mixed>  $fieldsConflicted
+     */
+    private function logFirstNameConflict(Contact $primary, Contact $secondary, array $fieldsConflicted): void
+    {
+        if (! array_key_exists('first_name', $fieldsConflicted)) {
+            return;
+        }
+
+        $secondaryFirstName = $this->normalizeComparableValue($secondary->first_name);
+
+        if ($secondaryFirstName === null || $secondaryFirstName === '') {
+            return;
+        }
+
+        $primary->timelineEvents()->create([
+            'event_type' => ContactTimelineEvent::EVENT_MERGE_NAME_CONFLICT,
+            'payload' => [
+                'merged_contact_id' => $secondary->id,
+                'merged_first_name' => $secondary->first_name,
+                'merged_first_name_source' => $secondary->first_name_source,
+            ],
+            'occurred_at' => now(),
+        ]);
     }
 
     /**

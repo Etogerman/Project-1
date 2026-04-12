@@ -8,6 +8,7 @@ use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactTimelineEvent;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Tag;
@@ -246,6 +247,10 @@ class MergeContactsActionTest extends TestCase
         $this->assertSame('phone_exact_match', $secondary->merge_reason);
         $this->assertSame($triggerPhone->phone_normalized, $secondary->merge_trigger_phone);
         $this->assertSame(Contact::DUPLICATE_REVIEW_STATUS_PENDING, $secondary->duplicate_review_status);
+        $this->assertDatabaseHas('contact_timeline_events', [
+            'contact_id' => $primary->id,
+            'event_type' => ContactTimelineEvent::EVENT_MERGE_NAME_CONFLICT,
+        ]);
 
         $primaryDialog->refresh();
         $primaryMessageWithoutDialog->refresh();

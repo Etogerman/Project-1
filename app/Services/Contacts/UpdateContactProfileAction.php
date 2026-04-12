@@ -25,7 +25,6 @@ class UpdateContactProfileAction
         $contact = $this->resolveRootContactAction->handle($contact);
         $collectorWasActive = $contact->isInDataCollection();
 
-        $firstName = $this->normalizeNullableString($attributes['first_name'] ?? null);
         $lastName = $this->normalizeNullableString($attributes['last_name'] ?? null);
         $gender = $this->normalizeGender($attributes['gender'] ?? null);
         $country = $this->normalizeNullableString($attributes['country'] ?? null);
@@ -41,7 +40,6 @@ class UpdateContactProfileAction
         $locationChanged = $countryOrCityChanged || $regionChanged;
 
         $payload = [
-            'first_name' => $firstName,
             'last_name' => $lastName,
             'gender' => $gender,
             'birth_date' => $birthDate,

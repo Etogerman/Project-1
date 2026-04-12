@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -35,6 +36,12 @@ class Contact extends Model
     public const DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM = 'russian_region_confirm';
 
     public const DATA_COLLECTION_FIELD_AGE_RANGE = 'age_range';
+
+    public const FIRST_NAME_SOURCE_AUTO = 'auto';
+
+    public const FIRST_NAME_SOURCE_CONTACT_CONFIRMED = 'contact_confirmed';
+
+    public const FIRST_NAME_SOURCE_MANUAL = 'manual';
 
     public const REGION_STATUS_RESOLVED = 'resolved';
 
@@ -96,6 +103,7 @@ class Contact extends Model
     protected $fillable = [
         'name',
         'first_name',
+        'first_name_source',
         'last_name',
         'gender',
         'age_years',
@@ -218,6 +226,18 @@ class Contact extends Model
         }
 
         return $options;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function allowedFirstNameSources(): array
+    {
+        return [
+            self::FIRST_NAME_SOURCE_AUTO,
+            self::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            self::FIRST_NAME_SOURCE_MANUAL,
+        ];
     }
 
     /**
@@ -480,34 +500,7 @@ class Contact extends Model
     protected function displayName(): Attribute
     {
         return Attribute::make(
-            get: function (): string {
-                $operatorFullName = trim(implode(' ', array_filter([
-                    $this->first_name,
-                    $this->last_name,
-                ], fn (mixed $value): bool => filled($value))));
-
-                if ($operatorFullName !== '') {
-                    return $operatorFullName;
-                }
-
-                if (filled($this->name)) {
-                    return (string) $this->name;
-                }
-
-                $identity = $this->relationLoaded('primaryIdentity')
-                    ? $this->primaryIdentity
-                    : $this->primaryIdentity()->first();
-
-                if (filled($identity?->external_username)) {
-                    return '@'.ltrim((string) $identity->external_username, '@');
-                }
-
-                if (filled($identity?->external_user_id)) {
-                    return (string) $identity->external_user_id;
-                }
-
-                return sprintf('Контакт #%d', $this->id);
-            },
+            get: fn (): string => app(ResolveContactDisplayNameAction::class)->handle($this),
         );
     }
 
