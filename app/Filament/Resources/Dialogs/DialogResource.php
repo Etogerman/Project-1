@@ -435,8 +435,7 @@ class DialogResource extends Resource
                 ->where('external_chat_id', 'ilike', "%{$search}%")
                 ->orWhereHas('contact', function (Builder $contactQuery) use ($search, $normalizedPhoneSearch): void {
                     $contactQuery
-                        ->where('name', 'ilike', "%{$search}%")
-                        ->orWhere('first_name', 'ilike', "%{$search}%")
+                        ->where('first_name', 'ilike', "%{$search}%")
                         ->orWhere('last_name', 'ilike', "%{$search}%");
 
                     if ($normalizedPhoneSearch !== '') {
@@ -447,7 +446,8 @@ class DialogResource extends Resource
                 })
                 ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($search): void {
                     $identityQuery
-                        ->where('external_user_id', 'ilike', "%{$search}%")
+                        ->where('display_name', 'ilike', "%{$search}%")
+                        ->orWhere('external_user_id', 'ilike', "%{$search}%")
                         ->orWhere('external_username', 'ilike', "%{$search}%");
                 });
         });

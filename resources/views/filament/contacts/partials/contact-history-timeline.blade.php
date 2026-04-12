@@ -69,10 +69,12 @@
                             <p class="ac-history-timeline__meta">{{ $item['actorName'] }}</p>
                         @endif
 
+                        @if (filled($item['description'] ?? null))
+                            <p class="ac-history-timeline__description">{{ $item['description'] }}</p>
+                        @endif
+
                         @if (filled($item['body'] ?? null))
                             <p class="ac-history-timeline__comment-body">{{ $item['body'] }}</p>
-                        @elseif (filled($item['description'] ?? null))
-                            <p class="ac-history-timeline__description">{{ $item['description'] }}</p>
                         @endif
                     </div>
                 </article>

@@ -241,6 +241,47 @@ class Contact extends Model
     }
 
     /**
+     * @return array<string, array{label:string,tone:string}>
+     */
+    public static function firstNameSourceBadgeOptions(): array
+    {
+        return [
+            self::FIRST_NAME_SOURCE_AUTO => [
+                'label' => 'Авто',
+                'tone' => 'gray',
+            ],
+            self::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => [
+                'label' => 'Клиент назвал',
+                'tone' => 'info',
+            ],
+            self::FIRST_NAME_SOURCE_MANUAL => [
+                'label' => 'Оператор',
+                'tone' => 'success',
+            ],
+        ];
+    }
+
+    public static function formatFirstNameSourceBadgeLabel(?string $value): ?string
+    {
+        return self::firstNameSourceBadgeOptions()[$value]['label'] ?? null;
+    }
+
+    public static function firstNameSourceBadgeTone(?string $value): ?string
+    {
+        return self::firstNameSourceBadgeOptions()[$value]['tone'] ?? null;
+    }
+
+    public static function formatFirstNameSourceTimelineLabel(?string $value): ?string
+    {
+        return match ($value) {
+            self::FIRST_NAME_SOURCE_AUTO => 'Авто (из мессенджера)',
+            self::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => 'Клиент назвал',
+            self::FIRST_NAME_SOURCE_MANUAL => 'Оператор',
+            default => null,
+        };
+    }
+
+    /**
      * @return array<string, string>
      */
     public static function regionStatusOptions(): array

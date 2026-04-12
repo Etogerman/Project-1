@@ -112,20 +112,16 @@ class BuildContactHistoryTimelineAction
                 continue;
             }
 
-            if ($timelineEvent->event_type !== ContactTimelineEvent::EVENT_OPERATOR_COMMENT) {
-                continue;
-            }
+            $item = match ($timelineEvent->event_type) {
+                ContactTimelineEvent::EVENT_OPERATOR_COMMENT => $this->buildOperatorCommentItem($timelineEvent),
+                ContactTimelineEvent::EVENT_FIRST_NAME_CHANGED => $this->buildFirstNameChangedItem($timelineEvent),
+                ContactTimelineEvent::EVENT_MERGE_NAME_CONFLICT => $this->buildMergeNameConflictItem($timelineEvent),
+                default => null,
+            };
 
-            $items->push($this->makeItem(
-                type: ContactTimelineEvent::EVENT_OPERATOR_COMMENT,
-                title: 'Комментарий оператора',
-                description: null,
-                body: $timelineEvent->body ?: null,
-                actorName: $this->formatCommentActorName($timelineEvent),
-                timestamp: $timelineEvent->occurred_at,
-                sortPriority: 90,
-                sortId: (int) $timelineEvent->id,
-            ));
+            if ($item !== null) {
+                $items->push($item);
+            }
         }
 
         return $items
@@ -218,6 +214,127 @@ class BuildContactHistoryTimelineAction
         }
 
         return 'Контакт объединён с основным контактом.';
+    }
+
+    /**
+     * @return array{
+     *     type:string,
+     *     title:string,
+     *     description:?string,
+     *     body:?string,
+     *     actorName:?string,
+     *     timestampLabel:string,
+     *     sortTimestamp:int,
+     *     sortPriority:int,
+     *     sortId:int
+     * }
+     */
+    private function buildOperatorCommentItem(ContactTimelineEvent $timelineEvent): array
+    {
+        return $this->makeItem(
+            type: ContactTimelineEvent::EVENT_OPERATOR_COMMENT,
+            title: 'Комментарий оператора',
+            description: null,
+            body: $timelineEvent->body ?: null,
+            actorName: $this->formatCommentActorName($timelineEvent),
+            timestamp: $timelineEvent->occurred_at,
+            sortPriority: 90,
+            sortId: (int) $timelineEvent->id,
+        );
+    }
+
+    /**
+     * @return array{
+     *     type:string,
+     *     title:string,
+     *     description:?string,
+     *     body:?string,
+     *     actorName:?string,
+     *     timestampLabel:string,
+     *     sortTimestamp:int,
+     *     sortPriority:int,
+     *     sortId:int
+     * }
+     */
+    private function buildFirstNameChangedItem(ContactTimelineEvent $timelineEvent): array
+    {
+        $payload = is_array($timelineEvent->payload) ? $timelineEvent->payload : [];
+        $previousValue = $this->normalizeTimelineValue($payload['previous_value'] ?? null) ?? '—';
+        $newValue = $this->normalizeTimelineValue($payload['new_value'] ?? null);
+
+        if ($newValue !== null) {
+            return $this->makeItem(
+                type: ContactTimelineEvent::EVENT_FIRST_NAME_CHANGED,
+                title: 'Имя изменено',
+                description: sprintf('«%s» → «%s»', $previousValue, $newValue),
+                body: 'Источник: '.$this->formatTimelineSourceLabel($payload['new_source'] ?? null),
+                timestamp: $timelineEvent->occurred_at,
+                sortPriority: 80,
+                sortId: (int) $timelineEvent->id,
+            );
+        }
+
+        return $this->makeItem(
+            type: ContactTimelineEvent::EVENT_FIRST_NAME_CHANGED,
+            title: 'Имя очищено',
+            description: sprintf('Было: «%s»', $previousValue),
+            body: 'Источник: '.$this->formatTimelineSourceLabel($payload['previous_source'] ?? null),
+            timestamp: $timelineEvent->occurred_at,
+            sortPriority: 80,
+            sortId: (int) $timelineEvent->id,
+        );
+    }
+
+    /**
+     * @return array{
+     *     type:string,
+     *     title:string,
+     *     description:?string,
+     *     body:?string,
+     *     actorName:?string,
+     *     timestampLabel:string,
+     *     sortTimestamp:int,
+     *     sortPriority:int,
+     *     sortId:int
+     * }
+     */
+    private function buildMergeNameConflictItem(ContactTimelineEvent $timelineEvent): array
+    {
+        $payload = is_array($timelineEvent->payload) ? $timelineEvent->payload : [];
+        $mergedContactId = (int) ($payload['merged_contact_id'] ?? 0);
+        $mergedFirstName = $this->normalizeTimelineValue($payload['merged_first_name'] ?? null) ?? '—';
+
+        return $this->makeItem(
+            type: ContactTimelineEvent::EVENT_MERGE_NAME_CONFLICT,
+            title: 'Конфликт имени при объединении',
+            description: $mergedContactId > 0
+                ? sprintf('При объединении с контактом #%d найдено другое имя: «%s»', $mergedContactId, $mergedFirstName)
+                : sprintf('При объединении найдено другое имя: «%s»', $mergedFirstName),
+            body: 'Источник: '.$this->formatTimelineSourceLabel($payload['merged_first_name_source'] ?? null),
+            timestamp: $timelineEvent->occurred_at,
+            sortPriority: 70,
+            sortId: (int) $timelineEvent->id,
+        );
+    }
+
+    private function formatTimelineSourceLabel(mixed $source): string
+    {
+        return Contact::formatFirstNameSourceTimelineLabel(is_string($source) ? $source : null) ?? '—';
+    }
+
+    private function normalizeTimelineValue(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = preg_replace('/\s+/u', ' ', trim((string) $value));
+
+        if (! is_string($normalized)) {
+            return null;
+        }
+
+        return $normalized === '' ? null : $normalized;
     }
 
     private function formatCommentActorName(ContactTimelineEvent $timelineEvent): string
