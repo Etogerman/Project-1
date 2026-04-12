@@ -390,7 +390,7 @@ class StoreInboundMessageAction
                 return true;
             }
 
-            if ($candidateReceivedAt->lt($currentReceivedAt)) {
+            if ($candidateReceivedAt->lte($currentReceivedAt)) {
                 return false;
             }
         } elseif ($candidateReceivedAt !== null) {
