@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
 use App\Models\Channel;
@@ -14,10 +15,12 @@ use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\TestCase;
 use Tests\Feature\Concerns\BuildsIbizaMvpSchema;
@@ -678,6 +681,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('completed', $run->exit_outcome);
         $this->assertSame('@german', data_get($run->state_payload, 'run.instagram_handle'));
         $this->assertSame('Герман', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(['vip-strong'], $contact->tags->pluck('slug')->all());
         $this->assertCount(10, $outboundMessages);
         $this->assertSame('Спасибо, вы подходите под VIP-формат.', $outboundMessages->last()?->text);
@@ -768,6 +772,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertNull($run->current_step);
         $this->assertSame('completed', $run->exit_outcome);
         $this->assertSame('Анна', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(['vip-borderline'], $contact->tags->pluck('slug')->all());
         $this->assertCount(9, $outboundMessages);
         $this->assertSame('Спасибо, посмотрим формат полегче.', $outboundMessages->last()?->text);
@@ -845,6 +850,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertNull($run->current_step);
         $this->assertSame('completed', $run->exit_outcome);
         $this->assertSame('Мария', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(['vip-weak'], $contact->tags->pluck('slug')->all());
         $this->assertCount(8, $outboundMessages);
         $this->assertSame('Спасибо! Пока предложим более мягкий формат участия.', $outboundMessages->last()?->text);
@@ -852,7 +858,185 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSentCount(8);
     }
 
-    public function test_ibiza_mvp_does_not_overwrite_existing_contact_first_name(): void
+    public function test_ibiza_mvp_upgrades_existing_auto_first_name_to_contact_confirmed_and_dispatches_side_effects(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7551],
+            ]),
+        ]);
+
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $identity->forceFill([
+            'display_name' => 'Telegram Клиент',
+        ])->save();
+        $contact->forceFill([
+            'first_name' => 'Assistant',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+        ])->save();
+
+        $queueBitrix24ContactSyncAction = Mockery::mock(QueueBitrix24ContactSyncAction::class);
+        $queueBitrix24ContactSyncAction
+            ->shouldReceive('handle')
+            ->once()
+            ->with(Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact)));
+        app()->instance(QueueBitrix24ContactSyncAction::class, $queueBitrix24ContactSyncAction);
+
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        ));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_inst1',
+            'message_parameter' => 'vip_ibiza_inst1',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Юля');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Пока нет');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Посмотреть формат');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Частично');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Средний');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Казань');
+
+        $run->refresh();
+        $contact->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertSame('Юля', data_get($run->state_payload, 'run.first_name'));
+        $this->assertSame('Юля', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+
+        Queue::assertPushed(InferContactGenderFromFirstNameJob::class, function (InferContactGenderFromFirstNameJob $job) use ($contact): bool {
+            return $job->contactId === $contact->id
+                && $job->expectedFirstName === 'Юля';
+        });
+    }
+
+    public function test_ibiza_mvp_upgrades_unknown_first_name_source_to_contact_confirmed_even_when_value_matches(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7552],
+            ]),
+        ]);
+
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $identity->forceFill([
+            'display_name' => 'Telegram Клиент',
+        ])->save();
+        $contact->forceFill([
+            'first_name' => 'Юля',
+            'first_name_source' => null,
+        ])->save();
+
+        $queueBitrix24ContactSyncAction = Mockery::mock(QueueBitrix24ContactSyncAction::class);
+        $queueBitrix24ContactSyncAction
+            ->shouldReceive('handle')
+            ->once()
+            ->with(Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact)));
+        app()->instance(QueueBitrix24ContactSyncAction::class, $queueBitrix24ContactSyncAction);
+
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        ));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_inst1',
+            'message_parameter' => 'vip_ibiza_inst1',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Юля');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Пока нет');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Посмотреть формат');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Частично');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Средний');
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Казань');
+
+        $run->refresh();
+        $contact->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertSame('Юля', data_get($run->state_payload, 'run.first_name'));
+        $this->assertSame('Юля', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+
+        Queue::assertPushed(InferContactGenderFromFirstNameJob::class, function (InferContactGenderFromFirstNameJob $job) use ($contact): bool {
+            return $job->contactId === $contact->id
+                && $job->expectedFirstName === 'Юля';
+        });
+    }
+
+    public function test_ibiza_mvp_does_not_overwrite_existing_manual_contact_first_name_or_dispatch_side_effects(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -861,11 +1045,18 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ]),
         ]);
 
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
+
         $channel = $this->createTelegramChannel();
         [$contact, $identity, $dialog] = $this->createDialogContext($channel);
         $contact->forceFill([
             'first_name' => 'Старое имя',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_MANUAL,
         ])->save();
+
+        $queueBitrix24ContactSyncAction = Mockery::mock(QueueBitrix24ContactSyncAction::class);
+        $queueBitrix24ContactSyncAction->shouldReceive('handle')->never();
+        app()->instance(QueueBitrix24ContactSyncAction::class, $queueBitrix24ContactSyncAction);
 
         $strongTag = Tag::factory()->create([
             'name' => 'vip strong',
@@ -920,6 +1111,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
         $this->assertSame('Герман', data_get($run->state_payload, 'run.first_name'));
         $this->assertSame('Старое имя', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $contact->first_name_source);
+
+        Queue::assertNotPushed(InferContactGenderFromFirstNameJob::class);
     }
 
     public function test_ibiza_mvp_keeps_contact_first_name_empty_when_extractor_retries(): void
@@ -933,6 +1127,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $channel = $this->createTelegramChannel();
         [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $identity->forceFill([
+            'display_name' => 'Telegram Клиент',
+        ])->save();
         $strongTag = Tag::factory()->create([
             'name' => 'vip strong',
         ]);
@@ -959,7 +1156,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $extractFirstNameAction
             ->shouldReceive('handle')
             ->once()
-            ->with('Это секрет', $contact->name)
+            ->with('Это секрет', 'Telegram Клиент')
             ->andReturn([
                 'decision' => ExtractFirstNameAction::DECISION_RETRY,
                 'first_name' => null,
@@ -998,6 +1195,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
         $this->assertSame('Это секрет', data_get($run->state_payload, 'run.first_name'));
         $this->assertNull($contact->first_name);
+        $this->assertNull($contact->first_name_source);
     }
 
     private function attachContactTags(Contact $contact, Tag ...$tags): void
