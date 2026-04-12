@@ -550,12 +550,14 @@ class FilamentDialogsResourceTest extends TestCase
             'contactName' => 'Герман Абрикосов',
             'externalUserId' => 'target-user-100',
             'externalUsername' => 'german_target',
+            'displayName' => 'Telegram Клиент',
             'externalChatId' => 'target-chat-100',
         ]);
         $otherDialog = $this->createInboxDialog([
             'contactName' => 'Другой контакт',
             'externalUserId' => 'other-user-200',
             'externalUsername' => 'other_target',
+            'displayName' => 'MAX Клиент',
             'externalChatId' => 'other-chat-200',
         ]);
 
@@ -575,6 +577,12 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
             ->searchTable('german_target')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('Telegram Клиент')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
 
@@ -1312,6 +1320,7 @@ class FilamentDialogsResourceTest extends TestCase
      *     platform?:string,
      *     externalUserId?:string,
      *     externalUsername?:?string,
+     *     displayName?:?string,
      *     externalChatId?:?string,
      *     hasToken?:bool
      * }  $attributes
@@ -1335,6 +1344,7 @@ class FilamentDialogsResourceTest extends TestCase
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
             'external_user_id' => $attributes['externalUserId'] ?? 'external-user-'.fake()->unique()->numerify('###'),
+            'display_name' => $attributes['displayName'] ?? null,
             'external_username' => $attributes['externalUsername'] ?? null,
         ]);
         $dialog = Dialog::factory()->create([

@@ -447,7 +447,8 @@ class DialogResource extends Resource
                 })
                 ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($search): void {
                     $identityQuery
-                        ->where('external_user_id', 'ilike', "%{$search}%")
+                        ->where('display_name', 'ilike', "%{$search}%")
+                        ->orWhere('external_user_id', 'ilike', "%{$search}%")
                         ->orWhere('external_username', 'ilike', "%{$search}%");
                 });
         });
