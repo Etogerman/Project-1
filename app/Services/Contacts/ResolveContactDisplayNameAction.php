@@ -27,12 +27,6 @@ class ResolveContactDisplayNameAction
             }
         }
 
-        $legacyName = $this->normalizeString($contact->name);
-
-        if ($legacyName !== null) {
-            return $legacyName;
-        }
-
         $identity = $this->resolveRelevantIdentity($contact);
 
         if ($identity instanceof ContactIdentity) {
@@ -41,6 +35,12 @@ class ResolveContactDisplayNameAction
             if ($identityLabel !== null) {
                 return $identityLabel;
             }
+        }
+
+        $legacyName = $this->normalizeString($contact->name);
+
+        if ($legacyName !== null) {
+            return $legacyName;
         }
 
         return sprintf('Контакт #%d', $contact->id);

@@ -54,17 +54,6 @@ class StoreInboundMessageAction
 
             $contact = $identity->contact;
 
-            $this->syncInboundIdentityProfile($identity, $message);
-
-            if ($contact instanceof Contact && filled($message->contactName)) {
-                $this->applyContactFirstNameAction->handle(
-                    $contact,
-                    $message->contactName,
-                    Contact::FIRST_NAME_SOURCE_AUTO,
-                    ApplyContactFirstNameAction::REASON_AUTO_INBOUND,
-                );
-            }
-
             if (filled($message->providerEventKey)) {
                 $existingMessage = $this->findExistingInboundMessage($channel, $message->providerEventKey);
 
@@ -87,6 +76,17 @@ class StoreInboundMessageAction
                         phoneCaptureStatus: $phoneCaptureStatus,
                     );
                 }
+            }
+
+            $this->syncInboundIdentityProfile($identity, $message);
+
+            if ($contact instanceof Contact && filled($message->contactName)) {
+                $this->applyContactFirstNameAction->handle(
+                    $contact,
+                    $message->contactName,
+                    Contact::FIRST_NAME_SOURCE_AUTO,
+                    ApplyContactFirstNameAction::REASON_AUTO_INBOUND,
+                );
             }
 
             try {
