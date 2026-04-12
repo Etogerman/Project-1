@@ -8,6 +8,7 @@ use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactTimelineEvent;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Tag;
@@ -246,6 +247,10 @@ class MergeContactsActionTest extends TestCase
         $this->assertSame('phone_exact_match', $secondary->merge_reason);
         $this->assertSame($triggerPhone->phone_normalized, $secondary->merge_trigger_phone);
         $this->assertSame(Contact::DUPLICATE_REVIEW_STATUS_PENDING, $secondary->duplicate_review_status);
+        $this->assertDatabaseHas('contact_timeline_events', [
+            'contact_id' => $primary->id,
+            'event_type' => ContactTimelineEvent::EVENT_MERGE_NAME_CONFLICT,
+        ]);
 
         $primaryDialog->refresh();
         $primaryMessageWithoutDialog->refresh();
@@ -339,6 +344,44 @@ class MergeContactsActionTest extends TestCase
         $this->assertTrue($result->wasNoopSameRoot);
         $this->assertNull($result->mergeLogId);
         $this->assertDatabaseCount('contact_merge_logs', 0);
+    }
+
+    public function test_it_copies_first_name_source_when_first_name_is_adopted_from_secondary(): void
+    {
+        $channel = Channel::factory()->create();
+        $primary = Contact::factory()->create([
+            'first_name' => null,
+            'first_name_source' => null,
+        ]);
+        $secondary = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_MANUAL,
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'primary-user',
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'secondary-user',
+        ]);
+
+        $result = app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $primary->refresh();
+        $secondary->refresh();
+
+        $this->assertTrue($result->wasMerged);
+        $this->assertSame('Герман', $primary->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $primary->first_name_source);
+        $this->assertSame($primary->id, $secondary->merged_into_contact_id);
+        $this->assertSame('Герман', data_get($result->fieldsCopied, 'first_name'));
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, data_get($result->fieldsCopied, 'first_name_source'));
     }
 
     public function test_it_preserves_secondary_pending_auto_reply_source_message_when_merging_dialogs(): void

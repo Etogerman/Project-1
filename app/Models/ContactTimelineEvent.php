@@ -12,6 +12,10 @@ class ContactTimelineEvent extends Model
 
     public const EVENT_OPERATOR_COMMENT = 'operator_comment';
 
+    public const EVENT_FIRST_NAME_CHANGED = 'contact.first_name_changed';
+
+    public const EVENT_MERGE_NAME_CONFLICT = 'contact.merge_name_conflict';
+
     /**
      * @var list<string>
      */

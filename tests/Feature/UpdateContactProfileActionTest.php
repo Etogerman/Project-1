@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\CalculateDistanceToMoscowJob;
 use App\Models\Contact;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\UpdateContactProfileAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -63,7 +64,7 @@ class UpdateContactProfileActionTest extends TestCase
         Http::fake();
 
         $root = Contact::factory()->create([
-            'first_name' => null,
+            'first_name' => 'Корневое имя',
             'country' => null,
             'city' => null,
         ]);
@@ -74,14 +75,13 @@ class UpdateContactProfileActionTest extends TestCase
         ]);
 
         $updated = app(UpdateContactProfileAction::class)->handle($merged, [
-            'first_name' => 'Герман',
             'country' => 'Россия',
             'city' => 'Москва',
             'region' => 'Московская область',
         ]);
 
         $this->assertSame($root->id, $updated->id);
-        $this->assertSame('Герман', $root->fresh()->first_name);
+        $this->assertSame('Корневое имя', $root->fresh()->first_name);
         $this->assertSame('Россия', $root->fresh()->country);
         $this->assertSame('Москва', $root->fresh()->city);
         $this->assertSame('Московская область', $root->fresh()->region);
@@ -92,7 +92,7 @@ class UpdateContactProfileActionTest extends TestCase
         });
     }
 
-    public function test_action_advances_active_collector_when_manual_edit_fills_current_field(): void
+    public function test_action_advances_active_collector_after_first_name_was_updated_via_apply_action(): void
     {
         Queue::fake();
         Http::fake();
@@ -107,8 +107,14 @@ class UpdateContactProfileActionTest extends TestCase
             'data_collection_attempts_count' => 2,
         ]);
 
-        $updated = app(UpdateContactProfileAction::class)->handle($contact, [
-            'first_name' => 'Герман',
+        app(ApplyContactFirstNameAction::class)->handle(
+            $contact,
+            'Герман',
+            Contact::FIRST_NAME_SOURCE_MANUAL,
+            ApplyContactFirstNameAction::REASON_MANUAL_EDIT,
+        );
+
+        $updated = app(UpdateContactProfileAction::class)->handle($contact->fresh(), [
             'last_name' => null,
             'gender' => null,
             'birth_date' => null,
@@ -144,7 +150,6 @@ class UpdateContactProfileActionTest extends TestCase
         ]);
 
         $updated = app(UpdateContactProfileAction::class)->handle($contact, [
-            'first_name' => 'Герман',
             'last_name' => null,
             'gender' => null,
             'birth_date' => null,
@@ -179,7 +184,6 @@ class UpdateContactProfileActionTest extends TestCase
         ]);
 
         $updated = app(UpdateContactProfileAction::class)->handle($contact, [
-            'first_name' => 'Герман',
             'last_name' => 'Абрикосов',
             'gender' => null,
             'birth_date' => null,
@@ -194,5 +198,29 @@ class UpdateContactProfileActionTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_CITY, $updated->data_collection_current_field);
         $this->assertSame(2, $updated->data_collection_attempts_count);
         $this->assertSame('Абрикосов', $updated->last_name);
+    }
+
+    public function test_action_ignores_first_name_in_general_profile_payload(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Старое имя',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+            'city' => 'Казань',
+        ]);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($contact, [
+            'first_name' => 'Новое имя',
+            'city' => 'Москва',
+            'country' => 'Россия',
+            'region' => 'Московская область',
+        ]);
+
+        $this->assertSame('Старое имя', $updated->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $updated->first_name_source);
+        $this->assertSame('Москва', $updated->city);
+        $this->assertSame('Россия', $updated->country);
     }
 }
