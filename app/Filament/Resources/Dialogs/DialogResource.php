@@ -435,8 +435,7 @@ class DialogResource extends Resource
                 ->where('external_chat_id', 'ilike', "%{$search}%")
                 ->orWhereHas('contact', function (Builder $contactQuery) use ($search, $normalizedPhoneSearch): void {
                     $contactQuery
-                        ->where('name', 'ilike', "%{$search}%")
-                        ->orWhere('first_name', 'ilike', "%{$search}%")
+                        ->where('first_name', 'ilike', "%{$search}%")
                         ->orWhere('last_name', 'ilike', "%{$search}%");
 
                     if ($normalizedPhoneSearch !== '') {
