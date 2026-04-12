@@ -40,25 +40,41 @@ class ResolveContactDisplayNameActionTest extends TestCase
             'first_name' => null,
             'last_name' => null,
         ]);
-        $contact->setRelation('primaryIdentity', ContactIdentity::factory()->make([
+        $contact->setRelation('identities', collect([ContactIdentity::factory()->make([
             'display_name' => 'Имя канала',
             'external_username' => 'runtime_customer',
-        ]));
+        ])]));
 
         $this->assertSame('Имя канала', app(ResolveContactDisplayNameAction::class)->handle($contact));
     }
 
-    public function test_it_temporarily_falls_back_to_legacy_name_before_identity_labels(): void
+    public function test_it_prefers_identity_label_over_legacy_name_for_global_contact_label(): void
     {
         $contact = Contact::factory()->create([
             'name' => 'Имя из мессенджера',
             'first_name' => null,
             'last_name' => null,
         ]);
-        $contact->setRelation('primaryIdentity', ContactIdentity::factory()->make([
+        $contact->setRelation('identities', collect([ContactIdentity::factory()->make([
             'display_name' => 'Имя канала',
             'external_username' => 'runtime_customer',
-        ]));
+        ])]));
+
+        $this->assertSame('Имя канала', app(ResolveContactDisplayNameAction::class)->handle($contact));
+    }
+
+    public function test_it_temporarily_falls_back_to_legacy_name_when_identity_label_is_missing(): void
+    {
+        $contact = Contact::factory()->create([
+            'name' => 'Имя из мессенджера',
+            'first_name' => null,
+            'last_name' => null,
+        ]);
+        $contact->setRelation('identities', collect([ContactIdentity::factory()->make([
+            'display_name' => null,
+            'external_username' => null,
+            'external_user_id' => null,
+        ])]));
 
         $this->assertSame('Имя из мессенджера', app(ResolveContactDisplayNameAction::class)->handle($contact));
     }
@@ -69,10 +85,10 @@ class ResolveContactDisplayNameActionTest extends TestCase
             'first_name' => null,
             'last_name' => null,
         ]);
-        $contact->setRelation('primaryIdentity', ContactIdentity::factory()->make([
+        $contact->setRelation('identities', collect([ContactIdentity::factory()->make([
             'display_name' => null,
             'external_username' => 'runtime_customer',
-        ]));
+        ])]));
 
         $this->assertSame('@runtime_customer', app(ResolveContactDisplayNameAction::class)->handle($contact));
     }
@@ -125,5 +141,45 @@ class ResolveContactDisplayNameActionTest extends TestCase
         ]);
 
         $this->assertSame('@fresh_user', app(ResolveContactDisplayNameAction::class)->handle($contact));
+    }
+
+    public function test_it_prefers_dialog_context_identity_over_global_contact_label(): void
+    {
+        $contact = Contact::factory()->create([
+            'first_name' => null,
+            'last_name' => null,
+            'name' => null,
+        ]);
+        $channel = Channel::factory()->create();
+        $globalIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'global-user',
+            'display_name' => 'Глобальное имя',
+        ]);
+        $dialogIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'dialog-user',
+            'display_name' => 'Имя текущего диалога',
+        ]);
+
+        Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $globalIdentity->id,
+            'last_message_at' => now(),
+        ]);
+
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $dialogIdentity->id,
+            'last_message_at' => now()->subMinute(),
+        ]);
+
+        $this->assertSame('Имя текущего диалога', app(ResolveContactDisplayNameAction::class)->handle($contact, $dialog));
     }
 }

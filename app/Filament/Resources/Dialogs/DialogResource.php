@@ -9,6 +9,7 @@ use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
@@ -96,7 +97,7 @@ class DialogResource extends Resource
             ->columns([
                 TextColumn::make('contact_label')
                     ->label('Контакт')
-                    ->state(fn (Dialog $record): string => $record->contact?->display_name ?? 'Контакт не найден')
+                    ->state(fn (Dialog $record): string => static::resolveContactLabel($record))
                     ->description(fn (Dialog $record): ?string => static::formatDialogTableIdentitySummary($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search))
                     ->toggleable(),
@@ -446,7 +447,8 @@ class DialogResource extends Resource
                 })
                 ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($search): void {
                     $identityQuery
-                        ->where('external_user_id', 'ilike', "%{$search}%")
+                        ->where('display_name', 'ilike', "%{$search}%")
+                        ->orWhere('external_user_id', 'ilike', "%{$search}%")
                         ->orWhere('external_username', 'ilike', "%{$search}%");
                 });
         });
@@ -534,6 +536,15 @@ class DialogResource extends Resource
         }
 
         return 'Не задан';
+    }
+
+    protected static function resolveContactLabel(Dialog $dialog): string
+    {
+        if (! $dialog->contact instanceof \App\Models\Contact) {
+            return 'Контакт не найден';
+        }
+
+        return app(ResolveContactDisplayNameAction::class)->handle($dialog->contact, $dialog);
     }
 
     protected static function formatDialogTableIdentitySummary(Dialog $dialog): ?string

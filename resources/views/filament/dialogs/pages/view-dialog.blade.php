@@ -85,6 +85,14 @@
                 <div class="ac-meta-grid ac-meta-grid--compact ac-surface__divider">
                     <div class="ac-meta">
                         <p class="ac-meta__label">
+                            Имя из мессенджера
+                        </p>
+                        <p data-role="dialog-messenger-name" class="ac-meta__value">
+                            {{ $dialogHeader['messenger_name_label'] }}
+                        </p>
+                    </div>
+                    <div class="ac-meta">
+                        <p class="ac-meta__label">
                             Источник маршрута
                         </p>
                         <p class="ac-meta__value">

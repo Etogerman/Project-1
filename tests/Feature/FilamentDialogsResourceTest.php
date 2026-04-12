@@ -64,6 +64,21 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee($dialog->contact->display_name);
     }
 
+    public function test_dialogs_inbox_uses_current_dialog_identity_label_for_each_row(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$telegramDialog, $maxDialog] = $this->createMultiChannelDialogsForContactLabel();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Telegram Клиент')
+            ->assertSee('MAX Клиент');
+    }
+
     public function test_employee_can_open_dialog_view_page_with_reply_composer(): void
     {
         $user = User::factory()->create([
@@ -76,6 +91,36 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('data-role="conversation-reply-form"', false);
+    }
+
+    public function test_dialog_view_uses_current_dialog_identity_label_in_contact_summary(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$telegramDialog] = $this->createMultiChannelDialogsForContactLabel();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
+            ->assertOk()
+            ->assertSee('Telegram Клиент');
+    }
+
+    public function test_dialog_view_renders_current_dialog_messenger_name_in_technical_context(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$telegramDialog] = $this->createMultiChannelDialogsForContactLabel();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
+            ->assertOk()
+            ->assertSee('Имя из мессенджера')
+            ->assertSee('data-role="dialog-messenger-name"', false)
+            ->assertSee('Telegram Клиент');
     }
 
     public function test_employee_can_open_dialogs_inbox_page(): void
@@ -505,12 +550,14 @@ class FilamentDialogsResourceTest extends TestCase
             'contactName' => 'Герман Абрикосов',
             'externalUserId' => 'target-user-100',
             'externalUsername' => 'german_target',
+            'displayName' => 'Telegram Клиент',
             'externalChatId' => 'target-chat-100',
         ]);
         $otherDialog = $this->createInboxDialog([
             'contactName' => 'Другой контакт',
             'externalUserId' => 'other-user-200',
             'externalUsername' => 'other_target',
+            'displayName' => 'MAX Клиент',
             'externalChatId' => 'other-chat-200',
         ]);
 
@@ -530,6 +577,12 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
             ->searchTable('german_target')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('Telegram Клиент')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
 
@@ -1187,6 +1240,79 @@ class FilamentDialogsResourceTest extends TestCase
     }
 
     /**
+     * @return array{Dialog, Dialog}
+     */
+    protected function createMultiChannelDialogsForContactLabel(): array
+    {
+        $contact = Contact::factory()->create([
+            'name' => null,
+            'first_name' => null,
+            'last_name' => null,
+        ]);
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+            'is_active' => true,
+        ]);
+        $telegramIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'platform' => $telegramChannel->platform,
+            'external_user_id' => 'telegram-contact-label',
+            'display_name' => 'Telegram Клиент',
+        ]);
+        $maxIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'platform' => $maxChannel->platform,
+            'external_user_id' => 'max-contact-label',
+            'display_name' => 'MAX Клиент',
+        ]);
+
+        $telegramDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'current_contact_identity_id' => $telegramIdentity->id,
+            'external_chat_id' => 'telegram-contact-label-chat',
+            'last_message_at' => now()->subMinute(),
+            'last_inbound_at' => now()->subMinute(),
+        ]);
+        $maxDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'current_contact_identity_id' => $maxIdentity->id,
+            'external_chat_id' => 'max-contact-label-chat',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+
+        $this->createDialogMessage($telegramDialog, [
+            'contact_identity_id' => $telegramIdentity->id,
+            'channel_id' => $telegramChannel->id,
+            'text' => 'Телеграм диалог',
+            'received_at' => now()->subMinute(),
+        ]);
+        $this->createDialogMessage($maxDialog, [
+            'contact_identity_id' => $maxIdentity->id,
+            'channel_id' => $maxChannel->id,
+            'text' => 'MAX диалог',
+            'received_at' => now(),
+        ]);
+
+        return [
+            $telegramDialog->fresh(['channel', 'currentContactIdentity', 'contact.assignedUser', 'contact.identities']),
+            $maxDialog->fresh(['channel', 'currentContactIdentity', 'contact.assignedUser', 'contact.identities']),
+        ];
+    }
+
+    /**
      * @param  array{
      *     contactName?:string,
      *     assignedUserId?:?int,
@@ -1194,6 +1320,7 @@ class FilamentDialogsResourceTest extends TestCase
      *     platform?:string,
      *     externalUserId?:string,
      *     externalUsername?:?string,
+     *     displayName?:?string,
      *     externalChatId?:?string,
      *     hasToken?:bool
      * }  $attributes
@@ -1217,6 +1344,7 @@ class FilamentDialogsResourceTest extends TestCase
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
             'external_user_id' => $attributes['externalUserId'] ?? 'external-user-'.fake()->unique()->numerify('###'),
+            'display_name' => $attributes['displayName'] ?? null,
             'external_username' => $attributes['externalUsername'] ?? null,
         ]);
         $dialog = Dialog::factory()->create([

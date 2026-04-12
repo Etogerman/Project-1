@@ -714,6 +714,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'bitrix24_sync_pending' => true,
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
             'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
             'last_name' => 'Абрикосов',
         ], channel: $channel);
 
@@ -795,7 +796,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             return is_array($fields)
                 && ($fields['NAME'] ?? null) === 'Герман'
                 && ($fields['LAST_NAME'] ?? null) === 'Абрикосов'
-                && ($fields['UF_CRM_64D7457E4DC07'] ?? null) === (int) config('bitrix24.values.name_source.self_reported_id');
+                && ($fields['UF_CRM_64D7457E4DC07'] ?? null) === (int) config('bitrix24.values.name_source.automatic_information_id');
         });
     }
 
@@ -1257,6 +1258,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
     ): Contact {
         $contact = Contact::factory()->create(array_merge([
             'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             'last_name' => 'Абрикосов',
             'gender' => 'male',
             'age_years' => 28,
@@ -1323,7 +1325,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
             'ADDRESS_CITY' => (string) $contact->city,
             'ADDRESS_COUNTRY' => (string) $contact->country,
-            'UF_CRM_64D7457E4DC07' => (string) config('bitrix24.values.name_source.self_reported_id'),
+            'UF_CRM_64D7457E4DC07' => (string) $this->resolveExpectedBitrixNameSourceId($contact),
             'UF_CRM_1606901533' => (string) $contact->effective_age_years,
             'UF_CRM_ABRIKOSOFF_AGE_RANGE' => (string) $contact->age_range,
             'UF_CRM_5EEB7355C13B1' => (string) config('bitrix24.values.gender.male_id'),
@@ -1344,6 +1346,15 @@ class Bitrix24ContactSyncJobTest extends TestCase
                 ->values()
                 ->all(),
         ], $overrides);
+    }
+
+    private function resolveExpectedBitrixNameSourceId(Contact $contact): int
+    {
+        return match ($contact->first_name_source) {
+            Contact::FIRST_NAME_SOURCE_AUTO => (int) config('bitrix24.values.name_source.automatic_information_id'),
+            Contact::FIRST_NAME_SOURCE_MANUAL => (int) config('bitrix24.values.name_source.training_verified_id'),
+            default => (int) config('bitrix24.values.name_source.self_reported_id'),
+        };
     }
 
     /**

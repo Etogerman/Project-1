@@ -9,6 +9,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
@@ -87,11 +88,14 @@ class ViewDialog extends ViewRecord
 
     public function getBreadcrumbs(): array
     {
-        $contact = $this->getRecord()->contact;
+        $dialog = $this->getRecord();
+        $contact = $dialog->contact;
 
         return [
             ContactResource::getUrl('index') => ContactResource::getBreadcrumb(),
-            $this->getContactViewUrl() => $contact?->display_name ?? 'Контакт',
+            $this->getContactViewUrl() => $contact instanceof Contact
+                ? app(ResolveContactDisplayNameAction::class)->handle($contact, $dialog)
+                : 'Контакт',
             $this->getBreadcrumb(),
         ];
     }
@@ -240,6 +244,7 @@ class ViewDialog extends ViewRecord
      * @return array{
      *     channel_label:string,
      *     platform_label:string,
+     *     messenger_name_label:string,
      *     route_source_label:string,
      *     external_chat_id_label:string,
      *     route_status_label:string,
@@ -257,6 +262,7 @@ class ViewDialog extends ViewRecord
             'platform_label' => $dialog->channel?->platform !== null
                 ? (Channel::platformOptions()[$dialog->channel->platform] ?? $dialog->channel->platform)
                 : '—',
+            'messenger_name_label' => $this->formatDialogMessengerNameLabel($dialog),
             'route_source_label' => $this->formatDialogRouteIdentityLabel($dialog),
             'external_chat_id_label' => $dialog->external_chat_id ?: 'Не задан',
             'route_status_label' => $routeStatus->label,
@@ -275,10 +281,13 @@ class ViewDialog extends ViewRecord
      */
     protected function getContactSummaryViewData(): array
     {
-        $contact = $this->getRecord()->contact;
+        $dialog = $this->getRecord();
+        $contact = $dialog->contact;
 
         return [
-            'contact_label' => $contact?->display_name ?? 'Контакт не найден',
+            'contact_label' => $contact instanceof Contact
+                ? app(ResolveContactDisplayNameAction::class)->handle($contact, $dialog)
+                : 'Контакт не найден',
             'contact_id' => $contact?->id,
             'phone_label' => $this->resolvePrimaryPhoneRaw($contact) ?? '—',
             'assigned_user_label' => $this->formatAssignedUserLabel($contact),
@@ -425,6 +434,29 @@ class ViewDialog extends ViewRecord
         }
 
         return 'Телефон в этом канале не подтвержден';
+    }
+
+    protected function formatDialogMessengerNameLabel(Dialog $dialog): string
+    {
+        $identity = $dialog->currentContactIdentity;
+
+        if (filled($identity?->display_name)) {
+            return trim((string) $identity->display_name);
+        }
+
+        if (filled($identity?->external_username)) {
+            return '@'.ltrim((string) $identity->external_username, '@');
+        }
+
+        if (filled($identity?->external_user_id)) {
+            return 'ID: '.$identity->external_user_id;
+        }
+
+        if ($dialog->current_contact_identity_id !== null) {
+            return 'Identity #'.$dialog->current_contact_identity_id;
+        }
+
+        return '—';
     }
 
     protected function formatDialogRouteIdentityLabel(Dialog $dialog): string

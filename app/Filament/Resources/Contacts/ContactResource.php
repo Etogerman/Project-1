@@ -1477,13 +1477,13 @@ class ContactResource extends Resource
 
     /**
      * @return array{
-     *     messengerName: string,
      *     dialogs: list<array{
      *         id:int,
      *         url:string,
      *         channel_label:string,
      *         route_status_label:string,
      *         route_status_tone:string,
+     *         messenger_name_label:string,
      *         phone_label:string,
      *         route_identity_label:string,
      *         external_chat_id_label:string,
@@ -1499,7 +1499,6 @@ class ContactResource extends Resource
     public static function buildDialogsViewData(Contact $record): array
     {
         return [
-            'messengerName' => $record->name ?? '—',
             'dialogs' => app(LoadContactDialogsOverviewAction::class)->handle($record)->all(),
         ];
     }
