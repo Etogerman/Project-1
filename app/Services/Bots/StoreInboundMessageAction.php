@@ -19,6 +19,7 @@ use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
 use App\Services\Contacts\MergeContactsAction;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
@@ -35,6 +36,7 @@ class StoreInboundMessageAction
         protected FindDuplicateContactRootsByPhoneAction $findDuplicateContactRootsByPhoneAction,
         protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
         protected MergeContactsAction $mergeContactsAction,
+        protected ApplyContactFirstNameAction $applyContactFirstNameAction,
         protected ResolveRootContactAction $resolveRootContactAction,
         protected ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
         protected ChannelActivityLogger $channelActivityLogger,
@@ -52,23 +54,15 @@ class StoreInboundMessageAction
 
             $contact = $identity->contact;
 
-            if (
-                $contact !== null
-                && filled($message->contactName)
-                && $contact->name !== $message->contactName
-            ) {
-                $contact->forceFill([
-                    'name' => $message->contactName,
-                ])->save();
-            }
+            $this->syncInboundIdentityProfile($identity, $message);
 
-            if (
-                filled($message->externalUsername)
-                && $identity->external_username !== $message->externalUsername
-            ) {
-                $identity->forceFill([
-                    'external_username' => $message->externalUsername,
-                ])->save();
+            if ($contact instanceof Contact && filled($message->contactName)) {
+                $this->applyContactFirstNameAction->handle(
+                    $contact,
+                    $message->contactName,
+                    Contact::FIRST_NAME_SOURCE_AUTO,
+                    ApplyContactFirstNameAction::REASON_AUTO_INBOUND,
+                );
             }
 
             if (filled($message->providerEventKey)) {
@@ -286,15 +280,14 @@ class StoreInboundMessageAction
             'channel_id' => $channel->id,
             'platform' => $message->platform,
             'external_user_id' => $message->externalUserId,
+            'display_name' => $message->contactName,
             'external_username' => $message->externalUsername,
         ])->load('contact');
     }
 
     protected function createNewContactWithIdentity(Channel $channel, IncomingBotMessage $message): ContactIdentity
     {
-        $contact = Contact::query()->create([
-            'name' => $message->contactName,
-        ]);
+        $contact = Contact::query()->create([]);
 
         try {
             return $this->createContactIdentityForChannel($contact, $channel, $message);
@@ -321,6 +314,28 @@ class StoreInboundMessageAction
     protected function wasUniqueConstraintViolation(QueryException $exception): bool
     {
         return ($exception->errorInfo[0] ?? null) === '23505';
+    }
+
+    protected function syncInboundIdentityProfile(ContactIdentity $identity, IncomingBotMessage $message): void
+    {
+        $updates = [];
+
+        if (filled($message->contactName) && $identity->display_name !== $message->contactName) {
+            $updates['display_name'] = $message->contactName;
+        }
+
+        if (
+            filled($message->externalUsername)
+            && $identity->external_username !== $message->externalUsername
+        ) {
+            $updates['external_username'] = $message->externalUsername;
+        }
+
+        if ($updates === []) {
+            return;
+        }
+
+        $identity->forceFill($updates)->save();
     }
 
     protected function resolveInboundMessageKind(IncomingBotMessage $message): string

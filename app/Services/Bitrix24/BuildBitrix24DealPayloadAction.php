@@ -48,10 +48,6 @@ class BuildBitrix24DealPayloadAction
             return 'Abrikosoff / '.$fullName;
         }
 
-        if (filled($contact->name)) {
-            return 'Abrikosoff / '.trim((string) $contact->name);
-        }
-
         return sprintf('Abrikosoff / Contact #%d', $contact->id);
     }
 

@@ -140,6 +140,128 @@ class StoreInboundMessageActionTest extends TestCase
         ]);
     }
 
+    public function test_store_inbound_message_sets_auto_first_name_and_identity_display_name_for_new_contact(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: 'new-chat-1',
+                externalUserId: 'new-user-1',
+                providerEventKey: 'telegram-new-user-1',
+                externalMessageId: 'new-user-1',
+                externalUsername: 'telegram_new_user',
+                contactName: 'Новое имя профиля',
+                text: 'Здравствуйте',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Здравствуйте']],
+                receivedAt: Carbon::parse('2026-04-12 15:00:00'),
+            ),
+        );
+
+        $contact = $storedResult->message->contact()->firstOrFail()->fresh();
+        $identity = $storedResult->message->contactIdentity()->firstOrFail()->fresh();
+
+        $this->assertSame('Новое имя профиля', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->first_name_source);
+        $this->assertNull($contact->name);
+        $this->assertSame('Новое имя профиля', $identity->display_name);
+    }
+
+    public function test_store_inbound_message_uses_latest_inbound_wins_for_auto_name(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Старое имя',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'auto-user-1',
+            'display_name' => 'Старый профиль',
+        ]);
+
+        app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: 'auto-chat-1',
+                externalUserId: 'auto-user-1',
+                providerEventKey: 'telegram-auto-user-1',
+                externalMessageId: 'auto-user-1',
+                externalUsername: 'auto_user_1',
+                contactName: 'Новое имя профиля',
+                text: 'Привет',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет']],
+                receivedAt: Carbon::parse('2026-04-12 15:05:00'),
+            ),
+        );
+
+        $this->assertSame('Новое имя профиля', $contact->fresh()->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->fresh()->first_name_source);
+        $this->assertSame('Новое имя профиля', $identity->fresh()->display_name);
+    }
+
+    public function test_store_inbound_message_keeps_confirmed_first_name_and_refreshes_identity_display_name(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Подтверждённое имя',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'confirmed-user-1',
+            'display_name' => 'Старое имя профиля',
+        ]);
+
+        app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: 'confirmed-chat-1',
+                externalUserId: 'confirmed-user-1',
+                providerEventKey: 'telegram-confirmed-user-1',
+                externalMessageId: 'confirmed-user-1',
+                externalUsername: 'confirmed_user_1',
+                contactName: 'Новое имя из профиля',
+                text: 'Привет',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет']],
+                receivedAt: Carbon::parse('2026-04-12 15:10:00'),
+            ),
+        );
+
+        $contact->refresh();
+        $identity->refresh();
+
+        $this->assertSame('Подтверждённое имя', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame('Новое имя из профиля', $identity->display_name);
+    }
+
     public function test_store_inbound_message_saves_pending_auto_reply_source_for_parameter_when_final_gate_is_not_ready(): void
     {
         $channel = Channel::factory()->create([

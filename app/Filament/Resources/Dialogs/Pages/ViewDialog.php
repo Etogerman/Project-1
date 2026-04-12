@@ -9,6 +9,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
@@ -87,11 +88,14 @@ class ViewDialog extends ViewRecord
 
     public function getBreadcrumbs(): array
     {
-        $contact = $this->getRecord()->contact;
+        $dialog = $this->getRecord();
+        $contact = $dialog->contact;
 
         return [
             ContactResource::getUrl('index') => ContactResource::getBreadcrumb(),
-            $this->getContactViewUrl() => $contact?->display_name ?? 'Контакт',
+            $this->getContactViewUrl() => $contact instanceof Contact
+                ? app(ResolveContactDisplayNameAction::class)->handle($contact, $dialog)
+                : 'Контакт',
             $this->getBreadcrumb(),
         ];
     }
@@ -275,10 +279,13 @@ class ViewDialog extends ViewRecord
      */
     protected function getContactSummaryViewData(): array
     {
-        $contact = $this->getRecord()->contact;
+        $dialog = $this->getRecord();
+        $contact = $dialog->contact;
 
         return [
-            'contact_label' => $contact?->display_name ?? 'Контакт не найден',
+            'contact_label' => $contact instanceof Contact
+                ? app(ResolveContactDisplayNameAction::class)->handle($contact, $dialog)
+                : 'Контакт не найден',
             'contact_id' => $contact?->id,
             'phone_label' => $this->resolvePrimaryPhoneRaw($contact) ?? '—',
             'assigned_user_label' => $this->formatAssignedUserLabel($contact),

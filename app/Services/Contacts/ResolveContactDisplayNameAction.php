@@ -58,9 +58,9 @@ class ResolveContactDisplayNameAction
             return $dialog->currentContactIdentity;
         }
 
-        $identity = $contact->relationLoaded('primaryIdentity')
-            ? $contact->primaryIdentity
-            : $contact->primaryIdentity()->first();
+        $identity = $contact->relationLoaded('identities')
+            ? $contact->identities->sortByDesc('id')->first()
+            : $contact->identities()->orderByDesc('id')->first();
 
         return $identity instanceof ContactIdentity ? $identity : null;
     }

@@ -23,6 +23,7 @@ class BuildBitrix24ContactPayloadAction
         $primaryIdentity = $rootContact->primaryIdentity()->with('channel')->first();
         $channel = $primaryIdentity?->channel;
         $sourceId = $this->resolveContactSourceAction->handle($rootContact);
+        $nameSourceId = $this->resolveNameSourceId($rootContact);
         $phones = $this->collectContactPhonesAction->handle($rootContact);
 
         if (! $channel instanceof Channel || ! filled($sourceId)) {
@@ -35,7 +36,7 @@ class BuildBitrix24ContactPayloadAction
             'ADDRESS_CITY' => $this->nullableString($rootContact->city),
             'ADDRESS_COUNTRY' => $this->nullableString($rootContact->country),
             'SOURCE_ID' => $sourceId,
-            config('bitrix24.fields.name_source') => (int) config('bitrix24.values.name_source.self_reported_id'),
+            config('bitrix24.fields.name_source') => $nameSourceId,
             config('bitrix24.fields.age_exact') => $rootContact->effective_age_years,
             config('bitrix24.fields.age_range') => $this->nullableString($rootContact->age_range),
             config('bitrix24.fields.gender') => $this->resolveGenderFieldValue($rootContact->gender),
@@ -86,6 +87,16 @@ class BuildBitrix24ContactPayloadAction
             'male' => (int) config('bitrix24.values.gender.male_id'),
             'female' => (int) config('bitrix24.values.gender.female_id'),
             'unknown' => (int) config('bitrix24.values.gender.unknown_id'),
+            default => null,
+        };
+    }
+
+    private function resolveNameSourceId(Contact $contact): ?int
+    {
+        return match ($contact->first_name_source) {
+            Contact::FIRST_NAME_SOURCE_AUTO => (int) config('bitrix24.values.name_source.automatic_information_id'),
+            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => (int) config('bitrix24.values.name_source.self_reported_id'),
+            Contact::FIRST_NAME_SOURCE_MANUAL => (int) config('bitrix24.values.name_source.training_verified_id'),
             default => null,
         };
     }

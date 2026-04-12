@@ -19,6 +19,7 @@ class ContactIdentity extends Model
         'channel_id',
         'platform',
         'external_user_id',
+        'display_name',
         'external_username',
     ];
 

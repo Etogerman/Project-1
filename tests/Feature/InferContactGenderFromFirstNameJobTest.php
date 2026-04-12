@@ -24,6 +24,7 @@ class InferContactGenderFromFirstNameJobTest extends TestCase
 
         $contact = Contact::factory()->create([
             'first_name' => 'Николай',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             'gender' => null,
         ]);
 
@@ -40,6 +41,7 @@ class InferContactGenderFromFirstNameJobTest extends TestCase
 
         $contact = Contact::factory()->create([
             'first_name' => 'Николай',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             'gender' => 'female',
         ]);
 
@@ -57,6 +59,7 @@ class InferContactGenderFromFirstNameJobTest extends TestCase
 
         $contact = Contact::factory()->create([
             'first_name' => 'Мария',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             'gender' => null,
         ]);
 
@@ -72,6 +75,7 @@ class InferContactGenderFromFirstNameJobTest extends TestCase
 
         $contact = Contact::factory()->create([
             'first_name' => 'Николай',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             'gender' => null,
         ]);
 
@@ -92,12 +96,14 @@ class InferContactGenderFromFirstNameJobTest extends TestCase
 
         $root = Contact::factory()->create([
             'first_name' => 'Николай',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             'gender' => null,
         ]);
         $merged = Contact::factory()->create([
             'merged_into_contact_id' => $root->id,
             'merged_at' => now(),
             'first_name' => 'Николай',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             'gender' => null,
         ]);
 
@@ -105,6 +111,24 @@ class InferContactGenderFromFirstNameJobTest extends TestCase
 
         $this->assertSame('male', $root->fresh()->gender);
         $this->assertNull($merged->fresh()->gender);
+    }
+
+    public function test_job_skips_when_first_name_source_is_auto(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake();
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Николай',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+            'gender' => null,
+        ]);
+
+        InferContactGenderFromFirstNameJob::dispatchSync($contact->id, 'Николай');
+
+        Http::assertNothingSent();
+        $this->assertNull($contact->fresh()->gender);
     }
 
     /**

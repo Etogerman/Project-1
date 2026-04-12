@@ -62,6 +62,10 @@ class InferContactGenderFromFirstNameJob implements ShouldQueue
             return;
         }
 
+        if ($contact->first_name_source !== Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED) {
+            return;
+        }
+
         $currentFirstName = trim((string) ($contact->first_name ?? ''));
 
         if ($currentFirstName === '' || $currentFirstName !== trim($this->expectedFirstName)) {

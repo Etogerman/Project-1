@@ -16,6 +16,7 @@ use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\SyncContactRussianRegionAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
@@ -81,6 +82,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
         SyncContactRussianRegionAction $syncContactRussianRegionAction,
         QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        ApplyContactFirstNameAction $applyContactFirstNameAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
@@ -185,6 +187,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
                 extractFirstNameAction: $extractFirstNameAction,
+                applyContactFirstNameAction: $applyContactFirstNameAction,
             ),
             Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => $this->handleResidenceCityReply(
                 message: $message,
@@ -287,9 +290,13 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ExtractFirstNameAction $extractFirstNameAction,
+        ApplyContactFirstNameAction $applyContactFirstNameAction,
     ): void {
         try {
-            $extraction = $extractFirstNameAction->handle($replyText, $contact->name);
+            $extraction = $extractFirstNameAction->handle(
+                $replyText,
+                $this->resolveFirstNameMessengerContext($message, $contact),
+            );
         } catch (Throwable $throwable) {
             Log::warning('contact.first_name_extraction_exception', [
                 'contact_id' => $contact->id,
@@ -334,13 +341,19 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $firstName = (string) ($extraction['first_name'] ?? '');
 
-        $contact->forceFill([
-            'first_name' => $firstName,
-        ])->save();
+        $result = $applyContactFirstNameAction->handle(
+            $contact,
+            $firstName,
+            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+        );
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
 
-        if (! filled($contact->gender)) {
+        if (
+            $result->newSource === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED
+            && ! filled($contact->gender)
+        ) {
             InferContactGenderFromFirstNameJob::dispatch($contact->id, $firstName);
         }
 
@@ -353,6 +366,41 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
         );
+    }
+
+    private function resolveFirstNameMessengerContext(Message $message, Contact $contact): ?string
+    {
+        $message->loadMissing(['dialog.currentContactIdentity', 'contactIdentity']);
+
+        $dialogIdentity = $message->dialog?->currentContactIdentity;
+
+        if ($dialogIdentity instanceof \App\Models\ContactIdentity && filled($dialogIdentity->display_name)) {
+            return trim((string) $dialogIdentity->display_name);
+        }
+
+        $messageIdentity = $message->contactIdentity;
+
+        if ($messageIdentity instanceof \App\Models\ContactIdentity && filled($messageIdentity->display_name)) {
+            return trim((string) $messageIdentity->display_name);
+        }
+
+        $latestDialogIdentityId = $contact->dialogs()
+            ->whereNotNull('current_contact_identity_id')
+            ->orderByDesc('last_message_at')
+            ->orderByDesc('id')
+            ->value('current_contact_identity_id');
+
+        if ($latestDialogIdentityId !== null) {
+            $displayName = \App\Models\ContactIdentity::query()
+                ->whereKey($latestDialogIdentityId)
+                ->value('display_name');
+
+            if (filled($displayName)) {
+                return trim((string) $displayName);
+            }
+        }
+
+        return null;
     }
 
     protected function handleResidenceCityReply(
