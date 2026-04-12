@@ -291,14 +291,8 @@ class ViewContact extends ViewRecord
             : null;
 
         return [
-            $this->makeRow(
-                'Имя',
-                'first_name',
-                $record->first_name ?? '—',
-                $profileAction,
-                [],
-                $this->buildFirstNameSourceBadges($record),
-            ),
+            $this->makeRow('Имя', 'first_name', $record->first_name ?? '—', $profileAction),
+            $this->makeRow('Откуда знаем имя?', 'first_name_source', $this->resolveFirstNameSourceValue($record)),
             $this->makeRow('Фамилия', 'last_name', $record->last_name ?? '—', $profileAction),
             $this->makeRow('Пол', 'gender', Contact::formatGender($record->gender), $profileAction),
             $this->makeRow('Возраст', 'effective_age_years', $record->effective_age_years !== null ? (string) $record->effective_age_years : '—'),
@@ -499,7 +493,6 @@ class ViewContact extends ViewRecord
         string $value,
         ?array $action = null,
         array $items = [],
-        array $badges = [],
     ): array
     {
         return [
@@ -508,7 +501,6 @@ class ViewContact extends ViewRecord
             'value' => $value !== '' ? $value : '—',
             'action' => $action,
             'items' => $items,
-            'badges' => $badges,
         ];
     }
 
@@ -575,26 +567,19 @@ class ViewContact extends ViewRecord
         return 'Контакт #'.$record->id;
     }
 
-    /**
-     * @return list<array{label:string,tone:string}>
-     */
-    protected function buildFirstNameSourceBadges(Contact $record): array
+    protected function resolveFirstNameSourceValue(Contact $record): string
     {
         if (! filled($record->first_name)) {
-            return [];
+            return '—';
         }
 
         $label = Contact::formatFirstNameSourceBadgeLabel($record->first_name_source);
-        $tone = Contact::firstNameSourceBadgeTone($record->first_name_source);
 
-        if ($label === null || $tone === null) {
-            return [];
+        if ($label === null) {
+            return 'Источник не определён';
         }
 
-        return [[
-            'label' => $label,
-            'tone' => $tone,
-        ]];
+        return $label;
     }
 
     protected function formatDate(mixed $value): string
