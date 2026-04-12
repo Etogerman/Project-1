@@ -110,6 +110,54 @@ class ContactDialogIdentityDisplayNameRepairMigrationTest extends TestCase
         $this->assertSame('Имя из legacy профиля', $dialogIdentity->display_name);
     }
 
+    public function test_repair_migration_does_not_copy_shared_legacy_name_into_unrelated_multi_channel_dialog_identities(): void
+    {
+        $contact = Contact::factory()->create([
+            'name' => 'Общее legacy имя',
+        ]);
+        $telegramChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $telegramIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'platform' => $telegramChannel->platform,
+            'external_user_id' => 'telegram-user-200',
+            'display_name' => null,
+        ]);
+        $maxIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'platform' => $maxChannel->platform,
+            'external_user_id' => 'max-user-200',
+            'display_name' => null,
+        ]);
+
+        Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'current_contact_identity_id' => $telegramIdentity->id,
+            'last_message_at' => now()->subMinute(),
+        ]);
+        Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'current_contact_identity_id' => $maxIdentity->id,
+            'last_message_at' => now(),
+        ]);
+
+        $this->runRepairMigration();
+
+        $telegramIdentity->refresh();
+        $maxIdentity->refresh();
+
+        $this->assertNull($telegramIdentity->display_name);
+        $this->assertNull($maxIdentity->display_name);
+    }
+
     public function test_repair_migration_keeps_existing_dialog_display_name_and_leaves_non_dialog_identity_untouched(): void
     {
         $contact = Contact::factory()->create([

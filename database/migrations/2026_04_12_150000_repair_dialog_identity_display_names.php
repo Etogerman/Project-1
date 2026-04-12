@@ -124,6 +124,10 @@ return new class extends Migration
             return $sourceIdentity['display_name'];
         }
 
+        if (count($dialogIdentities) !== 1) {
+            return null;
+        }
+
         return $legacyName;
     }
 
