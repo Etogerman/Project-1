@@ -4,18 +4,21 @@ namespace App\Services\Scenarios;
 
 use App\Data\Messages\PreparedMessageContentData;
 use App\Data\Scenarios\ScenarioInboundResult;
+use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactIdentity;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
+use App\Services\Bots\TelegramBotApiService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
-use App\Services\Bots\TelegramBotApiService;
 use App\Services\Messages\PrepareMessageContentAction;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -38,6 +41,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         private readonly MaxBotApiService $maxBotApiService,
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
         private readonly ExtractFirstNameAction $extractFirstNameAction,
+        private readonly ApplyContactFirstNameAction $applyContactFirstNameAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
     ) {}
@@ -372,7 +376,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
     private function completeScenario(Message $message, array $block, array $statePayload): array
     {
         $statePayload = $this->applyBlockActions($message, $block, $statePayload);
-        $this->fillEmptyIbizaFirstName($message, $statePayload);
+        $this->applyIbizaFirstNameEnrichment($message, $statePayload);
 
         return [
             'status' => ScenarioRun::STATUS_COMPLETED,
@@ -385,55 +389,106 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
     /**
      * @param  array<string, mixed>  $statePayload
      */
-    private function fillEmptyIbizaFirstName(Message $message, array $statePayload): void
+    private function applyIbizaFirstNameEnrichment(Message $message, array $statePayload): void
     {
         if ($this->code() !== self::IBIZA_SCENARIO_CODE || ! $message->contact instanceof Contact) {
             return;
         }
 
-        $contact = $this->resolveRootContactAction->handle($message->contact);
-
-        if (filled($contact->first_name)) {
-            return;
-        }
-
-        $rawFirstName = data_get($statePayload, 'run.first_name');
-
-        if (! is_string($rawFirstName) || trim($rawFirstName) === '') {
-            return;
-        }
-
         try {
-            $extraction = $this->extractFirstNameAction->handle($rawFirstName, $contact->name);
+            $contact = $this->resolveRootContactAction->handle($message->contact);
+
+            if (filled($contact->first_name)) {
+                return;
+            }
+
+            $rawFirstName = data_get($statePayload, 'run.first_name');
+
+            if (! is_string($rawFirstName) || trim($rawFirstName) === '') {
+                return;
+            }
+
+            $extraction = $this->extractFirstNameAction->handle(
+                $rawFirstName,
+                $this->resolveFirstNameMessengerContext($message, $contact),
+            );
+
+            if (($extraction['decision'] ?? null) !== ExtractFirstNameAction::DECISION_ACCEPT) {
+                return;
+            }
+
+            $firstName = is_string($extraction['first_name'] ?? null)
+                ? trim((string) $extraction['first_name'])
+                : '';
+
+            if ($firstName === '') {
+                return;
+            }
+
+            $result = $this->applyContactFirstNameAction->handle(
+                $contact,
+                $firstName,
+                Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+                ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+            );
+
+            if (! $result->changed) {
+                return;
+            }
+
+            $this->queueBitrix24ContactSyncAction->handle($contact);
+
+            if (
+                $result->newSource === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED
+                && ! filled($contact->gender)
+                && filled($result->newValue)
+            ) {
+                InferContactGenderFromFirstNameJob::dispatch($contact->id, (string) $result->newValue);
+            }
         } catch (Throwable $throwable) {
             Log::warning('scenario.ibiza_first_name_enrichment_failed', [
                 'scenario_code' => $this->code(),
-                'contact_id' => $contact->id,
+                'contact_id' => $message->contact_id,
                 'message_id' => $message->id,
                 'exception_class' => $throwable::class,
                 'error' => $throwable->getMessage(),
             ]);
+        }
+    }
 
-            return;
+    private function resolveFirstNameMessengerContext(Message $message, Contact $contact): ?string
+    {
+        $message->loadMissing(['dialog.currentContactIdentity', 'contactIdentity']);
+
+        $dialogIdentity = $message->dialog?->currentContactIdentity;
+
+        if ($dialogIdentity instanceof ContactIdentity && filled($dialogIdentity->display_name)) {
+            return trim((string) $dialogIdentity->display_name);
         }
 
-        if (($extraction['decision'] ?? null) !== ExtractFirstNameAction::DECISION_ACCEPT) {
-            return;
+        $messageIdentity = $message->contactIdentity;
+
+        if ($messageIdentity instanceof ContactIdentity && filled($messageIdentity->display_name)) {
+            return trim((string) $messageIdentity->display_name);
         }
 
-        $firstName = is_string($extraction['first_name'] ?? null)
-            ? trim((string) $extraction['first_name'])
-            : '';
+        $latestDialogIdentityId = $contact->dialogs()
+            ->whereNotNull('current_contact_identity_id')
+            ->orderByDesc('last_message_at')
+            ->orderByDesc('id')
+            ->value('current_contact_identity_id');
 
-        if ($firstName === '') {
-            return;
+        if ($latestDialogIdentityId !== null) {
+            $displayName = ContactIdentity::query()
+                ->whereKey($latestDialogIdentityId)
+                ->value('display_name');
+
+            if (filled($displayName)) {
+                return trim((string) $displayName);
+            }
         }
 
-        $contact->forceFill([
-            'first_name' => $firstName,
-        ])->save();
-
-        $this->queueBitrix24ContactSyncAction->handle($contact);
+        return null;
     }
 
     private function dispatchScenarioMessage(
