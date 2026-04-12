@@ -397,11 +397,6 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
         try {
             $contact = $this->resolveRootContactAction->handle($message->contact);
-
-            if (filled($contact->first_name)) {
-                return;
-            }
-
             $rawFirstName = data_get($statePayload, 'run.first_name');
 
             if (! is_string($rawFirstName) || trim($rawFirstName) === '') {
@@ -487,7 +482,6 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                 return trim((string) $displayName);
             }
         }
-
         return null;
     }
 
