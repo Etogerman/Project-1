@@ -397,6 +397,11 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
         try {
             $contact = $this->resolveRootContactAction->handle($message->contact);
+
+            if ($contact->first_name_source === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED) {
+                return;
+            }
+
             $rawFirstName = data_get($statePayload, 'run.first_name');
 
             if (! is_string($rawFirstName) || trim($rawFirstName) === '') {
