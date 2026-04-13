@@ -1075,7 +1075,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertNotContains('Поделитесь номером телефона.', $outboundMessages->pluck('text')->all());
     }
 
-    public function test_ibiza_mvp_skips_phone_capture_when_dialog_already_has_confirmed_phone(): void
+    public function test_ibiza_mvp_does_not_skip_phone_capture_when_only_dialog_has_confirmed_phone(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -1138,20 +1138,16 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Санкт-Петербург');
 
         $run->refresh();
-        $contact->refresh()->load('tags');
         $outboundMessages = Message::query()
             ->where('direction', Message::DIRECTION_OUTBOUND)
             ->where('dialog_id', $dialog->id)
             ->orderBy('id')
             ->get();
 
-        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
-        $this->assertNull($run->current_step);
-        $this->assertSame('completed', $run->exit_outcome);
-        $this->assertSame(['vip-borderline'], $contact->tags->pluck('slug')->all());
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('capture_phone_borderline', $run->current_step);
         $this->assertCount(8, $outboundMessages);
-        $this->assertSame('Спасибо, посмотрим формат полегче.', $outboundMessages->last()?->text);
-        $this->assertNotContains('Поделитесь номером телефона.', $outboundMessages->pluck('text')->all());
+        $this->assertSame('Поделитесь номером телефона.', $outboundMessages->last()?->text);
     }
 
     public function test_ibiza_mvp_completion_dispatches_gender_job_and_bitrix_queue_when_first_name_changes(): void
