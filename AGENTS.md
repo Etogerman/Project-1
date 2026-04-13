@@ -468,6 +468,20 @@ Abrikosoff Connector — операторская платформа для ра
   push -> PR в main -> CI -> ready -> финальный self-review -> merge ->
   cleanup`, но обязан остановиться на любом blocker
 
+Fast-track делегация (для прекращения режима «1,1,1»):
+- по явной команде пользователя `делай сам до merge` агент получает право
+  довести текущий implementation stream до `merge` без промежуточных
+  подтверждений
+- fast-track включает:
+  `commit -> push -> draft PR -> CI -> self-review -> ready -> merge`
+  для `staging`, затем `commit/push` не требуются, а PR в `main` создаётся
+  из validated diff и также доводится до `merge`
+- fast-track НЕ включает:
+  `rebase`, `force-push`, `deploy`, `staging smoke`, `production smoke`
+  и любые действия вне текущего согласованного scope
+- при любом blocker агент обязан остановиться и запросить следующий шаг
+  (конфликт, красный CI, scope drift, отсутствие доступа)
+
 Пример формата конца этапа:
 - `Что дальше:`
 - `1. commit`
