@@ -11,6 +11,15 @@ use App\Models\ScenarioRun;
 
 class DispatchStoredInboundScenarioAction
 {
+    /**
+     * @var list<string>
+     */
+    private const IBIZA_START_PARAMETERS = [
+        'vip_ibiza_apply',
+        'vip_ibiza_tg1',
+        'vip_ibiza_inst1',
+    ];
+
     public function __construct(
         private readonly ScenarioRegistry $scenarioRegistry,
     ) {}
@@ -78,6 +87,24 @@ class DispatchStoredInboundScenarioAction
         }
 
         return false;
+    }
+
+    public function shouldBlockVipIbizaParameterStartBecauseBusyState(Message $storedMessage): bool
+    {
+        if (! $this->isVipIbizaParameterStartMessage($storedMessage)) {
+            return false;
+        }
+
+        $storedMessage->loadMissing('contact');
+
+        if ($storedMessage->contact?->isInDataCollection()) {
+            return true;
+        }
+
+        return ScenarioRun::query()
+            ->active()
+            ->where('dialog_id', $storedMessage->dialog_id)
+            ->exists();
     }
 
     public function startMatchingScenario(Channel $channel, Message $storedMessage): bool
@@ -163,5 +190,25 @@ class DispatchStoredInboundScenarioAction
         return is_array($storedMessage->raw_payload)
             && is_array(data_get($storedMessage->raw_payload, 'callback_query'))
             && str_starts_with((string) data_get($storedMessage->raw_payload, 'callback_query.data', ''), 'scenario:');
+    }
+
+    private function isVipIbizaParameterStartMessage(Message $storedMessage): bool
+    {
+        $storedMessage->loadMissing('channel');
+
+        if (
+            ! in_array($storedMessage->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
+            || $storedMessage->message_kind !== Message::KIND_INBOUND_USER
+            || $storedMessage->dialog_id === null
+            || ! in_array(trim((string) $storedMessage->message_parameter), self::IBIZA_START_PARAMETERS, true)
+        ) {
+            return false;
+        }
+
+        return match ($storedMessage->channel?->platform) {
+            Channel::PLATFORM_TELEGRAM => true,
+            Channel::PLATFORM_MAX => data_get($storedMessage->raw_payload, 'update_type') === 'bot_started',
+            default => false,
+        };
     }
 }
