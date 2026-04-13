@@ -1274,6 +1274,118 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_telegram_vip_ibiza_deep_link_with_active_collector_and_no_active_run_sends_blocking_reply(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 504,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+        Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '300',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_apply',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_tg1',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_inst1',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 908,
+            text: '/start vip_ibiza_tg1',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '300'
+            && $request['text'] === 'У тебя уже есть активная анкета. Сначала заверши её.');
+
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessScenarioStartJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+
+        $this->assertNotNull($storedMessage->fresh()->auto_reply_sent_at);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'reply_to_message_id' => $storedMessage->id,
+            'text' => 'У тебя уже есть активная анкета. Сначала заверши её.',
+        ]);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_response_queued',
+        ]);
+    }
+
     public function test_telegram_vip_ibiza_deep_link_without_active_run_starts_scenario_as_before(): void
     {
         Queue::fake();

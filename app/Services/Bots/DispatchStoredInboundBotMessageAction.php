@@ -83,7 +83,7 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if ($this->dispatchStoredInboundScenarioAction->shouldBlockTelegramVipIbizaStartBecauseActiveRun($storedMessage)) {
+        if ($this->dispatchStoredInboundScenarioAction->shouldBlockTelegramVipIbizaStartBecauseBusyState($storedMessage)) {
             $this->sendVipIbizaActiveProcessReply($channel, $storedMessage, $duplicateContext);
 
             return;
@@ -256,8 +256,8 @@ class DispatchStoredInboundBotMessageAction
 
         $this->channelActivityLogger->info(
             $channel,
-            'scenario.vip_ibiza_start_blocked_active_run',
-            'Deep link VIP Ibiza отклонён: в диалоге уже есть активный процесс.',
+            'scenario.vip_ibiza_start_blocked_busy_state',
+            'Deep link VIP Ibiza отклонён: в диалоге уже есть активный процесс или активная анкета.',
             $duplicateContext + [
                 'outbound_message_id' => $outboundMessage->id,
                 'dialog_id' => $storedMessage->dialog_id,

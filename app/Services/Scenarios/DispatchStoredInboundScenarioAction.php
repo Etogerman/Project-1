@@ -89,10 +89,16 @@ class DispatchStoredInboundScenarioAction
         return false;
     }
 
-    public function shouldBlockTelegramVipIbizaStartBecauseActiveRun(Message $storedMessage): bool
+    public function shouldBlockTelegramVipIbizaStartBecauseBusyState(Message $storedMessage): bool
     {
         if (! $this->isTelegramVipIbizaStartMessage($storedMessage)) {
             return false;
+        }
+
+        $storedMessage->loadMissing('contact');
+
+        if ($storedMessage->contact?->isInDataCollection()) {
+            return true;
         }
 
         return ScenarioRun::query()
