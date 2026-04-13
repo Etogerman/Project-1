@@ -12,9 +12,13 @@ use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 
 class DispatchStoredInboundBotMessageAction
 {
+    private const VIP_IBIZA_ACTIVE_PROCESS_REPLY = 'У тебя уже есть активная анкета. Сначала заверши её.';
+
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
         protected DispatchStoredInboundScenarioAction $dispatchStoredInboundScenarioAction,
+        protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
+        protected TelegramBotApiService $telegramBotApiService,
     ) {}
 
     public function handle(
@@ -79,7 +83,9 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if ($this->dispatchStoredInboundScenarioAction->restartTelegramVipIbizaRunIfRequested($storedMessage)) {
+        if ($this->dispatchStoredInboundScenarioAction->shouldBlockTelegramVipIbizaStartBecauseActiveRun($storedMessage)) {
+            $this->sendVipIbizaActiveProcessReply($channel, $storedMessage, $duplicateContext);
+
             return;
         }
 
@@ -224,6 +230,37 @@ class DispatchStoredInboundBotMessageAction
                 'provider_event_key' => $storedMessage->provider_event_key,
                 'external_message_id' => $storedMessage->external_message_id,
                 'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            ],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $duplicateContext
+     */
+    protected function sendVipIbizaActiveProcessReply(Channel $channel, Message $storedMessage, array $duplicateContext): void
+    {
+        $storedMessage->loadMissing('contactIdentity');
+
+        $deliveryResult = $this->telegramBotApiService->sendTextMessage(
+            $channel,
+            $storedMessage->external_chat_id,
+            $storedMessage->contactIdentity?->external_user_id,
+            self::VIP_IBIZA_ACTIVE_PROCESS_REPLY,
+        );
+
+        $outboundMessage = $this->storeOutboundAutoReplyMessageAction->handle(
+            $channel,
+            $storedMessage,
+            $deliveryResult,
+        );
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'scenario.vip_ibiza_start_blocked_active_run',
+            'Deep link VIP Ibiza отклонён: в диалоге уже есть активный процесс.',
+            $duplicateContext + [
+                'outbound_message_id' => $outboundMessage->id,
+                'dialog_id' => $storedMessage->dialog_id,
             ],
         );
     }
