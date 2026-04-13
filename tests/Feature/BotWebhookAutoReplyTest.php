@@ -283,6 +283,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
 
         $dispatcher = Mockery::mock(DispatchStoredInboundScenarioAction::class);
+        $dispatcher->shouldReceive('shouldBlockVipIbizaParameterStartBecauseBusyState')->once()->andReturn(false);
         $dispatcher->shouldReceive('handle')->once()->andReturn(true);
         $this->app->instance(DispatchStoredInboundScenarioAction::class, $dispatcher);
 
@@ -401,6 +402,374 @@ class BotWebhookAutoReplyTest extends TestCase
         Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
         Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
         $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_max_vip_ibiza_parameter_start_with_active_run_sends_blocking_reply(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'body' => [
+                        'mid' => 'max-out-501',
+                    ],
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '500',
+            'external_username' => 'max_user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '700',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_apply',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_tg1',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_inst1',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'next' => 'capture_phone',
+                ],
+                'capture_phone' => [
+                    'type' => 'phone_capture',
+                    'text' => 'Поделитесь номером телефона.',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => 'other_flow',
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'awaiting_topic',
+            'state_payload' => [],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $this->maxBotStartedPayload(payload: 'vip_ibiza_apply'));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('other_flow', $run->scenario_code);
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+            && $request['text'] === 'У тебя уже есть активная анкета. Сначала заверши её.');
+
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessScenarioStartJob::class);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+
+        $this->assertNotNull($storedMessage->fresh()->auto_reply_sent_at);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'reply_to_message_id' => $storedMessage->id,
+            'text' => 'У тебя уже есть активная анкета. Сначала заверши её.',
+        ]);
+    }
+
+    public function test_repeated_max_vip_ibiza_parameter_start_with_busy_state_sends_blocking_reply_only_once(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'body' => [
+                        'mid' => 'max-out-502',
+                    ],
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '500',
+            'external_username' => 'max_user',
+        ]);
+
+        $headers = [
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ];
+        $payload = $this->maxBotStartedPayload(payload: 'vip_ibiza_inst1');
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $payload)
+            ->assertOk();
+
+        $this->withHeaders($headers)
+            ->postJson("/webhooks/max/{$channel->id}", $payload)
+            ->assertOk();
+
+        $message = $this->inboundMessages()->firstOrFail();
+
+        $this->assertNotNull($message->auto_reply_sent_at);
+        Http::assertSentCount(1);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessScenarioStartJob::class);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'webhook.duplicate_ignored',
+        ]);
+    }
+
+    public function test_max_vip_ibiza_parameter_start_with_active_collector_and_no_active_run_sends_blocking_reply(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => [
+                    'body' => [
+                        'mid' => 'max-out-503',
+                    ],
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '500',
+            'external_username' => 'max_user',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_apply',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_tg1',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_inst1',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $this->maxBotStartedPayload(payload: 'vip_ibiza_tg1'));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+            && $request['text'] === 'У тебя уже есть активная анкета. Сначала заверши её.');
+
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessScenarioStartJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+
+        $this->assertNotNull($storedMessage->fresh()->auto_reply_sent_at);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'reply_to_message_id' => $storedMessage->id,
+            'text' => 'У тебя уже есть активная анкета. Сначала заверши её.',
+        ]);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_response_queued',
+        ]);
+    }
+
+    public function test_max_vip_ibiza_parameter_start_without_busy_state_starts_scenario_as_before(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '500',
+            'external_username' => 'max_user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '700',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_apply',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_tg1',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'vip_ibiza_inst1',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'next' => 'capture_phone',
+                ],
+                'capture_phone' => [
+                    'type' => 'phone_capture',
+                    'text' => 'Поделитесь номером телефона.',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $this->maxBotStartedPayload(payload: 'vip_ibiza_inst1'));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessScenarioStartJob::class, function (ProcessScenarioStartJob $job) use ($storedMessage, $dialog, $scenario): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->dialogId === $dialog->id
+                && $job->scenarioCode === $scenario->code;
+        });
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertNull($storedMessage->fresh()->auto_reply_sent_at);
     }
 
     public function test_max_webhook_uses_real_payload_fields_for_contact_name_and_message_id(): void

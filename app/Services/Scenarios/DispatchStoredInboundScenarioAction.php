@@ -89,9 +89,9 @@ class DispatchStoredInboundScenarioAction
         return false;
     }
 
-    public function shouldBlockTelegramVipIbizaStartBecauseBusyState(Message $storedMessage): bool
+    public function shouldBlockVipIbizaParameterStartBecauseBusyState(Message $storedMessage): bool
     {
-        if (! $this->isTelegramVipIbizaStartMessage($storedMessage)) {
+        if (! $this->isVipIbizaParameterStartMessage($storedMessage)) {
             return false;
         }
 
@@ -192,13 +192,23 @@ class DispatchStoredInboundScenarioAction
             && str_starts_with((string) data_get($storedMessage->raw_payload, 'callback_query.data', ''), 'scenario:');
     }
 
-    private function isTelegramVipIbizaStartMessage(Message $storedMessage): bool
+    private function isVipIbizaParameterStartMessage(Message $storedMessage): bool
     {
         $storedMessage->loadMissing('channel');
 
-        return $storedMessage->channel?->platform === Channel::PLATFORM_TELEGRAM
-            && $storedMessage->message_kind === Message::KIND_INBOUND_USER
-            && $storedMessage->dialog_id !== null
-            && in_array(trim((string) $storedMessage->message_parameter), self::IBIZA_START_PARAMETERS, true);
+        if (
+            ! in_array($storedMessage->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
+            || $storedMessage->message_kind !== Message::KIND_INBOUND_USER
+            || $storedMessage->dialog_id === null
+            || ! in_array(trim((string) $storedMessage->message_parameter), self::IBIZA_START_PARAMETERS, true)
+        ) {
+            return false;
+        }
+
+        return match ($storedMessage->channel?->platform) {
+            Channel::PLATFORM_TELEGRAM => true,
+            Channel::PLATFORM_MAX => data_get($storedMessage->raw_payload, 'update_type') === 'bot_started',
+            default => false,
+        };
     }
 }
