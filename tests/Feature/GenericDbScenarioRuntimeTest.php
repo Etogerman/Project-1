@@ -926,12 +926,80 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertNotContains('Как вас зовут?', $outboundMessages->pluck('text')->all());
     }
 
-    public function test_ibiza_mvp_does_not_skip_name_question_for_manual_auto_or_unknown_source(): void
+    public function test_ibiza_mvp_skips_name_question_when_contact_first_name_is_manual(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
                 'result' => ['message_id' => 7555],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, contactOverrides: [
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_MANUAL,
+        ]);
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+
+        $scenario = $this->createPublishedScenario('vip_ibiza', $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        ));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_apply',
+            'message_parameter' => 'vip_ibiza_apply',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('dialog_id', $dialog->id)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('ask_dates', $run->current_step);
+        $this->assertSame([], $run->state_payload);
+        $this->assertCount(2, $outboundMessages);
+        $this->assertSame('Добро пожаловать', $outboundMessages[0]->text);
+        $this->assertStringStartsWith('Готовы ли вы участвовать', (string) $outboundMessages[1]->text);
+        $this->assertNotContains('Как вас зовут?', $outboundMessages->pluck('text')->all());
+    }
+
+    public function test_ibiza_mvp_does_not_skip_name_question_for_auto_unknown_or_empty_manual_name(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7556],
             ]),
         ]);
 
@@ -951,12 +1019,22 @@ class GenericDbScenarioRuntimeTest extends TestCase
             $weakTag->slug,
         ));
 
-        foreach ([Contact::FIRST_NAME_SOURCE_MANUAL, Contact::FIRST_NAME_SOURCE_AUTO, null] as $source) {
-            $channel = $this->createTelegramChannel();
-            [$contact, $identity, $dialog] = $this->createDialogContext($channel, contactOverrides: [
+        foreach ([
+            [
                 'first_name' => 'Уже есть',
-                'first_name_source' => $source,
-            ]);
+                'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+            ],
+            [
+                'first_name' => 'Уже есть',
+                'first_name_source' => null,
+            ],
+            [
+                'first_name' => null,
+                'first_name_source' => Contact::FIRST_NAME_SOURCE_MANUAL,
+            ],
+        ] as $contactOverrides) {
+            $channel = $this->createTelegramChannel();
+            [$contact, $identity, $dialog] = $this->createDialogContext($channel, contactOverrides: $contactOverrides);
 
             ScenarioChannelBinding::query()->create([
                 'channel_id' => $channel->id,
@@ -1001,7 +1079,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
-                'result' => ['message_id' => 7556],
+                'result' => ['message_id' => 7557],
             ]),
         ]);
 
@@ -1080,7 +1158,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
-                'result' => ['message_id' => 7557],
+                'result' => ['message_id' => 7558],
             ]),
         ]);
 
@@ -1493,7 +1571,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Queue::assertNotPushed(InferContactGenderFromFirstNameJob::class);
     }
 
-    public function test_ibiza_mvp_does_not_overwrite_existing_contact_first_name_or_dispatch_side_effects(): void
+    public function test_ibiza_mvp_skips_manual_name_question_and_completes_without_name_side_effects(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -1553,8 +1631,16 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->handle(app(ScenarioRegistry::class));
 
         $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('dialog_id', $dialog->id)
+            ->orderBy('id')
+            ->get();
 
-        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Герман');
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('ask_dates', $run->current_step);
+        $this->assertNotContains('Как вас зовут?', $outboundMessages->pluck('text')->all());
+
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Пока нет');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Посмотреть формат');
         $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Частично');
@@ -1565,7 +1651,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $contact->refresh();
 
         $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
-        $this->assertSame('Герман', data_get($run->state_payload, 'run.first_name'));
+        $this->assertNull(data_get($run->state_payload, 'run.first_name'));
         $this->assertSame('Старое имя', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $contact->first_name_source);
 
