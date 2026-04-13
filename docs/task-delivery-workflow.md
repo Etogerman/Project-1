@@ -319,6 +319,35 @@ Issue закрывается только если одновременно вы
 Результат:
 - закрытая issue.
 
+## Правило архивации ТЗ
+
+После полного закрытия implementation stream рабочее ТЗ нужно вывести
+из списка активных документов.
+
+ТЗ переносится из `docs/tz/` в `docs/tz/archive/` только если
+одновременно выполнено всё:
+1. PR в `staging` смержен
+2. staging deploy завершён
+3. staging smoke зелёный
+4. PR в `main` смержен
+5. production deploy завершён, если шаг реально выкатывается в production
+6. production smoke зелёный после фактического production deploy, если production входит в активный release flow
+7. критерии приёмки ТЗ выполнены
+
+После этого нужно:
+1. перенести файл ТЗ в `docs/tz/archive/`
+2. убрать его из списка активных документов в `docs/tz/README.md`
+3. при необходимости кратко отметить в архивном описании, каким PR или stream ТЗ закрыт
+
+Не архивируются:
+1. ТЗ с незавершёнными follow-up slices
+2. ТЗ, у которого закрыт только `staging`, но не `main`
+3. ТЗ без production-подтверждения, если production входил в release flow
+4. отменённые или заменённые ТЗ без полного delivery-loop
+
+Результат:
+- активные ТЗ остаются в `docs/tz/`, закрытые ТЗ переходят в `docs/tz/archive/`.
+
 ## Этап 23. Выход из ветки и переход к следующему шагу
 
 С ветки уходят только после полного закрытия stream.
@@ -374,7 +403,7 @@ Branch активна, пока существует хотя бы одно из
 
 ## Короткая формула процесса
 
-`Задача -> Уточнение -> Read-only анализ -> ТЗ -> Проверка ТЗ -> Улучшение ТЗ -> Slices -> Preflight -> Branch -> Реализация -> Review -> Commit -> Push -> Draft PR в staging -> CI -> Self-review -> Ready for review -> Merge в staging -> Staging deploy -> Staging smoke -> PR в main из validated diff -> CI -> Self-review -> Ready for review -> Merge в main -> Manual production deploy -> Production smoke -> Close issue -> Cleanup`
+`Задача -> Уточнение -> Read-only анализ -> ТЗ -> Проверка ТЗ -> Улучшение ТЗ -> Slices -> Preflight -> Branch -> Реализация -> Review -> Commit -> Push -> Draft PR в staging -> CI -> Self-review -> Ready for review -> Merge в staging -> Staging deploy -> Staging smoke -> PR в main из validated diff -> CI -> Self-review -> Ready for review -> Merge в main -> Manual production deploy -> Production smoke -> Close issue -> Archive TZ -> Cleanup`
 
 Если production deploy для конкретного шага не выполняется сразу, stream не
 считается полностью закрытым только по merge в `main` и staging smoke.
