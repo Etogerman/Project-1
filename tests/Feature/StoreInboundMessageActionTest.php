@@ -15,6 +15,7 @@ use App\Models\Message;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\MergeContactsAction;
+use App\Services\Dialogs\DialogConsolidationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Mockery\MockInterface;
@@ -1205,6 +1206,71 @@ class StoreInboundMessageActionTest extends TestCase
                 sharedContactUserId: '204',
                 rawPayload: ['message' => ['contact' => ['phone_number' => '+7 999 123 45 67']]],
                 receivedAt: Carbon::parse('2026-03-28 19:15:00'),
+            ),
+        );
+
+        $currentContact = Contact::query()->findOrFail($storedResult->message->contact_id);
+
+        $this->assertSame(StoredInboundMessageResult::PHONE_CAPTURE_STATUS_REVIEW_PENDING, $storedResult->phoneCaptureStatus);
+        $this->assertSame(Contact::DUPLICATE_REVIEW_STATUS_PENDING, $currentContact->duplicate_review_status);
+        $this->assertDatabaseHas('dialogs', [
+            'id' => $storedResult->message->dialog_id,
+            'confirmed_phone_raw' => '+7 999 123 45 67',
+            'confirmed_phone_normalized' => '+79991234567',
+            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+        ]);
+        $this->assertDatabaseHas('contact_duplicate_reviews', [
+            'contact_id' => $currentContact->id,
+            'phone_normalized' => '+79991234567',
+            'review_type' => ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE,
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+        $this->assertDatabaseCount('contact_merge_logs', 0);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_merge_failed_review_pending',
+        ]);
+    }
+
+    public function test_store_inbound_message_falls_back_to_review_pending_when_merge_fails_with_dialog_consolidation_exception(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $otherRoot = Contact::factory()->create([
+            'first_name' => 'Герман',
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $otherRoot->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        $this->mock(MergeContactsAction::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('handle')
+                ->once()
+                ->andThrow(new DialogConsolidationException('Active scenario run blocks dialog consolidation.'));
+        });
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: '305',
+                externalUserId: '205',
+                providerEventKey: 'telegram-update-305',
+                externalMessageId: '305',
+                externalUsername: 'telegram_user_305',
+                contactName: 'Тестовый контакт 305',
+                text: null,
+                inboundKind: IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE,
+                sharedPhoneNumber: '+7 999 123 45 67',
+                sharedContactUserId: '205',
+                rawPayload: ['message' => ['contact' => ['phone_number' => '+7 999 123 45 67']]],
+                receivedAt: Carbon::parse('2026-03-28 19:20:00'),
             ),
         );
 
