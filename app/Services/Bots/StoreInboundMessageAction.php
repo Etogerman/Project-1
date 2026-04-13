@@ -23,6 +23,7 @@ use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
+use App\Services\Dialogs\DialogConsolidationException;
 use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Database\QueryException;
@@ -722,7 +723,7 @@ class StoreInboundMessageAction
                 );
 
                 return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT;
-            } catch (ContactMergeException|BrokenContactMergeChainException|QueryException $exception) {
+            } catch (ContactMergeException|BrokenContactMergeChainException|DialogConsolidationException|QueryException $exception) {
                 $this->createPhoneDuplicateReview(
                     contact: $contact,
                     phoneNormalized: $phoneNumber->phone_normalized,

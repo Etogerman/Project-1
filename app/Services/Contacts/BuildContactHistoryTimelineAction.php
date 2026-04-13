@@ -6,6 +6,7 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactTimelineEvent;
 use App\Models\Dialog;
+use App\Models\ScenarioRun;
 use Illuminate\Support\Collection;
 
 class BuildContactHistoryTimelineAction
@@ -19,6 +20,24 @@ class BuildContactHistoryTimelineAction
     private const EVENT_DATA_COLLECTION_COMPLETED = 'data_collection_completed';
 
     private const EVENT_CONTACT_MERGED = 'contact_merged';
+
+    private const EVENT_VIP_IBIZA_COMPLETED = 'scenario_vip_ibiza_completed';
+
+    private const VIP_IBIZA_SCENARIO_CODE = 'vip_ibiza';
+
+    /**
+     * @var array<string, string>
+     */
+    private const VIP_IBIZA_SUMMARY_FIELDS = [
+        'run.first_name' => 'Имя',
+        'run.dates_response' => 'Готовность по датам',
+        'run.primary_goal' => 'Цель',
+        'run.commitment' => 'Формат включения',
+        'run.budget_tier' => 'Бюджет',
+        'run.departure_city' => 'Город вылета',
+        'run.call_readiness' => 'Готовность к созвону',
+        'run.instagram_handle' => 'Instagram',
+    ];
 
     /**
      * @return Collection<int, array{
@@ -105,6 +124,10 @@ class BuildContactHistoryTimelineAction
                 sortPriority: 50,
                 sortId: (int) $contact->id,
             ));
+        }
+
+        foreach ($this->buildVipIbizaRunItems($contact) as $scenarioItem) {
+            $items->push($scenarioItem);
         }
 
         foreach ($contact->timelineEvents as $timelineEvent) {
@@ -201,6 +224,89 @@ class BuildContactHistoryTimelineAction
         }
 
         return $channel->name ?: $platformLabel ?: 'неизвестный канал';
+    }
+
+    /**
+     * @return Collection<int, array{
+     *     type:string,
+     *     title:string,
+     *     description:?string,
+     *     body:?string,
+     *     actorName:?string,
+     *     timestampLabel:string,
+     *     sortTimestamp:int,
+     *     sortPriority:int,
+     *     sortId:int
+     * }>
+     */
+    private function buildVipIbizaRunItems(Contact $contact): Collection
+    {
+        $dialogs = $contact->dialogs
+            ->filter(static fn (mixed $dialog): bool => $dialog instanceof Dialog)
+            ->keyBy(static fn (Dialog $dialog): int => (int) $dialog->id);
+
+        if ($dialogs->isEmpty()) {
+            return collect();
+        }
+
+        return ScenarioRun::query()
+            ->where('scenario_code', self::VIP_IBIZA_SCENARIO_CODE)
+            ->where('status', ScenarioRun::STATUS_COMPLETED)
+            ->whereIn('dialog_id', $dialogs->keys()->all())
+            ->orderByDesc('finished_at')
+            ->orderByDesc('id')
+            ->get()
+            ->map(function (ScenarioRun $run) use ($dialogs): ?array {
+                if ($run->finished_at === null) {
+                    return null;
+                }
+
+                /** @var Dialog|null $dialog */
+                $dialog = $dialogs->get((int) $run->dialog_id);
+
+                return $this->makeItem(
+                    type: self::EVENT_VIP_IBIZA_COMPLETED,
+                    title: 'Пройден сценарий VIP Ibiza',
+                    description: $this->formatVipIbizaDescription($dialog),
+                    body: $this->formatVipIbizaSummary($run),
+                    timestamp: $run->finished_at,
+                    sortPriority: 85,
+                    sortId: (int) $run->id,
+                );
+            })
+            ->filter(static fn (mixed $item): bool => is_array($item))
+            ->values();
+    }
+
+    private function formatVipIbizaDescription(?Dialog $dialog): string
+    {
+        if ($dialog instanceof Dialog) {
+            return sprintf('Сценарий завершён в канале «%s».', $this->formatDialogChannelLabel($dialog));
+        }
+
+        return 'Сценарий завершён.';
+    }
+
+    private function formatVipIbizaSummary(ScenarioRun $run): ?string
+    {
+        $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
+        $lines = [];
+
+        foreach (self::VIP_IBIZA_SUMMARY_FIELDS as $path => $label) {
+            $value = $this->normalizeTimelineValue(data_get($statePayload, $path));
+
+            if ($value === null) {
+                continue;
+            }
+
+            $lines[] = sprintf('%s: %s', $label, $value);
+        }
+
+        if ($lines === []) {
+            return null;
+        }
+
+        return implode(PHP_EOL, $lines);
     }
 
     private function formatMergedDescription(Contact $contact): string
