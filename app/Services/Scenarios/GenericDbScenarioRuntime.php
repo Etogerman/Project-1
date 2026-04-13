@@ -275,7 +275,10 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         }
 
         return filled($contact->first_name)
-            && $contact->first_name_source === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED;
+            && in_array($contact->first_name_source, [
+                Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+                Contact::FIRST_NAME_SOURCE_MANUAL,
+            ], true);
     }
 
     /**
