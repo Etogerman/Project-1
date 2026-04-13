@@ -12,13 +12,14 @@ use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 
 class DispatchStoredInboundBotMessageAction
 {
-    private const VIP_IBIZA_ACTIVE_PROCESS_REPLY = 'У тебя уже есть активная анкета. Сначала заверши её.';
+    private const VIP_IBIZA_BUSY_STATE_REPLY = 'У тебя уже есть активная анкета. Сначала заверши её.';
 
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
         protected DispatchStoredInboundScenarioAction $dispatchStoredInboundScenarioAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
         protected TelegramBotApiService $telegramBotApiService,
+        protected MaxBotApiService $maxBotApiService,
     ) {}
 
     public function handle(
@@ -52,20 +53,6 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if ($this->isStoredMaxBotStartedEventWithoutParameter($channel, $storedMessage)) {
-            return;
-        }
-
-        if ($this->isAutoReplyOnlyMaxBotStartedEvent($channel, $storedMessage)) {
-            if ($this->dispatchStoredInboundScenarioAction->handle($channel, $storedMessage)) {
-                return;
-            }
-
-            $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
-
-            return;
-        }
-
         if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
             if (
                 $storedResult->shouldQueuePhoneCaptureFollowUp()
@@ -79,13 +66,27 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
+        if ($this->isStoredMaxBotStartedEventWithoutParameter($channel, $storedMessage)) {
             return;
         }
 
-        if ($this->dispatchStoredInboundScenarioAction->shouldBlockTelegramVipIbizaStartBecauseBusyState($storedMessage)) {
-            $this->sendVipIbizaActiveProcessReply($channel, $storedMessage, $duplicateContext);
+        if ($this->dispatchStoredInboundScenarioAction->shouldBlockVipIbizaParameterStartBecauseBusyState($storedMessage)) {
+            $this->sendVipIbizaBusyStateReply($channel, $storedMessage, $duplicateContext);
 
+            return;
+        }
+
+        if ($this->isAutoReplyOnlyMaxBotStartedEvent($channel, $storedMessage)) {
+            if ($this->dispatchStoredInboundScenarioAction->handle($channel, $storedMessage)) {
+                return;
+            }
+
+            $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
+
+            return;
+        }
+
+        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
             return;
         }
 
@@ -237,16 +238,25 @@ class DispatchStoredInboundBotMessageAction
     /**
      * @param  array<string, mixed>  $duplicateContext
      */
-    protected function sendVipIbizaActiveProcessReply(Channel $channel, Message $storedMessage, array $duplicateContext): void
+    protected function sendVipIbizaBusyStateReply(Channel $channel, Message $storedMessage, array $duplicateContext): void
     {
         $storedMessage->loadMissing('contactIdentity');
 
-        $deliveryResult = $this->telegramBotApiService->sendTextMessage(
-            $channel,
-            $storedMessage->external_chat_id,
-            $storedMessage->contactIdentity?->external_user_id,
-            self::VIP_IBIZA_ACTIVE_PROCESS_REPLY,
-        );
+        $deliveryResult = match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
+                $channel,
+                $storedMessage->external_chat_id,
+                $storedMessage->contactIdentity?->external_user_id,
+                self::VIP_IBIZA_BUSY_STATE_REPLY,
+            ),
+            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
+                $channel,
+                $storedMessage->external_chat_id,
+                $storedMessage->contactIdentity?->external_user_id,
+                self::VIP_IBIZA_BUSY_STATE_REPLY,
+            ),
+            default => throw new \InvalidArgumentException("VIP Ibiza busy-state reply is not supported for platform [{$channel->platform}]."),
+        };
 
         $outboundMessage = $this->storeOutboundAutoReplyMessageAction->handle(
             $channel,
