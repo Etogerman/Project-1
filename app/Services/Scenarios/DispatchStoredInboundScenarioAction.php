@@ -11,6 +11,15 @@ use App\Models\ScenarioRun;
 
 class DispatchStoredInboundScenarioAction
 {
+    /**
+     * @var list<string>
+     */
+    private const IBIZA_START_PARAMETERS = [
+        'vip_ibiza_apply',
+        'vip_ibiza_tg1',
+        'vip_ibiza_inst1',
+    ];
+
     public function __construct(
         private readonly ScenarioRegistry $scenarioRegistry,
     ) {}
@@ -78,6 +87,24 @@ class DispatchStoredInboundScenarioAction
         }
 
         return false;
+    }
+
+    public function shouldBlockTelegramVipIbizaStartBecauseBusyState(Message $storedMessage): bool
+    {
+        if (! $this->isTelegramVipIbizaStartMessage($storedMessage)) {
+            return false;
+        }
+
+        $storedMessage->loadMissing('contact');
+
+        if ($storedMessage->contact?->isInDataCollection()) {
+            return true;
+        }
+
+        return ScenarioRun::query()
+            ->active()
+            ->where('dialog_id', $storedMessage->dialog_id)
+            ->exists();
     }
 
     public function startMatchingScenario(Channel $channel, Message $storedMessage): bool
@@ -163,5 +190,15 @@ class DispatchStoredInboundScenarioAction
         return is_array($storedMessage->raw_payload)
             && is_array(data_get($storedMessage->raw_payload, 'callback_query'))
             && str_starts_with((string) data_get($storedMessage->raw_payload, 'callback_query.data', ''), 'scenario:');
+    }
+
+    private function isTelegramVipIbizaStartMessage(Message $storedMessage): bool
+    {
+        $storedMessage->loadMissing('channel');
+
+        return $storedMessage->channel?->platform === Channel::PLATFORM_TELEGRAM
+            && $storedMessage->message_kind === Message::KIND_INBOUND_USER
+            && $storedMessage->dialog_id !== null
+            && in_array(trim((string) $storedMessage->message_parameter), self::IBIZA_START_PARAMETERS, true);
     }
 }
