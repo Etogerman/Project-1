@@ -12,6 +12,7 @@ use App\Models\Scenario;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Models\User;
+use App\Services\Contacts\MergeContactsAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -186,6 +187,76 @@ class ContactHistoryIbizaScenarioTest extends TestCase
             ->assertSee('Город вылета: Казань')
             ->assertDontSee('FAILED SHOULD STAY HIDDEN')
             ->assertDontSee('OTHER SCENARIO SHOULD STAY HIDDEN');
+    }
+
+    public function test_contact_history_keeps_completed_vip_ibiza_run_visible_after_same_channel_merge(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $primary = Contact::factory()->create();
+        $secondary = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $primaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ibiza-history-merge-root',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ibiza-history-merge-secondary',
+        ]);
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+            'external_chat_id' => 'ibiza-history-root-chat',
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'ibiza-history-secondary-chat',
+        ]);
+
+        $this->createPublishedDatabaseScenario('vip_ibiza', 'VIP Ibiza');
+
+        $run = ScenarioRun::query()->create([
+            'scenario_code' => 'vip_ibiza',
+            'dialog_id' => $secondaryDialog->id,
+            'status' => ScenarioRun::STATUS_COMPLETED,
+            'current_step' => null,
+            'state_payload' => [
+                'run' => [
+                    'primary_goal' => 'Прийти к браку',
+                ],
+            ],
+            'exit_outcome' => 'completed',
+            'started_at' => now()->subMinutes(12),
+            'finished_at' => now()->subMinutes(10),
+        ]);
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $this->assertDatabaseHas('scenario_runs', [
+            'id' => $run->id,
+            'dialog_id' => $primaryDialog->id,
+            'status' => ScenarioRun::STATUS_COMPLETED,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $primary->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('Пройден сценарий VIP Ibiza')
+            ->assertSee('Цель: Прийти к браку')
+            ->assertDontSee((string) $secondaryDialog->id);
     }
 
     private function createPublishedDatabaseScenario(string $code, string $name): Scenario
