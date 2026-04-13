@@ -11,9 +11,13 @@ use App\Models\ContactPhoneNumber;
 use App\Models\ContactTimelineEvent;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\Scenario;
+use App\Models\ScenarioRun;
+use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\MergeContactsAction;
+use App\Services\Dialogs\DialogConsolidationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -841,5 +845,177 @@ class MergeContactsActionTest extends TestCase
             $originalFieldStartedAt?->toDateTimeString(),
             $primary->data_collection_current_field_started_at?->toDateTimeString(),
         );
+    }
+
+    public function test_it_relinks_completed_cancelled_and_failed_scenario_runs_before_deleting_redundant_dialog(): void
+    {
+        $channel = Channel::factory()->create();
+        $primary = Contact::factory()->create();
+        $secondary = Contact::factory()->create();
+
+        $primaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'merge-scenario-root',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'merge-scenario-secondary',
+        ]);
+
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+            'external_chat_id' => 'merge-scenario-root-chat',
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'merge-scenario-secondary-chat',
+        ]);
+
+        $this->createPublishedDatabaseScenario('vip_ibiza', 'VIP Ibiza');
+
+        $completedRun = ScenarioRun::query()->create([
+            'scenario_code' => 'vip_ibiza',
+            'dialog_id' => $secondaryDialog->id,
+            'status' => ScenarioRun::STATUS_COMPLETED,
+            'current_step' => null,
+            'state_payload' => ['run' => ['primary_goal' => 'Completed']],
+            'exit_outcome' => 'completed',
+            'started_at' => now()->subMinutes(9),
+            'finished_at' => now()->subMinutes(8),
+        ]);
+        $cancelledRun = ScenarioRun::query()->create([
+            'scenario_code' => 'vip_ibiza',
+            'dialog_id' => $secondaryDialog->id,
+            'status' => ScenarioRun::STATUS_CANCELLED,
+            'current_step' => null,
+            'state_payload' => ['run' => ['primary_goal' => 'Cancelled']],
+            'exit_outcome' => 'cancelled',
+            'started_at' => now()->subMinutes(7),
+            'finished_at' => now()->subMinutes(6),
+        ]);
+        $failedRun = ScenarioRun::query()->create([
+            'scenario_code' => 'vip_ibiza',
+            'dialog_id' => $secondaryDialog->id,
+            'status' => ScenarioRun::STATUS_FAILED,
+            'current_step' => null,
+            'state_payload' => ['run' => ['primary_goal' => 'Failed']],
+            'exit_outcome' => 'failed',
+            'started_at' => now()->subMinutes(5),
+            'finished_at' => now()->subMinutes(4),
+        ]);
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $this->assertDatabaseMissing('dialogs', [
+            'id' => $secondaryDialog->id,
+        ]);
+        $this->assertDatabaseHas('scenario_runs', [
+            'id' => $completedRun->id,
+            'dialog_id' => $primaryDialog->id,
+            'status' => ScenarioRun::STATUS_COMPLETED,
+        ]);
+        $this->assertDatabaseHas('scenario_runs', [
+            'id' => $cancelledRun->id,
+            'dialog_id' => $primaryDialog->id,
+            'status' => ScenarioRun::STATUS_CANCELLED,
+        ]);
+        $this->assertDatabaseHas('scenario_runs', [
+            'id' => $failedRun->id,
+            'dialog_id' => $primaryDialog->id,
+            'status' => ScenarioRun::STATUS_FAILED,
+        ]);
+    }
+
+    public function test_it_fails_fast_when_redundant_dialog_has_active_scenario_run(): void
+    {
+        $channel = Channel::factory()->create();
+        $primary = Contact::factory()->create();
+        $secondary = Contact::factory()->create();
+
+        $primaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'merge-active-root',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'merge-active-secondary',
+        ]);
+
+        $primaryDialog = Dialog::factory()->create([
+            'contact_id' => $primary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $primaryIdentity->id,
+            'external_chat_id' => 'merge-active-root-chat',
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'merge-active-secondary-chat',
+        ]);
+
+        $this->createPublishedDatabaseScenario('vip_ibiza', 'VIP Ibiza');
+
+        $activeRun = ScenarioRun::query()->create([
+            'scenario_code' => 'vip_ibiza',
+            'dialog_id' => $secondaryDialog->id,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'ask_budget',
+            'state_payload' => ['run' => ['primary_goal' => 'Active']],
+            'exit_outcome' => null,
+            'started_at' => now()->subMinutes(3),
+            'finished_at' => null,
+        ]);
+
+        $this->expectException(DialogConsolidationException::class);
+        $this->expectExceptionMessage('Cannot consolidate dialogs while a redundant dialog has an active scenario run.');
+
+        try {
+            app(MergeContactsAction::class)->handle($primary, $secondary);
+        } finally {
+            $this->assertDatabaseHas('dialogs', [
+                'id' => $primaryDialog->id,
+            ]);
+            $this->assertDatabaseHas('dialogs', [
+                'id' => $secondaryDialog->id,
+            ]);
+            $this->assertDatabaseHas('scenario_runs', [
+                'id' => $activeRun->id,
+                'dialog_id' => $secondaryDialog->id,
+                'status' => ScenarioRun::STATUS_ACTIVE,
+            ]);
+            $this->assertNull($secondary->fresh()->merged_into_contact_id);
+        }
+    }
+
+    private function createPublishedDatabaseScenario(string $code, string $name): Scenario
+    {
+        $scenario = Scenario::query()->create([
+            'code' => $code,
+            'name' => $name,
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => [],
+        ]);
+
+        return $scenario->fresh('publishedVersion');
     }
 }

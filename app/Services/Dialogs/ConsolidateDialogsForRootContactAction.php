@@ -7,6 +7,7 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\ScenarioRun;
 use DateTimeInterface;
 use Illuminate\Support\Collection;
 
@@ -179,6 +180,14 @@ class ConsolidateDialogsForRootContactAction
                 ->reject(fn (Dialog $dialog): bool => $dialog->is($survivingDialog))
                 ->values();
 
+            if ($redundantDialogs->isNotEmpty()) {
+                $this->relinkRedundantDialogScenarioRuns(
+                    survivingDialog: $survivingDialog,
+                    redundantDialogs: $redundantDialogs,
+                    apply: $apply,
+                );
+            }
+
             $stats['dialogs_merged'] += $redundantDialogs->count();
             $stats['dialogs_deleted'] += $redundantDialogs->count();
 
@@ -213,6 +222,59 @@ class ConsolidateDialogsForRootContactAction
             ->first();
 
         return $fallbackDialog;
+    }
+
+    /**
+     * @param  Collection<int, Dialog>  $redundantDialogs
+     */
+    private function relinkRedundantDialogScenarioRuns(
+        Dialog $survivingDialog,
+        Collection $redundantDialogs,
+        bool $apply,
+    ): void {
+        $redundantDialogIds = $redundantDialogs->modelKeys();
+
+        if ($redundantDialogIds === []) {
+            return;
+        }
+
+        $scenarioRunsQuery = ScenarioRun::query()
+            ->whereIn('dialog_id', $redundantDialogIds)
+            ->orderBy('id');
+
+        if ($apply) {
+            $scenarioRunsQuery->lockForUpdate();
+        }
+
+        /** @var Collection<int, ScenarioRun> $scenarioRuns */
+        $scenarioRuns = $scenarioRunsQuery->get();
+
+        if ($scenarioRuns->where('status', ScenarioRun::STATUS_ACTIVE)->isNotEmpty()) {
+            throw new DialogConsolidationException('Cannot consolidate dialogs while a redundant dialog has an active scenario run.');
+        }
+
+        if (! $apply) {
+            return;
+        }
+
+        $scenarioRunsToRelink = $scenarioRuns
+            ->whereIn('status', [
+                ScenarioRun::STATUS_COMPLETED,
+                ScenarioRun::STATUS_CANCELLED,
+                ScenarioRun::STATUS_FAILED,
+            ])
+            ->values();
+
+        if ($scenarioRunsToRelink->isEmpty()) {
+            return;
+        }
+
+        ScenarioRun::query()
+            ->whereKey($scenarioRunsToRelink->modelKeys())
+            ->update([
+                'dialog_id' => $survivingDialog->id,
+                'updated_at' => now(),
+            ]);
     }
 
     /**
