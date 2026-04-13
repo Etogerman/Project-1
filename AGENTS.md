@@ -366,6 +366,19 @@ Abrikosoff Connector — операторская платформа для ра
 - production smoke
 - закрытие issue
 
+Исключение для чисто документационных PR:
+- если diff меняет только `AGENTS.md`, `docs/**`, `README*.md`, ТЗ и другие
+  markdown/текстовые регламенты
+- и не меняет `app/`, `config/`, `database/`, `resources/`, `tests/`,
+  `.github/workflows/`, скрипты и любые исполняемые файлы
+- используется упрощённый путь:
+  `read-only анализ -> краткое согласование -> clean branch от origin/main ->
+  правка документов -> локальный self-review -> commit -> push ->
+  один PR сразу в main -> CI -> ready -> merge -> cleanup`
+- для такого PR не нужны `staging`, deploy-check и smoke
+- если в diff попадает хотя бы один не-документационный файл,
+  снова включается обычный полный процесс
+
 Новый кодовый шаг начинается только после:
 - согласованного ТЗ
 - чистого preflight
