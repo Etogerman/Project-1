@@ -8,7 +8,6 @@ use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
-use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioRun;
@@ -288,15 +287,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             return false;
         }
 
-        if ($contact->phoneNumbers()->exists()) {
-            return true;
-        }
-
-        $message->loadMissing('dialog');
-        $dialog = $message->dialog;
-
-        return $dialog instanceof Dialog
-            && (filled($dialog->confirmed_phone_raw) || filled($dialog->confirmed_phone_normalized));
+        return $contact->phoneNumbers()->exists();
     }
 
     /**
