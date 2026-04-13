@@ -28,6 +28,8 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 {
     private const IBIZA_SCENARIO_CODE = 'vip_ibiza';
 
+    private const IBIZA_FIRST_NAME_STATE_KEY = 'run.first_name';
+
     private const PHONE_CAPTURE_BUTTON_TEXT = 'Поделиться номером телефона';
 
     public function __construct(
@@ -191,6 +193,19 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             throw new RuntimeException("Scenario [{$this->code()}] references missing block [{$nextBlockId}].");
         }
 
+        $ibizaSkipResult = $this->resolveIbizaSkipResult(
+            $message,
+            $schema,
+            $block,
+            $statePayload,
+            $remainingTransitions,
+            $removeTelegramKeyboard,
+        );
+
+        if ($ibizaSkipResult !== null) {
+            return $ibizaSkipResult;
+        }
+
         return match ($block['type'] ?? null) {
             'message' => $this->advanceAfterMessageBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1, $removeTelegramKeyboard),
             'question' => $this->enterQuestionBlock($message, $nextBlockId, $block, $statePayload, $removeTelegramKeyboard),
@@ -199,6 +214,80 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             'complete' => $this->completeScenario($message, $block, $statePayload),
             default => throw new RuntimeException("Scenario [{$this->code()}] uses unsupported block type."),
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @param  array{
+     *     version: int,
+     *     start_block_id: string,
+     *     triggers: list<array{type: 'parameter', value: string}>,
+     *     blocks: array<string, array<string, mixed>>,
+     * }  $schema
+     * @return array{
+     *     status: string,
+     *     current_step: ?string,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: ?string,
+     * }|null
+     */
+    private function resolveIbizaSkipResult(
+        Message $message,
+        array $schema,
+        array $block,
+        array $statePayload,
+        int $remainingTransitions,
+        bool $removeTelegramKeyboard,
+    ): ?array {
+        if (
+            $this->code() !== self::IBIZA_SCENARIO_CODE
+            || ! is_array($block)
+            || ! array_key_exists('next', $block)
+            || ! $message->contact instanceof Contact
+        ) {
+            return null;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+
+        if ($this->shouldSkipIbizaFirstNameBlock($block, $contact) || $this->shouldSkipIbizaPhoneCaptureBlock($message, $block, $contact)) {
+            return $this->advanceFromBlock(
+                $message,
+                $schema,
+                (string) $block['next'],
+                $statePayload,
+                $remainingTransitions - 1,
+                $removeTelegramKeyboard,
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function shouldSkipIbizaFirstNameBlock(array $block, Contact $contact): bool
+    {
+        if (($block['type'] ?? null) !== 'question' || ($block['save_to'] ?? null) !== self::IBIZA_FIRST_NAME_STATE_KEY) {
+            return false;
+        }
+
+        return filled($contact->first_name)
+            && $contact->first_name_source === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function shouldSkipIbizaPhoneCaptureBlock(Message $message, array $block, Contact $contact): bool
+    {
+        if (($block['type'] ?? null) !== 'phone_capture') {
+            return false;
+        }
+
+        return $contact->phoneNumbers()->exists();
     }
 
     /**
@@ -402,7 +491,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                 return;
             }
 
-            $rawFirstName = data_get($statePayload, 'run.first_name');
+            $rawFirstName = data_get($statePayload, self::IBIZA_FIRST_NAME_STATE_KEY);
 
             if (! is_string($rawFirstName) || trim($rawFirstName) === '') {
                 return;
