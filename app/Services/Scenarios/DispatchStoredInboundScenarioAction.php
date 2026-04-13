@@ -11,6 +11,12 @@ use App\Models\ScenarioRun;
 
 class DispatchStoredInboundScenarioAction
 {
+    private const IBIZA_SCENARIO_CODE = 'vip_ibiza';
+
+    private const IBIZA_RESTART_PARAMETER = 'vip_ibiza_apply';
+
+    private const IBIZA_RESTART_OUTCOME = 'restart_requested';
+
     public function __construct(
         private readonly ScenarioRegistry $scenarioRegistry,
     ) {}
@@ -25,6 +31,10 @@ class DispatchStoredInboundScenarioAction
             || $storedMessage->dialog_id === null
         ) {
             return false;
+        }
+
+        if ($this->restartTelegramVipIbizaRunIfRequested($storedMessage)) {
+            return true;
         }
 
         if ($this->continueActiveRun($storedMessage)) {
@@ -78,6 +88,39 @@ class DispatchStoredInboundScenarioAction
         }
 
         return false;
+    }
+
+    public function restartTelegramVipIbizaRunIfRequested(Message $storedMessage): bool
+    {
+        if (! $this->isTelegramVipIbizaRestartMessage($storedMessage)) {
+            return false;
+        }
+
+        $activeIbizaRun = ScenarioRun::query()
+            ->active()
+            ->where('dialog_id', $storedMessage->dialog_id)
+            ->where('scenario_code', self::IBIZA_SCENARIO_CODE)
+            ->orderBy('id')
+            ->first();
+
+        if (! $activeIbizaRun instanceof ScenarioRun) {
+            return false;
+        }
+
+        $activeIbizaRun->forceFill([
+            'status' => ScenarioRun::STATUS_CANCELLED,
+            'current_step' => null,
+            'exit_outcome' => self::IBIZA_RESTART_OUTCOME,
+            'finished_at' => now(),
+        ])->save();
+
+        ProcessScenarioStartJob::dispatch(
+            $storedMessage->id,
+            $storedMessage->dialog_id,
+            self::IBIZA_SCENARIO_CODE,
+        )->afterCommit();
+
+        return true;
     }
 
     public function startMatchingScenario(Channel $channel, Message $storedMessage): bool
@@ -163,5 +206,15 @@ class DispatchStoredInboundScenarioAction
         return is_array($storedMessage->raw_payload)
             && is_array(data_get($storedMessage->raw_payload, 'callback_query'))
             && str_starts_with((string) data_get($storedMessage->raw_payload, 'callback_query.data', ''), 'scenario:');
+    }
+
+    private function isTelegramVipIbizaRestartMessage(Message $storedMessage): bool
+    {
+        $storedMessage->loadMissing('channel');
+
+        return $storedMessage->channel?->platform === Channel::PLATFORM_TELEGRAM
+            && $storedMessage->message_kind === Message::KIND_INBOUND_USER
+            && $storedMessage->dialog_id !== null
+            && trim((string) $storedMessage->message_parameter) === self::IBIZA_RESTART_PARAMETER;
     }
 }

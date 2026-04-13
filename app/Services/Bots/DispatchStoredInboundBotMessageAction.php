@@ -79,6 +79,10 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
+        if ($this->dispatchStoredInboundScenarioAction->restartTelegramVipIbizaRunIfRequested($storedMessage)) {
+            return;
+        }
+
         if ($this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)) {
             return;
         }
