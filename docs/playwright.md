@@ -38,12 +38,36 @@ php artisan db:seed --class=AdminUserSeeder
 php artisan serve
 ```
 
-Потом запусти smoke-тесты:
+Потом можно запускать smoke-тесты двумя способами.
+
+Вариант 1: как и раньше, через ручной `export`:
 
 ```bash
 export PLAYWRIGHT_BASE_URL=http://127.0.0.1:8000
 export PLAYWRIGHT_ADMIN_EMAIL=admin@abrikosoff.local
 export PLAYWRIGHT_ADMIN_PASSWORD="$ADMIN_USER_SEEDER_PASSWORD"
+npx playwright test
+```
+
+Вариант 2: через локальный файл `.env.playwright.local`.
+
+Скопируй шаблон:
+
+```bash
+cp .env.playwright.example .env.playwright.local
+```
+
+Заполни реальные значения:
+
+```bash
+PLAYWRIGHT_BASE_URL=http://127.0.0.1:8000
+PLAYWRIGHT_ADMIN_EMAIL=admin@abrikosoff.local
+PLAYWRIGHT_ADMIN_PASSWORD=replace-with-secret
+```
+
+После этого можно запускать без ручного `export`:
+
+```bash
 npx playwright test
 ```
 
@@ -86,6 +110,9 @@ Production smoke запускается:
 - `PLAYWRIGHT_BASE_URL`
 - `PLAYWRIGHT_ADMIN_EMAIL`
 - `PLAYWRIGHT_ADMIN_PASSWORD`
+
+Локально эти же переменные можно задавать через `.env.playwright.local`.
+В CI и post-deploy smoke ничего не меняется: там источником остаётся `process.env`.
 
 Smoke идёт по живому URL:
 
