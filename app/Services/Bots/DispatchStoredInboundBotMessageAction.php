@@ -4,6 +4,7 @@ namespace App\Services\Bots;
 
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Jobs\ProcessAutoReplyJob;
+use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
@@ -110,6 +111,29 @@ class DispatchStoredInboundBotMessageAction
         }
 
         if ($storedMessage->contact?->isInDataCollection()) {
+            if ($this->currentDataCollectionFieldIsPendingPrompt($storedMessage)) {
+                ProcessDataCollectionQuestionJob::dispatch(
+                    $storedMessage->id,
+                    false,
+                    $storedMessage->contact_id,
+                    $storedMessage->contact?->data_collection_current_field,
+                )->afterCommit();
+
+                $this->channelActivityLogger->info(
+                    $channel,
+                    'contact.data_collection_pending_question_queued',
+                    'Текущий шаг анкеты ещё не был задан пользователю: вместо обработки ответа поставлена в очередь повторная отправка вопроса.',
+                    [
+                        'platform' => $channel->platform,
+                        'message_id' => $storedMessage->id,
+                        'contact_id' => $storedMessage->contact_id,
+                        'current_field' => $storedMessage->contact?->data_collection_current_field,
+                    ],
+                );
+
+                return;
+            }
+
             ProcessDataCollectionResponseJob::dispatch(
                 $storedMessage->id,
                 $storedMessage->contact_id,
@@ -136,6 +160,19 @@ class DispatchStoredInboundBotMessageAction
         }
 
         $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
+    }
+
+    protected function currentDataCollectionFieldIsPendingPrompt(Message $storedMessage): bool
+    {
+        $storedMessage->loadMissing('contact');
+
+        $currentField = $storedMessage->contact?->data_collection_current_field;
+
+        if (! filled($currentField)) {
+            return false;
+        }
+
+        return $storedMessage->contact?->data_collection_last_prompted_field !== $currentField;
     }
 
     protected function dispatchContactShareFollowUp(

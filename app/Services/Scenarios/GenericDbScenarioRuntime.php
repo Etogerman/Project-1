@@ -31,6 +31,10 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
     private const PHONE_CAPTURE_BUTTON_TEXT = 'Поделиться номером телефона';
 
+    private const PENDING_PROMPT_DELIVERY_STATE_KEY = 'run.pending_prompt_delivery';
+
+    private const PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY = 'run.pending_prompt_remove_telegram_keyboard';
+
     public function __construct(
         private readonly Scenario $scenario,
         private readonly ScenarioVersion $publishedVersion,
@@ -141,6 +145,10 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
         $block = $schema['blocks'][$currentStep];
 
+        if ($this->hasPendingPromptDelivery($statePayload)) {
+            return $this->resumePendingPromptDelivery($message, $schema, $block, $currentStep, $statePayload);
+        }
+
         return match ($block['type'] ?? null) {
             'question' => $this->handleQuestionInbound($message, $schema, $block, $currentStep, $statePayload),
             'phone_capture' => $this->handlePhoneCaptureInbound($message, $schema, $block, $currentStep, $statePayload),
@@ -205,7 +213,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         }
 
         return match ($block['type'] ?? null) {
-            'message' => $this->advanceAfterMessageBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1, $removeTelegramKeyboard),
+            'message' => $this->advanceAfterMessageBlock($message, $schema, $nextBlockId, $block, $statePayload, $remainingTransitions - 1, $removeTelegramKeyboard),
             'question' => $this->enterQuestionBlock($message, $nextBlockId, $block, $statePayload, $removeTelegramKeyboard),
             'condition' => $this->advanceAfterConditionBlock($message, $schema, $block, $statePayload, $remainingTransitions - 1, $removeTelegramKeyboard),
             'phone_capture' => $this->enterPhoneCaptureBlock($message, $nextBlockId, $block, $statePayload),
@@ -310,20 +318,28 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
     private function advanceAfterMessageBlock(
         Message $message,
         array $schema,
+        string $blockId,
         array $block,
         array $statePayload,
         int $remainingTransitions,
         bool $removeTelegramKeyboard = false,
     ): array
     {
-        $this->dispatchScenarioMessage(
+        if (! $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
             (string) $block['text_format'],
             removeTelegramKeyboard: $removeTelegramKeyboard,
-        );
+        )) {
+            return $this->activeProgress(
+                $blockId,
+                $this->markPendingPromptDelivery($statePayload, $removeTelegramKeyboard),
+            );
+        }
 
-        $statePayload = $this->applyBlockActions($message, $block, $statePayload);
+        $statePayload = $this->clearPendingPromptDelivery(
+            $this->applyBlockActions($message, $block, $statePayload),
+        );
 
         return $this->advanceFromBlock(
             $message,
@@ -411,19 +427,22 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         bool $removeTelegramKeyboard = false,
     ): array
     {
-        $this->dispatchScenarioMessage(
+        if (! $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
             (string) $block['text_format'],
             removeTelegramKeyboard: $removeTelegramKeyboard,
-        );
+        )) {
+            return $this->activeProgress(
+                $blockId,
+                $this->markPendingPromptDelivery($statePayload, $removeTelegramKeyboard),
+            );
+        }
 
-        return [
-            'status' => ScenarioRun::STATUS_ACTIVE,
-            'current_step' => $blockId,
-            'state_payload' => $statePayload,
-            'exit_outcome' => null,
-        ];
+        return $this->activeProgress(
+            $blockId,
+            $this->clearPendingPromptDelivery($statePayload),
+        );
     }
 
     /**
@@ -438,19 +457,22 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
      */
     private function enterPhoneCaptureBlock(Message $message, string $blockId, array $block, array $statePayload): array
     {
-        $this->dispatchScenarioMessage(
+        if (! $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
             (string) $block['text_format'],
             requestPhone: true,
-        );
+        )) {
+            return $this->activeProgress(
+                $blockId,
+                $this->markPendingPromptDelivery($statePayload),
+            );
+        }
 
-        return [
-            'status' => ScenarioRun::STATUS_ACTIVE,
-            'current_step' => $blockId,
-            'state_payload' => $statePayload,
-            'exit_outcome' => null,
-        ];
+        return $this->activeProgress(
+            $blockId,
+            $this->clearPendingPromptDelivery($statePayload),
+        );
     }
 
     /**
@@ -586,7 +608,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         string $textFormat,
         bool $requestPhone = false,
         bool $removeTelegramKeyboard = false,
-    ): void
+    ): bool
     {
         $channel = $message->channel;
 
@@ -605,7 +627,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         );
 
         if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
-            return;
+            return false;
         }
 
         $this->storeOutboundScenarioMessageAction->handle(
@@ -618,6 +640,8 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         );
 
         $channel->markReplySent();
+
+        return true;
     }
 
     /**
@@ -681,6 +705,119 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         $this->applyScenarioTagEffectsAction->handle($message->contact, $actions);
 
         return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array{
+     *     status: string,
+     *     current_step: string,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: null,
+     * }
+     */
+    private function activeProgress(string $currentStep, array $statePayload): array
+    {
+        return [
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => $currentStep,
+            'state_payload' => $statePayload,
+            'exit_outcome' => null,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function markPendingPromptDelivery(array $statePayload, bool $removeTelegramKeyboard = false): array
+    {
+        data_set($statePayload, self::PENDING_PROMPT_DELIVERY_STATE_KEY, true);
+        data_set($statePayload, self::PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY, $removeTelegramKeyboard);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function clearPendingPromptDelivery(array $statePayload): array
+    {
+        data_forget($statePayload, self::PENDING_PROMPT_DELIVERY_STATE_KEY);
+        data_forget($statePayload, self::PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function hasPendingPromptDelivery(array $statePayload): bool
+    {
+        return (bool) data_get($statePayload, self::PENDING_PROMPT_DELIVERY_STATE_KEY, false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function pendingPromptRemoveTelegramKeyboard(array $statePayload): bool
+    {
+        return (bool) data_get($statePayload, self::PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY, false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  array<string, mixed>  $block
+     * @param  array{
+     *     version: int,
+     *     start_block_id: string,
+     *     triggers: list<array{type: 'parameter', value: string}>,
+     *     blocks: array<string, array<string, mixed>>,
+     * }  $schema
+     */
+    private function resumePendingPromptDelivery(
+        Message $message,
+        array $schema,
+        array $block,
+        string $currentStep,
+        array $statePayload,
+    ): ScenarioInboundResult {
+        $removeTelegramKeyboard = $this->pendingPromptRemoveTelegramKeyboard($statePayload);
+
+        $progress = match ($block['type'] ?? null) {
+            'message' => $this->advanceAfterMessageBlock(
+                $message,
+                $schema,
+                $currentStep,
+                $block,
+                $statePayload,
+                count($schema['blocks']) + 1,
+                $removeTelegramKeyboard,
+            ),
+            'question' => $this->enterQuestionBlock(
+                $message,
+                $currentStep,
+                $block,
+                $statePayload,
+                $removeTelegramKeyboard,
+            ),
+            'phone_capture' => $this->enterPhoneCaptureBlock(
+                $message,
+                $currentStep,
+                $block,
+                $statePayload,
+            ),
+            default => $this->activeProgress($currentStep, $statePayload),
+        };
+
+        return new ScenarioInboundResult(
+            consumed: true,
+            status: $progress['status'],
+            currentStep: $progress['current_step'],
+            statePayload: $progress['state_payload'],
+            exitOutcome: $progress['exit_outcome'],
+        );
     }
 
     /**

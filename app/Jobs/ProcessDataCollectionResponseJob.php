@@ -1721,6 +1721,10 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             );
 
             if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+                if ($messageKind === Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION) {
+                    $this->markCurrentFieldPromptPending($message->contact);
+                }
+
                 $channelActivityLogger->info(
                     $channel,
                     'contact.data_collection_reply_skipped_dialog_not_sendable',
@@ -1786,6 +1790,18 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
             throw $throwable;
         }
+    }
+
+    protected function markCurrentFieldPromptPending(?Contact $contact): void
+    {
+        if (! $contact instanceof Contact || ! filled($contact->data_collection_current_field)) {
+            return;
+        }
+
+        $contact->forceFill([
+            'data_collection_last_prompted_field' => null,
+            'data_collection_current_field_started_at' => null,
+        ])->save();
     }
 
     /**

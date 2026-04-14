@@ -2317,6 +2317,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame('Николай', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
+        $this->assertNull($contact->data_collection_last_prompted_field);
+        $this->assertNull($contact->data_collection_current_field_started_at);
         $this->assertDatabaseMissing('messages', [
             'contact_id' => $contact->id,
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,

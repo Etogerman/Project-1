@@ -248,8 +248,102 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
         $this->assertSame('ask_budget', $run->current_step);
         $this->assertSame('Анна', data_get($run->state_payload, 'run.first_name'));
+        $this->assertTrue((bool) data_get($run->state_payload, 'run.pending_prompt_delivery'));
         $this->assertCount(2, $outboundMessages);
         Http::assertSentCount(2);
+    }
+
+    public function test_database_backed_scenario_replays_pending_prompt_after_unblock_before_accepting_next_answer(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7201]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7202]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7203]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('vip_ibiza_apply', $this->linearSchema('vip_ibiza_apply'));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_apply',
+            'message_parameter' => 'vip_ibiza_apply',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $firstAnswer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Анна',
+        ]);
+
+        (new ProcessScenarioInboundJob($firstAnswer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->forceFill([
+            'bot_subscription_status' => null,
+            'bot_subscription_changed_at' => now()->addSecond(),
+        ])->save();
+
+        $resumeMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'middle',
+        ]);
+
+        (new ProcessScenarioInboundJob($resumeMessage->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('ask_budget', $run->current_step);
+        $this->assertSame('Анна', data_get($run->state_payload, 'run.first_name'));
+        $this->assertNull(data_get($run->state_payload, 'run.budget_tier'));
+        $this->assertFalse((bool) data_get($run->state_payload, 'run.pending_prompt_delivery'));
+        $this->assertCount(3, $outboundMessages);
+        $this->assertSame('Какой у вас бюджет?', $outboundMessages[2]->text);
+        Http::assertSentCount(3);
     }
 
     public function test_database_backed_scenario_stores_outbound_against_current_dialog_route_source_for_stale_trigger_message(): void

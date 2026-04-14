@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
+use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Jobs\ProcessScenarioInboundJob;
@@ -1010,6 +1011,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
             'data_collection_started_at' => now(),
         ]);
 
@@ -3438,6 +3440,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
             'data_collection_started_at' => now(),
         ]);
 
@@ -3475,6 +3478,65 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_active_data_collection_with_unprompted_current_field_requeues_question_instead_of_processing_response(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            'data_collection_last_prompted_field' => null,
+            'data_collection_started_at' => now(),
+            'data_collection_current_field_started_at' => null,
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 903,
+            text: 'Санкт-Петербург',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessDataCollectionQuestionJob::class, function (ProcessDataCollectionQuestionJob $job) use ($storedMessage): bool {
+            return $job->sourceMessageId === $storedMessage->id
+                && $job->contactId === $storedMessage->contact_id
+                && $job->expectedField === Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY
+                && $job->forceSend === false;
+        });
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_pending_question_queued',
+        ]);
+    }
+
     public function test_repeated_telegram_webhook_with_same_update_id_does_not_requeue_collector_reply(): void
     {
         Queue::fake();
@@ -3491,6 +3553,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
             'data_collection_started_at' => now(),
         ]);
 
@@ -3561,6 +3624,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
             'data_collection_started_at' => now(),
         ]);
 
@@ -3668,6 +3732,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
             'pending_region_candidates' => ['Волгоградская область', 'Приморский край'],
             'data_collection_started_at' => now(),
         ]);
