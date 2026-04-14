@@ -2,7 +2,33 @@
 
 # Abrikosoff Connector
 
-## Проект
+## Критичные правила для агента
+
+Термины:
+- `ТЗ` — согласованный контракт текущего stream. По умолчанию фиксируется в чате; сохранять ТЗ в `docs/` можно только по явной команде пользователя.
+- `Активный slice` — единственный slice, который агент может реализовывать прямо сейчас.
+- `Хвост` — незавершённые обязательства текущего или предыдущего stream: локальный diff, незапушенные изменения, открытый PR, незавершённый CI, незавершённый `staging`/`main` path, cleanup или другой follow-up.
+- `Dangerous ops` — `rebase`, `force-push`, любые `migrate`, `production deploy`.
+
+Базовые правила:
+1. Без явной команды пользователя на реализацию и без согласованного ТЗ агент не меняет код, конфиги, тесты, документацию, git-состояние и окружения.
+2. Если пользователь просит анализ, review, критику, сравнение вариантов, план или подготовку ТЗ, агент работает только в read-only режиме.
+3. Одновременно допускается только один активный кодовый шаг.
+4. Перед новым кодовым шагом агент обязан проверить хвост предыдущего implementation stream.
+5. Если пользователь явно ограничил шаг локальной работой или явно запретил публикацию, действует локальный режим.
+6. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, для code stream по умолчанию действует уровень `PR в staging`.
+7. Уровень `PR в staging` разрешает в рамках текущего scope: author self-review, helper-review при доступности, `commit`, `push`, draft PR в `staging`, `CI` и исправления в рамках того же scope.
+8. Уровень `PR в staging` не включает `merge` в `staging`, staging smoke, PR в `main`, `merge` в `main` и dangerous ops.
+9. Уровень `через staging` требует отдельной явной делегации и разрешает `merge` в ветку `staging`, staging deploy-check и staging smoke.
+10. Уровень `до merge в main` требует отдельной явной делегации и разрешает после успешного прохождения через `staging` создать PR в `main`, пройти `CI` и review-контур и довести validated diff до `merge` в `main`.
+11. Dangerous ops всегда требуют отдельного явного разрешения.
+12. Локальные проверки выполняются только там, где они дают честный сигнал. Для UI-only изменений локальная проверка может быть основной. Для логики процессов основной средой проверки считается `staging`, но эта проверка начинается только после `merge` в ветку `staging`.
+13. Author self-review обязателен всегда. Для code stream diff дополнительно проходит review двумя вспомогательными агентами, если среда и разрешения это поддерживают.
+14. Если по ходу работы появляется двусмысленность, blocker, scope drift или нехватка данных, агент обязан остановиться и запросить следующий шаг.
+15. Если агент предлагает варианты следующих действий, варианты должны быть пронумерованы. Формат рекомендации: `Рекомендация: 1. ...` и отдельной строкой `Почему: ...`.
+16. Подробный delivery-playbook, уровни делегации и procedural flow описаны в `docs/task-delivery-workflow.md`; `AGENTS.md` фиксирует только верхнеуровневые рамки, инварианты и ограничения.
+
+## Проект и текущий scope
 
 Abrikosoff Connector — операторская платформа для работы
 с входящими сообщениями из мессенджеров.
@@ -14,243 +40,100 @@ Abrikosoff Connector — операторская платформа для ра
 - условия правил по наличию телефона контакта
 - phone capture flow для Telegram и MAX
 - AI profile collector после получения телефона
-  - active collector имеет приоритет над обычным auto-reply
-  - flow: `first_name -> residence_city -> [country] -> [russian_region_confirm] -> age_range -> completion`
-  - для российских ambiguous-city кейсов используется deterministic Russian shortcut:
-    сначала пытаемся определить `region` или exact candidate set,
-    и только потом задаём fallback-вопрос про страну
-  - max 2 попытки на поле, затем мягкий skip на следующий безопасный шаг
-- для российских контактов после точного определения локации
-  асинхронно считается `distance_to_moscow_km`
-  - `Москва -> 0`
-  - остальные города РФ: `Yandex Geocoder + Haversine`
-  - ambiguous-city кейсы считают расстояние только после
-    подтверждения `region` и deterministic geocode query
 - просмотр контактов, диалогов и истории в админке
 - overview-only карточка контакта с профилем, ownership и списком диалогов
 - отдельная страница диалога как рабочее место оператора
-- телефоны в списке контактов: колонка, фильтры, поиск
 - ручной ответ со страницы диалога
 - CRUD телефонов из карточки контакта
-- ownership контакта (назначение ответственного оператора)
-- редактирование профиля контакта из карточки
-- ручное возобновление анкеты из карточки
-- удаление контакта из карточки
+- ownership контакта
+- редактирование профиля, ручное возобновление анкеты и удаление контакта
 
-Стратегическое направление:
-- Битрикс24 Open Lines happy-path уже подтверждён через отдельный
-  box-side пакет в коробке.
-  Зафиксированная рабочая конфигурация:
-  - Telegram line id `32`
-  - MAX line id `31`
-  - existing-contact rebinding happy-path работает для Telegram и MAX
-- Подтверждённый локальный happy-path со стороны приложения:
-  - `contact sync -> deal sync -> history export`
-  - live bridge идёт через `Dialog` / `Message`
-  - missed inbound recovery разрешён только внутри уже подтверждённого
-    Open Lines happy-path
-- Любое новое расширение Bitrix24 вне подтверждённого happy-path
-  требует отдельного ТЗ.
-- Возможно подключение дополнительных мессенджеров.
+Подтверждённый scope и жёсткие границы:
+- active collector имеет приоритет над обычным auto-reply
+- collector flow: `first_name -> residence_city -> [country] -> [russian_region_confirm] -> age_range -> completion`
+- для российских ambiguous-city кейсов используется deterministic Russian shortcut: сначала пытаемся определить `region` или exact candidate set, и только потом задаём fallback-вопрос про страну
+- максимум 2 попытки на поле, затем мягкий skip на следующий безопасный шаг
+- после точного определения российской локации асинхронно считается `distance_to_moscow_km`; special-case `Москва -> 0`, остальные города РФ идут через `Yandex Geocoder + Haversine`
+- ambiguous-city кейсы считают расстояние только после подтверждения `region` и deterministic geocode query
+- подтверждённый локальный Bitrix24 happy-path со стороны приложения: `contact sync -> deal sync -> history export`
+- Bitrix24 Open Lines happy-path уже подтверждён через box-side пакет; зафиксированная рабочая конфигурация: Telegram line id `32`, MAX line id `31`
+- existing-contact rebinding happy-path подтверждён для Telegram и MAX
+- любое новое расширение Bitrix24 вне подтверждённого happy-path требует отдельного ТЗ
+- возможно подключение дополнительных мессенджеров, но не через преждевременные абстракции
 
 ## Стек
 
 - PHP 8.2+, Laravel 11, PostgreSQL
-- Filament 5 (админ-панель)
+- Filament 5
 - Tailwind 3, Vite
-- PHPUnit 11 (feature-тесты)
-- Playwright (e2e smoke-тесты)
-- Текущий queue driver — database; долгие side-эффекты
-  предпочтительно уводить из HTTP-запроса в очередь.
+- PHPUnit 11
+- Playwright
+- текущий queue driver — `database`; долгие side-эффекты предпочтительно уводить из HTTP-запроса в очередь
 
-## Активный runtime
+## Источники истины
 
-Источником архитектурных решений считается активный Laravel-контур.
-Каталог `legacy/` и второстепенные артефакты использовать только
-как справочный материал, если они реально влияют на текущую систему.
+Приоритет источников истины:
+1. Для описания текущего поведения и архитектуры приоритет у активного Laravel runtime.
+2. Каталог `legacy/` и второстепенные артефакты используются только как справка, если реально влияют на текущую систему.
+3. Для целевого поведения приоритет у явного запроса пользователя и согласованного ТЗ.
+4. Если код и документы расходятся, агент сначала показывает расхождение пользователю и не придумывает «правильную» версию молча.
 
-## Архитектура
+## Архитектурные и доменные инварианты
 
-Прагматичный Laravel-монолит.
-
-Карта слоёв:
-- `app/Models/` — Eloquent-модели
-- `app/Data/` — readonly DTO (следовать текущему стилю проекта)
-- `app/Services/AI/` — интеграция с Gemini для structured extraction
-- `app/Services/Bots/` — webhook, автоответ, ручной ответ, действия с каналами
-- `app/Services/DataCollection/` — extractor/action-классы и collector orchestration helpers
-- `app/Services/Contacts/` — ownership-действия и phone CRUD/action-классы
-- `app/Services/Dialogs/` — dialog routing, history loading, feed building и overview-данные
-- `app/Services/Bitrix24/` — contact/deal sync, history export, Open Lines,
-  OAuth/connection recovery и callback processing
-- `app/Jobs/` — queued orchestration для автоответа, phone capture follow-up и collector flow
-- `app/Http/Controllers/` — тонкие HTTP-контроллеры
-- `app/Filament/Resources/` — UI админки (Resources + Pages)
-- `app/Filament/Resources/*/Pages/` — page-level state и modal orchestration
-- `resources/views/filament/` — Blade-партиалы для dialog workspace, contact overview, collector status и profile UI
-
-Ветвление по провайдерам через `match($channel->platform)` в сервисах.
-Общий интерфейс провайдера — преждевременная абстракция,
-пока не появится третий провайдер или реальная проблема с дублированием.
+Архитектура:
+- проект — прагматичный Laravel-монолит
+- transport-логика остаётся локализованной в сервисных классах
+- критичная бизнес-логика живёт вне контроллеров и UI
+- ветвление по провайдерам делается через `match($channel->platform)` в сервисах
+- общий интерфейс провайдера — преждевременная абстракция, пока не появится третий провайдер или реальная проблема с дублированием
 
 Рабочий UI-принцип:
-- `Contact` — обзорная карточка клиента
+- `Contact` — обзорная карточка клиента и ownership-сущность
 - `Dialog` — канальный thread и основное рабочее место оператора
 - ownership остаётся на `Contact`, не на `Dialog`
 
-## Доменная модель (стабильная часть)
+Стабильные доменные инварианты:
+- `Dialog` уникален на пару `[contact_id, channel_id]`
+- `Dialog` хранит route context канала и используется как точка точного manual reply route
+- `Message.provider_event_key` участвует в идемпотентности сообщений
+- active collector имеет приоритет над обычным auto-reply
+- collector progression идёт по зафиксированному flow, с максимум двумя попытками на поле и мягким skip после исчерпания попыток
+- `region` — канонический российский business-region для фильтров, а не обязательно административный субъект
+- `distance_to_moscow_*` — best-effort квалификационное поле только для России; считается асинхронно, не управляет progression collector-а и для ambiguous-city кейсов запускается только после подтверждения `region`
+- live bridge Bitrix24 идёт через `Dialog` / `Message`; missed inbound recovery допустим только внутри подтверждённого Open Lines happy-path
 
-- **Channel** — подключение бота к мессенджеру (platform, encrypted credentials,
-  метаданные бота, health-статус, `auto_reply_mode = rules_only`)
-- **Contact** — внешний человек; может иметь `assigned_user_id` (FK → users)
-  и флаг `is_auto_reply_enabled`
-  - профильные поля: `first_name`, `last_name`, `birth_date`,
-    `age_years`, `age_range`, `country`, `city`,
-    `region`, `region_status`, `region_source`,
-    `distance_to_moscow_km`, `distance_to_moscow_status`,
-    `distance_to_moscow_calculated_at`
-  - collector state: `data_collection_status`,
-    `data_collection_current_field`, `data_collection_started_at`,
-    `data_collection_completed_at`, `data_collection_attempts_count`,
-    `pending_region_candidates`
-  - `region` — канонический российский business-region для фильтров,
-    а не обязательно официальный административный субъект
-  - `distance_to_moscow_*` — best-effort вычисляемое поле
-    для квалификации только по России; считается асинхронно,
-    не влияет на progression collector-а
-  - Bitrix24 sync state:
-    `bitrix24_contact_id`, `bitrix24_sync_status`,
-    `bitrix24_sync_pending`, `bitrix24_last_synced_at`,
-    `bitrix24_linked_at`
-  - Bitrix24 deal/history state:
-    `bitrix24_deal_id`, `bitrix24_deal_sync_status`,
-    `bitrix24_deal_last_synced_at`, `bitrix24_deal_linked_at`,
-    `bitrix24_deal_sync_pending`,
-    `bitrix24_history_sync_status`,
-    `bitrix24_history_last_synced_at`,
-    `bitrix24_history_sync_pending`
-  - вычисляемые поля: `display_name`, `effective_age_years`
-- **ContactIdentity** — связь Contact ↔ Channel через external_user_id;
-  unique constraint на `[channel_id, external_user_id]`
-- **ContactPhoneNumber** — отдельная таблица телефонов контакта
-  - `phone_raw`, `phone_normalized`, `source`, `is_primary`
-  - unique constraint на `[contact_id, phone_normalized]`
-  - primary переустанавливается автоматически при удалении текущего primary
-- **Dialog** — канальный thread контакта
-  - уникален на пару `[contact_id, channel_id]`
-  - хранит route context канала:
-    `current_contact_identity_id`, `external_chat_id`,
-    `confirmed_phone_*`, `last_message_at`, `last_inbound_at`, `last_outbound_at`
-  - Bitrix24 live state:
-    `bitrix24_live_status`, `bitrix24_live_chat_id`,
-    `bitrix24_live_last_exported_at`, `bitrix24_live_last_imported_at`
-  - manual reply из operator UI отправляется через точный `dialog_id`
-- **Message** — единая таблица входящих и исходящих сообщений
-  - `direction`: inbound | outbound
-  - `message_kind`:
-    `inbound_user | inbound_contact_share | outbound_auto_reply |
-    outbound_manual_reply | outbound_phone_capture_confirmation |
-    outbound_data_collection_question | outbound_data_collection_completion`
-  - `provider_event_key` — ключ идемпотентности;
-    partial unique index `[channel_id, direction, provider_event_key]`
-  - `reply_to_message_id` — FK на родительское сообщение (self-referential)
-  - `raw_payload` — jsonb, оригинальный payload от платформы
-- **AutoReplyRule** — правило автоответа
-  - `match_scope`: `exact_keyword | any_inbound`
-  - `contact_phone_condition`: `null | has_phone | missing_phone`
-  - `telegram_button_type`, `max_button_type`: `request_phone`
-- **ChannelActivityLog** — append-only журнал событий канала
-- **Bitrix24Connection** — состояние установленного Bitrix24-приложения
-  - portal/client endpoint, OAuth state и token expiry
-  - `status`, `installed_at`, `last_refreshed_at`
-  - callback timestamps и `last_error_message`
-  - persisted install payload и encrypted access/refresh token state
-- **User** — внутренний сотрудник (is_active, is_admin)
+## Критичные интеграционные и конфигурационные инварианты
 
-## Конфигурация
+- `config/bots.php` — источник платформенных настроек, текстов phone capture / collector и Gemini settings
+- `config/bitrix24.php` — источник callback URL, интеграционных настроек Bitrix24 и rate-limit правил публичных callback endpoints
+- `config/russian_region_cities.php` — deterministic source of truth для `российский город -> exact candidate regions` и geocode hints
+- `config/services.php` хранит настройки `yandex_geocoder` и reference point для Москвы
+- `BITRIX24_AUTH_SERVER_URL` критичен для token refresh; его отсутствие может вывести `Bitrix24Connection` из рабочего состояния и остановить contact/deal/history/Open Lines sync
+- `YANDEX_GEOCODER_API_KEY` обязателен для расчёта `distance_to_moscow` вне special-case `Москва = 0`
+- токены ботов и webhook-секреты хранятся в `Channel.credentials`, а не в `.env`
 
-- `config/bots.php` — webhook и платформенные настройки,
-  `phone_capture_confirmation_text`, collector questions/messages,
-  Gemini settings (`api_key`, `model`, `max_output_tokens`, `thinking_budget`),
-  allowed Russian business regions, тексты `russian_region_confirm`
-  и rate-limit настройки публичных bot webhook endpoints
-- `config/bitrix24.php` — callback URLs, Bitrix24 интеграционные настройки
-  и rate-limit настройки публичных callback endpoints
-- обязательные Bitrix24 env:
-  - `BITRIX24_PORTAL_DOMAIN`
-  - `BITRIX24_CLIENT_ID`
-  - `BITRIX24_CLIENT_SECRET`
-  - `BITRIX24_APP_CODE`
-  - `BITRIX24_AUTH_SERVER_URL`
-- `BITRIX24_AUTH_SERVER_URL` критичен для token refresh; его отсутствие
-  может вывести `Bitrix24Connection` из рабочего состояния и остановить
-  contact/deal/history/Open Lines sync
-- `config/russian_region_cities.php` — deterministic source of truth
-  для `российский город -> exact candidate regions` и
-  geocode hints для `distance_to_moscow`
-- `config/services.php` — внешние сервисы; в текущем runtime
-  здесь лежат `yandex_geocoder` и reference point для Москвы
-- `YANDEX_GEOCODER_API_KEY` — обязательный env var
-  для расчёта `distance_to_moscow` вне special-case `Москва = 0`
-- Токены ботов хранятся в `Channel.credentials` (encrypted:array), а не в .env
-- Webhook-секреты генерируются и хранятся в том же поле credentials
+## High-Risk Zones
 
-## Ключевые файлы для входа в проект
+- webhook ingestion и идемпотентность сообщений
+- phone capture flow и follow-up orchestration
+- collector progression, retry-логика, soft skip и manual resume
+- dialog routing и точность manual reply через `dialog_id`
+- Bitrix24 contact/deal/history sync и live export/import happy-path
+- российская location-логика, deterministic region resolution и `distance_to_moscow` pipeline
 
-- `app/Http/Controllers/BotWebhookController.php` — точка входа webhook
-  c post-secret throttling для публичных bot webhook requests
-- `app/Models/Contact.php` — профильные поля, collector state, `display_name`, `effective_age_years`
-- `app/Services/Bots/StoreInboundMessageAction.php` — сохранение входящего сообщения
-- `app/Data/Bots/StoredInboundMessageResult.php` — result object с `phoneCaptureStatus`
-- `app/Services/Bots/BotIncomingMessageNormalizer.php` — нормализация inbound payload по платформам
-- `app/Services/Bots/BotAutoReplyService.php` — orchestration автоответа
-- `app/Services/Bots/ResolveAutoReplyRuleAction.php` — matching `exact_keyword / any_inbound`
-- `app/Services/AI/GeminiApiService.php` — structured Gemini-запросы для extractor-ов
-- `app/Services/DataCollection/ExtractFirstNameAction.php` — hybrid extraction имени
-- `app/Services/DataCollection/ExtractResidenceCityAction.php` — city-first extraction города проживания и страны
-- `app/Services/DataCollection/ExtractCountryAction.php` — extraction страны
-- `app/Services/DataCollection/ExtractCityAction.php` — country-aware extraction города
-- `app/Services/DataCollection/ResolveRussianRegionCandidatesLookupAction.php` — deterministic lookup exact candidate regions для российских городов
-- `app/Services/DataCollection/ResolveRussianRegionAction.php` — Russian region resolution поверх lookup и AI fallback
-- `app/Services/DataCollection/ResolveNextDataCollectionFieldAction.php` — определение следующего collector field
-- `app/Services/DataCollection/ResumeContactDataCollectionAction.php` — ручное возобновление анкеты
-- `app/Services/Geo/YandexGeocoderService.php` — geocode coordinates для российских населённых пунктов
-- `app/Services/Geo/ResolveRussianLocalityGeocodeQueryAction.php` — deterministic geocode query resolver для distance-path
-- `app/Services/Geo/CalculateDistanceToMoscowAction.php` — расчёт `distance_to_moscow_km` через Haversine
-- `app/Jobs/ProcessAutoReplyJob.php` — queued auto-reply
-- `app/Jobs/ProcessPhoneCaptureFollowUpJob.php` — queued confirmation после phone share
-- `app/Jobs/ProcessDataCollectionQuestionJob.php` — отправка следующего вопроса collector-а
-- `app/Jobs/ProcessDataCollectionResponseJob.php` — обработка ответа на collector field
-- `app/Jobs/CalculateDistanceToMoscowJob.php` — queued sync `distance_to_moscow_*`
-- `app/Jobs/SyncContactToBitrix24Job.php` — orchestration Bitrix24 contact sync
-  и post-sync хвостов `deal/history/open lines retry`
-- `app/Services/Bots/StoreOutboundAutoReplyMessageAction.php` — сохранение исходящего автоответа
-- `app/Services/Bots/SendManualDialogReplyAction.php` — ручной ответ оператора через точный dialog route
-- `app/Services/Dialogs/ResolveDialogRouteSourceAction.php` — определение route source для dialog/provider
-- `app/Services/Dialogs/LoadDialogMessagesPageAction.php` — порционная загрузка истории диалога
-- `app/Services/Dialogs/BuildConversationFeedViewDataAction.php` — общий builder bubble/feed view-data
-- `app/Services/Dialogs/LoadContactDialogsOverviewAction.php` — overview карточек диалогов на странице контакта
-- `app/Services/Contacts/AddContactPhoneAction.php` — нормализация и сохранение телефона
-- `app/Services/Contacts/UpdateContactPhoneAction.php` — редактирование телефона
-- `app/Services/Contacts/DeleteContactPhoneAction.php` — удаление телефона
-- `app/Services/Contacts/SyncContactRussianRegionAction.php` — синхронизация `region` и `pending_region_candidates` после изменения `city/country`
-- `app/Services/Contacts/SyncContactDistanceToMoscowAction.php` — синхронизация `distance_to_moscow_*` после изменения location
-- `app/Services/Contacts/UpdateContactProfileAction.php` — обновление профильных полей контакта
-- `app/Services/Contacts/DeleteContactAction.php` — удаление контакта и связанных сущностей
-- `app/Services/Contacts/ClaimContactAction.php` — взятие контакта в работу
-- `app/Services/Bitrix24/SyncContactToBitrix24Action.php` — основной sync контакта в Bitrix24
-- `app/Services/Bitrix24/QueueBitrix24DealSyncAction.php` — постановка sync сделки
-- `app/Services/Bitrix24/QueueBitrix24HistoryExportAction.php` — постановка history export
-- `app/Services/Bitrix24/QueueMissedBitrix24OpenLinesRetryAction.php` — retry missed inbound live-export
-- `app/Services/Bitrix24/RefreshBitrix24AccessTokenAction.php` — refresh OAuth access token
-- `app/Services/Bitrix24/ResolveActiveBitrix24ConnectionAction.php` — выбор активного Bitrix24 connection
-- `app/Filament/Resources/Contacts/ContactResource.php` — overview карточка контакта
-- `app/Filament/Resources/Contacts/Pages/ManageContacts.php` — Livewire-логика контактов
-- `app/Filament/Resources/Dialogs/DialogResource.php` — hidden resource страницы диалога
-- `app/Filament/Resources/Bitrix24Connections/Bitrix24ConnectionResource.php` — operator/admin обзор состояния Bitrix24 connection
-- `app/Filament/Resources/Dialogs/Pages/ViewDialog.php` — operator workspace конкретного диалога
-- `resources/views/filament/dialogs/pages/view-dialog.blade.php` — layout страницы диалога
-- `resources/views/filament/contacts/partials/contact-dialogs.blade.php` — overview карточки диалогов на контакте
+## Start Here
+
+Полный code map при необходимости можно вынести в отдельный reference doc. Для старта почти в любой задаче достаточно этих входных точек:
+- `app/Http/Controllers/BotWebhookController.php`
+- `app/Models/Contact.php`
+- `app/Services/Bots/StoreInboundMessageAction.php`
+- `app/Services/Bots/BotAutoReplyService.php`
+- `app/Jobs/ProcessAutoReplyJob.php`
+- `app/Jobs/ProcessDataCollectionResponseJob.php`
+- `app/Services/Contacts/UpdateContactProfileAction.php`
+- `app/Services/Bitrix24/SyncContactToBitrix24Action.php`
+- `app/Filament/Resources/Dialogs/Pages/ViewDialog.php`
+- `resources/views/filament/dialogs/pages/view-dialog.blade.php`
 
 ## Принципы разработки
 
@@ -258,370 +141,65 @@ Abrikosoff Connector — операторская платформа для ра
 2. Расширять существующие пути, прежде чем добавлять новые абстракции.
 3. Read-only улучшения предпочтительнее тяжёлых рефакторингов.
 4. Использовать существующие Filament Resource / ViewAction modal.
-   Для рабочего chat workflow приоритет у уже существующей dialog page,
-   а не у расширения contact modal.
-5. Новая таблица или сущность — только после обоснования,
-   почему текущие модели недостаточны.
-6. Transport-логика остаётся локализованной в сервисных классах.
+5. Для рабочего chat workflow приоритет у уже существующей dialog page, а не у расширения contact modal.
+6. Новая таблица или сущность — только после обоснования, почему текущие модели недостаточны.
+7. Формулировать через утверждение желаемого поведения; избегать конструкций с отрицанием, если есть утвердительная альтернатива.
 
 ## Соглашения по коду
 
-- Код приложения и комментарии в коде: английский язык.
-- UI-тексты и операторский интерфейс: русский язык.
-- Документация проекта (включая этот файл, ТЗ, docs/): русский язык.
-- Критичная бизнес-логика живёт вне контроллеров и UI;
-  для сценариев предпочитать Action-классы с `handle()`,
-  для переиспользуемой логики допустимы сервисные классы.
-- DTO в `app/Data/` — по возможности readonly, следовать текущему стилю проекта.
-- Предпочитать явные константы классов, а не магические строки.
-- Формулировать через утверждение желаемого поведения;
-  избегать конструкций с отрицанием, если есть утвердительная альтернатива.
+- код приложения и комментарии в коде: английский язык
+- UI-тексты и операторский интерфейс: русский язык
+- документация проекта, включая `AGENTS.md`, ТЗ и `docs/`: русский язык
+- для сценариев предпочтительны Action-классы с `handle()`
+- для переиспользуемой логики допустимы сервисные классы
+- DTO в `app/Data/` — по возможности readonly, следовать текущему стилю проекта
+- предпочитать явные константы классов, а не магические строки
 
 ## Соглашения по языку и git-именованию
 
-- Общение агента с пользователем: русский язык, если пользователь явно
-  не попросил иное.
-- Сообщения коммитов: русский язык.
-- Заголовки PR, описания PR и GitHub-комментарии по изменениям: русский язык.
-- Названия веток: русский смысл в `ASCII`-транслитерации, без кириллицы,
-  с префиксом `codex/`.
-- Английские технические термины допустимы только там, где перевод ухудшает
-  точность или создаёт двусмысленность.
+- общение агента с пользователем: русский язык, если пользователь явно не попросил иное
+- сообщения коммитов: русский язык
+- заголовки PR, описания PR и GitHub-комментарии по изменениям: русский язык
+- названия веток: русский смысл в `ASCII`-транслитерации, без кириллицы, с префиксом `codex/`
+- английские технические термины допустимы только там, где перевод ухудшает точность или создаёт двусмысленность
 
 ## Соглашения по тестам
 
-- Feature-тесты в `tests/Feature/`, с RefreshDatabase.
-- Следовать существующему стилю: factories, Http::fake, Livewire::test.
-- Тестировать тот слой, который реально меняется.
-- Покрывать идемпотентность и edge cases.
-- UI wiring тестировать через Livewire structural assertions.
-- Уже покрытые webhook, dialog reply и ownership сценарии повторно не дублировать.
-- При сомнениях в доменной модели сначала смотреть миграции, модели и текущие feature tests.
+- feature-тесты в `tests/Feature/`, с `RefreshDatabase`
+- следовать существующему стилю: factories, `Http::fake`, `Livewire::test`
+- тестировать тот слой, который реально меняется
+- покрывать идемпотентность и edge cases
+- UI wiring тестировать через Livewire structural assertions
+- уже покрытые webhook, dialog reply и ownership сценарии повторно не дублировать
+- при сомнениях в доменной модели сначала смотреть миграции, модели и текущие feature tests
 
-## Соглашения по ТЗ
+## Что не делать без отдельного ТЗ
 
-Каждое ТЗ явно фиксирует:
-- Цель шага
-- Границы (что меняется, что остаётся)
-- Тестовую стратегию
-- Критерии приёмки
-- Известные компромиссы или двусмысленности
-
-## Преждевременная сложность (избегать до явной необходимости)
-
-- Абстрактный интерфейс / адаптер провайдера
-- Микросервисы
+Не вводить до явной необходимости:
+- абстрактный интерфейс / адаптер провайдера
+- микросервисы
 - SLA-движок или таймеры
-- Round-robin назначение
-- История назначений (assignment history)
-- Новая Conversation / thread сущность поверх уже существующего `Dialog`
-- Generic config-driven collector engine
-- Auto re-entry / cooldown policy
+- round-robin назначение и assignment history
+- новую Conversation / thread сущность поверх уже существующего `Dialog`
+- generic config-driven collector engine
+- auto re-entry / cooldown policy
 - Interactions API для Gemini
-- Phone-country inference для location
-- Generic geocoder / routing engine вне текущего узкого кейса `distance_to_moscow`
-- Routing API / Distance Matrix для точного расстояния по дорогам
-- Distance buckets / qualification categories
+- phone-country inference для location
+- generic geocoder / routing engine вне текущего узкого кейса `distance_to_moscow`
+- routing API / Distance Matrix для точного расстояния по дорогам
+- distance buckets / qualification categories
 - generic `location_confirm` / non-Russian ambiguous-city engine
-- Новый код интеграции с Битрикс24 вне подтверждённого Open Lines happy-path
+- новый код интеграции с Bitrix24 вне подтверждённого Open Lines happy-path
 
-## Рабочий стиль для агентов
+## Подробные документы
 
-Жёсткое правило:
-- без явной команды пользователя на реализацию и без чёткого согласованного ТЗ
-  агент не меняет код, конфиги, миграции, тесты, документацию,
-  git-состояние и окружения
-- если пользователь просит анализ, review, критику, сравнение вариантов,
-  план или ТЗ, агент работает только в read-only режиме
-- если ТЗ неполное или двусмысленное, агент сначала уточняет
-  и не начинает реализацию
-- `merge`, `rebase`, `force-push`, `migrate` и `deploy`
-  всегда требуют отдельной явной команды пользователя
-
-## Process workflow
-
-Короткий обязательный порядок работы по шагу:
-- уточнение задачи
-- read-only анализ текущей системы
-- подготовка ТЗ
-- проверка ТЗ на слабые места
-- разбиение на slices при необходимости
-- preflight перед новым кодовым шагом
-- создание clean branch от `origin/main`
-- реализация одного шага
-- локальный review diff
-- commit
-- push
-- draft PR в `staging`
-- CI
-- финальный self-review
-- merge в `staging`
-- staging deploy-check
-- staging smoke
-- отдельный PR в `main` из проверенного diff текущего шага
-- CI
-- финальный self-review
-- merge в `main`
-- production deploy-check
-- production smoke
-- закрытие issue
-
-Исключение для чисто документационных изменений:
-- если агент видит, что diff является `docs-only`, он обязан прямо сообщить
-  об этом пользователю и предложить упрощённый документальный путь
-- `docs-only` считается только такой diff, который меняет исключительно:
-  `AGENTS.md`, `docs/**`, `README*.md`, ТЗ и другие markdown/текстовые
-  регламенты
-- если в diff попадает хотя бы один файл вне этого списка,
-  упрощённый путь запрещён, и агент обязан вернуться
-  к обычному полному process flow
-- по команде пользователя `идём по пути для документов`
-  агент получает делегацию на весь текущий `docs-only` stream до `merge`
-- для такого stream используется упрощённый путь:
-  `read-only анализ -> короткое подтверждение docs-only пути ->
-  clean branch/worktree от origin/main -> правка документов ->
-  короткий self-review -> commit -> push -> PR сразу в main ->
-  CI, если он есть -> ready -> финальный self-review -> merge -> cleanup`
-- для такого stream не используются `staging`, deploy-check и smoke
-- обязательные проверки для такого stream:
-  подтверждение, что diff действительно `docs-only`,
-  короткий self-review и `CI`, если он существует для этого PR
-- отсутствие `CI` не блокирует такой stream
-- при красном `CI`, конфликте, неожиданном не-документационном diff
-  или любом другом blocker агент обязан остановиться и спросить
-  следующий шаг
-
-Новый кодовый шаг начинается только после:
-- согласованного ТЗ
-- чистого preflight
-- создания новой clean branch от `origin/main`
-
-Подробный регламент описан в `docs/task-delivery-workflow.md`.
-
-Границы разрешений:
-- команда на реализацию разрешает только изменения файлов и локальные проверки
-  по умолчанию
-- по умолчанию `commit`, `push` и создание `draft PR` требуют отдельной
-  явной команды пользователя
-- если пользователь явно делегировал агенту право на `commit`, `push`
-  и создание `draft PR` в текущем диалоге, агент может выполнять эти
-  действия без отдельного подтверждения на каждый из них, но только после
-  команды на реализацию и согласованного ТЗ
-- команда пользователя `идём по пути для документов` для `docs-only`
-  stream считается отдельной явной делегацией на
-  `commit`, `push`, создание PR в `main`, проверку `CI`, перевод в `ready`,
-  финальный self-review, `merge` и `cleanup` без промежуточных подтверждений
-- если пользователь явно делегировал агенту в текущем диалоге ведение PR
-  до `ready` после зелёного `CI`, агент может в рамках того же
-  implementation stream сам выполнять `commit`, `push`, создание и
-  обновление `draft PR`, проверку `CI`, перевод PR в `ready` и
-  финальный self-review без отдельного подтверждения на каждый подэтап
-- такая делегация не распространяется на `merge`, `rebase`, `force-push`,
-  действия после конфликтов и запуск тестов,
-  если они отдельно не разрешены
-- локальный `rebase`, `merge` и ручное разрешение конфликтов не дают права на `push`
-- `force-push` считается отдельным более опасным действием
-- команды вида `сделай`, `сделай сам`, `доведи`, `разрули` трактуются в
-  наименее привилегированном смысле
-- если команда двусмысленна, агент обязан выбрать более безопасный вариант
-  и остановиться на нём
-
-Правило публикации:
-- в базовом режиме любое действие, которое публикует изменения наружу,
-  требует отдельного явного выбора пользователя
-- в делегированном режиме агент может сам выполнить `push` и создать
-  `draft PR`, если пользователь заранее явно дал такие права в текущем
-  диалоге
-- если пользователь заранее явно делегировал ведение PR до `ready`
-  после зелёного `CI`, агент может сам обновлять `draft PR`, проверять
-  `CI`, переводить PR в `ready` и завершать финальный self-review
-  в рамках того же implementation stream
-- если пользователь явно выбрал документальный путь командой
-  `идём по пути для документов`, агент может для текущего `docs-only`
-  stream сам довести публикационную цепочку до `merge` в `main`
-- к публикации относятся `push`, `force-push`, создание PR и обновление PR
-  после локального rebase или разрешения конфликтов
-- `merge` всегда требует отдельного явного выбора пользователя,
-  кроме отдельно разрешённого `docs-only` пути
-- после локального разрешения конфликта агент обязан остановиться и отдельно
-  спросить следующий шаг, а не обновлять PR автоматически
-
-Правило конца этапа:
-- после каждого завершённого этапа агент обязан остановиться
-- вместо автоматического перехода к следующему шагу агент обязан предложить
-  короткое меню из 2-3 вариантов
-- в конце агент обязан дать одну явную рекомендацию и кратко объяснить её
-- после завершённого этапа агент обязан отдельно предложить cleanup своих
-  временных артефактов, если они были созданы в ходе шага
-- если пользователь не выбрал вариант явно, агент обязан применить самый
-  безопасный вариант: остановиться и ничего не публиковать
-- исключение: если пользователь заранее явно делегировал агенту
-  `commit`, `push`, обновление `draft PR` и ведение PR до `ready`
-  после зелёного `CI`, агент может без промежуточной остановки довести
-  текущий implementation stream по цепочке `commit -> push -> draft PR ->
-  CI -> ready -> final self-review`, но обязан остановиться на блокере,
-  перед `merge`, перед `deploy` и перед любым действием вне этой цепочки
-- исключение для `docs-only` stream:
-  после команды `идём по пути для документов`
-  агент может без промежуточных остановок довести текущий stream
-  по цепочке `clean branch/worktree -> правка -> self-review -> commit ->
-  push -> PR в main -> CI -> ready -> финальный self-review -> merge ->
-  cleanup`, но обязан остановиться на любом blocker
-
-Fast-track делегация (для прекращения режима «1,1,1»):
-- по явной команде пользователя `делай сам до merge` агент получает право
-  довести текущий implementation stream до `merge` без промежуточных
-  подтверждений
-- fast-track включает:
-  `commit -> push -> draft PR -> CI -> self-review -> ready -> merge`
-  для `staging`, затем `commit/push` не требуются, а PR в `main` создаётся
-  из validated diff и также доводится до `merge`
-- fast-track НЕ включает:
-  `rebase`, `force-push`, `deploy`, `staging smoke`, `production smoke`
-  и любые действия вне текущего согласованного scope
-- при любом blocker агент обязан остановиться и запросить следующий шаг
-  (конфликт, красный CI, scope drift, отсутствие доступа)
-
-Авто‑проверка CI:
-- по умолчанию агент сам проверяет CI по PR и фиксирует результат
-  без отдельного запроса пользователю
-- запрос пользователю требуется только если нет доступа
-  к статусам CI или проверка невозможна по техническим причинам
-
-Пример формата конца этапа:
-- `Что дальше:`
-- `1. commit`
-- `2. commit + push`
-- `3. commit + push + draft PR`
-- `Рекомендация: 1. commit`
-- `Почему: изменения готовы локально, но перед публикацией лучше оставить
-  пользователю отдельную точку контроля.`
-
-Правило рекомендации:
-- если `push` ещё не разрешён явно в текущем stream, рекомендовать `COMMIT`
-- если пользователь уже явно выбрал `push` или заранее делегировал
-  `commit` и `push` в текущем stream, рекомендовать `COMMIT + PUSH`
-- если пользователь заранее делегировал ещё и создание `draft PR`,
-  после локально готового diff можно рекомендовать
-  `COMMIT + PUSH + DRAFT PR`
-- это меняет только рекомендуемый вариант в меню конца этапа,
-  но не даёт права публиковать изменения без уже полученного разрешения
-
-Правило после `ready`:
-- если в текущем implementation stream финальный review выполняет агент
-  и внешний reviewer явно не ожидается,
-  агент не должен по умолчанию рекомендовать `Ждать review по PR`
-- после зелёного `CI`, финального self-review и перевода PR в `ready`
-  агент должен предлагать:
-  - `MERGE`
-  - `Остановиться`
-  - `Запросить внешний review` только как опциональный вариант
-- `ready` в таком процессе означает, что PR готов к пользовательскому
-  решению о `merge`, а не к обязательному ожиданию внешнего reviewer-а
-
-Стабильные process-правила:
-- агент по умолчанию стремится доводить текущий implementation stream
-  до полного закрытия, а не открывать параллельные хвосты и побочные шаги
-- одновременно допускается только один активный implementation stream
-- одно дело = одна задача = один активный implementation stream;
-  параллельные implementation- и policy-stream'ы не открываются,
-  пока текущий шаг не завершён полностью или не отложен явно
-- новые clean streams режутся от `origin/main`, а не от stale mixed-ветки
-- `staging` используется как обязательный интеграционный gate, а не как база
-  для новых веток
-- путь публикации по умолчанию: `codex/... -> PR в staging -> staging smoke ->
-  отдельный PR в main`
-- PR `staging -> main` запрещён
-- в `main` идёт только отдельный PR из проверенного diff текущего шага:
-  обычно из той же `codex/...` ветки или из отдельной clean-ветки
-  с тем же validated diff
-- residual diff audit обязателен только для extraction из mixed/reference
-  контекста, а не для каждого обычного нового шага от свежего `main`
-- branch создаётся только перед кодовой реализацией, а не заранее
-- на новую branch переходят сразу при создании
-- один branch = один implementation step
-- branch считается активной до полного закрытия PR/deploy/smoke хвоста
-- каждый clean stream публикуется отдельной веткой и отдельным draft PR
-- заголовки PR, описания PR на GitHub и сопроводительные GitHub-комментарии
-  по изменениям пишутся на русском языке
-- сообщения коммитов пишутся на русском языке
-- названия веток формулируются в русской `ASCII`-транслитерации с префиксом
-  `codex/`
-- auto-deploy не закрывает релиз сам по себе: после deploy обязателен post-deploy smoke-check
-- старая mixed-ветка используется только как `reference-only`, пока явно не доказано обратное
-- cleanup после закрытого шага касается только временных артефактов,
-  созданных агентом в рамках этого шага
-- в cleanup по умолчанию входят только:
-  временные `git worktree`, временные локальные и remote-ветки после merge,
-  временные файлы в `/tmp` и фоновые процессы, запущенные агентом
-- cleanup не затрагивает пользовательские `untracked`-файлы, незавершённые
-  ветки/worktree, окружения и любые артефакты без явного безопасного основания
-- для локальных файловых артефактов в рабочем дереве действует отдельная
-  cleanup-taxonomy ниже
-- перед любым удалением локальных файлов или каталогов в рабочем дереве
-  агент обязан явно перечислить точные пути и классифицировать каждый путь как:
-  `временный`, `сохраняемый` или `неопределённый`
-- эта классификация относится только к файловым артефактам в рабочем дереве;
-  она не распространяется на локальные и remote-ветки, `git worktree`,
-  фоновые процессы и окружения
-- для веток, `git worktree`, фоновых процессов и окружений действует только
-  allowlist cleanup выше
-- `сохраняемый` — это содержательный артефакт, созданный или запрошенный
-  пользователем (`docs`, ТЗ, заметка, шаблон, справочный файл, отчёт,
-  тестовая фикстура и т.п.)
-- `временный` — это заведомо одноразовый технический артефакт,
-  созданный только для промежуточной работы и не имеющий самостоятельной
-  ценности после завершения шага
-- `неопределённый` по умолчанию трактуется как `сохраняемый`
-- по умолчанию к cleanup можно рекомендовать только артефакты класса
-  `временный`
-- `сохраняемый` и `неопределённый` не могут рекомендоваться к удалению без
-  отдельного явного предупреждения, что это полезный пользовательский
-  артефакт, а не временный хвост
-- если пользователь отдельно сказал `оставить локально`, артефакт
-  фиксируется как `сохраняемый` до новой явной команды пользователя
-- если cleanup включает потенциально опасное удаление, агент обязан запросить
-  отдельное подтверждение пользователя
-- подробный workflow описан в `docs/clean-stream-release-flow.md`
-- operational checklist описан в `docs/post-deploy-smoke.md`
-- полный workflow по задаче описан в `docs/task-delivery-workflow.md`
-
-Новый кодовый шаг запрещён, если предыдущий шаг ещё не закрыт полностью.
-Блокирующими считаются любые из состояний:
-- есть локальный незапубликованный diff по текущему шагу
-- есть открытый draft PR или обычный PR в `staging` или `main`
-- PR в `staging` смержен, но staging deploy или staging smoke-check ещё не завершён
-- staging smoke завершён, но PR в `main` для этого же diff ещё не проведён
-- PR в `main` смержен, но изменение ещё не выкачено в production
-- production deploy прошёл, но production smoke-check ещё не завершён
-
-Пока такой хвост существует, агент может только:
-- доводить этот же шаг до конца
-- делать read-only анализ
-- по явной команде пользователя закрыть, отменить или отложить текущий шаг
-
-Перед стартом нового кодового шага агент обязан сделать preflight-check:
-- есть ли активный PR по предыдущему шагу
-- есть ли незавершённый staging deploy или staging smoke
-- есть ли незавершённый production deploy или production smoke
-
-Если хвост найден, агент не начинает новую реализацию и сначала явно сообщает
-об этом пользователю.
-
-Перед предложением изменений:
-1. Изучить существующие пути в коде.
-2. Найти минимальную безопасную точку расширения.
-3. Сохранять текущее поведение, если шаг явно его не меняет.
-4. Явно обозначать компромиссы и открытые вопросы.
-
-Если AGENTS.md расходится с реальным кодом — источником истины
-считается код. Обновление AGENTS.md выполнять отдельным коротким
-шагом после подтверждения изменений.
+- `docs/task-delivery-workflow.md` — подробный implementation и delivery workflow
+- дополнительные reference docs по domain/config/code-map допустимы отдельным `docs-only` шагом, если текущего верхнеуровневого контекста станет недостаточно
 
 ## Поддержка файла
 
-AGENTS.md описывает стабильные решения, а не временные эксперименты.
-AGENTS.md обновлять отдельным коротким шагом после подтверждённых изменений.
+`AGENTS.md` описывает стабильные решения, а не временные эксперименты.
+`AGENTS.md` обновлять отдельным коротким шагом после подтверждённых изменений.
 Файл — живой справочник, а не журнал изменений.
 
 <!-- ABRIKOSOFF CONNECTOR PROJECT END -->
