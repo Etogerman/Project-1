@@ -170,7 +170,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
-    public function test_blocked_telegram_dialog_skips_openlines_delivery_without_transport_ack_or_failed_status(): void
+    public function test_blocked_telegram_dialog_sends_feedback_to_openlines_and_acks_without_transport_or_failed_status(): void
     {
         $connection = $this->makeActiveConnection();
         $dialog = $this->createTelegramLiveDialog();
@@ -178,7 +178,14 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
         ])->save();
 
-        Http::fake();
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
 
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
@@ -206,6 +213,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertNotNull($dialog->bitrix24_live_last_imported_at);
         $this->assertDatabaseMissing('messages', [
             'channel_id' => $dialog->channel_id,
             'provider_event_key' => 'bitrix24-openlines:bitrix-im-blocked-tg',
@@ -217,10 +225,36 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'status' => 'skipped',
         ]);
 
-        Http::assertNothingSent();
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
+                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
+        });
+
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
+                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && str_starts_with((string) ($payload['MESSAGES'][0]['message']['id'][0] ?? ''), 'abrikosoff-blocked-feedback-');
+        });
+
+        Http::assertSentCount(2);
     }
 
-    public function test_blocked_max_dialog_skips_openlines_delivery_without_transport_ack_or_failed_status(): void
+    public function test_blocked_max_dialog_sends_feedback_to_openlines_and_acks_without_transport_or_failed_status(): void
     {
         $connection = $this->makeActiveConnection();
         $dialog = $this->createMaxLiveDialog();
@@ -228,7 +262,14 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
         ])->save();
 
-        Http::fake();
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
 
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
@@ -256,6 +297,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertNotNull($dialog->bitrix24_live_last_imported_at);
         $this->assertDatabaseMissing('messages', [
             'channel_id' => $dialog->channel_id,
             'provider_event_key' => 'bitrix24-openlines:bitrix-im-blocked-max',
@@ -267,7 +309,33 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'status' => 'skipped',
         ]);
 
-        Http::assertNothingSent();
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
+                && ($payload['LINE'] ?? null) === 'line-max'
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
+        });
+
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
+                && ($payload['LINE'] ?? null) === 'line-max'
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && str_starts_with((string) ($payload['MESSAGES'][0]['message']['id'][0] ?? ''), 'abrikosoff-blocked-feedback-');
+        });
+
+        Http::assertSentCount(2);
     }
 
     public function test_duplicate_openlines_callback_does_not_resend_to_messenger_and_still_acks(): void

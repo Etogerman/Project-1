@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Data\Bitrix24\Bitrix24OpenLinesOperatorMessageData;
 use App\Data\Bots\BotDialogTextSendResult;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Models\Bitrix24SyncLog;
@@ -12,12 +13,15 @@ use Throwable;
 
 class ProcessBitrix24OpenLinesWebhookAction
 {
+    private const BLOCKED_DIALOG_FEEDBACK_TEXT = 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
+
     public function __construct(
         private readonly NormalizeBitrix24OpenLinesEventAction $normalizeBitrix24OpenLinesEventAction,
         private readonly HandleBitrix24OpenLinesSessionClosedAction $handleBitrix24OpenLinesSessionClosedAction,
         private readonly ResolveDialogByBitrix24LiveChatKeyAction $resolveDialogByBitrix24LiveChatKeyAction,
         private readonly IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
         private readonly DeliverBitrix24OpenLinesMessageToMessengerAction $deliverBitrix24OpenLinesMessageToMessengerAction,
+        private readonly SendBitrix24OpenLinesBlockedDialogFeedbackAction $sendBitrix24OpenLinesBlockedDialogFeedbackAction,
         private readonly StoreBitrix24OpenLinesOutboundMessageAction $storeBitrix24OpenLinesOutboundMessageAction,
         private readonly AcknowledgeBitrix24OpenLinesDeliveryAction $acknowledgeBitrix24OpenLinesDeliveryAction,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
@@ -106,7 +110,20 @@ class ProcessBitrix24OpenLinesWebhookAction
                 );
 
                 if ($this->isBlockedDialogSkip($deliveryResult)) {
-                    $this->logBlockedDialogSkipped($event, $dialog, $messageData, $deliveryResult);
+                    [$feedbackMessageId, $acknowledgementMessageId] = $this->handleBlockedDialogSkip(
+                        $dialog,
+                        $messageData,
+                    );
+
+                    $this->activateDialog($dialog, $event, $messageData->chatId);
+                    $this->logBlockedDialogSkipped(
+                        $event,
+                        $dialog,
+                        $messageData,
+                        $deliveryResult,
+                        $feedbackMessageId,
+                        $acknowledgementMessageId,
+                    );
 
                     continue;
                 }
@@ -182,8 +199,10 @@ class ProcessBitrix24OpenLinesWebhookAction
     private function logBlockedDialogSkipped(
         Bitrix24WebhookEvent $event,
         Dialog $dialog,
-        mixed $messageData,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
         BotDialogTextSendResult $deliveryResult,
+        string $feedbackMessageId,
+        string $acknowledgementMessageId,
     ): void {
         $this->logBitrix24ApiCallAction->handle(
             direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
@@ -200,11 +219,40 @@ class ProcessBitrix24OpenLinesWebhookAction
                 'route_status_code' => $deliveryResult->routeStatus->code,
                 'route_status_label' => $deliveryResult->routeStatus->label,
                 'blocked_reason' => $deliveryResult->routeStatus->blockedReason,
+                'feedback_message_text' => self::BLOCKED_DIALOG_FEEDBACK_TEXT,
+                'feedback_message_id' => $feedbackMessageId,
+                'acknowledgement_message_id' => $acknowledgementMessageId,
             ],
             connection: $event->connection,
             entityType: 'openlines_webhook_event',
             entityId: (string) $event->id,
         );
+    }
+
+    /**
+     * @return array{0: string, 1: string}
+     */
+    private function handleBlockedDialogSkip(
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+    ): array {
+        $fingerprint = substr(hash('sha256', $messageData->chatId.'|'.$messageData->bitrixMessageId), 0, 16);
+        $feedbackMessageId = 'abrikosoff-blocked-feedback-'.$fingerprint;
+
+        $this->sendBitrix24OpenLinesBlockedDialogFeedbackAction->handle(
+            $dialog,
+            $messageData,
+            self::BLOCKED_DIALOG_FEEDBACK_TEXT,
+            $feedbackMessageId,
+        );
+
+        $this->acknowledgeBitrix24OpenLinesDeliveryAction->handle(
+            $dialog,
+            $messageData,
+            $feedbackMessageId,
+        );
+
+        return [$feedbackMessageId, $feedbackMessageId];
     }
 
     /**
