@@ -23,6 +23,8 @@ class Message extends Model
 
     public const KIND_INBOUND_CONTACT_SHARE = 'inbound_contact_share';
 
+    public const KIND_INBOUND_SYSTEM_EVENT = 'inbound_system_event';
+
     public const KIND_OUTBOUND_AUTO_REPLY = 'outbound_auto_reply';
 
     public const KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION = 'outbound_phone_capture_confirmation';
@@ -53,6 +55,8 @@ class Message extends Model
 
     public const SENT_BY_SYSTEM_CODE_DATA_COLLECTION_COMPLETION = 'data_collection_completion';
 
+    public const SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION = 'telegram_bot_subscription';
+
     public const SENT_BY_SYSTEM_CODE_SCENARIO_WARMUP = 'scenario_warmup';
 
     public const SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY = 'scenario_needs_discovery';
@@ -60,6 +64,10 @@ class Message extends Model
     public const SENT_BY_SYSTEM_CODE_LEGACY_UNKNOWN_KIND = 'legacy_unknown_kind';
 
     public const SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES = 'bitrix24_openlines';
+
+    public const SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER = 'bot_blocked_by_user';
+
+    public const SYSTEM_EVENT_CODE_BOT_UNBLOCKED_BY_USER = 'bot_unblocked_by_user';
 
     /**
      * @var list<string>
@@ -71,6 +79,7 @@ class Message extends Model
         'channel_id',
         'direction',
         'message_kind',
+        'system_event_code',
         'sent_by_type',
         'sent_by_user_id',
         'sent_by_system_code',

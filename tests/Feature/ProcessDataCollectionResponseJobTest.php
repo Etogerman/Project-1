@@ -9,6 +9,7 @@ use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -2276,6 +2277,57 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
             'reply_to_message_id' => $message->id,
             'text' => 'Хорошо, возраст пропустим.',
+        ]);
+    }
+
+    public function test_job_skips_collector_reply_when_dialog_is_blocked_by_user(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
+
+        Http::fake();
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Николай',
+            'external_chat_id' => 'blocked-collector-chat',
+        ], [
+            'external_user_id' => 'blocked-collector-user',
+        ]);
+
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $message->contact_identity_id,
+            'external_chat_id' => 'blocked-collector-chat',
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ]);
+
+        $message->forceFill([
+            'dialog_id' => $dialog->id,
+        ])->save();
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
+        $this->assertNull($contact->data_collection_last_prompted_field);
+        $this->assertNull($contact->data_collection_current_field_started_at);
+        $this->assertDatabaseMissing('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_reply_skipped_dialog_not_sendable',
+            'level' => 'info',
         ]);
     }
 

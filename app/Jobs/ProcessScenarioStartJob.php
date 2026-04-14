@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
+use App\Services\Dialogs\CanSendThroughDialogAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Database\QueryException;
 use Illuminate\Bus\Queueable;
@@ -48,10 +49,15 @@ class ProcessScenarioStartJob implements ShouldQueue
         ];
     }
 
-    public function handle(ScenarioRegistry $scenarioRegistry): void
+    public function handle(
+        ScenarioRegistry $scenarioRegistry,
+        ?CanSendThroughDialogAction $canSendThroughDialogAction = null,
+    ): void
     {
+        $canSendThroughDialogAction ??= app(CanSendThroughDialogAction::class);
+
         $message = Message::query()
-            ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.currentContactIdentity'])
             ->find($this->inboundMessageId);
 
         if (! $message instanceof Message || $message->message_kind !== Message::KIND_INBOUND_USER || $message->dialog_id === null) {
@@ -66,6 +72,10 @@ class ProcessScenarioStartJob implements ShouldQueue
         }
 
         if ($message->contact?->isInDataCollection()) {
+            return;
+        }
+
+        if (! $message->dialog instanceof \App\Models\Dialog || ! $canSendThroughDialogAction->handle($message->dialog)) {
             return;
         }
 

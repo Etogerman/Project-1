@@ -1790,6 +1790,10 @@
         justify-content: flex-start;
     }
 
+    .ac-message--system {
+        justify-content: center;
+    }
+
     .ac-message__bubble {
         display: inline-flex;
         flex-direction: column;
@@ -1813,6 +1817,14 @@
         border-top-left-radius: 6px;
     }
 
+    .ac-message--system .ac-message__bubble {
+        align-items: center;
+        max-width: min(34rem, 90%);
+        border-radius: 999px;
+        border-color: color-mix(in srgb, var(--ac-text-soft) 12%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-surface-strong) 88%, white);
+    }
+
     .ac-message__meta {
         display: flex;
         align-items: flex-start;
@@ -1829,6 +1841,14 @@
         flex-wrap: wrap;
     }
 
+    .ac-message--system .ac-message__meta {
+        justify-content: center;
+    }
+
+    .ac-message--system .ac-message__meta-main {
+        justify-content: center;
+    }
+
     .ac-message__text {
         white-space: pre-wrap;
         word-break: break-word;
@@ -1836,6 +1856,10 @@
         line-height: 1.45;
         color: var(--ac-text);
         text-align: left;
+    }
+
+    .ac-message--system .ac-message__text {
+        text-align: center;
     }
 
     .ac-message__text--html a {

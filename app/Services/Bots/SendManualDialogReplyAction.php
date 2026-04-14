@@ -24,9 +24,8 @@ class SendManualDialogReplyAction
         protected ResolveRootContactAction $resolveRootContactAction,
         protected MessageChronology $messageChronology,
         protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
+        protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreManualOutboundMessageAction $storeManualOutboundMessageAction,
-        protected TelegramBotApiService $telegramBotApiService,
-        protected MaxBotApiService $maxBotApiService,
         protected PrepareMessageContentAction $prepareMessageContentAction,
     ) {}
 
@@ -52,12 +51,6 @@ class SendManualDialogReplyAction
         $effectiveContact = $this->resolveRootContactAction->handle($contact);
 
         $content = $this->prepareMessageContentAction->handle($text, $textFormat);
-
-        $blockedReason = $this->getBlockedReason($dialog);
-
-        if ($blockedReason !== null) {
-            throw new InvalidArgumentException($blockedReason);
-        }
 
         $channel = $dialog->channel;
 
@@ -143,20 +136,16 @@ class SendManualDialogReplyAction
         string $textFormat = Message::TEXT_FORMAT_PLAIN_TEXT,
     ): AutoReplyDeliveryResult
     {
-        $dialog->loadMissing(['channel', 'currentContactIdentity']);
+        $sendResult = $this->sendBotDialogTextAction->handleDialog(
+            $dialog,
+            $text,
+            textFormat: $textFormat,
+        );
 
-        $channel = $dialog->channel;
-
-        if (! $channel instanceof Channel) {
-            throw new InvalidArgumentException('У этого диалога сейчас нет рабочего маршрута для отправки ответа.');
+        if (! $sendResult->wasSent() || ! $sendResult->deliveryResult instanceof AutoReplyDeliveryResult) {
+            throw new InvalidArgumentException($sendResult->routeStatus->blockedReason ?? 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.');
         }
 
-        $externalUserId = $dialog->currentContactIdentity?->external_user_id;
-
-        return match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage($channel, $dialog->external_chat_id, $externalUserId, $text, null, $textFormat),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage($channel, $dialog->external_chat_id, $externalUserId, $text, null, $textFormat),
-            default => throw new InvalidArgumentException('У этого диалога сейчас нет рабочего маршрута для отправки ответа.'),
-        };
+        return $sendResult->deliveryResult;
     }
 }
