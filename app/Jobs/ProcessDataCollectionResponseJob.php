@@ -163,6 +163,21 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
+        if ($this->isSlashCommand($replyText)) {
+            $this->repeatCurrentQuestionAfterSlashCommand(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                currentField: $currentField,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
         if ($this->isLocalSkipCommand($replyText, $currentField)) {
             $this->handleLocalSkip(
                 message: $message,
@@ -864,6 +879,34 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
     }
 
+    protected function repeatCurrentQuestionAfterSlashCommand(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        ?string $currentField,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $currentField = $currentField ?? Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->currentPromptText($contact, $channel, $currentField),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_current_question_repeated',
+            activityMessage: 'Повторно отправлен текущий вопрос сбора профиля после slash-команды.',
+            telegramReplyMarkup: $this->telegramReplyMarkupForField($currentField, $contact),
+            maxAttachments: $this->maxAttachmentsForField($currentField, $contact),
+        );
+    }
+
     protected function handleRetry(
         Message $message,
         Channel $channel,
@@ -941,6 +984,11 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $normalized = mb_strtolower(trim($text));
 
         return in_array($normalized, (array) $this->fieldConfig($currentField, 'skip_commands', ['пропустить', 'skip']), true);
+    }
+
+    protected function isSlashCommand(string $text): bool
+    {
+        return str_starts_with(trim($text), '/');
     }
 
     protected function retryMessage(?string $field): string
@@ -1511,6 +1559,30 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
     protected function questionText(string $field, ?string $platform = null): string
     {
         return $this->promptHelper()->questionText($field, $platform);
+    }
+
+    protected function currentPromptText(Contact $contact, Channel $channel, string $field): string
+    {
+        $boundary = $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at;
+
+        $latestPromptText = $contact->messages()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->where(function ($query) use ($field): void {
+                $query->where('message_parameter', $field)
+                    ->orWhereNull('message_parameter');
+            })
+            ->when($boundary !== null, fn ($query) => $query->where('received_at', '>=', $boundary))
+            ->orderByDesc('id')
+            ->value('text');
+
+        if (filled($latestPromptText)) {
+            return (string) $latestPromptText;
+        }
+
+        return $field === Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM
+            ? $this->russianRegionConfirmQuestionText($contact)
+            : $this->questionText($field, $channel->platform);
     }
 
     protected function cityMatchesCountry(string $city, string $country, ExtractCityAction $extractCityAction): bool
