@@ -20,6 +20,14 @@ class IsMessageReadyForBitrix24LiveExportAction
         Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
     ];
 
+    /**
+     * @var list<string>
+     */
+    private const EXPORTABLE_SYSTEM_EVENT_CODES = [
+        Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER,
+        Message::SYSTEM_EVENT_CODE_BOT_UNBLOCKED_BY_USER,
+    ];
+
     public function __construct(
         private readonly IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
     ) {}
@@ -34,11 +42,11 @@ class IsMessageReadyForBitrix24LiveExportAction
             return false;
         }
 
-        if (! in_array($message->message_kind, self::EXPORTABLE_MESSAGE_KINDS, true)) {
+        if (! $this->isExportableMessageKind($message)) {
             return false;
         }
 
-        if ($message->message_kind !== Message::KIND_INBOUND_CONTACT_SHARE && trim((string) $message->text) === '') {
+        if (! $this->hasExportableMessageText($message)) {
             return false;
         }
 
@@ -55,5 +63,28 @@ class IsMessageReadyForBitrix24LiveExportAction
             ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
             ->where('export_status', Bitrix24MessageExport::STATUS_EXPORTED)
             ->exists();
+    }
+
+    private function isExportableMessageKind(Message $message): bool
+    {
+        if (in_array($message->message_kind, self::EXPORTABLE_MESSAGE_KINDS, true)) {
+            return true;
+        }
+
+        return $message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT
+            && in_array($message->system_event_code, self::EXPORTABLE_SYSTEM_EVENT_CODES, true);
+    }
+
+    private function hasExportableMessageText(Message $message): bool
+    {
+        if ($message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
+            return true;
+        }
+
+        if ($message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return in_array($message->system_event_code, self::EXPORTABLE_SYSTEM_EVENT_CODES, true);
+        }
+
+        return trim((string) $message->text) !== '';
     }
 }
