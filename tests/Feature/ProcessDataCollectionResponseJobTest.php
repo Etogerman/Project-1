@@ -318,6 +318,123 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         ]);
     }
 
+    public function test_job_repeats_current_country_question_for_start_command_without_incrementing_attempts(): void
+    {
+        $fieldStartedAt = now()->subMinute();
+        $questionText = 'Подскажите, пожалуйста, страну, где вы живёте. Для города «Москва» это нужно уточнить.';
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9949],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '/start',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'data_collection_current_field_started_at' => $fieldStartedAt,
+            'data_collection_attempts_count' => 1,
+            'city' => 'Москва',
+        ]);
+
+        Message::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'message_parameter' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'text' => $questionText,
+            'received_at' => $fieldStartedAt->copy()->addSecond(),
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->data_collection_current_field);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->data_collection_last_prompted_field);
+        $this->assertSame(1, $contact->data_collection_attempts_count);
+        $this->assertSame(
+            $fieldStartedAt->toDateTimeString(),
+            $contact->data_collection_current_field_started_at?->toDateTimeString(),
+        );
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === $questionText);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => $questionText,
+        ]);
+    }
+
+    public function test_job_repeats_current_age_range_question_for_other_slash_command_without_incrementing_attempts(): void
+    {
+        $fieldStartedAt = now()->subMinute();
+        $questionText = 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.';
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => ['message_id' => 'max-repeat-after-slash'],
+            ]),
+        ]);
+
+        $channel = $this->createMaxChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '/help',
+            'external_chat_id' => '700',
+        ], [
+            'external_user_id' => '500',
+        ], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_current_field_started_at' => $fieldStartedAt,
+            'data_collection_attempts_count' => 1,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        Message::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'message_parameter' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'text' => $questionText,
+            'received_at' => $fieldStartedAt->copy()->addSecond(),
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_last_prompted_field);
+        $this->assertSame(1, $contact->data_collection_attempts_count);
+        $this->assertSame(
+            $fieldStartedAt->toDateTimeString(),
+            $contact->data_collection_current_field_started_at?->toDateTimeString(),
+        );
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+            && $request['text'] === $questionText
+            && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'message'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'До 18 лет');
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => $questionText,
+        ]);
+    }
+
     public function test_job_moves_to_country_after_second_invalid_first_name_attempt(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
