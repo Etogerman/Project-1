@@ -170,6 +170,106 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
+    public function test_blocked_telegram_dialog_skips_openlines_delivery_without_transport_ack_or_failed_status(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+        ])->save();
+
+        Http::fake();
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-blocked-tg',
+                        'message_id' => 'bitrix-im-blocked-tg',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Не должно уйти в Telegram',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertDatabaseMissing('messages', [
+            'channel_id' => $dialog->channel_id,
+            'provider_event_key' => 'bitrix24-openlines:bitrix-im-blocked-tg',
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_message_skipped_blocked_dialog',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'skipped',
+        ]);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_blocked_max_dialog_skips_openlines_delivery_without_transport_ack_or_failed_status(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createMaxLiveDialog();
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+        ])->save();
+
+        Http::fake();
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_max',
+                'LINE' => 'line-max',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-blocked-max',
+                        'message_id' => 'bitrix-im-blocked-max',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Не должно уйти в MAX',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertDatabaseMissing('messages', [
+            'channel_id' => $dialog->channel_id,
+            'provider_event_key' => 'bitrix24-openlines:bitrix-im-blocked-max',
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_message_skipped_blocked_dialog',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'skipped',
+        ]);
+
+        Http::assertNothingSent();
+    }
+
     public function test_duplicate_openlines_callback_does_not_resend_to_messenger_and_still_acks(): void
     {
         $connection = $this->makeActiveConnection();
