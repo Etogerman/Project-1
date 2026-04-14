@@ -298,6 +298,7 @@ return [
         'allowed_updates' => [
             'message',
             'callback_query',
+            'my_chat_member',
         ],
     ],
 

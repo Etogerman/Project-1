@@ -29,8 +29,9 @@
                     data-kind="{{ $message['kind'] }}"
                     @class([
                         'ac-message',
-                        'ac-message--outbound' => $message['is_outbound'],
-                        'ac-message--inbound' => ! $message['is_outbound'],
+                        'ac-message--system' => $message['is_system_event'] ?? false,
+                        'ac-message--outbound' => $message['is_outbound'] && ! ($message['is_system_event'] ?? false),
+                        'ac-message--inbound' => ! $message['is_outbound'] && ! ($message['is_system_event'] ?? false),
                     ])
                 >
                     <article class="ac-message__bubble">
@@ -38,16 +39,16 @@
                             <div class="ac-message__meta-main">
                                 <span
                                     class="ac-pill"
-                                    data-tone="{{ $message['is_outbound'] ? 'success' : 'info' }}"
+                                    data-tone="{{ $message['direction_tone'] ?? ($message['is_outbound'] ? 'success' : 'info') }}"
                                 >
-                                    {{ $message['is_outbound'] ? 'Исходящее' : 'Входящее' }}
+                                    {{ $message['direction_label'] ?? ($message['is_outbound'] ? 'Исходящее' : 'Входящее') }}
                                 </span>
 
                                 @if (filled($message['sender_label']))
                                     <span
                                         data-role="conversation-sender"
                                         class="ac-pill"
-                                        data-tone="primary"
+                                        data-tone="{{ $message['sender_tone'] ?? 'primary' }}"
                                     >
                                         {{ $message['sender_label'] }}
                                     </span>

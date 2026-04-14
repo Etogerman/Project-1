@@ -509,6 +509,92 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee(DialogResource::getUrl('view', ['record' => $dialog]), escape: false);
     }
 
+    public function test_dialogs_inbox_keeps_system_unsubscribe_preview_without_marking_dialog_as_requires_reply(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Системный диалог',
+            'channelName' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $latestInbound = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->createDialogMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'reply_to_message_id' => $latestInbound->id,
+            'text' => 'Оператор уже ответил',
+            'received_at' => now()->subSeconds(10),
+        ]);
+
+        $this->createDialogMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_SYSTEM_EVENT,
+            'system_event_code' => Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION,
+            'text' => null,
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertCanNotSeeTableRecords([$dialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->removeTableFilter('requires_manual_reply')
+            ->assertCanSeeTableRecords([$dialog])
+            ->assertSee('Клиент заблокировал бота')
+            ->assertSee('Система')
+            ->assertSee('Нет новых');
+    }
+
+    public function test_dialog_view_renders_telegram_unsubscribe_as_system_message_badge(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $dialog->channel()->update([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'name' => 'Telegram Support',
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $this->createDialogMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_SYSTEM_EVENT,
+            'system_event_code' => Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION,
+            'text' => null,
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('Клиент заблокировал бота')
+            ->assertSee('Системное')
+            ->assertSee('Система')
+            ->assertDontSee('Входящее');
+    }
+
     public function test_dialog_view_route_status_matches_inbox_route_badge_for_same_dialog(): void
     {
         $admin = User::factory()->create([
