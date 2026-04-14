@@ -14,6 +14,11 @@ use Throwable;
 class ProcessBitrix24OpenLinesWebhookAction
 {
     private const BLOCKED_DIALOG_FEEDBACK_TEXT = 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
+    private const BLOCKED_DIALOG_PHASE_ENTITY_TYPE = 'openlines_blocked_attempt';
+    private const BLOCKED_DIALOG_FEEDBACK_SENT_OPERATION = 'openlines_blocked_feedback_sent';
+    private const BLOCKED_DIALOG_FEEDBACK_FAILED_OPERATION = 'openlines_blocked_feedback_failed';
+    private const BLOCKED_DIALOG_ACK_SENT_OPERATION = 'openlines_blocked_feedback_ack_sent';
+    private const BLOCKED_DIALOG_ACK_FAILED_OPERATION = 'openlines_blocked_feedback_ack_failed';
 
     public function __construct(
         private readonly NormalizeBitrix24OpenLinesEventAction $normalizeBitrix24OpenLinesEventAction,
@@ -71,6 +76,7 @@ class ProcessBitrix24OpenLinesWebhookAction
 
         foreach ($normalized['messages'] as $messageData) {
             $dialog = null;
+            $preserveDialogLiveStatusOnFailure = false;
 
             try {
                 $dialog = $this->resolveDialogByBitrix24LiveChatKeyAction->handle($messageData->chatId);
@@ -110,12 +116,14 @@ class ProcessBitrix24OpenLinesWebhookAction
                 );
 
                 if ($this->isBlockedDialogSkip($deliveryResult)) {
+                    $preserveDialogLiveStatusOnFailure = true;
                     [$feedbackMessageId, $acknowledgementMessageId] = $this->handleBlockedDialogSkip(
+                        $event,
                         $dialog,
                         $messageData,
                     );
 
-                    $this->activateDialog($dialog, $event, $messageData->chatId);
+                    $this->markBlockedDialogAttemptHandled($dialog);
                     $this->logBlockedDialogSkipped(
                         $event,
                         $dialog,
@@ -175,7 +183,7 @@ class ProcessBitrix24OpenLinesWebhookAction
                     entityId: (string) $event->id,
                 );
             } catch (Throwable $throwable) {
-                if ($dialog instanceof Dialog) {
+                if ($dialog instanceof Dialog && ! $preserveDialogLiveStatusOnFailure) {
                     $dialog->forceFill([
                         'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_FAILED,
                     ])->save();
@@ -233,26 +241,158 @@ class ProcessBitrix24OpenLinesWebhookAction
      * @return array{0: string, 1: string}
      */
     private function handleBlockedDialogSkip(
+        Bitrix24WebhookEvent $event,
         Dialog $dialog,
         Bitrix24OpenLinesOperatorMessageData $messageData,
     ): array {
-        $fingerprint = substr(hash('sha256', $messageData->chatId.'|'.$messageData->bitrixMessageId), 0, 16);
-        $feedbackMessageId = 'abrikosoff-blocked-feedback-'.$fingerprint;
+        $phaseFingerprint = $this->buildBlockedDialogPhaseFingerprint($messageData);
+        $feedbackMessageId = $this->buildBlockedDialogFeedbackMessageId($messageData);
 
-        $this->sendBitrix24OpenLinesBlockedDialogFeedbackAction->handle(
-            $dialog,
-            $messageData,
-            self::BLOCKED_DIALOG_FEEDBACK_TEXT,
-            $feedbackMessageId,
-        );
+        if (! $this->hasBlockedDialogPhaseSucceeded(self::BLOCKED_DIALOG_FEEDBACK_SENT_OPERATION, $phaseFingerprint)) {
+            try {
+                $this->sendBitrix24OpenLinesBlockedDialogFeedbackAction->handle(
+                    $dialog,
+                    $messageData,
+                    self::BLOCKED_DIALOG_FEEDBACK_TEXT,
+                    $feedbackMessageId,
+                );
+            } catch (Throwable $throwable) {
+                $this->logBlockedDialogPhaseFailure(
+                    operation: self::BLOCKED_DIALOG_FEEDBACK_FAILED_OPERATION,
+                    event: $event,
+                    dialog: $dialog,
+                    messageData: $messageData,
+                    phaseFingerprint: $phaseFingerprint,
+                    feedbackMessageId: $feedbackMessageId,
+                    errorMessage: $throwable->getMessage(),
+                );
 
-        $this->acknowledgeBitrix24OpenLinesDeliveryAction->handle(
-            $dialog,
-            $messageData,
-            $feedbackMessageId,
-        );
+                throw $throwable;
+            }
+
+            $this->logBlockedDialogPhaseSuccess(
+                operation: self::BLOCKED_DIALOG_FEEDBACK_SENT_OPERATION,
+                event: $event,
+                dialog: $dialog,
+                messageData: $messageData,
+                phaseFingerprint: $phaseFingerprint,
+                feedbackMessageId: $feedbackMessageId,
+            );
+        }
+
+        if (! $this->hasBlockedDialogPhaseSucceeded(self::BLOCKED_DIALOG_ACK_SENT_OPERATION, $phaseFingerprint)) {
+            try {
+                $this->acknowledgeBitrix24OpenLinesDeliveryAction->handle(
+                    $dialog,
+                    $messageData,
+                    $feedbackMessageId,
+                );
+            } catch (Throwable $throwable) {
+                $this->logBlockedDialogPhaseFailure(
+                    operation: self::BLOCKED_DIALOG_ACK_FAILED_OPERATION,
+                    event: $event,
+                    dialog: $dialog,
+                    messageData: $messageData,
+                    phaseFingerprint: $phaseFingerprint,
+                    feedbackMessageId: $feedbackMessageId,
+                    errorMessage: $throwable->getMessage(),
+                );
+
+                throw $throwable;
+            }
+
+            $this->logBlockedDialogPhaseSuccess(
+                operation: self::BLOCKED_DIALOG_ACK_SENT_OPERATION,
+                event: $event,
+                dialog: $dialog,
+                messageData: $messageData,
+                phaseFingerprint: $phaseFingerprint,
+                feedbackMessageId: $feedbackMessageId,
+            );
+        }
 
         return [$feedbackMessageId, $feedbackMessageId];
+    }
+
+    private function buildBlockedDialogFeedbackMessageId(Bitrix24OpenLinesOperatorMessageData $messageData): string
+    {
+        return 'abrikosoff-openlines-blocked:'.$messageData->bitrixMessageId;
+    }
+
+    private function buildBlockedDialogPhaseFingerprint(Bitrix24OpenLinesOperatorMessageData $messageData): string
+    {
+        return hash('sha256', $messageData->chatId.'|'.$messageData->bitrixMessageId);
+    }
+
+    private function hasBlockedDialogPhaseSucceeded(string $operation, string $phaseFingerprint): bool
+    {
+        return Bitrix24SyncLog::query()
+            ->where('operation', $operation)
+            ->where('status', Bitrix24SyncLog::STATUS_SUCCESS)
+            ->where('fingerprint', $phaseFingerprint)
+            ->exists();
+    }
+
+    private function logBlockedDialogPhaseSuccess(
+        string $operation,
+        Bitrix24WebhookEvent $event,
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        string $phaseFingerprint,
+        string $feedbackMessageId,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: $operation,
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog->id,
+                'chat_id' => $messageData->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+            ],
+            responsePayload: [
+                'feedback_message_id' => $feedbackMessageId,
+                'feedback_message_text' => self::BLOCKED_DIALOG_FEEDBACK_TEXT,
+            ],
+            connection: $event->connection,
+            entityType: self::BLOCKED_DIALOG_PHASE_ENTITY_TYPE,
+            entityId: $feedbackMessageId,
+            fingerprint: $phaseFingerprint,
+        );
+    }
+
+    private function logBlockedDialogPhaseFailure(
+        string $operation,
+        Bitrix24WebhookEvent $event,
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        string $phaseFingerprint,
+        string $feedbackMessageId,
+        string $errorMessage,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: $operation,
+            status: Bitrix24SyncLog::STATUS_FAILED,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog->id,
+                'chat_id' => $messageData->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+            ],
+            responsePayload: [
+                'feedback_message_id' => $feedbackMessageId,
+                'feedback_message_text' => self::BLOCKED_DIALOG_FEEDBACK_TEXT,
+            ],
+            connection: $event->connection,
+            errorMessage: $errorMessage,
+            entityType: self::BLOCKED_DIALOG_PHASE_ENTITY_TYPE,
+            entityId: $feedbackMessageId,
+            fingerprint: $phaseFingerprint,
+        );
     }
 
     /**
@@ -359,5 +499,12 @@ class ProcessBitrix24OpenLinesWebhookAction
                 entityId: (string) $dialog->id,
             );
         }
+    }
+
+    private function markBlockedDialogAttemptHandled(Dialog $dialog): void
+    {
+        $dialog->forceFill([
+            'bitrix24_live_last_imported_at' => now(),
+        ])->save();
     }
 }
