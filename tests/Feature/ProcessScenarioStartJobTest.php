@@ -204,6 +204,50 @@ class ProcessScenarioStartJobTest extends TestCase
         $this->assertDatabaseCount('scenario_runs', 0);
     }
 
+    public function test_job_skips_when_dialog_is_blocked_by_user(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-user-203',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'telegram-chat-303',
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'hello blocked warmup',
+            'raw_payload' => [],
+        ]);
+
+        $registry = $this->createMock(ScenarioRegistry::class);
+        $registry->expects($this->never())->method('makeRuntime');
+
+        $job = new ProcessScenarioStartJob($message->id, $dialog->id, 'warmup');
+
+        $job->handle($registry);
+
+        $this->assertDatabaseCount('scenario_runs', 0);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
     private function overlapKey(WithoutOverlapping $middleware): string
     {
         return (new \ReflectionProperty($middleware, 'key'))->getValue($middleware);

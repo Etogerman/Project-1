@@ -414,6 +414,71 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertDatabaseCount('messages', 2);
     }
 
+    public function test_store_inbound_message_same_second_telegram_update_id_refreshes_auto_name_state(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Старое имя',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'auto-same-second-user-1',
+            'display_name' => 'Старый профиль',
+            'external_username' => 'initial_username',
+        ]);
+
+        $olderInbound = new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: 'auto-same-second-chat-1',
+            externalUserId: 'auto-same-second-user-1',
+            providerEventKey: '101',
+            externalMessageId: 'same-second-older',
+            externalUsername: 'older_username',
+            contactName: 'Более старое имя',
+            text: 'Привет',
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: ['message' => ['text' => 'Привет']],
+            receivedAt: Carbon::parse('2026-04-12 15:25:00'),
+        );
+
+        $newerInbound = new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: 'auto-same-second-chat-1',
+            externalUserId: 'auto-same-second-user-1',
+            providerEventKey: '102',
+            externalMessageId: 'same-second-newer',
+            externalUsername: 'newer_username',
+            contactName: 'Более новое имя',
+            text: 'Снова привет',
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: ['message' => ['text' => 'Снова привет']],
+            receivedAt: Carbon::parse('2026-04-12 15:25:00'),
+        );
+
+        app(StoreInboundMessageAction::class)->handle($channel, $olderInbound);
+        app(StoreInboundMessageAction::class)->handle($channel, $newerInbound);
+
+        $contact->refresh();
+        $identity->refresh();
+
+        $this->assertSame('Более новое имя', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->first_name_source);
+        $this->assertSame('Более новое имя', $identity->display_name);
+        $this->assertSame('newer_username', $identity->external_username);
+        $this->assertDatabaseCount('messages', 2);
+    }
+
     public function test_store_inbound_message_keeps_confirmed_first_name_and_refreshes_identity_display_name(): void
     {
         $channel = Channel::factory()->create([
@@ -1757,6 +1822,137 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame('2026-03-28 20:00:00', $dialog->phone_confirmed_at?->format('Y-m-d H:i:s'));
     }
 
+    public function test_store_inbound_system_event_persists_and_updates_dialog_block_state(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        [$contact, $identity, $dialog] = $this->createLiveReadyContact($channel, 'telegram-unsub-1');
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundSystemEventMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-unsub-block-1',
+                systemEventCode: IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER,
+                receivedAt: Carbon::parse('2026-04-14 12:00:00'),
+                externalUserId: $identity->external_user_id,
+                externalChatId: $dialog->external_chat_id,
+            ),
+        );
+
+        $this->assertInstanceOf(StoredInboundMessageResult::class, $storedResult);
+        $this->assertSame(Message::KIND_INBOUND_SYSTEM_EVENT, $storedResult->message->message_kind);
+        $this->assertSame(Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER, $storedResult->message->system_event_code);
+        $this->assertSame(Message::SENT_BY_TYPE_SYSTEM, $storedResult->message->sent_by_type);
+        $this->assertSame(Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION, $storedResult->message->sent_by_system_code);
+        $this->assertSame($contact->id, $storedResult->message->contact_id);
+        $this->assertSame($identity->id, $storedResult->message->contact_identity_id);
+        $this->assertSame($dialog->id, $storedResult->message->dialog_id);
+
+        $dialog->refresh();
+
+        $this->assertSame(Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER, $dialog->bot_subscription_status);
+        $this->assertSame('2026-04-14 12:00:00', $dialog->bot_subscription_changed_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($storedResult->message->id, $dialog->bot_subscription_source_message_id);
+    }
+
+    public function test_store_inbound_system_event_without_existing_identity_is_ignored_without_creating_entities(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundSystemEventMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-unsub-missing-identity',
+                systemEventCode: IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER,
+                receivedAt: Carbon::parse('2026-04-14 12:10:00'),
+                externalUserId: 'missing-user-1',
+                externalChatId: 'missing-user-1',
+            ),
+        );
+
+        $this->assertNull($storedResult);
+        $this->assertDatabaseCount('contacts', 0);
+        $this->assertDatabaseCount('contact_identities', 0);
+        $this->assertDatabaseCount('dialogs', 0);
+        $this->assertDatabaseCount('messages', 0);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.telegram_unsubscribe_ignored',
+        ]);
+    }
+
+    public function test_store_inbound_system_event_replay_is_idempotent(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        [, $identity, $dialog] = $this->createLiveReadyContact($channel, 'telegram-unsub-2');
+
+        $message = $this->makeInboundSystemEventMessage(
+            channel: $channel,
+            providerEventKey: 'telegram-unsub-block-replay',
+            systemEventCode: IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER,
+            receivedAt: Carbon::parse('2026-04-14 12:15:00'),
+            externalUserId: $identity->external_user_id,
+            externalChatId: $dialog->external_chat_id,
+        );
+
+        $firstResult = app(StoreInboundMessageAction::class)->handle($channel, $message);
+        $secondResult = app(StoreInboundMessageAction::class)->handle($channel, $message);
+
+        $this->assertInstanceOf(StoredInboundMessageResult::class, $firstResult);
+        $this->assertInstanceOf(StoredInboundMessageResult::class, $secondResult);
+        $this->assertTrue($firstResult->message->is($secondResult->message));
+        $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_store_inbound_system_event_stale_block_does_not_override_newer_unblock_state(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        [, $identity, $dialog] = $this->createLiveReadyContact($channel, 'telegram-unsub-3');
+
+        $newerUnblockResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundSystemEventMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-unsub-unblock-newer',
+                systemEventCode: IncomingBotMessage::SYSTEM_EVENT_BOT_UNBLOCKED_BY_USER,
+                receivedAt: Carbon::parse('2026-04-14 12:30:00'),
+                externalUserId: $identity->external_user_id,
+                externalChatId: $dialog->external_chat_id,
+            ),
+        );
+
+        $staleBlockResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundSystemEventMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-unsub-block-stale',
+                systemEventCode: IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER,
+                receivedAt: Carbon::parse('2026-04-14 12:20:00'),
+                externalUserId: $identity->external_user_id,
+                externalChatId: $dialog->external_chat_id,
+            ),
+        );
+
+        $this->assertInstanceOf(StoredInboundMessageResult::class, $newerUnblockResult);
+        $this->assertInstanceOf(StoredInboundMessageResult::class, $staleBlockResult);
+
+        $dialog->refresh();
+
+        $this->assertNull($dialog->bot_subscription_status);
+        $this->assertSame('2026-04-14 12:30:00', $dialog->bot_subscription_changed_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($newerUnblockResult->message->id, $dialog->bot_subscription_source_message_id);
+        $this->assertDatabaseCount('messages', 2);
+    }
+
     private function makeInboundUserMessage(
         Channel $channel,
         string $providerEventKey,
@@ -1783,6 +1979,38 @@ class StoreInboundMessageActionTest extends TestCase
             sharedContactUserId: null,
             rawPayload: ['message' => ['text' => $text]],
             receivedAt: $receivedAt,
+        );
+    }
+
+    private function makeInboundSystemEventMessage(
+        Channel $channel,
+        string $providerEventKey,
+        string $systemEventCode,
+        Carbon $receivedAt,
+        string $externalUserId,
+        string $externalChatId,
+    ): IncomingBotMessage {
+        return new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $externalChatId,
+            externalUserId: $externalUserId,
+            providerEventKey: $providerEventKey,
+            externalMessageId: null,
+            externalUsername: 'telegram_user_'.$externalUserId,
+            contactName: 'Тестовый контакт '.$externalUserId,
+            text: null,
+            inboundKind: IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: [
+                'my_chat_member' => [
+                    'old_chat_member' => ['status' => $systemEventCode === IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER ? 'member' : 'kicked'],
+                    'new_chat_member' => ['status' => $systemEventCode === IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER ? 'kicked' : 'member'],
+                ],
+            ],
+            receivedAt: $receivedAt,
+            systemEventCode: $systemEventCode,
         );
     }
 

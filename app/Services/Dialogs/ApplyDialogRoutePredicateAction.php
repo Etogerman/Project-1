@@ -14,6 +14,11 @@ class ApplyDialogRoutePredicateAction
     public function applyReady(Builder $query): Builder
     {
         return $query
+            ->where(function (Builder $query): void {
+                $query
+                    ->whereNull('bot_subscription_status')
+                    ->orWhere('bot_subscription_status', '!=', \App\Models\Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER);
+            })
             ->whereHas('channel', fn (Builder $query): Builder => $query
                 ->where('is_active', true)
                 ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
@@ -50,6 +55,7 @@ class ApplyDialogRoutePredicateAction
         return $query->where(function (Builder $query): void {
             $query
                 ->whereDoesntHave('channel')
+                ->orWhere('bot_subscription_status', \App\Models\Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER)
                 ->orWhereHas('channel', function (Builder $query): void {
                     $query
                         ->where('is_active', false)

@@ -284,6 +284,10 @@ class DialogResource extends Resource
             return null;
         }
 
+        if ($previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'Система';
+        }
+
         if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
             return 'Контакт';
         }
@@ -302,6 +306,10 @@ class DialogResource extends Resource
         $previewMessage = static::resolvePreviewMessage($record);
 
         if (! $previewMessage instanceof Message) {
+            return 'gray';
+        }
+
+        if ($previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
             return 'gray';
         }
 
@@ -327,7 +335,9 @@ class DialogResource extends Resource
         }
 
         $parts = [
-            $previewMessage->direction === Message::DIRECTION_INBOUND ? 'Входящее' : 'Исходящее',
+            $previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT
+                ? 'Системное'
+                : ($previewMessage->direction === Message::DIRECTION_INBOUND ? 'Входящее' : 'Исходящее'),
         ];
 
         if (filled($record->channel?->display_title)) {

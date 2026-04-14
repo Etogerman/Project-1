@@ -47,9 +47,13 @@ class StoreInboundMessageAction
         protected SyncDialogConfirmedPhoneAction $syncDialogConfirmedPhoneAction,
     ) {}
 
-    public function handle(Channel $channel, IncomingBotMessage $message): StoredInboundMessageResult
+    public function handle(Channel $channel, IncomingBotMessage $message): ?StoredInboundMessageResult
     {
-        return DB::transaction(function () use ($channel, $message): StoredInboundMessageResult {
+        return DB::transaction(function () use ($channel, $message): ?StoredInboundMessageResult {
+            if ($this->isInboundSystemEvent($message)) {
+                return $this->storeInboundSystemEvent($channel, $message);
+            }
+
             $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId)
                 ?? $this->resolveOrCreateContactIdentity($channel, $message);
 
@@ -153,6 +157,73 @@ class StoreInboundMessageAction
                 );
             }
         });
+    }
+
+    protected function storeInboundSystemEvent(Channel $channel, IncomingBotMessage $message): ?StoredInboundMessageResult
+    {
+        $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId);
+
+        if (! $identity instanceof ContactIdentity) {
+            $this->logIgnoredInboundSystemEvent($channel, $message, 'identity_missing');
+
+            return null;
+        }
+
+        $dialog = $this->findExistingDialogForIdentity($channel, $identity);
+
+        if (! $dialog instanceof Dialog) {
+            $this->logIgnoredInboundSystemEvent($channel, $message, 'dialog_missing');
+
+            return null;
+        }
+
+        if (filled($message->providerEventKey)) {
+            $existingMessage = $this->findExistingInboundMessage($channel, $message->providerEventKey);
+
+            if ($existingMessage !== null) {
+                $existingMessage->loadMissing(['contact', 'contactIdentity', 'dialog']);
+
+                $this->syncStoredInboundMessageMetadata($channel, $identity->contact, $existingMessage, $message);
+                $this->syncDialogBotSubscriptionState($existingMessage);
+
+                return new StoredInboundMessageResult(message: $existingMessage);
+            }
+        }
+
+        try {
+            $storedMessage = Message::query()->create([
+                'contact_id' => $identity->contact_id,
+                'contact_identity_id' => $identity->id,
+                'channel_id' => $channel->id,
+                'direction' => Message::DIRECTION_INBOUND,
+                'message_kind' => $this->resolveInboundMessageKind($message),
+                'system_event_code' => $this->resolveInboundSystemEventCode($message),
+                'provider_event_key' => $message->providerEventKey,
+                'external_chat_id' => $message->externalChatId,
+                'external_message_id' => $message->externalMessageId,
+                'text' => $message->text,
+                'message_parameter' => $message->messageParameter,
+                'raw_payload' => $message->rawPayload,
+                'received_at' => $message->receivedAt,
+            ]);
+
+            $this->syncStoredInboundMessageMetadata($channel, $identity->contact, $storedMessage, $message);
+            $this->syncDialogBotSubscriptionState($storedMessage);
+
+            return new StoredInboundMessageResult(message: $storedMessage);
+        } catch (QueryException $exception) {
+            if (! filled($message->providerEventKey) || ! $this->wasUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+
+            $existingMessage = $this->findExistingInboundMessage($channel, $message->providerEventKey) ?? throw $exception;
+            $existingMessage->loadMissing(['contact', 'contactIdentity', 'dialog']);
+
+            $this->syncStoredInboundMessageMetadata($channel, $identity->contact, $existingMessage, $message);
+            $this->syncDialogBotSubscriptionState($existingMessage);
+
+            return new StoredInboundMessageResult(message: $existingMessage);
+        }
     }
 
     protected function findContactIdentityForChannel(Channel $channel, ?string $externalUserId): ?ContactIdentity
@@ -309,6 +380,14 @@ class StoreInboundMessageAction
         }
     }
 
+    protected function findExistingDialogForIdentity(Channel $channel, ContactIdentity $identity): ?Dialog
+    {
+        return Dialog::query()
+            ->where('contact_id', $identity->contact_id)
+            ->where('channel_id', $channel->id)
+            ->first();
+    }
+
     protected function findExistingInboundMessage(Channel $channel, string $providerEventKey): ?Message
     {
         return Message::query()
@@ -316,6 +395,26 @@ class StoreInboundMessageAction
             ->where('direction', Message::DIRECTION_INBOUND)
             ->where('provider_event_key', $providerEventKey)
             ->first();
+    }
+
+    protected function logIgnoredInboundSystemEvent(
+        Channel $channel,
+        IncomingBotMessage $message,
+        string $reason,
+    ): void {
+        $this->channelActivityLogger->info(
+            $channel,
+            'contact.telegram_unsubscribe_ignored',
+            'Telegram unsubscribe system event проигнорирован: не найден действующий route context.',
+            [
+                'channel_id' => $channel->id,
+                'reason' => $reason,
+                'provider_event_key' => $message->providerEventKey,
+                'external_user_id' => $message->externalUserId,
+                'external_chat_id' => $message->externalChatId,
+                'system_event_code' => $message->systemEventCode,
+            ],
+        );
     }
 
     protected function wasUniqueConstraintViolation(QueryException $exception): bool
@@ -391,9 +490,11 @@ class StoreInboundMessageAction
                 return true;
             }
 
-            if ($candidateReceivedAt->lte($currentReceivedAt)) {
+            if ($candidateReceivedAt->lt($currentReceivedAt)) {
                 return false;
             }
+
+            return $this->isSameOrNewerInboundProfileTieBreakCandidate($candidate, $current);
         } elseif ($candidateReceivedAt !== null) {
             return true;
         } elseif ($currentReceivedAt !== null) {
@@ -403,11 +504,52 @@ class StoreInboundMessageAction
         return true;
     }
 
+    protected function isSameOrNewerInboundProfileTieBreakCandidate(
+        IncomingBotMessage $candidate,
+        Message $current,
+    ): bool {
+        $candidateSequence = $this->normalizeInboundProfileSequence($candidate->providerEventKey);
+        $currentSequence = $this->normalizeInboundProfileSequence($current->provider_event_key);
+
+        if ($candidateSequence !== null && $currentSequence !== null) {
+            return $candidateSequence >= $currentSequence;
+        }
+
+        return false;
+    }
+
+    protected function normalizeInboundProfileSequence(?string $value): ?int
+    {
+        if (! filled($value) || ! ctype_digit($value)) {
+            return null;
+        }
+
+        return (int) $value;
+    }
+
+    protected function isInboundSystemEvent(IncomingBotMessage $message): bool
+    {
+        return $message->inboundKind === IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT;
+    }
+
     protected function resolveInboundMessageKind(IncomingBotMessage $message): string
     {
+        if ($message->inboundKind === IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT) {
+            return Message::KIND_INBOUND_SYSTEM_EVENT;
+        }
+
         return $message->inboundKind === IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
             ? Message::KIND_INBOUND_CONTACT_SHARE
             : Message::KIND_INBOUND_USER;
+    }
+
+    protected function resolveInboundSystemEventCode(IncomingBotMessage $message): ?string
+    {
+        return match ($message->systemEventCode) {
+            IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER => Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER,
+            IncomingBotMessage::SYSTEM_EVENT_BOT_UNBLOCKED_BY_USER => Message::SYSTEM_EVENT_CODE_BOT_UNBLOCKED_BY_USER,
+            default => null,
+        };
     }
 
     protected function syncStoredInboundMessageMetadata(
@@ -428,8 +570,109 @@ class StoreInboundMessageAction
             $channel,
             $storedMessage->contactIdentity,
             $storedMessage->external_chat_id ?? $message->externalChatId,
-            Message::SENT_BY_TYPE_CONTACT,
+            $this->resolveInboundSentByType($message),
+            sentBySystemCode: $this->resolveInboundSentBySystemCode($message),
         );
+    }
+
+    protected function resolveInboundSentByType(IncomingBotMessage $message): string
+    {
+        return $message->inboundKind === IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT
+            ? Message::SENT_BY_TYPE_SYSTEM
+            : Message::SENT_BY_TYPE_CONTACT;
+    }
+
+    protected function resolveInboundSentBySystemCode(IncomingBotMessage $message): ?string
+    {
+        return $message->inboundKind === IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT
+            ? Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION
+            : null;
+    }
+
+    protected function syncDialogBotSubscriptionState(Message $storedMessage): void
+    {
+        if ($storedMessage->message_kind !== Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return;
+        }
+
+        $storedMessage->loadMissing('dialog');
+
+        $dialog = $storedMessage->dialog;
+
+        if (! $dialog instanceof Dialog) {
+            return;
+        }
+
+        $lockedDialog = Dialog::query()
+            ->whereKey($dialog->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $lockedDialog instanceof Dialog) {
+            return;
+        }
+
+        if (! $this->isSameOrNewerDialogSubscriptionCandidate($storedMessage, $lockedDialog)) {
+            return;
+        }
+
+        $payload = [
+            'bot_subscription_status' => $this->resolveDialogBotSubscriptionStatus($storedMessage),
+            'bot_subscription_changed_at' => $storedMessage->received_at,
+            'bot_subscription_source_message_id' => $storedMessage->id,
+        ];
+
+        if (
+            $lockedDialog->bot_subscription_status === $payload['bot_subscription_status']
+            && $this->normalizeComparableDateTime($lockedDialog->bot_subscription_changed_at) === $this->normalizeComparableDateTime($payload['bot_subscription_changed_at'])
+            && $lockedDialog->bot_subscription_source_message_id === $payload['bot_subscription_source_message_id']
+        ) {
+            return;
+        }
+
+        $lockedDialog->forceFill($payload)->save();
+    }
+
+    protected function resolveDialogBotSubscriptionStatus(Message $storedMessage): ?string
+    {
+        return $storedMessage->system_event_code === Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER
+            ? Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER
+            : null;
+    }
+
+    protected function isSameOrNewerDialogSubscriptionCandidate(
+        Message $candidate,
+        Dialog $currentDialog,
+    ): bool {
+        $candidateReceivedAt = $candidate->received_at;
+        $currentChangedAt = $currentDialog->bot_subscription_changed_at;
+
+        if ($candidateReceivedAt !== null && $currentChangedAt !== null) {
+            if ($candidateReceivedAt->gt($currentChangedAt)) {
+                return true;
+            }
+
+            if ($candidateReceivedAt->lt($currentChangedAt)) {
+                return false;
+            }
+        } elseif ($candidateReceivedAt !== null) {
+            return true;
+        } elseif ($currentChangedAt !== null) {
+            return false;
+        }
+
+        if ($currentDialog->bot_subscription_source_message_id !== null) {
+            return $candidate->id >= $currentDialog->bot_subscription_source_message_id;
+        }
+
+        return true;
+    }
+
+    protected function normalizeComparableDateTime(mixed $value): ?string
+    {
+        return $value instanceof \DateTimeInterface
+            ? $value->format('Y-m-d H:i:s')
+            : null;
     }
 
     protected function syncDialogConfirmedPhoneIfNeeded(

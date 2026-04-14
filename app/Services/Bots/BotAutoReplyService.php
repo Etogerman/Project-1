@@ -15,9 +15,8 @@ class BotAutoReplyService
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
         protected ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
+        protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
-        protected TelegramBotApiService $telegramBotApiService,
-        protected MaxBotApiService $maxBotApiService,
     ) {}
 
     public function handle(Message $storedMessage): void
@@ -284,23 +283,45 @@ class BotAutoReplyService
                 'contact_has_phone' => $contactHasPhone,
             ]);
 
-            $deliveryResult = match ($channel->platform) {
-                \App\Models\Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
-                    $channel,
-                    $externalChatId,
-                    $externalUserId,
+            $sendResult = $routeDialog instanceof Dialog
+                ? $this->sendBotDialogTextAction->handleDialog(
+                    $routeDialog,
                     $replyText,
                     $this->buildTelegramReplyMarkup($matchedRule, $channel),
-                ),
-                \App\Models\Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
-                    $channel,
-                    $externalChatId,
-                    $externalUserId,
-                    $replyText,
                     $this->buildMaxAttachments($matchedRule, $channel),
-                ),
-                default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-            };
+                )
+                : $this->sendBotDialogTextAction->handleMessage(
+                    $storedMessage,
+                    $replyText,
+                    telegramReplyMarkup: $this->buildTelegramReplyMarkup($matchedRule, $channel),
+                    maxAttachments: $this->buildMaxAttachments($matchedRule, $channel),
+                );
+
+            if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+                $this->channelActivityLogger->info(
+                    $channel,
+                    'bot.reply_skipped_dialog_not_sendable',
+                    'Автоответ не отправлен: диалог сейчас недоступен для отправки.',
+                    $baseContext + [
+                        'auto_reply_source' => $autoReplySource,
+                        'button_type' => $buttonType,
+                        'match_scope' => $matchedRule->match_scope,
+                        'contact_phone_condition' => $matchedRule->contact_phone_condition,
+                        'rule_id' => $matchedRule->id,
+                        'rule_name' => $matchedRule->display_name,
+                        'dialog_id' => $sendResult->dialog?->id ?? $routeDialog?->id ?? $storedMessage->dialog_id,
+                        'external_chat_id' => $sendResult->dialog?->external_chat_id ?? $externalChatId,
+                        'external_user_id' => $sendResult->dialog?->currentContactIdentity?->external_user_id ?? $externalUserId,
+                        'route_status_code' => $sendResult->routeStatus->code,
+                        'blocked_reason' => $sendResult->routeStatus->blockedReason,
+                    ],
+                );
+
+                return;
+            }
+
+            $deliveryResult = $sendResult->deliveryResult;
+            $routeDialog = $sendResult->dialog ?? $routeDialog;
 
             $this->storeOutboundAutoReplyMessageAction->handle(
                 $channel,
