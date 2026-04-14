@@ -72,6 +72,14 @@ class BuildBitrix24OpenLinesMessagePayloadAction
             return 'Клиент поделился номером телефона';
         }
 
+        if ($message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return match ($message->system_event_code) {
+                Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER => 'Система: Клиент заблокировал бота',
+                Message::SYSTEM_EVENT_CODE_BOT_UNBLOCKED_BY_USER => 'Система: Клиент разблокировал бота',
+                default => 'Система: Служебное событие канала',
+            };
+        }
+
         return trim((string) $message->text);
     }
 

@@ -237,6 +237,49 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
     }
 
+    public function test_store_inbound_system_event_queues_live_export_job_for_ready_bitrix_contact(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog();
+        $channel = $dialog->channel()->firstOrFail();
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: (string) $dialog->external_chat_id,
+                externalUserId: (string) $dialog->currentContactIdentity()->firstOrFail()->external_user_id,
+                providerEventKey: 'tg-system-live-101',
+                externalMessageId: null,
+                externalUsername: 'live_user',
+                contactName: 'Live Contact',
+                text: null,
+                inboundKind: IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['my_chat_member' => ['status' => 'kicked']],
+                receivedAt: Carbon::parse('2026-04-01 12:01:00', 'Europe/Moscow'),
+                systemEventCode: IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER,
+            ),
+        );
+
+        $this->assertNotNull($storedResult);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($storedResult): bool {
+            return $job->messageId === $storedResult->message->id
+                && $job->retryAfterSync === false;
+        });
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $storedResult->message->id,
+            'contact_id' => $dialog->contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+        ]);
+    }
+
     public function test_live_export_action_marks_message_as_exported_and_updates_dialog_live_state(): void
     {
         $this->makeActiveConnection();
@@ -555,6 +598,84 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             return ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Клиент поделился номером телефона';
         });
+    }
+
+    public function test_blocked_system_event_is_exported_as_system_text(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_SYSTEM_EVENT,
+            'system_event_code' => Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION,
+            'text' => null,
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        Http::assertSent(function (Request $request): bool {
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Система: Клиент заблокировал бота';
+        });
+    }
+
+    public function test_unblocked_system_event_payload_uses_system_text(): void
+    {
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_SYSTEM_EVENT,
+            'system_event_code' => Message::SYSTEM_EVENT_CODE_BOT_UNBLOCKED_BY_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION,
+            'text' => null,
+            'received_at' => Carbon::parse('2026-04-01 13:48:00', 'Europe/Moscow'),
+        ]);
+
+        $payload = app(BuildBitrix24OpenLinesMessagePayloadAction::class)->handle(
+            $message,
+            new Bitrix24OpenLinesRouteData(
+                platform: Channel::PLATFORM_TELEGRAM,
+                connectorCode: 'abrikosoff_telegram',
+                lineId: 'line-telegram',
+            ),
+        );
+
+        $this->assertSame('Система: Клиент разблокировал бота', $payload['MESSAGES'][0]['message']['text'] ?? null);
+    }
+
+    public function test_unknown_system_event_is_not_queued_for_live_export(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_SYSTEM_EVENT,
+            'system_event_code' => 'unsupported_system_event',
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION,
+            'text' => null,
+        ]);
+
+        $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
+
+        $this->assertFalse($result->queued);
+        $this->assertFalse($result->ready);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        $this->assertDatabaseMissing('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+        ]);
     }
 
     public function test_missing_openlines_route_config_marks_export_failed_without_sending_request(): void

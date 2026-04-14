@@ -141,7 +141,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
-    public function test_telegram_my_chat_member_webhook_stores_system_event_without_queueing_runtime_jobs(): void
+    public function test_telegram_my_chat_member_webhook_stores_system_event_and_queues_live_export_for_ready_dialog(): void
     {
         Queue::fake();
         Http::fake();
@@ -153,7 +153,11 @@ class BotWebhookAutoReplyTest extends TestCase
                 'webhook_secret' => 'telegram-secret',
             ],
         ]);
-        $contact = Contact::factory()->create();
+        $contact = Contact::factory()->create([
+            'bitrix24_contact_id' => 'B24-CONTACT-TG-200',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_sync_pending' => false,
+        ]);
         $identity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
@@ -187,7 +191,9 @@ class BotWebhookAutoReplyTest extends TestCase
         Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
         Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Queue::assertNotPushed(ProcessScenarioStartJob::class);
-        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job): bool {
+            return $job->retryAfterSync === false;
+        });
         Http::assertNothingSent();
 
         $storedMessage = Message::query()->firstOrFail();
@@ -208,6 +214,12 @@ class BotWebhookAutoReplyTest extends TestCase
         $dialog->refresh();
 
         $this->assertSame(Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER, $dialog->bot_subscription_status);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $storedMessage->id,
+            'contact_id' => $contact->id,
+            'export_mode' => \App\Models\Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => \App\Models\Bitrix24MessageExport::STATUS_PENDING,
+        ]);
     }
 
     public function test_max_webhook_endpoint_accepts_valid_event_and_queues_auto_reply(): void
