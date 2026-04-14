@@ -18,6 +18,8 @@ final readonly class DialogRouteStatusData
 
     public const CODE_UNSUPPORTED_PLATFORM = 'unsupported_platform';
 
+    public const CODE_BLOCKED_BY_USER = 'blocked_by_user';
+
     public const CODE_READY = 'ready';
 
     public function __construct(

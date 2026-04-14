@@ -141,6 +141,10 @@ class LoadContactDialogsOverviewAction
             return null;
         }
 
+        if ($previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'Система';
+        }
+
         if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
             return 'Контакт';
         }
@@ -156,6 +160,10 @@ class LoadContactDialogsOverviewAction
     {
         if (! $previewMessage instanceof Message) {
             return null;
+        }
+
+        if ($previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'gray';
         }
 
         if ($previewMessage->direction === Message::DIRECTION_INBOUND) {

@@ -23,6 +23,8 @@ class Dialog extends Model
 
     public const BITRIX24_LIVE_STATUS_CLOSED = 'closed';
 
+    public const BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER = 'blocked_by_user';
+
     /**
      * @var list<string>
      */
@@ -31,6 +33,9 @@ class Dialog extends Model
         'channel_id',
         'current_contact_identity_id',
         'pending_auto_reply_source_message_id',
+        'bot_subscription_status',
+        'bot_subscription_changed_at',
+        'bot_subscription_source_message_id',
         'external_chat_id',
         'bitrix24_live_chat_id',
         'bitrix24_live_status',
@@ -51,11 +56,17 @@ class Dialog extends Model
     protected $casts = [
         'bitrix24_live_last_exported_at' => 'datetime',
         'bitrix24_live_last_imported_at' => 'datetime',
+        'bot_subscription_changed_at' => 'datetime',
         'phone_confirmed_at' => 'datetime',
         'last_message_at' => 'datetime',
         'last_inbound_at' => 'datetime',
         'last_outbound_at' => 'datetime',
     ];
+
+    public function isBotBlockedByUser(): bool
+    {
+        return $this->bot_subscription_status === self::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER;
+    }
 
     public function isBitrix24LiveActive(): bool
     {
@@ -80,6 +91,11 @@ class Dialog extends Model
     public function pendingAutoReplySourceMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'pending_auto_reply_source_message_id');
+    }
+
+    public function botSubscriptionSourceMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'bot_subscription_source_message_id');
     }
 
     public function messages(): HasMany

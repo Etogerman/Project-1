@@ -42,6 +42,7 @@ class MessageFactory extends Factory
             },
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
+            'system_event_code' => null,
             'sent_by_type' => null,
             'sent_by_user_id' => null,
             'sent_by_system_code' => null,

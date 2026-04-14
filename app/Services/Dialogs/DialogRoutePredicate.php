@@ -48,6 +48,11 @@ class DialogRoutePredicate
         return filled($dialog->external_chat_id);
     }
 
+    public function isBlockedByUser(Dialog $dialog): bool
+    {
+        return $dialog->isBotBlockedByUser();
+    }
+
     public function hasMaxRouteSource(Dialog $dialog): bool
     {
         return filled($dialog->external_chat_id) || filled($dialog->currentContactIdentity?->external_user_id);
@@ -84,6 +89,7 @@ class DialogRoutePredicate
             && $this->isBotChannel($channel)
             && $this->hasConfiguredToken($channel)
             && $this->supportsPlatform($channel)
+            && ! $this->isBlockedByUser($dialog)
             && $this->hasSupportedRouteSource($dialog);
     }
 }

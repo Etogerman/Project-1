@@ -179,7 +179,10 @@ class BotWebhookController extends Controller
             }
 
             $storedResult = $storeInboundMessageAction->handle($channel, $message);
-            $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult, $deliveryLagSeconds);
+
+            if ($storedResult !== null) {
+                $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult, $deliveryLagSeconds);
+            }
         }
 
         return response()->json([
@@ -348,7 +351,10 @@ class BotWebhookController extends Controller
         }
 
         $storedResult = $storeInboundMessageAction->handle($channel, $message);
-        $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult);
+
+        if ($storedResult !== null) {
+            $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult);
+        }
 
         return response()->json([
             'ok' => true,
@@ -488,6 +494,10 @@ class BotWebhookController extends Controller
     {
         if (isset($payload['callback_query'])) {
             return 'callback_query';
+        }
+
+        if (isset($payload['my_chat_member'])) {
+            return 'my_chat_member';
         }
 
         return isset($payload['message']) ? 'message' : null;

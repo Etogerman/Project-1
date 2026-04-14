@@ -140,6 +140,75 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_telegram_my_chat_member_webhook_stores_system_event_without_queueing_runtime_jobs(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '200',
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramMyChatMemberPayload(
+            userId: 200,
+            chatId: 200,
+            oldStatus: 'member',
+            newStatus: 'kicked',
+            updateId: 2010,
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessScenarioStartJob::class);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        Http::assertNothingSent();
+
+        $storedMessage = Message::query()->firstOrFail();
+
+        $this->assertSame(Message::KIND_INBOUND_SYSTEM_EVENT, $storedMessage->message_kind);
+        $this->assertSame(Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER, $storedMessage->system_event_code);
+        $this->assertSame(Message::SENT_BY_TYPE_SYSTEM, $storedMessage->sent_by_type);
+        $this->assertSame(Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION, $storedMessage->sent_by_system_code);
+        $this->assertSame('2010', $storedMessage->provider_event_key);
+        $this->assertDatabaseCount('contacts', 1);
+        $this->assertDatabaseCount('contact_identities', 1);
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_queued',
+        ]);
+
+        $dialog->refresh();
+
+        $this->assertSame(Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER, $dialog->bot_subscription_status);
+    }
+
     public function test_max_webhook_endpoint_accepts_valid_event_and_queues_auto_reply(): void
     {
         Queue::fake();
@@ -3761,6 +3830,41 @@ class BotWebhookAutoReplyTest extends TestCase
         }
 
         return $payload;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function telegramMyChatMemberPayload(
+        int|string $userId = 200,
+        int|string $chatId = 200,
+        string $oldStatus = 'member',
+        string $newStatus = 'kicked',
+        int $date = 1_711_539_200,
+        int|string $updateId = 2010,
+        ?string $username = 'telegram_user',
+    ): array {
+        return [
+            'update_id' => $updateId,
+            'my_chat_member' => [
+                'date' => $date,
+                'from' => [
+                    'id' => $userId,
+                    'username' => $username,
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => $chatId,
+                    'type' => 'private',
+                ],
+                'old_chat_member' => [
+                    'status' => $oldStatus,
+                ],
+                'new_chat_member' => [
+                    'status' => $newStatus,
+                ],
+            ],
+        ];
     }
 
     /**

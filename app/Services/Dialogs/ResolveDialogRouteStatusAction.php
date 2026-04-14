@@ -10,6 +10,8 @@ class ResolveDialogRouteStatusAction
 {
     private const GENERIC_BLOCKED_REASON = 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.';
 
+    private const BLOCKED_BY_USER_REASON = 'Клиент заблокировал бота в Telegram. Новые сообщения в этот диалог сейчас отправлять нельзя.';
+
     public function __construct(
         private readonly DialogRoutePredicate $dialogRoutePredicate,
     ) {}
@@ -26,6 +28,16 @@ class ResolveDialogRouteStatusAction
                 'Канал не найден',
                 'gray',
                 false,
+            );
+        }
+
+        if ($this->dialogRoutePredicate->isBlockedByUser($dialog)) {
+            return new DialogRouteStatusData(
+                code: DialogRouteStatusData::CODE_BLOCKED_BY_USER,
+                label: 'Бот заблокирован',
+                tone: 'danger',
+                isSendable: false,
+                blockedReason: self::BLOCKED_BY_USER_REASON,
             );
         }
 
