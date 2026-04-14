@@ -414,6 +414,71 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertDatabaseCount('messages', 2);
     }
 
+    public function test_store_inbound_message_same_second_telegram_update_id_refreshes_auto_name_state(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Старое имя',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'auto-same-second-user-1',
+            'display_name' => 'Старый профиль',
+            'external_username' => 'initial_username',
+        ]);
+
+        $olderInbound = new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: 'auto-same-second-chat-1',
+            externalUserId: 'auto-same-second-user-1',
+            providerEventKey: '101',
+            externalMessageId: 'same-second-older',
+            externalUsername: 'older_username',
+            contactName: 'Более старое имя',
+            text: 'Привет',
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: ['message' => ['text' => 'Привет']],
+            receivedAt: Carbon::parse('2026-04-12 15:25:00'),
+        );
+
+        $newerInbound = new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: 'auto-same-second-chat-1',
+            externalUserId: 'auto-same-second-user-1',
+            providerEventKey: '102',
+            externalMessageId: 'same-second-newer',
+            externalUsername: 'newer_username',
+            contactName: 'Более новое имя',
+            text: 'Снова привет',
+            inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: ['message' => ['text' => 'Снова привет']],
+            receivedAt: Carbon::parse('2026-04-12 15:25:00'),
+        );
+
+        app(StoreInboundMessageAction::class)->handle($channel, $olderInbound);
+        app(StoreInboundMessageAction::class)->handle($channel, $newerInbound);
+
+        $contact->refresh();
+        $identity->refresh();
+
+        $this->assertSame('Более новое имя', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->first_name_source);
+        $this->assertSame('Более новое имя', $identity->display_name);
+        $this->assertSame('newer_username', $identity->external_username);
+        $this->assertDatabaseCount('messages', 2);
+    }
+
     public function test_store_inbound_message_keeps_confirmed_first_name_and_refreshes_identity_display_name(): void
     {
         $channel = Channel::factory()->create([

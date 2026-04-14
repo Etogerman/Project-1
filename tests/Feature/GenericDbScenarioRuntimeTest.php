@@ -183,6 +183,157 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSentCount(3);
     }
 
+    public function test_database_backed_scenario_suppresses_next_outbound_when_dialog_is_blocked_mid_run(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7101]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7102]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('vip_ibiza_apply', $this->linearSchema('vip_ibiza_apply'));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start vip_ibiza_apply',
+            'message_parameter' => 'vip_ibiza_apply',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $firstAnswer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Анна',
+        ]);
+
+        (new ProcessScenarioInboundJob($firstAnswer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('ask_budget', $run->current_step);
+        $this->assertSame('Анна', data_get($run->state_payload, 'run.first_name'));
+        $this->assertCount(2, $outboundMessages);
+        Http::assertSentCount(2);
+    }
+
+    public function test_database_backed_scenario_stores_outbound_against_current_dialog_route_source_for_stale_trigger_message(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7151]])
+                ->push(['ok' => true, 'result' => ['message_id' => 7152]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $contact = Contact::factory()->create([
+            'is_auto_reply_enabled' => true,
+        ]);
+        $legacyIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'legacy-user-500',
+        ]);
+        $currentIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'current-user-500',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $currentIdentity->id,
+            'external_chat_id' => 'telegram-chat-799',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        $scenario = $this->createPublishedScenario('vip_ibiza_apply', $this->linearSchema('vip_ibiza_apply'));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $legacyIdentity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => 'telegram-chat-700',
+            'text' => '/start vip_ibiza_apply',
+            'message_parameter' => 'vip_ibiza_apply',
+            'raw_payload' => [
+                'message' => [
+                    'text' => '/start vip_ibiza_apply',
+                ],
+            ],
+        ]);
+
+        (new ProcessScenarioStartJob($message->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertCount(2, $outboundMessages);
+        $this->assertSame($dialog->id, $outboundMessages[0]->dialog_id);
+        $this->assertSame($currentIdentity->id, $outboundMessages[0]->contact_identity_id);
+        $this->assertSame('telegram-chat-799', $outboundMessages[0]->external_chat_id);
+        $this->assertSame($dialog->id, $outboundMessages[1]->dialog_id);
+        $this->assertSame($currentIdentity->id, $outboundMessages[1]->contact_identity_id);
+        $this->assertSame('telegram-chat-799', $outboundMessages[1]->external_chat_id);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === 'telegram-chat-799'
+            && $request['text'] === 'Добро пожаловать в сценарий.');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === 'telegram-chat-799'
+            && $request['text'] === 'Как вас зовут?');
+    }
+
     public function test_database_backed_scenario_waits_for_contact_share_and_completes_phone_capture_flow(): void
     {
         Http::fake([

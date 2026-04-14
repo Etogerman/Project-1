@@ -8,9 +8,8 @@ use App\Models\Contact;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
-use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StorePhoneCaptureConfirmationAction;
-use App\Services\Bots\TelegramBotApiService;
 use App\Services\Dialogs\ResolveDialogRouteSourceAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -19,7 +18,6 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
-use InvalidArgumentException;
 use Throwable;
 
 class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
@@ -55,8 +53,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
     }
 
     public function handle(
-        TelegramBotApiService $telegramBotApiService,
-        MaxBotApiService $maxBotApiService,
+        SendBotDialogTextAction $sendBotDialogTextAction,
         StorePhoneCaptureConfirmationAction $storePhoneCaptureConfirmationAction,
         ChannelActivityLogger $channelActivityLogger,
         ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
@@ -126,22 +123,28 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             $confirmationText = $this->resolvePhoneCaptureReplyText($contact, $resolveNextDataCollectionFieldAction);
 
             try {
-                $deliveryResult = match ($channel->platform) {
-                    Channel::PLATFORM_TELEGRAM => $telegramBotApiService->sendTextMessage(
+                $sendResult = $sendBotDialogTextAction->handleDialog(
+                    $routeDialog,
+                    $confirmationText,
+                    ['remove_keyboard' => true],
+                );
+
+                if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+                    $channelActivityLogger->info(
                         $channel,
-                        $routeDialog->external_chat_id,
-                        $routeDialog->currentContactIdentity?->external_user_id,
-                        $confirmationText,
-                        ['remove_keyboard' => true],
-                    ),
-                    Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
-                        $channel,
-                        $routeDialog->external_chat_id,
-                        $routeDialog->currentContactIdentity?->external_user_id,
-                        $confirmationText,
-                    ),
-                    default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-                };
+                        'contact.phone_capture_confirmation_skipped_dialog_not_sendable',
+                        'Подтверждение после получения номера не отправлено: диалог сейчас недоступен для отправки.',
+                        $this->baseContext($message, $channel, $routeDialog->id) + [
+                            'route_status_code' => $sendResult->routeStatus->code,
+                            'blocked_reason' => $sendResult->routeStatus->blockedReason,
+                            'phone_capture_status' => $this->phoneCaptureStatus,
+                        ],
+                    );
+
+                    return;
+                }
+
+                $deliveryResult = $sendResult->deliveryResult;
 
                 $storePhoneCaptureConfirmationAction->handle($routeDialog, $message, $deliveryResult);
                 $channel->markReplySent();

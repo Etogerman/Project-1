@@ -7,9 +7,8 @@ use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
-use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
-use App\Services\Bots\TelegramBotApiService;
 use App\Services\Dialogs\ResolveDialogRouteSourceAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -18,7 +17,6 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
-use InvalidArgumentException;
 use Throwable;
 
 class ProcessDataCollectionQuestionJob implements ShouldQueue
@@ -64,8 +62,7 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
     }
 
     public function handle(
-        TelegramBotApiService $telegramBotApiService,
-        MaxBotApiService $maxBotApiService,
+        SendBotDialogTextAction $sendBotDialogTextAction,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
@@ -177,29 +174,39 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         }
 
         try {
-            $deliveryResult = match ($channel->platform) {
-                Channel::PLATFORM_TELEGRAM => $telegramBotApiService->sendTextMessage(
+            $sendResult = $sendBotDialogTextAction->handleDialog(
+                $routeDialog,
+                $questionText,
+                $this->resolveTelegramReplyMarkup($contact),
+                $this->resolveMaxAttachments($contact),
+            );
+
+            if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+                $channelActivityLogger->info(
                     $channel,
-                    $routeDialog->external_chat_id,
-                    $routeDialog->currentContactIdentity?->external_user_id,
-                    $questionText,
-                    $this->resolveTelegramReplyMarkup($contact),
-                ),
-                Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
-                    $channel,
-                    $routeDialog->external_chat_id,
-                    $routeDialog->currentContactIdentity?->external_user_id,
-                    $questionText,
-                    $this->resolveMaxAttachments($contact),
-                ),
-                default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-            };
+                    'contact.data_collection_question_skipped_dialog_not_sendable',
+                    'Вопрос сбора профиля не отправлен: диалог сейчас недоступен для отправки.',
+                    [
+                        'contact_id' => $contact->id,
+                        'channel_id' => $channel->id,
+                        'message_id' => $message->id,
+                        'dialog_id' => $routeDialog->id,
+                        'current_field' => $contact->data_collection_current_field,
+                        'route_status_code' => $sendResult->routeStatus->code,
+                        'blocked_reason' => $sendResult->routeStatus->blockedReason,
+                    ],
+                );
+
+                return;
+            }
+
+            $deliveryResult = $sendResult->deliveryResult;
 
             $storeDataCollectionOutboundMessageAction->handle(
                 $message,
                 $deliveryResult,
                 Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
-                $routeDialog,
+                $sendResult->dialog ?? $routeDialog,
                 $currentField,
             );
 

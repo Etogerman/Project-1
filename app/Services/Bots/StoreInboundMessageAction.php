@@ -490,9 +490,11 @@ class StoreInboundMessageAction
                 return true;
             }
 
-            if ($candidateReceivedAt->lte($currentReceivedAt)) {
+            if ($candidateReceivedAt->lt($currentReceivedAt)) {
                 return false;
             }
+
+            return $this->isSameOrNewerInboundProfileTieBreakCandidate($candidate, $current);
         } elseif ($candidateReceivedAt !== null) {
             return true;
         } elseif ($currentReceivedAt !== null) {
@@ -500,6 +502,29 @@ class StoreInboundMessageAction
         }
 
         return true;
+    }
+
+    protected function isSameOrNewerInboundProfileTieBreakCandidate(
+        IncomingBotMessage $candidate,
+        Message $current,
+    ): bool {
+        $candidateSequence = $this->normalizeInboundProfileSequence($candidate->providerEventKey);
+        $currentSequence = $this->normalizeInboundProfileSequence($current->provider_event_key);
+
+        if ($candidateSequence !== null && $currentSequence !== null) {
+            return $candidateSequence >= $currentSequence;
+        }
+
+        return false;
+    }
+
+    protected function normalizeInboundProfileSequence(?string $value): ?int
+    {
+        if (! filled($value) || ! ctype_digit($value)) {
+            return null;
+        }
+
+        return (int) $value;
     }
 
     protected function isInboundSystemEvent(IncomingBotMessage $message): bool

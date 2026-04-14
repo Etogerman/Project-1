@@ -12,9 +12,8 @@ use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
-use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
-use App\Services\Bots\TelegramBotApiService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
@@ -39,8 +38,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         private readonly ScenarioConditionEvaluator $scenarioConditionEvaluator,
         private readonly ApplyScenarioTagEffectsAction $applyScenarioTagEffectsAction,
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
-        private readonly TelegramBotApiService $telegramBotApiService,
-        private readonly MaxBotApiService $maxBotApiService,
+        private readonly SendBotDialogTextAction $sendBotDialogTextAction,
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
         private readonly ExtractFirstNameAction $extractFirstNameAction,
         private readonly ApplyContactFirstNameAction $applyContactFirstNameAction,
@@ -597,45 +595,29 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         }
 
         $content = $this->prepareMessageContentAction->handle($text, $textFormat);
-        $deliveryResult = $this->deliverScenarioMessage($channel, $message, $content, $requestPhone, $removeTelegramKeyboard);
+
+        $sendResult = $this->sendBotDialogTextAction->handleMessage(
+            $message,
+            $content->transportText,
+            telegramReplyMarkup: $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard),
+            maxAttachments: $requestPhone ? $this->maxPhoneCaptureAttachments() : null,
+            textFormat: $content->textFormat,
+        );
+
+        if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+            return;
+        }
 
         $this->storeOutboundScenarioMessageAction->handle(
-            $channel,
-            $message,
-            $deliveryResult,
-            $this->systemCode(),
-            $content,
+            channel: $channel,
+            inboundMessage: $message,
+            deliveryResult: $sendResult->deliveryResult,
+            systemCode: $this->systemCode(),
+            routeDialog: $sendResult->dialog,
+            content: $content,
         );
 
         $channel->markReplySent();
-    }
-
-    private function deliverScenarioMessage(
-        Channel $channel,
-        Message $message,
-        PreparedMessageContentData $content,
-        bool $requestPhone = false,
-        bool $removeTelegramKeyboard = false,
-    ): \App\Data\Bots\AutoReplyDeliveryResult {
-        return match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
-                $channel,
-                $message->external_chat_id,
-                $message->contactIdentity?->external_user_id,
-                $content->transportText,
-                $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard),
-                $content->textFormat,
-            ),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
-                $channel,
-                $message->external_chat_id,
-                $message->contactIdentity?->external_user_id,
-                $content->transportText,
-                $requestPhone ? $this->maxPhoneCaptureAttachments() : null,
-                $content->textFormat,
-            ),
-            default => throw new RuntimeException("Scenario [{$this->code()}] does not support channel platform [{$channel->platform}]."),
-        };
     }
 
     /**

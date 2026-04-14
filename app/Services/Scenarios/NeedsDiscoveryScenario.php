@@ -8,9 +8,8 @@ use App\Models\Contact;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
-use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
-use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
@@ -32,8 +31,7 @@ class NeedsDiscoveryScenario implements ScenarioHandler
     }
 
     public function __construct(
-        private readonly TelegramBotApiService $telegramBotApiService,
-        private readonly MaxBotApiService $maxBotApiService,
+        private readonly SendBotDialogTextAction $sendBotDialogTextAction,
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
     ) {}
 
@@ -77,7 +75,7 @@ class NeedsDiscoveryScenario implements ScenarioHandler
             'state_payload' => [
                 'trigger_message_id' => $message->id,
                 'question_message_ids' => [
-                    self::STEP_PRIMARY_GOAL => $outboundQuestion->id,
+                    self::STEP_PRIMARY_GOAL => $outboundQuestion?->id,
                     self::STEP_MAIN_BLOCKER => null,
                 ],
                 'completion_message_id' => null,
@@ -145,7 +143,7 @@ class NeedsDiscoveryScenario implements ScenarioHandler
             $this->questionForStep(self::STEP_MAIN_BLOCKER),
         );
 
-        $updatedStatePayload['question_message_ids'][self::STEP_MAIN_BLOCKER] = $nextQuestion->id;
+        $updatedStatePayload['question_message_ids'][self::STEP_MAIN_BLOCKER] = $nextQuestion?->id;
 
         return new ScenarioInboundResult(
             consumed: true,
@@ -176,7 +174,7 @@ class NeedsDiscoveryScenario implements ScenarioHandler
             $this->completionMessage(),
         );
 
-        $updatedStatePayload['completion_message_id'] = $completionMessage->id;
+        $updatedStatePayload['completion_message_id'] = $completionMessage?->id;
 
         return new ScenarioInboundResult(
             consumed: true,
@@ -208,7 +206,7 @@ class NeedsDiscoveryScenario implements ScenarioHandler
         return $warmupRun instanceof ScenarioRun && ! $warmupRun->isActive();
     }
 
-    private function sendScenarioMessage(Message $inboundMessage, string $text): Message
+    private function sendScenarioMessage(Message $inboundMessage, string $text): ?Message
     {
         $channel = $inboundMessage->channel;
 
@@ -216,27 +214,18 @@ class NeedsDiscoveryScenario implements ScenarioHandler
             throw new InvalidArgumentException('Scenario inbound message does not have a channel relation.');
         }
 
-        $deliveryResult = match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
-                $channel,
-                $inboundMessage->external_chat_id,
-                $inboundMessage->contactIdentity?->external_user_id,
-                $text,
-            ),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
-                $channel,
-                $inboundMessage->external_chat_id,
-                $inboundMessage->contactIdentity?->external_user_id,
-                $text,
-            ),
-            default => throw new InvalidArgumentException("Unsupported scenario platform [{$channel->platform}]."),
-        };
+        $sendResult = $this->sendBotDialogTextAction->handleMessage($inboundMessage, $text);
+
+        if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+            return null;
+        }
 
         $outboundMessage = $this->storeOutboundScenarioMessageAction->handle(
-            $channel,
-            $inboundMessage,
-            $deliveryResult,
-            Message::SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY,
+            channel: $channel,
+            inboundMessage: $inboundMessage,
+            deliveryResult: $sendResult->deliveryResult,
+            systemCode: Message::SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY,
+            routeDialog: $sendResult->dialog,
         );
 
         $channel->markReplySent();

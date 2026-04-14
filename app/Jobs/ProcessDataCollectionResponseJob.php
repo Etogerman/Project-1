@@ -15,6 +15,7 @@ use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\SyncContactRussianRegionAction;
@@ -1712,25 +1713,39 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ?array $maxAttachments = null,
     ): void {
         try {
-            $deliveryResult = match ($channel->platform) {
-                Channel::PLATFORM_TELEGRAM => $telegramBotApiService->sendTextMessage(
-                    $channel,
-                    $message->external_chat_id,
-                    $message->contactIdentity?->external_user_id,
-                    $text,
-                    $telegramReplyMarkup,
-                ),
-                Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
-                    $channel,
-                    $message->external_chat_id,
-                    $message->contactIdentity?->external_user_id,
-                    $text,
-                    $maxAttachments,
-                ),
-                default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-            };
+            $sendResult = app(SendBotDialogTextAction::class)->handleMessage(
+                $message,
+                $text,
+                telegramReplyMarkup: $telegramReplyMarkup,
+                maxAttachments: $maxAttachments,
+            );
 
-            $storeDataCollectionOutboundMessageAction->handle($message, $deliveryResult, $messageKind);
+            if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+                $channelActivityLogger->info(
+                    $channel,
+                    'contact.data_collection_reply_skipped_dialog_not_sendable',
+                    'Сообщение сбора профиля не отправлено: диалог сейчас недоступен для отправки.',
+                    [
+                        'contact_id' => $message->contact_id,
+                        'channel_id' => $channel->id,
+                        'message_id' => $message->id,
+                        'dialog_id' => $sendResult->dialog?->id ?? $message->dialog_id,
+                        'message_kind' => $messageKind,
+                        'current_field' => $message->contact?->data_collection_current_field,
+                        'route_status_code' => $sendResult->routeStatus->code,
+                        'blocked_reason' => $sendResult->routeStatus->blockedReason,
+                    ],
+                );
+
+                return;
+            }
+
+            $storeDataCollectionOutboundMessageAction->handle(
+                $message,
+                $sendResult->deliveryResult,
+                $messageKind,
+                $sendResult->dialog,
+            );
 
             $channel->markReplySent();
 

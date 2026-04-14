@@ -17,9 +17,8 @@ class DispatchStoredInboundBotMessageAction
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
         protected DispatchStoredInboundScenarioAction $dispatchStoredInboundScenarioAction,
+        protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
-        protected TelegramBotApiService $telegramBotApiService,
-        protected MaxBotApiService $maxBotApiService,
     ) {}
 
     public function handle(
@@ -240,28 +239,34 @@ class DispatchStoredInboundBotMessageAction
      */
     protected function sendVipIbizaBusyStateReply(Channel $channel, Message $storedMessage, array $duplicateContext): void
     {
-        $storedMessage->loadMissing('contactIdentity');
+        $sendResult = $this->sendBotDialogTextAction->handleMessage(
+            $storedMessage,
+            self::VIP_IBIZA_BUSY_STATE_REPLY,
+        );
 
-        $deliveryResult = match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
+        if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+            $this->channelActivityLogger->info(
                 $channel,
-                $storedMessage->external_chat_id,
-                $storedMessage->contactIdentity?->external_user_id,
-                self::VIP_IBIZA_BUSY_STATE_REPLY,
-            ),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
-                $channel,
-                $storedMessage->external_chat_id,
-                $storedMessage->contactIdentity?->external_user_id,
-                self::VIP_IBIZA_BUSY_STATE_REPLY,
-            ),
-            default => throw new \InvalidArgumentException("VIP Ibiza busy-state reply is not supported for platform [{$channel->platform}]."),
-        };
+                'scenario.vip_ibiza_start_blocked_dialog_not_sendable',
+                'Deep link VIP Ibiza не отправил busy-state reply: диалог сейчас недоступен для отправки.',
+                $duplicateContext + [
+                    'dialog_id' => $sendResult->dialog?->id ?? $storedMessage->dialog_id,
+                    'route_status_code' => $sendResult->routeStatus->code,
+                    'blocked_reason' => $sendResult->routeStatus->blockedReason,
+                ],
+            );
+
+            return;
+        }
+
+        $deliveryResult = $sendResult->deliveryResult;
 
         $outboundMessage = $this->storeOutboundAutoReplyMessageAction->handle(
             $channel,
             $storedMessage,
             $deliveryResult,
+            null,
+            $sendResult->dialog,
         );
 
         $this->channelActivityLogger->info(
