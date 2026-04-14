@@ -70,6 +70,7 @@ class QueueMissedBitrix24OpenLinesRetryAction
             ->whereIn('messages.message_kind', [
                 Message::KIND_INBOUND_USER,
                 Message::KIND_INBOUND_CONTACT_SHARE,
+                Message::KIND_INBOUND_SYSTEM_EVENT,
             ])
             ->where(function ($query): void {
                 $query->whereNull('live_export.id')
