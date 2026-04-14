@@ -2,6 +2,8 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Data\Bots\BotDialogTextSendResult;
+use App\Data\Dialogs\DialogRouteStatusData;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Dialog;
@@ -103,7 +105,20 @@ class ProcessBitrix24OpenLinesWebhookAction
                     $messageData,
                 );
 
-                $externalMessageId = trim((string) ($deliveryResult->externalMessageId ?? ''));
+                if ($this->isBlockedDialogSkip($deliveryResult)) {
+                    $this->logBlockedDialogSkipped($event, $dialog, $messageData, $deliveryResult);
+
+                    continue;
+                }
+
+                if (! $deliveryResult->wasSent() || $deliveryResult->deliveryResult === null) {
+                    throw new Bitrix24ApiException(
+                        $deliveryResult->routeStatus->blockedReason
+                            ?? 'Bitrix24 Open Lines dialog is not sendable for messenger delivery.'
+                    );
+                }
+
+                $externalMessageId = trim((string) ($deliveryResult->deliveryResult->externalMessageId ?? ''));
 
                 if ($externalMessageId === '') {
                     throw new Bitrix24ApiException('Messenger delivery did not return an external message id for Bitrix acknowledgement.');
@@ -112,7 +127,7 @@ class ProcessBitrix24OpenLinesWebhookAction
                 $storedMessage = $this->storeBitrix24OpenLinesOutboundMessageAction->handle(
                     $dialog,
                     $messageData,
-                    $deliveryResult,
+                    $deliveryResult->deliveryResult,
                 );
 
                 $this->acknowledgeBitrix24OpenLinesDeliveryAction->handle(
@@ -156,6 +171,40 @@ class ProcessBitrix24OpenLinesWebhookAction
         $this->markEventProcessed($event);
 
         return $event->fresh();
+    }
+
+    private function isBlockedDialogSkip(BotDialogTextSendResult $deliveryResult): bool
+    {
+        return ! $deliveryResult->wasSent()
+            && $deliveryResult->routeStatus->code === DialogRouteStatusData::CODE_BLOCKED_BY_USER;
+    }
+
+    private function logBlockedDialogSkipped(
+        Bitrix24WebhookEvent $event,
+        Dialog $dialog,
+        mixed $messageData,
+        BotDialogTextSendResult $deliveryResult,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'openlines_message_skipped_blocked_dialog',
+            status: Bitrix24SyncLog::STATUS_SKIPPED,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog->id,
+                'chat_id' => $messageData->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+            ],
+            responsePayload: [
+                'route_status_code' => $deliveryResult->routeStatus->code,
+                'route_status_label' => $deliveryResult->routeStatus->label,
+                'blocked_reason' => $deliveryResult->routeStatus->blockedReason,
+            ],
+            connection: $event->connection,
+            entityType: 'openlines_webhook_event',
+            entityId: (string) $event->id,
+        );
     }
 
     /**
