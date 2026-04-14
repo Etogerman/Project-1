@@ -33,6 +33,12 @@ class BotIncomingMessageNormalizer
             return $this->normalizeTelegramCallbackQuery($channel, $payload, $callbackQuery);
         }
 
+        $chatMemberUpdate = $payload['my_chat_member'] ?? null;
+
+        if (is_array($chatMemberUpdate)) {
+            return $this->normalizeTelegramChatMemberUpdate($channel, $payload, $chatMemberUpdate);
+        }
+
         $message = $payload['message'] ?? null;
 
         if (! is_array($message) || data_get($message, 'from.is_bot') === true) {
@@ -72,6 +78,57 @@ class BotIncomingMessageNormalizer
                 data_get($message, 'date'),
             ]),
             messageParameter: $this->resolveTelegramStartMessageParameter($normalizedText),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $chatMemberUpdate
+     */
+    protected function normalizeTelegramChatMemberUpdate(Channel $channel, array $payload, array $chatMemberUpdate): ?IncomingBotMessage
+    {
+        if (data_get($chatMemberUpdate, 'from.is_bot') === true) {
+            return null;
+        }
+
+        if (data_get($chatMemberUpdate, 'chat.type') !== 'private') {
+            return null;
+        }
+
+        $systemEventCode = $this->resolveTelegramChatMemberSystemEventCode(
+            $this->normalizeText(data_get($chatMemberUpdate, 'old_chat_member.status')),
+            $this->normalizeText(data_get($chatMemberUpdate, 'new_chat_member.status')),
+        );
+
+        if ($systemEventCode === null) {
+            return null;
+        }
+
+        $chatId = $this->normalizeExternalId(data_get($chatMemberUpdate, 'chat.id'));
+        $userId = $this->normalizeExternalId(data_get($chatMemberUpdate, 'from.id'));
+
+        if (! filled($chatId) || ! filled($userId) || $chatId !== $userId) {
+            return null;
+        }
+
+        return new IncomingBotMessage(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $chatId,
+            externalUserId: $userId,
+            providerEventKey: $this->normalizeExternalId($payload['update_id'] ?? null),
+            externalMessageId: null,
+            externalUsername: $this->normalizeUsername(data_get($chatMemberUpdate, 'from.username')),
+            contactName: $this->resolvePersonName(data_get($chatMemberUpdate, 'from')),
+            text: null,
+            inboundKind: IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT,
+            sharedPhoneNumber: null,
+            sharedContactUserId: null,
+            rawPayload: $payload,
+            receivedAt: $this->resolveReceivedAt([
+                data_get($chatMemberUpdate, 'date'),
+            ]),
+            systemEventCode: $systemEventCode,
         );
     }
 
@@ -155,6 +212,17 @@ class BotIncomingMessageNormalizer
         }
 
         return null;
+    }
+
+    protected function resolveTelegramChatMemberSystemEventCode(
+        ?string $oldStatus,
+        ?string $newStatus,
+    ): ?string {
+        return match ([$oldStatus, $newStatus]) {
+            ['member', 'kicked'] => IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER,
+            ['kicked', 'member'] => IncomingBotMessage::SYSTEM_EVENT_BOT_UNBLOCKED_BY_USER,
+            default => null,
+        };
     }
 
     /**

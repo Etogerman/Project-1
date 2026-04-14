@@ -296,6 +296,166 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('94', $message->providerEventKey);
     }
 
+    public function test_telegram_my_chat_member_block_event_is_normalized(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 95,
+            'my_chat_member' => [
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'first_name' => 'Герман',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 200,
+                    'type' => 'private',
+                ],
+                'old_chat_member' => [
+                    'status' => 'member',
+                ],
+                'new_chat_member' => [
+                    'status' => 'kicked',
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT, $message->inboundKind);
+        $this->assertSame(IncomingBotMessage::SYSTEM_EVENT_BOT_BLOCKED_BY_USER, $message->systemEventCode);
+        $this->assertSame('200', $message->externalChatId);
+        $this->assertSame('200', $message->externalUserId);
+        $this->assertNull($message->externalMessageId);
+        $this->assertNull($message->text);
+        $this->assertSame('95', $message->providerEventKey);
+    }
+
+    public function test_telegram_my_chat_member_unblock_event_is_normalized(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 96,
+            'my_chat_member' => [
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'first_name' => 'Герман',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 200,
+                    'type' => 'private',
+                ],
+                'old_chat_member' => [
+                    'status' => 'kicked',
+                ],
+                'new_chat_member' => [
+                    'status' => 'member',
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_SYSTEM_EVENT, $message->inboundKind);
+        $this->assertSame(IncomingBotMessage::SYSTEM_EVENT_BOT_UNBLOCKED_BY_USER, $message->systemEventCode);
+        $this->assertSame('96', $message->providerEventKey);
+    }
+
+    public function test_telegram_my_chat_member_ignores_unsupported_transition(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 97,
+            'my_chat_member' => [
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 200,
+                    'type' => 'private',
+                ],
+                'old_chat_member' => [
+                    'status' => 'member',
+                ],
+                'new_chat_member' => [
+                    'status' => 'administrator',
+                ],
+            ],
+        ];
+
+        $this->assertNull(app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload));
+    }
+
+    public function test_telegram_my_chat_member_ignores_non_private_or_mismatched_identity(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $groupPayload = [
+            'update_id' => 98,
+            'my_chat_member' => [
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => -1001,
+                    'type' => 'group',
+                ],
+                'old_chat_member' => [
+                    'status' => 'member',
+                ],
+                'new_chat_member' => [
+                    'status' => 'kicked',
+                ],
+            ],
+        ];
+
+        $mismatchedPrivatePayload = [
+            'update_id' => 99,
+            'my_chat_member' => [
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 201,
+                    'type' => 'private',
+                ],
+                'old_chat_member' => [
+                    'status' => 'member',
+                ],
+                'new_chat_member' => [
+                    'status' => 'kicked',
+                ],
+            ],
+        ];
+
+        $this->assertNull(app(BotIncomingMessageNormalizer::class)->normalize($channel, $groupPayload));
+        $this->assertNull(app(BotIncomingMessageNormalizer::class)->normalize($channel, $mismatchedPrivatePayload));
+    }
+
     public function test_max_bot_started_payload_is_normalized_as_store_only_inbound_event(): void
     {
         $channel = Channel::factory()->create([

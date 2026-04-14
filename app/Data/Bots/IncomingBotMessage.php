@@ -10,6 +10,12 @@ final readonly class IncomingBotMessage
 
     public const KIND_INBOUND_CONTACT_SHARE = 'inbound_contact_share';
 
+    public const KIND_INBOUND_SYSTEM_EVENT = 'inbound_system_event';
+
+    public const SYSTEM_EVENT_BOT_BLOCKED_BY_USER = 'bot_blocked_by_user';
+
+    public const SYSTEM_EVENT_BOT_UNBLOCKED_BY_USER = 'bot_unblocked_by_user';
+
     /**
      * @param  array<string, mixed>  $rawPayload
      */
@@ -29,5 +35,6 @@ final readonly class IncomingBotMessage
         public array $rawPayload,
         public Carbon $receivedAt,
         public ?string $messageParameter = null,
+        public ?string $systemEventCode = null,
     ) {}
 }

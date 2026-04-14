@@ -112,6 +112,17 @@ class DialogRoutePredicateParityTest extends TestCase
             $this->createDialog(
                 channelAttributes: [
                     'platform' => Channel::PLATFORM_TELEGRAM,
+                    'credentials' => ['token' => 'telegram-blocked-token'],
+                ],
+                dialogAttributes: [
+                    'external_chat_id' => 'telegram-blocked-chat',
+                    'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+                    'bot_subscription_changed_at' => now(),
+                ],
+            ),
+            $this->createDialog(
+                channelAttributes: [
+                    'platform' => Channel::PLATFORM_TELEGRAM,
                     'credentials' => [],
                 ],
                 dialogAttributes: [

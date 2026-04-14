@@ -100,6 +100,51 @@ class ResolveDialogRouteStatusActionTest extends TestCase
         $this->assertFalse($status->isSendable);
     }
 
+    public function test_resolve_dialog_route_status_marks_dialog_blocked_by_user(): void
+    {
+        $dialog = $this->createDialog(
+            channelAttributes: [
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'credentials' => ['token' => 'telegram-token'],
+            ],
+            dialogAttributes: [
+                'external_chat_id' => 'telegram-blocked-chat',
+                'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+                'bot_subscription_changed_at' => now(),
+            ],
+        );
+
+        $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog);
+
+        $this->assertSame(DialogRouteStatusData::CODE_BLOCKED_BY_USER, $status->code);
+        $this->assertSame('Бот заблокирован', $status->label);
+        $this->assertSame('danger', $status->tone);
+        $this->assertFalse($status->isSendable);
+        $this->assertSame('Клиент заблокировал бота в Telegram. Новые сообщения в этот диалог сейчас отправлять нельзя.', $status->blockedReason);
+        $this->assertFalse(app(CanSendThroughDialogAction::class)->handle($dialog));
+    }
+
+    public function test_resolve_dialog_route_status_prioritizes_blocked_by_user_reason_over_missing_token(): void
+    {
+        $dialog = $this->createDialog(
+            channelAttributes: [
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'credentials' => [],
+            ],
+            dialogAttributes: [
+                'external_chat_id' => 'telegram-blocked-no-token-chat',
+                'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+                'bot_subscription_changed_at' => now(),
+            ],
+        );
+
+        $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog);
+
+        $this->assertSame(DialogRouteStatusData::CODE_BLOCKED_BY_USER, $status->code);
+        $this->assertSame('Бот заблокирован', $status->label);
+        $this->assertSame('Клиент заблокировал бота в Telegram. Новые сообщения в этот диалог сейчас отправлять нельзя.', $status->blockedReason);
+    }
+
     public function test_resolve_dialog_route_status_marks_inactive_channel(): void
     {
         $dialog = $this->createDialog(

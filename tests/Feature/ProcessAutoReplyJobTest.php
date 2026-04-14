@@ -10,6 +10,7 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Tag;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -1717,5 +1718,137 @@ class ProcessAutoReplyJobTest extends TestCase
 
         Http::assertNothingSent();
         $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_job_skips_auto_reply_when_dialog_is_blocked_by_user(): void
+    {
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Не должен отправиться.',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-blocked-auto-reply',
+            'external_chat_id' => 'blocked-auto-reply-chat',
+        ], [
+            'external_user_id' => 'blocked-auto-reply-user',
+        ]);
+
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $message->contact_identity_id,
+            'external_chat_id' => 'blocked-auto-reply-chat',
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ]);
+
+        $message->forceFill([
+            'dialog_id' => $dialog->id,
+        ])->save();
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+
+        $message->refresh();
+
+        $this->assertNull($message->auto_reply_sent_at);
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_skipped_dialog_not_sendable',
+            'level' => 'info',
+        ]);
+    }
+
+    public function test_job_recovers_route_from_legacy_message_when_attached_dialog_is_stale(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9301,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Восстановленный маршрут.',
+            'is_active' => true,
+        ]);
+
+        $contact = Contact::factory()->create();
+        $legacyIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'legacy-user',
+            'external_username' => 'legacy_username',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => null,
+            'external_chat_id' => null,
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $legacyIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-legacy-route-recovery',
+            'external_chat_id' => '399',
+            'external_message_id' => 'legacy-route-source-1',
+            'text' => 'hello',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+            'auto_reply_sent_at' => null,
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '399'
+            && $request['text'] === 'Восстановленный маршрут.');
+
+        $outboundMessage = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('reply_to_message_id', $message->id)
+            ->firstOrFail();
+
+        $dialog->refresh();
+
+        $this->assertSame($legacyIdentity->id, $dialog->current_contact_identity_id);
+        $this->assertSame('399', $dialog->external_chat_id);
+        $this->assertSame($dialog->id, $outboundMessage->dialog_id);
+        $this->assertSame($legacyIdentity->id, $outboundMessage->contact_identity_id);
+        $this->assertSame('399', $outboundMessage->external_chat_id);
     }
 }

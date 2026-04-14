@@ -243,6 +243,197 @@ class NeedsDiscoveryScenarioTest extends TestCase
         $this->assertSame($outboundMessages[2]->id, data_get($run->state_payload, 'completion_message_id'));
     }
 
+    public function test_needs_discovery_replays_blocked_follow_up_question_after_unblock_before_accepting_next_answer(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 9211],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 9212],
+                ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => NeedsDiscoveryScenario::code(),
+            'is_active' => true,
+        ]);
+
+        [, , $dialog] = $this->createRoute($channel, externalUserId: '200', externalChatId: '300');
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 40,
+            text: 'хочу продолжить',
+        ))->assertOk();
+
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 41,
+            text: 'Найти больше клиентов',
+        ))->assertOk();
+
+        $run = ScenarioRun::query()->where('scenario_code', NeedsDiscoveryScenario::code())->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame(NeedsDiscoveryScenario::STEP_MAIN_BLOCKER, $run->current_step);
+        $this->assertSame('Найти больше клиентов', data_get($run->state_payload, 'answers.primary_goal.text'));
+        $this->assertNull(data_get($run->state_payload, 'question_message_ids.main_blocker'));
+        $this->assertTrue((bool) data_get($run->state_payload, 'run.pending_delivery_active'));
+        $this->assertSame(NeedsDiscoveryScenario::STEP_MAIN_BLOCKER, data_get($run->state_payload, 'run.pending_delivery_step'));
+        $this->assertSame('question', data_get($run->state_payload, 'run.pending_delivery_type'));
+
+        Http::assertSentCount(1);
+
+        $dialog->forceFill([
+            'bot_subscription_status' => null,
+            'bot_subscription_changed_at' => now()->addSecond(),
+        ])->save();
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 42,
+            text: 'первое после unblock',
+        ))->assertOk();
+
+        $run->refresh();
+
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame(NeedsDiscoveryScenario::STEP_MAIN_BLOCKER, $run->current_step);
+        $this->assertSame(2, $outboundMessages->count());
+        $this->assertSame(config('bots.scenarios.needs_discovery.main_blocker.question'), $outboundMessages[1]->text);
+        $this->assertSame($outboundMessages[1]->id, data_get($run->state_payload, 'question_message_ids.main_blocker'));
+        $this->assertNull(data_get($run->state_payload, 'answers.main_blocker.text'));
+        $this->assertNull(data_get($run->state_payload, 'answers.main_blocker.message_id'));
+        $this->assertFalse((bool) data_get($run->state_payload, 'run.pending_delivery_active'));
+    }
+
+    public function test_needs_discovery_replays_blocked_completion_after_unblock_before_finishing_run(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 9221],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 9222],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 9223],
+                ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => NeedsDiscoveryScenario::code(),
+            'is_active' => true,
+        ]);
+
+        [, , $dialog] = $this->createRoute($channel, externalUserId: '200', externalChatId: '300');
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 50,
+            text: 'хочу продолжить',
+        ))->assertOk();
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 51,
+            text: 'Найти больше клиентов',
+        ))->assertOk();
+
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 52,
+            text: 'Не хватает времени на обработку',
+        ))->assertOk();
+
+        $run = ScenarioRun::query()->where('scenario_code', NeedsDiscoveryScenario::code())->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame(NeedsDiscoveryScenario::STEP_MAIN_BLOCKER, $run->current_step);
+        $this->assertSame('Не хватает времени на обработку', data_get($run->state_payload, 'answers.main_blocker.text'));
+        $this->assertNull(data_get($run->state_payload, 'completion_message_id'));
+        $this->assertTrue((bool) data_get($run->state_payload, 'run.pending_delivery_active'));
+        $this->assertSame('completion', data_get($run->state_payload, 'run.pending_delivery_type'));
+
+        $dialog->forceFill([
+            'bot_subscription_status' => null,
+            'bot_subscription_changed_at' => now()->addSecond(),
+        ])->save();
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 53,
+            text: 'первое после unblock',
+        ))->assertOk();
+
+        $run->refresh();
+
+        $outboundMessages = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertSame(NeedsDiscoveryScenario::OUTCOME_COMPLETED_WITH_ANSWERS, $run->exit_outcome);
+        $this->assertNull($run->current_step);
+        $this->assertSame(3, $outboundMessages->count());
+        $this->assertSame(config('bots.scenarios.needs_discovery.completion_message'), $outboundMessages[2]->text);
+        $this->assertSame($outboundMessages[2]->id, data_get($run->state_payload, 'completion_message_id'));
+        $this->assertFalse((bool) data_get($run->state_payload, 'run.pending_delivery_active'));
+    }
+
     public function test_max_happy_path_supports_skip_and_completes_with_partial_answers(): void
     {
         Http::fake([
