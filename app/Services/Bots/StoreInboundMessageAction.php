@@ -185,6 +185,7 @@ class StoreInboundMessageAction
 
                 $this->syncStoredInboundMessageMetadata($channel, $identity->contact, $existingMessage, $message);
                 $this->syncDialogBotSubscriptionState($existingMessage);
+                $this->queueBitrix24LiveMessageExportAction->handle($existingMessage);
 
                 return new StoredInboundMessageResult(message: $existingMessage);
             }
@@ -209,6 +210,7 @@ class StoreInboundMessageAction
 
             $this->syncStoredInboundMessageMetadata($channel, $identity->contact, $storedMessage, $message);
             $this->syncDialogBotSubscriptionState($storedMessage);
+            $this->queueBitrix24LiveMessageExportAction->handle($storedMessage);
 
             return new StoredInboundMessageResult(message: $storedMessage);
         } catch (QueryException $exception) {
@@ -221,6 +223,7 @@ class StoreInboundMessageAction
 
             $this->syncStoredInboundMessageMetadata($channel, $identity->contact, $existingMessage, $message);
             $this->syncDialogBotSubscriptionState($existingMessage);
+            $this->queueBitrix24LiveMessageExportAction->handle($existingMessage);
 
             return new StoredInboundMessageResult(message: $existingMessage);
         }
