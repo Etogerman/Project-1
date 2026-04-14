@@ -3537,6 +3537,81 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_active_data_collection_with_legacy_sent_question_does_not_requeue_prompt_again(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $fieldStartedAt = now()->subMinute();
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_last_prompted_field' => null,
+            'data_collection_started_at' => $fieldStartedAt->copy()->subMinute(),
+            'data_collection_current_field_started_at' => $fieldStartedAt,
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+
+        Message::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'message_parameter' => null,
+            'text' => 'Как вас зовут?',
+            'received_at' => $fieldStartedAt,
+        ]);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 904,
+            text: 'Герман',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->latest('id')->firstOrFail();
+
+        Queue::assertPushed(ProcessDataCollectionResponseJob::class, function (ProcessDataCollectionResponseJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->contactId === $storedMessage->contact_id
+                && $job->expectedField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
+        });
+        Queue::assertNotPushed(ProcessDataCollectionQuestionJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_response_queued',
+        ]);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_pending_question_queued',
+        ]);
+    }
+
     public function test_repeated_telegram_webhook_with_same_update_id_does_not_requeue_collector_reply(): void
     {
         Queue::fake();

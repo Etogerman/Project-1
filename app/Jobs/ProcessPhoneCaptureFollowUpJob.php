@@ -83,6 +83,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
 
         $routeDialog = $resolveDialogRouteSourceAction->forMessage($message);
         $fallbackUsed = false;
+        $confirmationWasSkippedBecauseDialogNotSendable = false;
 
         if (! $routeDialog) {
             $routeDialog = $resolveDialogRouteSourceAction->fallbackFromLegacyMessage($message);
@@ -130,6 +131,8 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                 );
 
                 if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+                    $confirmationWasSkippedBecauseDialogNotSendable = true;
+
                     $channelActivityLogger->info(
                         $channel,
                         'contact.phone_capture_confirmation_skipped_dialog_not_sendable',
@@ -140,35 +143,33 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                             'phone_capture_status' => $this->phoneCaptureStatus,
                         ],
                     );
-
-                    return;
-                }
-
-                $deliveryResult = $sendResult->deliveryResult;
-
-                $storePhoneCaptureConfirmationAction->handle($routeDialog, $message, $deliveryResult);
-                $channel->markReplySent();
-
-                if ($this->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
-                    $channelActivityLogger->info(
-                        $channel,
-                        'contact.phone_capture_recognition_sent',
-                        'После склейки контакта отправлено сообщение распознавания.',
-                        $this->baseContext($message, $channel) + [
-                            'dialog_id' => $routeDialog->id,
-                            'phone_capture_status' => $this->phoneCaptureStatus,
-                        ],
-                    );
                 } else {
-                    $channelActivityLogger->info(
-                        $channel,
-                        'contact.phone_capture_confirmed',
-                        'Подтверждение после получения номера отправлено.',
-                        $this->baseContext($message, $channel) + [
-                            'dialog_id' => $routeDialog->id,
-                            'phone_capture_status' => $this->phoneCaptureStatus,
-                        ],
-                    );
+                    $deliveryResult = $sendResult->deliveryResult;
+
+                    $storePhoneCaptureConfirmationAction->handle($routeDialog, $message, $deliveryResult);
+                    $channel->markReplySent();
+
+                    if ($this->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
+                        $channelActivityLogger->info(
+                            $channel,
+                            'contact.phone_capture_recognition_sent',
+                            'После склейки контакта отправлено сообщение распознавания.',
+                            $this->baseContext($message, $channel) + [
+                                'dialog_id' => $routeDialog->id,
+                                'phone_capture_status' => $this->phoneCaptureStatus,
+                            ],
+                        );
+                    } else {
+                        $channelActivityLogger->info(
+                            $channel,
+                            'contact.phone_capture_confirmed',
+                            'Подтверждение после получения номера отправлено.',
+                            $this->baseContext($message, $channel) + [
+                                'dialog_id' => $routeDialog->id,
+                                'phone_capture_status' => $this->phoneCaptureStatus,
+                            ],
+                        );
+                    }
                 }
             } catch (Throwable $throwable) {
                 $channel->markError($throwable);
@@ -197,10 +198,32 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         if ($this->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT) {
             $this->maybeContinueDataCollectionAfterMerge($message, $channel, $contact, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
 
+            if ($confirmationWasSkippedBecauseDialogNotSendable) {
+                $channelActivityLogger->info(
+                    $channel,
+                    'contact.phone_capture_follow_up_continued_after_skipped_confirmation',
+                    'После пропуска подтверждения из-за blocked dialog анкета продолжена через pending collector flow.',
+                    $this->baseContext($message, $channel, $routeDialog?->id) + [
+                        'phone_capture_status' => $this->phoneCaptureStatus,
+                    ],
+                );
+            }
+
             return;
         }
 
         $this->maybeStartDataCollection($message, $channel, $contact, $channelActivityLogger, $resolveNextDataCollectionFieldAction);
+
+        if ($confirmationWasSkippedBecauseDialogNotSendable) {
+            $channelActivityLogger->info(
+                $channel,
+                'contact.phone_capture_follow_up_continued_after_skipped_confirmation',
+                'После пропуска подтверждения из-за blocked dialog анкета продолжена через pending collector flow.',
+                $this->baseContext($message, $channel, $routeDialog?->id) + [
+                    'phone_capture_status' => $this->phoneCaptureStatus,
+                ],
+            );
+        }
     }
 
     protected function confirmationAlreadyExists(Message $message): bool

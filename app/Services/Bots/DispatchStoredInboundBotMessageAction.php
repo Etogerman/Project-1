@@ -8,7 +8,10 @@ use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
+use App\Models\Contact;
 use App\Models\Message;
+use App\Services\DataCollection\DataCollectionPromptHelper;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 
 class DispatchStoredInboundBotMessageAction
@@ -20,6 +23,7 @@ class DispatchStoredInboundBotMessageAction
         protected DispatchStoredInboundScenarioAction $dispatchStoredInboundScenarioAction,
         protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
+        protected DataCollectionPromptHelper $dataCollectionPromptHelper,
     ) {}
 
     public function handle(
@@ -111,7 +115,7 @@ class DispatchStoredInboundBotMessageAction
         }
 
         if ($storedMessage->contact?->isInDataCollection()) {
-            if ($this->currentDataCollectionFieldIsPendingPrompt($storedMessage)) {
+            if ($this->currentDataCollectionFieldIsPendingPrompt($channel, $storedMessage)) {
                 ProcessDataCollectionQuestionJob::dispatch(
                     $storedMessage->id,
                     false,
@@ -162,17 +166,116 @@ class DispatchStoredInboundBotMessageAction
         $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
     }
 
-    protected function currentDataCollectionFieldIsPendingPrompt(Message $storedMessage): bool
+    protected function currentDataCollectionFieldIsPendingPrompt(Channel $channel, Message $storedMessage): bool
     {
         $storedMessage->loadMissing('contact');
+        $contact = $storedMessage->contact;
 
-        $currentField = $storedMessage->contact?->data_collection_current_field;
+        if (! $contact instanceof Contact) {
+            return false;
+        }
+
+        $currentField = $contact->data_collection_current_field;
 
         if (! filled($currentField)) {
             return false;
         }
 
-        return $storedMessage->contact?->data_collection_last_prompted_field !== $currentField;
+        if ($this->contactAlreadyHasPromptForCurrentField($channel, $contact, $currentField)) {
+            return false;
+        }
+
+        return $contact->data_collection_last_prompted_field !== $currentField;
+    }
+
+    protected function contactAlreadyHasPromptForCurrentField(Channel $channel, Contact $contact, string $currentField): bool
+    {
+        $query = $contact->messages()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->where('message_parameter', $currentField);
+
+        $this->applyReceivedAtBoundary(
+            $query,
+            $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at,
+        );
+
+        if ($query->exists()) {
+            return true;
+        }
+
+        if ($this->legacyQuestionWasLoggedForCurrentField($contact, $currentField)) {
+            return true;
+        }
+
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY) {
+            return false;
+        }
+
+        $questionText = $this->resolveCurrentFieldQuestionText($channel, $contact, $currentField);
+
+        if (! filled($questionText)) {
+            return false;
+        }
+
+        $legacyQuery = $contact->messages()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->whereNull('message_parameter')
+            ->where('text', $questionText);
+
+        $this->applyReceivedAtBoundary(
+            $legacyQuery,
+            $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at,
+        );
+
+        return $legacyQuery->exists();
+    }
+
+    protected function legacyQuestionWasLoggedForCurrentField(Contact $contact, string $currentField): bool
+    {
+        $query = ChannelActivityLog::query()
+            ->where('event', 'contact.data_collection_question_sent')
+            ->where('context->contact_id', $contact->id)
+            ->where('context->current_field', $currentField);
+
+        $this->applyCreatedAtBoundary(
+            $query,
+            $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at,
+        );
+
+        return $query->exists();
+    }
+
+    protected function resolveCurrentFieldQuestionText(Channel $channel, Contact $contact, string $currentField): ?string
+    {
+        return match ($currentField) {
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => $this->dataCollectionPromptHelper->russianRegionConfirmQuestionText($contact),
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            Contact::DATA_COLLECTION_FIELD_CITY,
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->dataCollectionPromptHelper->questionText($currentField, $channel->platform),
+            default => null,
+        };
+    }
+
+    protected function applyReceivedAtBoundary($query, $boundary): void
+    {
+        if ($boundary === null) {
+            return;
+        }
+
+        $query->where('received_at', '>=', $boundary);
+    }
+
+    protected function applyCreatedAtBoundary($query, $boundary): void
+    {
+        if ($boundary === null) {
+            return;
+        }
+
+        $query->where('created_at', '>=', $boundary);
     }
 
     protected function dispatchContactShareFollowUp(

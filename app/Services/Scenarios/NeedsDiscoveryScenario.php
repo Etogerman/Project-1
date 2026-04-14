@@ -15,6 +15,16 @@ use InvalidArgumentException;
 
 class NeedsDiscoveryScenario implements ScenarioHandler
 {
+    private const PENDING_DELIVERY_STATE_KEY = 'run.pending_delivery_active';
+
+    private const PENDING_DELIVERY_STEP_STATE_KEY = 'run.pending_delivery_step';
+
+    private const PENDING_DELIVERY_TYPE_STATE_KEY = 'run.pending_delivery_type';
+
+    private const PENDING_DELIVERY_TYPE_QUESTION = 'question';
+
+    private const PENDING_DELIVERY_TYPE_COMPLETION = 'completion';
+
     public const STEP_PRIMARY_GOAL = 'primary_goal';
 
     public const STEP_MAIN_BLOCKER = 'main_blocker';
@@ -70,34 +80,49 @@ class NeedsDiscoveryScenario implements ScenarioHandler
             $this->questionForStep(self::STEP_PRIMARY_GOAL),
         );
 
-        $run->forceFill([
-            'current_step' => self::STEP_PRIMARY_GOAL,
-            'state_payload' => [
-                'trigger_message_id' => $message->id,
-                'question_message_ids' => [
-                    self::STEP_PRIMARY_GOAL => $outboundQuestion?->id,
-                    self::STEP_MAIN_BLOCKER => null,
+        $statePayload = [
+            'trigger_message_id' => $message->id,
+            'question_message_ids' => [
+                self::STEP_PRIMARY_GOAL => $outboundQuestion?->id,
+                self::STEP_MAIN_BLOCKER => null,
+            ],
+            'completion_message_id' => null,
+            'answers' => [
+                self::STEP_PRIMARY_GOAL => [
+                    'text' => null,
+                    'message_id' => null,
+                    'skipped' => false,
                 ],
-                'completion_message_id' => null,
-                'answers' => [
-                    self::STEP_PRIMARY_GOAL => [
-                        'text' => null,
-                        'message_id' => null,
-                        'skipped' => false,
-                    ],
-                    self::STEP_MAIN_BLOCKER => [
-                        'text' => null,
-                        'message_id' => null,
-                        'skipped' => false,
-                    ],
+                self::STEP_MAIN_BLOCKER => [
+                    'text' => null,
+                    'message_id' => null,
+                    'skipped' => false,
                 ],
             ],
+        ];
+
+        if (! $outboundQuestion instanceof Message) {
+            $statePayload = $this->markPendingDelivery(
+                $statePayload,
+                self::STEP_PRIMARY_GOAL,
+                self::PENDING_DELIVERY_TYPE_QUESTION,
+            );
+        }
+
+        $run->forceFill([
+            'current_step' => self::STEP_PRIMARY_GOAL,
+            'state_payload' => $statePayload,
         ])->save();
     }
 
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
     {
         $statePayload = $this->ensureStatePayload(is_array($run->state_payload) ? $run->state_payload : []);
+
+        if ($this->hasPendingDelivery($statePayload)) {
+            return $this->resumePendingDelivery($message, $statePayload);
+        }
+
         $normalizedText = $this->normalizeText($message->text);
 
         if ($normalizedText === '') {
@@ -145,6 +170,16 @@ class NeedsDiscoveryScenario implements ScenarioHandler
 
         $updatedStatePayload['question_message_ids'][self::STEP_MAIN_BLOCKER] = $nextQuestion?->id;
 
+        if ($nextQuestion instanceof Message) {
+            $updatedStatePayload = $this->clearPendingDelivery($updatedStatePayload);
+        } else {
+            $updatedStatePayload = $this->markPendingDelivery(
+                $updatedStatePayload,
+                self::STEP_MAIN_BLOCKER,
+                self::PENDING_DELIVERY_TYPE_QUESTION,
+            );
+        }
+
         return new ScenarioInboundResult(
             consumed: true,
             status: ScenarioRun::STATUS_ACTIVE,
@@ -175,6 +210,22 @@ class NeedsDiscoveryScenario implements ScenarioHandler
         );
 
         $updatedStatePayload['completion_message_id'] = $completionMessage?->id;
+
+        if (! $completionMessage instanceof Message) {
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_ACTIVE,
+                currentStep: self::STEP_MAIN_BLOCKER,
+                statePayload: $this->markPendingDelivery(
+                    $updatedStatePayload,
+                    self::STEP_MAIN_BLOCKER,
+                    self::PENDING_DELIVERY_TYPE_COMPLETION,
+                ),
+                exitOutcome: null,
+            );
+        }
+
+        $updatedStatePayload = $this->clearPendingDelivery($updatedStatePayload);
 
         return new ScenarioInboundResult(
             consumed: true,
@@ -265,6 +316,138 @@ class NeedsDiscoveryScenario implements ScenarioHandler
         }
 
         return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function hasPendingDelivery(array $statePayload): bool
+    {
+        return (bool) data_get($statePayload, self::PENDING_DELIVERY_STATE_KEY, false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function markPendingDelivery(array $statePayload, string $step, string $type): array
+    {
+        data_set($statePayload, self::PENDING_DELIVERY_STATE_KEY, true);
+        data_set($statePayload, self::PENDING_DELIVERY_STEP_STATE_KEY, $step);
+        data_set($statePayload, self::PENDING_DELIVERY_TYPE_STATE_KEY, $type);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function clearPendingDelivery(array $statePayload): array
+    {
+        data_forget($statePayload, self::PENDING_DELIVERY_STATE_KEY);
+        data_forget($statePayload, self::PENDING_DELIVERY_STEP_STATE_KEY);
+        data_forget($statePayload, self::PENDING_DELIVERY_TYPE_STATE_KEY);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function pendingDeliveryStep(array $statePayload): ?string
+    {
+        $step = data_get($statePayload, self::PENDING_DELIVERY_STEP_STATE_KEY);
+
+        return in_array($step, [self::STEP_PRIMARY_GOAL, self::STEP_MAIN_BLOCKER], true)
+            ? $step
+            : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function pendingDeliveryType(array $statePayload): ?string
+    {
+        $type = data_get($statePayload, self::PENDING_DELIVERY_TYPE_STATE_KEY);
+
+        return in_array($type, [
+            self::PENDING_DELIVERY_TYPE_QUESTION,
+            self::PENDING_DELIVERY_TYPE_COMPLETION,
+        ], true)
+            ? $type
+            : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function resumePendingDelivery(Message $message, array $statePayload): ScenarioInboundResult
+    {
+        $step = $this->pendingDeliveryStep($statePayload);
+        $type = $this->pendingDeliveryType($statePayload);
+
+        if ($step === null || $type === null) {
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_ACTIVE,
+                currentStep: self::STEP_PRIMARY_GOAL,
+                statePayload: $this->clearPendingDelivery($statePayload),
+                exitOutcome: null,
+            );
+        }
+
+        if ($type === self::PENDING_DELIVERY_TYPE_QUESTION) {
+            $outboundQuestion = $this->sendScenarioMessage(
+                $message,
+                $this->questionForStep($step),
+            );
+
+            if (! $outboundQuestion instanceof Message) {
+                return new ScenarioInboundResult(
+                    consumed: true,
+                    status: ScenarioRun::STATUS_ACTIVE,
+                    currentStep: $step,
+                    statePayload: $statePayload,
+                    exitOutcome: null,
+                );
+            }
+
+            $statePayload['question_message_ids'][$step] = $outboundQuestion->id;
+
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_ACTIVE,
+                currentStep: $step,
+                statePayload: $this->clearPendingDelivery($statePayload),
+                exitOutcome: null,
+            );
+        }
+
+        $completionMessage = $this->sendScenarioMessage(
+            $message,
+            $this->completionMessage(),
+        );
+
+        if (! $completionMessage instanceof Message) {
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_ACTIVE,
+                currentStep: self::STEP_MAIN_BLOCKER,
+                statePayload: $statePayload,
+                exitOutcome: null,
+            );
+        }
+
+        $statePayload['completion_message_id'] = $completionMessage->id;
+
+        return new ScenarioInboundResult(
+            consumed: true,
+            status: ScenarioRun::STATUS_COMPLETED,
+            currentStep: null,
+            statePayload: $this->clearPendingDelivery($statePayload),
+            exitOutcome: $this->resolveCompletionOutcome($statePayload),
+        );
     }
 
     /**
