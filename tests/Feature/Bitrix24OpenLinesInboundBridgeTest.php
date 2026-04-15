@@ -338,6 +338,94 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_max_suspended_transport_response_marks_dialog_blocked_and_sends_feedback_to_openlines(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createMaxLiveDialog();
+
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response([
+                'code' => 'chat.denied',
+                'message' => 'Key: error.dialog.suspended, args: [228532008,].',
+            ], 403),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_max',
+                'LINE' => 'line-max',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-max-suspended',
+                        'message_id' => 'bitrix-im-max-suspended',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Попытка в заблокированный MAX',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertSame(Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER, $dialog->bot_subscription_status);
+        $this->assertNotNull($dialog->bot_subscription_changed_at);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertDatabaseMissing('messages', [
+            'channel_id' => $dialog->channel_id,
+            'provider_event_key' => 'bitrix24-openlines:bitrix-im-max-suspended',
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_message_skipped_blocked_dialog',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'skipped',
+        ]);
+
+        Http::assertSent(function (Request $request): bool {
+            return str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
+                && str_contains($request->url(), 'chat_id=max-chat-100')
+                && $request['text'] === 'Попытка в заблокированный MAX';
+        });
+
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
+                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
+        });
+
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
+                && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === 'abrikosoff-openlines-blocked:bitrix-im-max-suspended';
+        });
+
+        Http::assertSentCount(3);
+    }
+
     public function test_blocked_dialog_feedback_reactivates_closed_and_failed_live_bridge_statuses(): void
     {
         $connection = $this->makeActiveConnection();

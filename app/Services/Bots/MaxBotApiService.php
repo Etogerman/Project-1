@@ -6,13 +6,19 @@ use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotMetadata;
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
+use App\Models\Message;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 class MaxBotApiService
 {
+    private const DIALOG_SUSPENDED_ERROR_CODE = 'chat.denied';
+
+    private const DIALOG_SUSPENDED_MESSAGE_KEY = 'error.dialog.suspended';
+
     public function sendAutoReply(Channel $channel, IncomingBotMessage $message, string $text): AutoReplyDeliveryResult
     {
         return $this->sendTextMessage($channel, $message->externalChatId, $message->externalUserId, $text);
@@ -27,9 +33,8 @@ class MaxBotApiService
         ?string $externalUserId,
         string $text,
         ?array $attachments = null,
-        string $textFormat = \App\Models\Message::TEXT_FORMAT_PLAIN_TEXT,
-    ): AutoReplyDeliveryResult
-    {
+        string $textFormat = Message::TEXT_FORMAT_PLAIN_TEXT,
+    ): AutoReplyDeliveryResult {
         $query = [];
 
         if (filled($externalChatId)) {
@@ -44,7 +49,7 @@ class MaxBotApiService
             'text' => $text,
         ];
 
-        if ($textFormat === \App\Models\Message::TEXT_FORMAT_HTML) {
+        if ($textFormat === Message::TEXT_FORMAT_HTML) {
             $payload['format'] = 'html';
         }
 
@@ -56,7 +61,13 @@ class MaxBotApiService
             ->post(
                 'https://platform-api.max.ru/messages?'.http_build_query($query),
                 $payload,
-            )
+            );
+
+        if ($this->isDialogSuspendedResponse($response)) {
+            throw MaxDialogSuspendedException::fromResponse($response);
+        }
+
+        $response = $response
             ->throw()
             ->json();
 
@@ -139,6 +150,22 @@ class MaxBotApiService
         return Http::withHeaders([
             'Authorization' => $this->token($channel),
         ])->asJson();
+    }
+
+    protected function isDialogSuspendedResponse(Response $response): bool
+    {
+        if ($response->status() !== 403) {
+            return false;
+        }
+
+        $payload = $response->json();
+
+        if (! is_array($payload)) {
+            return false;
+        }
+
+        return data_get($payload, 'code') === self::DIALOG_SUSPENDED_ERROR_CODE
+            && str_contains((string) data_get($payload, 'message', ''), self::DIALOG_SUSPENDED_MESSAGE_KEY);
     }
 
     protected function token(Channel $channel): string

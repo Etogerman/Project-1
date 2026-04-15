@@ -50,25 +50,35 @@ class SendBotDialogTextAction
             throw new InvalidArgumentException(self::GENERIC_BLOCKED_REASON);
         }
 
-        $deliveryResult = match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
-                $channel,
-                $dialog->external_chat_id,
-                $dialog->currentContactIdentity?->external_user_id,
-                $text,
-                $telegramReplyMarkup,
-                $textFormat,
-            ),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
-                $channel,
-                $dialog->external_chat_id,
-                $dialog->currentContactIdentity?->external_user_id,
-                $text,
-                $maxAttachments,
-                $textFormat,
-            ),
-            default => throw new InvalidArgumentException(self::GENERIC_BLOCKED_REASON),
-        };
+        try {
+            $deliveryResult = match ($channel->platform) {
+                Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
+                    $channel,
+                    $dialog->external_chat_id,
+                    $dialog->currentContactIdentity?->external_user_id,
+                    $text,
+                    $telegramReplyMarkup,
+                    $textFormat,
+                ),
+                Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
+                    $channel,
+                    $dialog->external_chat_id,
+                    $dialog->currentContactIdentity?->external_user_id,
+                    $text,
+                    $maxAttachments,
+                    $textFormat,
+                ),
+                default => throw new InvalidArgumentException(self::GENERIC_BLOCKED_REASON),
+            };
+        } catch (MaxDialogSuspendedException) {
+            $this->markMaxDialogSuspended($dialog);
+            $dialog->refresh()->loadMissing(['channel', 'currentContactIdentity']);
+
+            return new BotDialogTextSendResult(
+                routeStatus: $this->resolveDialogRouteStatusAction->handle($dialog),
+                dialog: $dialog,
+            );
+        }
 
         return new BotDialogTextSendResult(
             routeStatus: $routeStatus,
@@ -144,5 +154,14 @@ class SendBotDialogTextAction
                 blockedReason: self::GENERIC_BLOCKED_REASON,
             ),
         );
+    }
+
+    private function markMaxDialogSuspended(Dialog $dialog): void
+    {
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+            'bot_subscription_source_message_id' => null,
+        ])->save();
     }
 }

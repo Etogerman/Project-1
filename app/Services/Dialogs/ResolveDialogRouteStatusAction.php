@@ -10,7 +10,9 @@ class ResolveDialogRouteStatusAction
 {
     private const GENERIC_BLOCKED_REASON = 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.';
 
-    private const BLOCKED_BY_USER_REASON = 'Клиент заблокировал бота в Telegram. Новые сообщения в этот диалог сейчас отправлять нельзя.';
+    private const TELEGRAM_BLOCKED_BY_USER_REASON = 'Клиент заблокировал бота в Telegram. Новые сообщения в этот диалог сейчас отправлять нельзя.';
+
+    private const MAX_BLOCKED_BY_USER_REASON = 'Клиент заблокировал бота в MAX. Новые сообщения в этот диалог сейчас отправлять нельзя.';
 
     public function __construct(
         private readonly DialogRoutePredicate $dialogRoutePredicate,
@@ -37,7 +39,7 @@ class ResolveDialogRouteStatusAction
                 label: 'Бот заблокирован',
                 tone: 'danger',
                 isSendable: false,
-                blockedReason: self::BLOCKED_BY_USER_REASON,
+                blockedReason: $this->blockedByUserReason($channel),
             );
         }
 
@@ -97,5 +99,13 @@ class ResolveDialogRouteStatusAction
             isSendable: $isSendable,
             blockedReason: $isSendable ? null : self::GENERIC_BLOCKED_REASON,
         );
+    }
+
+    private function blockedByUserReason(Channel $channel): string
+    {
+        return match ($channel->platform) {
+            Channel::PLATFORM_MAX => self::MAX_BLOCKED_BY_USER_REASON,
+            default => self::TELEGRAM_BLOCKED_BY_USER_REASON,
+        };
     }
 }
