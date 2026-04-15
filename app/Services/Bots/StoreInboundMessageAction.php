@@ -12,16 +12,16 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bitrix24\IsDialogReadyForBitrix24LiveBridgeAction;
+use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\AssignContactStartTagAction;
 use App\Services\Contacts\BrokenContactMergeChainException;
 use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
 use App\Services\Contacts\MergeContactsAction;
-use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
-use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Dialogs\DialogConsolidationException;
 use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
@@ -71,6 +71,7 @@ class StoreInboundMessageAction
                     }
 
                     $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
+                    $this->clearMaxDialogSuspensionIfNeeded($channel, $existingMessage);
                     $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
                     $this->assignStartTagIfNeeded($channel, $contact, $existingMessage);
                     $this->syncDialogPendingAutoReplySource($existingMessage, $contact);
@@ -123,6 +124,7 @@ class StoreInboundMessageAction
                 }
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $storedMessage, $message);
+                $this->clearMaxDialogSuspensionIfNeeded($channel, $storedMessage);
                 $this->syncDialogConfirmedPhoneIfNeeded($storedMessage, $message, $phoneCaptureStatus);
                 $this->assignStartTagIfNeeded($channel, $contact, $storedMessage);
                 $this->syncDialogPendingAutoReplySource($storedMessage, $contact);
@@ -146,6 +148,7 @@ class StoreInboundMessageAction
                 }
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
+                $this->clearMaxDialogSuspensionIfNeeded($channel, $existingMessage);
                 $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
                 $this->assignStartTagIfNeeded($channel, $contact, $existingMessage);
                 $this->syncDialogPendingAutoReplySource($existingMessage, $contact);
@@ -634,6 +637,46 @@ class StoreInboundMessageAction
         }
 
         $lockedDialog->forceFill($payload)->save();
+    }
+
+    protected function clearMaxDialogSuspensionIfNeeded(Channel $channel, Message $storedMessage): void
+    {
+        if ($channel->platform !== Channel::PLATFORM_MAX) {
+            return;
+        }
+
+        $storedMessage->loadMissing('dialog');
+
+        $dialog = $storedMessage->dialog;
+
+        if (! $dialog instanceof Dialog) {
+            return;
+        }
+
+        $lockedDialog = Dialog::query()
+            ->whereKey($dialog->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (
+            ! $lockedDialog instanceof Dialog
+            || $lockedDialog->bot_subscription_status !== Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER
+        ) {
+            return;
+        }
+
+        $messageReceivedAt = $storedMessage->received_at;
+        $currentChangedAt = $lockedDialog->bot_subscription_changed_at;
+
+        if ($messageReceivedAt !== null && $currentChangedAt !== null && $messageReceivedAt->lt($currentChangedAt)) {
+            return;
+        }
+
+        $lockedDialog->forceFill([
+            'bot_subscription_status' => null,
+            'bot_subscription_changed_at' => $messageReceivedAt ?? now(),
+            'bot_subscription_source_message_id' => $storedMessage->id,
+        ])->save();
     }
 
     protected function resolveDialogBotSubscriptionStatus(Message $storedMessage): ?string
