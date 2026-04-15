@@ -123,7 +123,7 @@ class ProcessBitrix24OpenLinesWebhookAction
                         $messageData,
                     );
 
-                    $this->markBlockedDialogAttemptHandled($dialog);
+                    $this->activateDialog($dialog, $event, $messageData->chatId);
                     $this->logBlockedDialogSkipped(
                         $event,
                         $dialog,
@@ -501,10 +501,4 @@ class ProcessBitrix24OpenLinesWebhookAction
         }
     }
 
-    private function markBlockedDialogAttemptHandled(Dialog $dialog): void
-    {
-        $dialog->forceFill([
-            'bitrix24_live_last_imported_at' => now(),
-        ])->save();
-    }
 }

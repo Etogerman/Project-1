@@ -338,6 +338,65 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_blocked_dialog_feedback_reactivates_closed_and_failed_live_bridge_statuses(): void
+    {
+        $connection = $this->makeActiveConnection();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        foreach ([
+            Dialog::BITRIX24_LIVE_STATUS_CLOSED => 'bitrix-im-blocked-reopen-closed',
+            Dialog::BITRIX24_LIVE_STATUS_FAILED => 'bitrix-im-blocked-reopen-failed',
+        ] as $previousLiveStatus => $bitrixMessageId) {
+            $dialog = $this->createTelegramLiveDialog();
+            $dialog->forceFill([
+                'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+                'bitrix24_live_status' => $previousLiveStatus,
+            ])->save();
+
+            $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+                'data' => [
+                    'CONNECTOR' => 'abrikosoff_telegram',
+                    'LINE' => 'line-telegram',
+                    'DATA' => [[
+                        'im' => [
+                            'chat_id' => 'bitrix-chat-'.$bitrixMessageId,
+                            'message_id' => $bitrixMessageId,
+                        ],
+                        'chat' => [
+                            'id' => 'abrikosoff-dialog:'.$dialog->id,
+                        ],
+                        'message' => [
+                            'text' => 'Blocked dialog should reactivate live bridge status',
+                        ],
+                    ]],
+                ],
+            ]);
+
+            $this->runWebhookEventJob($event);
+
+            $event->refresh();
+            $dialog->refresh();
+
+            $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+            $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+            $this->assertNotNull($dialog->bitrix24_live_last_imported_at);
+            $this->assertDatabaseHas('bitrix24_sync_logs', [
+                'operation' => 'openlines_dialog_reopened',
+                'entity_type' => 'dialog',
+                'entity_id' => (string) $dialog->id,
+                'status' => 'success',
+            ]);
+        }
+    }
+
     public function test_blocked_dialog_retry_does_not_repeat_feedback_after_ack_failure(): void
     {
         $connection = $this->makeActiveConnection();
