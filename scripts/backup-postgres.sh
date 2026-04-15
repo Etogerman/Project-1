@@ -9,6 +9,8 @@ OUTPUT_FILE=""
 
 # shellcheck source=scripts/lib/load-dotenv.sh
 source "$ROOT_DIR/scripts/lib/load-dotenv.sh"
+# shellcheck source=scripts/lib/postgres-url.sh
+source "$ROOT_DIR/scripts/lib/postgres-url.sh"
 
 usage() {
     cat <<'USAGE'
@@ -117,16 +119,29 @@ pg_dump_args=(
 )
 
 if [[ -n "${DB_URL:-}" ]]; then
-    pg_dump_args+=(--dbname="$DB_URL")
+    load_postgres_url_parts "$DB_URL"
+    [[ -n "${POSTGRES_URL_HOST:-}" ]] && pg_dump_args+=(--host="$POSTGRES_URL_HOST")
+    [[ -n "${POSTGRES_URL_PORT:-}" ]] && pg_dump_args+=(--port="$POSTGRES_URL_PORT")
+    [[ -n "${POSTGRES_URL_USERNAME:-}" ]] && pg_dump_args+=(--username="$POSTGRES_URL_USERNAME")
+    [[ -n "${POSTGRES_URL_DATABASE:-}" ]] || fail "DB_URL must include a database name"
+    pg_dump_args+=(--dbname="$POSTGRES_URL_DATABASE")
+
+    if [[ -n "${POSTGRES_URL_PASSWORD:-}" ]]; then
+        export PGPASSWORD="$POSTGRES_URL_PASSWORD"
+    fi
+
+    if [[ -n "${POSTGRES_URL_SSLMODE:-}" ]]; then
+        export PGSSLMODE="$POSTGRES_URL_SSLMODE"
+    fi
 else
     [[ -n "${DB_HOST:-}" ]] && pg_dump_args+=(--host="$DB_HOST")
     [[ -n "${DB_PORT:-}" ]] && pg_dump_args+=(--port="$DB_PORT")
     [[ -n "${DB_USERNAME:-}" ]] && pg_dump_args+=(--username="$DB_USERNAME")
     pg_dump_args+=(--dbname="$DB_DATABASE")
-fi
 
-if [[ -n "${DB_PASSWORD:-}" && "${DB_PASSWORD}" != "null" ]]; then
-    export PGPASSWORD="$DB_PASSWORD"
+    if [[ -n "${DB_PASSWORD:-}" && "${DB_PASSWORD}" != "null" ]]; then
+        export PGPASSWORD="$DB_PASSWORD"
+    fi
 fi
 
 pg_dump "${pg_dump_args[@]}"

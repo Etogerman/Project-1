@@ -8,10 +8,15 @@ DUMP_FILE=""
 RESTORE_SMOKE=0
 KEEP_RESTORE_DB=0
 RESTORE_DB=""
+RESTORE_HOST=""
+RESTORE_PORT="5432"
+RESTORE_USERNAME=""
 MAINTENANCE_DB="${POSTGRES_MAINTENANCE_DB:-postgres}"
 
 # shellcheck source=scripts/lib/load-dotenv.sh
 source "$ROOT_DIR/scripts/lib/load-dotenv.sh"
+# shellcheck source=scripts/lib/postgres-url.sh
+source "$ROOT_DIR/scripts/lib/postgres-url.sh"
 
 usage() {
     cat <<'USAGE'
@@ -27,6 +32,10 @@ is provided.
 Options:
   --env-file PATH       Read PostgreSQL connection settings from this file.
   --restore-smoke      Run a real restore into a temporary database.
+  --restore-host HOST   Explicit local PostgreSQL host for smoke restore.
+  --restore-port PORT   Explicit PostgreSQL port for smoke restore.
+  --restore-username USER
+                        Explicit PostgreSQL user for smoke restore.
   --restore-db NAME    Use a specific restore database name; implies smoke.
   --keep-restore-db    Keep the restore database after a successful smoke.
   --maintenance-db DB  Maintenance database used by createdb/dropdb.
@@ -48,6 +57,21 @@ while [[ $# -gt 0 ]]; do
         --restore-smoke)
             RESTORE_SMOKE=1
             shift
+            ;;
+        --restore-host)
+            [[ $# -ge 2 ]] || fail "--restore-host requires a host"
+            RESTORE_HOST="$2"
+            shift 2
+            ;;
+        --restore-port)
+            [[ $# -ge 2 ]] || fail "--restore-port requires a port"
+            RESTORE_PORT="$2"
+            shift 2
+            ;;
+        --restore-username)
+            [[ $# -ge 2 ]] || fail "--restore-username requires a user"
+            RESTORE_USERNAME="$2"
+            shift 2
             ;;
         --restore-db)
             [[ $# -ge 2 ]] || fail "--restore-db requires a database name"
@@ -101,15 +125,42 @@ if [[ -n "${DB_CONNECTION:-}" && "${DB_CONNECTION}" != "pgsql" ]]; then
     fail "DB_CONNECTION must be pgsql, got: ${DB_CONNECTION}"
 fi
 
+configured_database="${DB_DATABASE:-}"
+
+if [[ -n "${DB_URL:-}" ]]; then
+    load_postgres_url_parts "$DB_URL"
+    configured_database="${POSTGRES_URL_DATABASE:-$configured_database}"
+fi
+
+if [[ -z "$RESTORE_HOST" ]]; then
+    fail "--restore-smoke requires an explicit --restore-host local target"
+fi
+
+if [[ -z "$RESTORE_USERNAME" ]]; then
+    fail "--restore-smoke requires an explicit --restore-username"
+fi
+
+if [[ ! "$RESTORE_PORT" =~ ^[0-9]+$ ]]; then
+    fail "--restore-port must be a number"
+fi
+
+case "$RESTORE_HOST" in
+    localhost|127.0.0.1|::1|/*)
+        ;;
+    *)
+        fail "--restore-host must be a local target: localhost, 127.0.0.1, ::1, or a Unix socket directory"
+        ;;
+esac
+
 if [[ -z "$RESTORE_DB" ]]; then
-    RESTORE_DB="abrikosoff_restore_check_$(date +%Y%m%d%H%M%S)"
+    RESTORE_DB="abrikosoff_restore_check_$(date +%Y%m%d%H%M%S)_$$"
 fi
 
 if [[ ! "$RESTORE_DB" =~ ^[A-Za-z0-9_]+$ ]]; then
     fail "restore database name must contain only letters, digits, and underscores"
 fi
 
-if [[ -n "${DB_DATABASE:-}" && "$RESTORE_DB" == "$DB_DATABASE" ]]; then
+if [[ -n "$configured_database" && "$RESTORE_DB" == "$configured_database" ]]; then
     fail "restore database must not be the configured working database"
 fi
 
@@ -117,18 +168,15 @@ if [[ "$RESTORE_DB" == "$MAINTENANCE_DB" ]]; then
     fail "restore database must not be the maintenance database"
 fi
 
-if [[ -n "${DB_PASSWORD:-}" && "${DB_PASSWORD}" != "null" ]]; then
-    export PGPASSWORD="$DB_PASSWORD"
-fi
-
 conn_args=()
-[[ -n "${DB_HOST:-}" ]] && conn_args+=(--host="$DB_HOST")
-[[ -n "${DB_PORT:-}" ]] && conn_args+=(--port="$DB_PORT")
-[[ -n "${DB_USERNAME:-}" ]] && conn_args+=(--username="$DB_USERNAME")
+conn_args+=(--host="$RESTORE_HOST")
+conn_args+=(--port="$RESTORE_PORT")
+conn_args+=(--username="$RESTORE_USERNAME")
+psql_maintenance_args=("${conn_args[@]}" --dbname="$MAINTENANCE_DB")
+maintenance_tool_args=("${conn_args[@]}" --maintenance-db="$MAINTENANCE_DB")
 
 existing_db="$(
-    psql "${conn_args[@]}" \
-        --dbname="$MAINTENANCE_DB" \
+    psql "${psql_maintenance_args[@]}" \
         --tuples-only \
         --no-align \
         --command="select 1 from pg_database where datname = '$RESTORE_DB';" \
@@ -143,12 +191,12 @@ restore_db_created=0
 
 cleanup_restore_db() {
     if [[ "$restore_db_created" -eq 1 && "$KEEP_RESTORE_DB" -eq 0 ]]; then
-        dropdb "${conn_args[@]}" "$RESTORE_DB" >/dev/null 2>&1 || true
+        dropdb "${maintenance_tool_args[@]}" "$RESTORE_DB" >/dev/null 2>&1 || true
     fi
 }
 trap cleanup_restore_db EXIT
 
-createdb "${conn_args[@]}" "$RESTORE_DB"
+createdb "${maintenance_tool_args[@]}" "$RESTORE_DB"
 restore_db_created=1
 
 pg_restore "${conn_args[@]}" \
@@ -171,7 +219,7 @@ printf 'Restore smoke succeeded in database: %s\n' "$RESTORE_DB"
 printf 'Public tables restored: %s\n' "$table_count"
 
 if [[ "$KEEP_RESTORE_DB" -eq 0 ]]; then
-    dropdb "${conn_args[@]}" "$RESTORE_DB"
+    dropdb "${maintenance_tool_args[@]}" "$RESTORE_DB"
     restore_db_created=0
     printf 'Temporary restore database dropped.\n'
 else

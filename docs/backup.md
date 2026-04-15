@@ -70,10 +70,17 @@ scripts/verify-postgres-backup.sh storage/app/private/backups/postgres/<file>.du
 восстанавливает dump, считает public-таблицы и удаляет временную database:
 
 ```bash
-scripts/verify-postgres-backup.sh storage/app/private/backups/postgres/<file>.dump --restore-smoke
+scripts/verify-postgres-backup.sh \
+  storage/app/private/backups/postgres/<file>.dump \
+  --restore-smoke \
+  --restore-host 127.0.0.1 \
+  --restore-username "$USER"
 ```
 
-Скрипт специально запрещает restore в configured working database.
+`--restore-smoke` требует явный локальный target и не берёт host/port/user из
+app `.env`. Это защищает от случайного restore на staging/prod-кластере.
+Скрипт также читает `DB_URL` / `DB_DATABASE` из env-файла, чтобы запретить
+restore в configured working database.
 
 ## Ручное восстановление
 
