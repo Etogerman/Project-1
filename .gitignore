@@ -32,3 +32,11 @@ yarn-error.log
 /legacy/package-lock.json
 /playwright-report
 /test-results
+
+# Local database backups
+/backups/
+/storage/app/private/backups/
+*.dump
+*.dump.partial.*
+*.backup
+*.backup.partial.*
