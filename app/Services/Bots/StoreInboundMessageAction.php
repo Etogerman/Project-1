@@ -668,7 +668,7 @@ class StoreInboundMessageAction
         $messageReceivedAt = $storedMessage->received_at;
         $currentChangedAt = $lockedDialog->bot_subscription_changed_at;
 
-        if ($messageReceivedAt !== null && $currentChangedAt !== null && $messageReceivedAt->lt($currentChangedAt)) {
+        if ($messageReceivedAt !== null && $currentChangedAt !== null && ! $messageReceivedAt->gt($currentChangedAt)) {
             return;
         }
 

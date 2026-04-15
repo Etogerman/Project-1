@@ -63,6 +63,12 @@ class MaxSuspendedDialogRuntimeTest extends TestCase
             'Клиент заблокировал бота в MAX. Новые сообщения в этот диалог сейчас отправлять нельзя.',
             $routeStatus->blockedReason,
         );
+        $this->assertNull($dialog->channel()->firstOrFail()->last_error_at);
+        $this->assertNull($dialog->channel()->firstOrFail()->last_error_message);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $dialog->channel_id,
+            'event' => 'contact.reply_skipped_dialog_not_sendable',
+        ]);
 
         Http::assertSent(function (Request $request): bool {
             return str_starts_with($request->url(), 'https://platform-api.max.ru/messages?')
@@ -129,6 +135,40 @@ class MaxSuspendedDialogRuntimeTest extends TestCase
                 sharedContactUserId: null,
                 rawPayload: ['update_type' => 'message_created'],
                 receivedAt: Carbon::parse('2026-04-15 09:59:59'),
+            ),
+        );
+
+        $dialog->refresh();
+
+        $this->assertSame(Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER, $dialog->bot_subscription_status);
+        $this->assertSame('2026-04-15 10:00:00', $dialog->bot_subscription_changed_at?->format('Y-m-d H:i:s'));
+        $this->assertNull($dialog->bot_subscription_source_message_id);
+    }
+
+    public function test_equal_second_max_inbound_message_does_not_clear_suspended_state(): void
+    {
+        $dialog = $this->createMaxDialog([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => Carbon::parse('2026-04-15 10:00:00'),
+        ]);
+
+        app(StoreInboundMessageAction::class)->handle(
+            $dialog->channel()->firstOrFail(),
+            new IncomingBotMessage(
+                platform: Channel::PLATFORM_MAX,
+                channelId: $dialog->channel_id,
+                externalChatId: 'max-chat-100',
+                externalUserId: 'max-user-100',
+                providerEventKey: 'max-message-same-second-as-suspended',
+                externalMessageId: 'max-mid-same-second-as-suspended',
+                externalUsername: 'max_user',
+                contactName: 'MAX Клиент',
+                text: 'Сообщение из той же секунды',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['update_type' => 'message_created'],
+                receivedAt: Carbon::parse('2026-04-15 10:00:00'),
             ),
         );
 
