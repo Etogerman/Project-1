@@ -9,6 +9,7 @@ use App\Services\Scenarios\ArchiveScenarioAction;
 use App\Services\Scenarios\CreateNextScenarioDraftAction;
 use App\Services\Scenarios\CreateScenarioAction;
 use App\Services\Scenarios\PublishScenarioVersionAction;
+use App\Services\Scenarios\RestoreScenarioAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\ValidateScenarioSchemaPayloadAction;
 use BackedEnum;
@@ -269,7 +270,28 @@ class ScenarioResource extends Resource
                     ->modalWidth(Width::FiveExtraLarge)
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->extraModalWindowAttributes(['class' => 'ac-scenario-form-modal'])
+                    ->visible(fn (Scenario $record): bool => ! $record->is_archived
+                        && (auth()->user()?->can('update', $record) ?? false))
                     ->using(fn (array $data, Scenario $record): Scenario => static::saveScenario($data, $record)),
+                Action::make('restoreScenario')
+                    ->icon(Heroicon::OutlinedArrowPath)
+                    ->iconButton()
+                    ->tooltip('Восстановить сценарий')
+                    ->color('primary')
+                    ->requiresConfirmation()
+                    ->visible(fn (Scenario $record): bool => $record->is_archived
+                        && (auth()->user()?->can('archive', $record) ?? false))
+                    ->action(function (Scenario $record): void {
+                        abort_unless(auth()->user()?->can('archive', $record) ?? false, 403);
+
+                        app(RestoreScenarioAction::class)->handle($record);
+
+                        Notification::make()
+                            ->success()
+                            ->title('Сценарий восстановлен')
+                            ->body('Сценарий снова доступен для черновика и публикации, но остаётся выключенным.')
+                            ->send();
+                    }),
                 Action::make('archiveScenario')
                     ->icon(Heroicon::OutlinedTrash)
                     ->iconButton()
@@ -310,6 +332,12 @@ class ScenarioResource extends Resource
                 'code' => (string) ($data['code'] ?? ''),
                 'name' => (string) ($data['name'] ?? ''),
                 'is_active' => (bool) ($data['is_active'] ?? true),
+            ]);
+        }
+
+        if ($record->is_archived) {
+            throw ValidationException::withMessages([
+                'scenario' => 'Архивный сценарий сначала нужно восстановить.',
             ]);
         }
 
