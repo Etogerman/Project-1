@@ -19,7 +19,7 @@ test.describe('Admin smoke', () => {
         await expect(page.getByRole('columnheader', { name: 'ID' })).toBeVisible();
         await expect(page.getByRole('columnheader', { name: 'Email' })).toBeVisible();
         await expect(page.getByRole('columnheader', { name: /^(Статус|Активен)$/ })).toBeVisible();
-        await expect(page.getByRole('cell', { name: admin.email! })).toBeVisible();
+        await expect(page.getByRole('table')).toContainText(admin.email!);
     });
 
     test('admin can open contacts and dialogs resources', async ({ page }) => {
