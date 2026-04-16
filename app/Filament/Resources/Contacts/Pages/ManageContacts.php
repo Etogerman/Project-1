@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Contacts\Pages;
 
 use App\Filament\Resources\Contacts\ContactResource;
+use App\Filament\Resources\Pages\ManageRecords;
 use App\Models\Contact;
 use App\Models\Tag;
 use App\Models\User;
@@ -22,7 +23,6 @@ use App\Services\Contacts\UpdateContactPhoneAction;
 use App\Services\DataCollection\ResumeContactDataCollectionAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
-use Filament\Resources\Pages\ManageRecords;
 use Illuminate\Database\Eloquent\Model;
 use RuntimeException;
 use Illuminate\Validation\Rule;
