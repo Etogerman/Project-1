@@ -52,6 +52,13 @@ class ResolveNextDataCollectionFieldAction
             return false;
         }
 
+        if (
+            $contact->data_collection_status === Contact::DATA_COLLECTION_STATUS_COMPLETED
+            && $contact->data_collection_current_field === null
+        ) {
+            return true;
+        }
+
         return $contact->first_name_source !== Contact::FIRST_NAME_SOURCE_AUTO;
     }
 }
