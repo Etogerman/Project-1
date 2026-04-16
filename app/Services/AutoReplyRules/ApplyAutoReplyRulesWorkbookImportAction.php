@@ -4,8 +4,10 @@ namespace App\Services\AutoReplyRules;
 
 use App\Data\AutoReplyRules\AutoReplyRuleWorkbookPreviewData;
 use App\Data\AutoReplyRules\AutoReplyRuleWorkbookRowData;
+use App\Data\AutoReplyRules\AutoReplyRuleWorkbookRowErrorData;
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Models\AutoReplyRule;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -21,6 +23,12 @@ class ApplyAutoReplyRulesWorkbookImportAction
 
         $rows = [...$preview->createRows, ...$preview->updateRows];
 
+        $uniquenessErrors = app(ValidateAutoReplyRulesWorkbookUniquenessAction::class)->handle($rows);
+
+        if ($uniquenessErrors !== []) {
+            throw ValidationException::withMessages($this->buildUniquenessValidationMessages($uniquenessErrors));
+        }
+
         usort($rows, fn (AutoReplyRuleWorkbookRowData $left, AutoReplyRuleWorkbookRowData $right): int => $left->rowNumber <=> $right->rowNumber);
 
         DB::transaction(function () use ($rows): void {
@@ -32,10 +40,16 @@ class ApplyAutoReplyRulesWorkbookImportAction
                 if ($row->id !== null && ! $record instanceof AutoReplyRule) {
                     throw ValidationException::withMessages([
                         'id' => sprintf('Правило из строки %d больше не найдено.', $row->rowNumber),
-                    ]);
-                }
+                        ]);
+                    }
 
-                AutoReplyRuleResource::saveAutoReplyRule($this->buildPayload($row), $record);
+                try {
+                    AutoReplyRuleResource::saveAutoReplyRule($this->buildPayload($row), $record);
+                } catch (QueryException $exception) {
+                    $this->throwValidationExceptionForUniqueConstraint($exception, $row);
+
+                    throw $exception;
+                }
             }
         });
     }
@@ -63,5 +77,36 @@ class ApplyAutoReplyRulesWorkbookImportAction
             'is_active' => $row->isActive,
             'priority' => $row->priority,
         ];
+    }
+
+    /**
+     * @param  list<AutoReplyRuleWorkbookRowErrorData>  $errors
+     * @return array<string, string>
+     */
+    protected function buildUniquenessValidationMessages(array $errors): array
+    {
+        $messages = [];
+
+        foreach ($errors as $index => $error) {
+            $messages['workbook_'.$index] = sprintf('Строка %d: %s', $error->rowNumber, $error->message);
+        }
+
+        return $messages;
+    }
+
+    protected function throwValidationExceptionForUniqueConstraint(QueryException $exception, AutoReplyRuleWorkbookRowData $row): void
+    {
+        $sqlState = $exception->errorInfo[0] ?? $exception->getCode();
+
+        if ($sqlState !== '23505') {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'workbook' => sprintf(
+                'Строка %d конфликтует с существующим правилом по ключу (channel_id + match_scope + keyword). Обновите предпросмотр и повторите импорт.',
+                $row->rowNumber,
+            ),
+        ]);
     }
 }

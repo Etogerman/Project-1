@@ -141,6 +141,295 @@ class AutoReplyRulesWorkbookTest extends TestCase
         $this->assertSame('category_name', $preview->errors[0]->column);
     }
 
+    public function test_parse_preview_reports_existing_rule_uniqueness_conflict_for_create_row(): void
+    {
+        $channel = Channel::factory()->create();
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'ONASA01',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('ONASA01'),
+            'reply_text' => 'Existing reply',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Новое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Импортируемый ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertSame(0, $preview->createCount());
+        $this->assertSame(0, $preview->updateCount());
+        $this->assertSame(1, $preview->errorCount());
+        $this->assertSame('id', $preview->errors[0]->column);
+        $this->assertStringContainsString('Укажите id для обновления', $preview->errors[0]->message);
+    }
+
+    public function test_parse_preview_reports_existing_rule_uniqueness_conflict_for_create_row_with_zero_keyword(): void
+    {
+        $channel = Channel::factory()->create();
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => '0',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('0'),
+            'reply_text' => 'Existing reply',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Новое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                '0',
+                '',
+                'Импортируемый ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertSame(0, $preview->createCount());
+        $this->assertSame(0, $preview->updateCount());
+        $this->assertSame(1, $preview->errorCount());
+        $this->assertSame('id', $preview->errors[0]->column);
+        $this->assertStringContainsString('Укажите id для обновления', $preview->errors[0]->message);
+    }
+
+    public function test_parse_preview_reports_duplicate_rule_key_inside_workbook(): void
+    {
+        $channel = Channel::factory()->create();
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Первое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Первый ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+            [
+                '',
+                'Второе правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Второй ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertSame(1, $preview->createCount());
+        $this->assertSame(0, $preview->updateCount());
+        $this->assertSame(1, $preview->errorCount());
+        $this->assertSame(3, $preview->errors[0]->rowNumber);
+        $this->assertSame('keyword', $preview->errors[0]->column);
+        $this->assertStringContainsString('Строка конфликтует со строкой 2', $preview->errors[0]->message);
+    }
+
+    public function test_parse_preview_allows_duplicate_updates_of_same_rule_with_same_future_key(): void
+    {
+        $channel = Channel::factory()->create();
+        $rule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'OLD_KEY',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('OLD_KEY'),
+            'reply_text' => 'Existing reply',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                (string) $rule->id,
+                'Первое обновление',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'NEW_KEY',
+                '',
+                'Первый ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+            [
+                (string) $rule->id,
+                'Второе обновление',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'NEW_KEY',
+                '',
+                'Второй ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertFalse($preview->hasErrors());
+        $this->assertSame(0, $preview->createCount());
+        $this->assertSame(2, $preview->updateCount());
+    }
+
+    public function test_import_allows_key_handoff_between_existing_rules_in_row_order(): void
+    {
+        $channel = Channel::factory()->create();
+        $firstRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'KEY_A',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('KEY_A'),
+            'reply_text' => 'First reply',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+        $secondRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'KEY_C',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('KEY_C'),
+            'reply_text' => 'Second reply',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                (string) $firstRule->id,
+                'Первое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'KEY_B',
+                '',
+                'Первый ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+            [
+                (string) $secondRule->id,
+                'Второе правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'KEY_A',
+                '',
+                'Второй ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertFalse($preview->hasErrors());
+        $this->assertSame(0, $preview->createCount());
+        $this->assertSame(2, $preview->updateCount());
+
+        app(ApplyAutoReplyRulesWorkbookImportAction::class)->handle($preview);
+
+        $firstRule->refresh();
+        $secondRule->refresh();
+
+        $this->assertSame('KEY_B', $firstRule->keyword);
+        $this->assertSame('KEY_A', $secondRule->keyword);
+    }
+
     public function test_import_round_trip_preserves_normalized_rule_state(): void
     {
         $category = AutoReplyCategory::factory()->create(['name' => 'Fallback']);
