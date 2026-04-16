@@ -200,23 +200,41 @@ class User extends Authenticatable implements FilamentUser
      */
     public function putTablePreference(string $pageClass, array $preference): void
     {
+        static::query()
+            ->whereKey($this->getKey())
+            ->update([
+                'table_preferences' => DB::raw(
+                    sprintf(
+                        "coalesce(table_preferences, '{}'::jsonb) || jsonb_build_object(%s, %s::jsonb)",
+                        DB::getPdo()->quote($pageClass),
+                        DB::getPdo()->quote(json_encode($preference, JSON_THROW_ON_ERROR)),
+                    ),
+                ),
+            ]);
+
         $preferences = $this->tablePreferences();
         $preferences[$pageClass] = $preference;
 
-        $this->persistTablePreferences($preferences);
+        $this->syncTablePreferencesAttribute($preferences);
     }
 
     public function forgetTablePreference(string $pageClass): void
     {
+        static::query()
+            ->whereKey($this->getKey())
+            ->update([
+                'table_preferences' => DB::raw(
+                    sprintf(
+                        "coalesce(table_preferences, '{}'::jsonb) - %s",
+                        DB::getPdo()->quote($pageClass),
+                    ),
+                ),
+            ]);
+
         $preferences = $this->tablePreferences();
-
-        if (! array_key_exists($pageClass, $preferences)) {
-            return;
-        }
-
         unset($preferences[$pageClass]);
 
-        $this->persistTablePreferences($preferences);
+        $this->syncTablePreferencesAttribute($preferences);
     }
 
     /**
@@ -251,14 +269,8 @@ class User extends Authenticatable implements FilamentUser
     /**
      * @param  array<string, array<string, mixed>>  $preferences
      */
-    protected function persistTablePreferences(array $preferences): void
+    protected function syncTablePreferencesAttribute(array $preferences): void
     {
-        static::query()
-            ->whereKey($this->getKey())
-            ->update([
-                'table_preferences' => $preferences,
-            ]);
-
         $this->setAttribute('table_preferences', $preferences);
         $this->syncOriginalAttribute('table_preferences');
     }

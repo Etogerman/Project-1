@@ -118,6 +118,70 @@ class FilamentTableColumnPreferencesTest extends TestCase
         $this->assertFalse($this->findColumnState($mountedState, 'name')['isToggled']);
     }
 
+    public function test_stale_user_instances_do_not_overwrite_other_pages_table_preferences(): void
+    {
+        $admin = $this->createAdmin();
+        $firstPageUser = User::query()->findOrFail($admin->id);
+        $secondPageUser = User::query()->findOrFail($admin->id);
+
+        $firstPageUser->putTablePreference(ManageUsers::class, [
+            'columns' => [
+                ['name' => 'email', 'isToggled' => false],
+            ],
+            'has_reordered_columns' => false,
+        ]);
+
+        $secondPageUser->putTablePreference(ManageContacts::class, [
+            'columns' => [
+                ['name' => 'id', 'isToggled' => false],
+            ],
+            'has_reordered_columns' => true,
+        ]);
+
+        $freshUser = User::query()->findOrFail($admin->id);
+
+        $this->assertSame(
+            ['columns' => [['name' => 'email', 'isToggled' => false]], 'has_reordered_columns' => false],
+            $freshUser->getTablePreference(ManageUsers::class),
+        );
+        $this->assertSame(
+            ['columns' => [['name' => 'id', 'isToggled' => false]], 'has_reordered_columns' => true],
+            $freshUser->getTablePreference(ManageContacts::class),
+        );
+    }
+
+    public function test_stale_user_instance_can_forget_one_page_without_dropping_other_page_preferences(): void
+    {
+        $admin = $this->createAdmin();
+        $seedUser = User::query()->findOrFail($admin->id);
+
+        $seedUser->putTablePreference(ManageUsers::class, [
+            'columns' => [
+                ['name' => 'email', 'isToggled' => false],
+            ],
+            'has_reordered_columns' => false,
+        ]);
+        $seedUser->putTablePreference(ManageContacts::class, [
+            'columns' => [
+                ['name' => 'id', 'isToggled' => false],
+            ],
+            'has_reordered_columns' => true,
+        ]);
+
+        $staleUser = User::query()->findOrFail($admin->id);
+        $freshUser = User::query()->findOrFail($admin->id);
+
+        $staleUser->forgetTablePreference(ManageUsers::class);
+
+        $updatedUser = $freshUser->fresh();
+
+        $this->assertNull($updatedUser->getTablePreference(ManageUsers::class));
+        $this->assertSame(
+            ['columns' => [['name' => 'id', 'isToggled' => false]], 'has_reordered_columns' => true],
+            $updatedUser->getTablePreference(ManageContacts::class),
+        );
+    }
+
     private function createAdmin(): User
     {
         return User::factory()->create([
