@@ -38,4 +38,53 @@ class AppVersionTest extends TestCase
 
         $this->assertSame('2026.03.27.2', AppVersion::resolveFromFile($path));
     }
+
+    public function test_environment_indicator_exposes_normalized_revision_marker(): void
+    {
+        $this->withTemporaryAppVersion('ABCDEF1234567890ABCDEF1234567890ABCDEF12', function (): void {
+            $html = view('filament.components.environment-indicator')->render();
+
+            $this->assertStringContainsString('data-role="environment-indicator"', $html);
+            $this->assertStringContainsString('data-app-version="abcdef1"', $html);
+            $this->assertStringContainsString('rev abcdef1', $html);
+        });
+    }
+
+    private function withTemporaryAppVersion(string $value, callable $callback): void
+    {
+        $previousEnvValue = $_ENV['APP_VERSION'] ?? null;
+        $previousServerValue = $_SERVER['APP_VERSION'] ?? null;
+        $previousProcessValue = getenv('APP_VERSION');
+
+        $_ENV['APP_VERSION'] = $value;
+        $_SERVER['APP_VERSION'] = $value;
+        putenv('APP_VERSION='.$value);
+
+        try {
+            $callback();
+        } finally {
+            $this->restoreEnvironmentValue('APP_VERSION', $previousEnvValue, $_ENV);
+            $this->restoreEnvironmentValue('APP_VERSION', $previousServerValue, $_SERVER);
+
+            if ($previousProcessValue === false) {
+                putenv('APP_VERSION');
+            } else {
+                putenv('APP_VERSION='.$previousProcessValue);
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $target
+     */
+    private function restoreEnvironmentValue(string $key, ?string $value, array &$target): void
+    {
+        if ($value === null) {
+            unset($target[$key]);
+
+            return;
+        }
+
+        $target[$key] = $value;
+    }
 }

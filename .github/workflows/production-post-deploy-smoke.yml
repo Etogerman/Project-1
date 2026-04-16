@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       release_ref:
-        description: "Deploy ref or release note"
-        required: false
+        description: "Expected deployed commit SHA"
+        required: true
         type: string
 
 permissions:
@@ -27,6 +27,7 @@ jobs:
       PLAYWRIGHT_ADMIN_EMAIL: ${{ secrets.PLAYWRIGHT_ADMIN_EMAIL }}
       PLAYWRIGHT_ADMIN_PASSWORD: ${{ secrets.PLAYWRIGHT_ADMIN_PASSWORD }}
       RELEASE_REF: ${{ inputs.release_ref }}
+      PLAYWRIGHT_EXPECTED_APP_REV: ${{ inputs.release_ref }}
 
     steps:
       - name: Checkout repository
@@ -79,6 +80,9 @@ jobs:
 
           echo "::error::Timed out waiting for ${readiness_url}"
           exit 1
+
+      - name: Verify deployed revision
+        run: npx playwright test e2e/release-rev.smoke.spec.ts
 
       - name: Run public smoke
         run: npx playwright test e2e/public.smoke.spec.ts
