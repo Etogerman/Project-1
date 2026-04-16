@@ -41,6 +41,22 @@ class ResolveNextDataCollectionFieldActionTest extends TestCase
         );
     }
 
+    public function test_it_returns_first_name_when_only_auto_first_name_is_filled(): void
+    {
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+            'country' => null,
+            'city' => null,
+            'age_range' => null,
+        ]);
+
+        $this->assertSame(
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            app(ResolveNextDataCollectionFieldAction::class)->handle($contact),
+        );
+    }
+
     public function test_it_returns_city_when_country_is_filled_but_city_is_missing(): void
     {
         $contact = Contact::factory()->create([
