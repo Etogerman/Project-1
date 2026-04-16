@@ -98,7 +98,6 @@ class DialogResource extends Resource
                 TextColumn::make('contact_label')
                     ->label('Контакт')
                     ->state(fn (Dialog $record): string => static::resolveContactLabel($record))
-                    ->description(fn (Dialog $record): ?string => static::formatDialogTableIdentitySummary($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search))
                     ->toggleable(),
                 TextColumn::make('inbox_status')
@@ -149,9 +148,20 @@ class DialogResource extends Resource
                     ->label('ID')
                     ->sortable()
                     ->toggleable(),
+                TextColumn::make('external_user_id')
+                    ->label('Внешний ID')
+                    ->state(fn (Dialog $record): ?string => static::resolveDialogExternalUserId($record))
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('external_username')
+                    ->label('Username')
+                    ->state(fn (Dialog $record): ?string => static::resolveDialogUsername($record))
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('phone_label')
-                    ->label('Телефон канала')
-                    ->state(fn (Dialog $record): string => static::formatDialogPhoneLabel($record))
+                    ->label('Номер телефона')
+                    ->state(fn (Dialog $record): ?string => static::resolveDialogPhoneValue($record))
+                    ->placeholder('—')
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('route_source')
                     ->label('Источник маршрута')
@@ -513,7 +523,7 @@ class DialogResource extends Resource
         return $channel->name ?: $platformLabel ?: 'Неизвестный канал';
     }
 
-    protected static function formatDialogPhoneLabel(Dialog $dialog): string
+    protected static function resolveDialogPhoneValue(Dialog $dialog): ?string
     {
         if (filled($dialog->confirmed_phone_raw)) {
             return (string) $dialog->confirmed_phone_raw;
@@ -523,7 +533,7 @@ class DialogResource extends Resource
             return (string) $dialog->confirmed_phone_normalized;
         }
 
-        return 'Телефон в этом канале не подтвержден';
+        return null;
     }
 
     protected static function formatDialogRouteIdentityLabel(Dialog $dialog): string
@@ -559,21 +569,17 @@ class DialogResource extends Resource
         return app(ResolveContactDisplayNameAction::class)->handle($dialog->contact, $dialog);
     }
 
-    protected static function formatDialogTableIdentitySummary(Dialog $dialog): ?string
+    protected static function resolveDialogExternalUserId(Dialog $dialog): ?string
     {
-        $parts = [];
-        $routeIdentityLabel = static::formatDialogRouteIdentityLabel($dialog);
+        return filled($dialog->currentContactIdentity?->external_user_id)
+            ? (string) $dialog->currentContactIdentity->external_user_id
+            : null;
+    }
 
-        if ($routeIdentityLabel !== 'Не задан') {
-            $parts[] = $routeIdentityLabel;
-        }
-
-        $phoneLabel = static::formatDialogPhoneLabel($dialog);
-
-        if ($phoneLabel !== 'Телефон в этом канале не подтвержден') {
-            $parts[] = $phoneLabel;
-        }
-
-        return $parts === [] ? null : implode(' · ', $parts);
+    protected static function resolveDialogUsername(Dialog $dialog): ?string
+    {
+        return filled($dialog->currentContactIdentity?->external_username)
+            ? '@'.ltrim((string) $dialog->currentContactIdentity->external_username, '@')
+            : null;
     }
 }
