@@ -57,10 +57,7 @@ class ViewDialog extends ViewRecord
      */
     public ?array $nextOlderCursor = null;
 
-    /**
-     * @var array{sort_at:string,id:int}|null
-     */
-    public ?array $latestVisibleMessageCursor = null;
+    public ?int $latestKnownMessageId = null;
 
     public function mount(int|string $record): void
     {
@@ -215,7 +212,7 @@ class ViewDialog extends ViewRecord
         $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
         $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
         $this->nextOlderCursor = $page->nextOlderCursor;
-        $this->latestVisibleMessageCursor = $this->makeMessageCursor($page->messages->last());
+        $this->latestKnownMessageId = $this->resolveLatestKnownMessageId($page->messages);
     }
 
     /**
@@ -336,7 +333,7 @@ class ViewDialog extends ViewRecord
             if ($page->messages->isEmpty()) {
                 $this->hasMoreOlderMessages = false;
                 $this->nextOlderCursor = null;
-                $this->latestVisibleMessageCursor = null;
+                $this->latestKnownMessageId = null;
 
                 return 0;
             }
@@ -344,14 +341,14 @@ class ViewDialog extends ViewRecord
             $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
             $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
             $this->nextOlderCursor = $page->nextOlderCursor;
-            $this->latestVisibleMessageCursor = $this->makeMessageCursor($page->messages->last());
+            $this->latestKnownMessageId = $this->resolveLatestKnownMessageId($page->messages);
 
             return count($this->conversationMessages);
         }
 
-        $messages = app(LoadDialogMessagesPageAction::class)->loadMessagesAfter(
+        $messages = app(LoadDialogMessagesPageAction::class)->loadMessagesAddedAfterId(
             $this->getRecord(),
-            $this->latestVisibleMessageCursor,
+            $this->latestKnownMessageId,
             50,
         );
 
@@ -378,7 +375,7 @@ class ViewDialog extends ViewRecord
             ->values();
 
         if ($newMessages->isEmpty()) {
-            $this->latestVisibleMessageCursor = $this->makeMessageCursor($messages->last()) ?? $this->latestVisibleMessageCursor;
+            $this->latestKnownMessageId = max($this->latestKnownMessageId ?? 0, $this->resolveLatestKnownMessageId($messages) ?? 0) ?: null;
 
             return 0;
         }
@@ -393,30 +390,35 @@ class ViewDialog extends ViewRecord
             ...$this->conversationMessages,
             ...$newMessageViewData,
         ];
-        $this->latestVisibleMessageCursor = $this->makeMessageCursor($newMessages->last()) ?? $this->latestVisibleMessageCursor;
+        $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
+        $this->latestKnownMessageId = max($this->latestKnownMessageId ?? 0, $this->resolveLatestKnownMessageId($newMessages) ?? 0) ?: null;
 
         return count($newMessageViewData);
     }
 
     /**
-     * @return array{sort_at:string,id:int}|null
+     * @param  list<array<string, mixed>>  $messages
+     * @return list<array<string, mixed>>
      */
-    protected function makeMessageCursor(?Message $message): ?array
+    protected function sortConversationMessages(array $messages): array
     {
-        if (! $message instanceof Message) {
-            return null;
-        }
+        usort($messages, function (array $left, array $right): int {
+            return strcmp((string) ($left['sort_key'] ?? ''), (string) ($right['sort_key'] ?? ''));
+        });
 
-        $sortAt = app(BuildConversationFeedViewDataAction::class)->resolveMessageSortAt($message);
+        return array_values($messages);
+    }
 
-        if ($sortAt === null) {
-            return null;
-        }
+    /**
+     * @param  Collection<int, Message>  $messages
+     */
+    protected function resolveLatestKnownMessageId(Collection $messages): ?int
+    {
+        $latestMessageId = $messages->max('id');
 
-        return [
-            'sort_at' => $sortAt->toIso8601String(),
-            'id' => $message->id,
-        ];
+        return is_numeric($latestMessageId)
+            ? (int) $latestMessageId
+            : null;
     }
 
     protected function getContactViewUrl(): string
