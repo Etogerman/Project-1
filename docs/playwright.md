@@ -76,10 +76,23 @@ Staging smoke запускается:
 - после каждого `push` в `staging`
 - вручную через `workflow_dispatch`
 
+Для staging действует rev-check:
+
+- automatic run после `push` в `staging` ожидает deployed rev равным SHA этого push-коммита
+- manual `workflow_dispatch` требует явный input `expected_app_rev`
+- если `expected_app_rev` не передан или передан неверно, это ошибка запуска smoke, а не app regression
+
 Production smoke запускается:
 
 - только вручную через `workflow_dispatch`
 - только после реального production deploy
+
+Для production действует rev-check:
+
+- при запуске нужно обязательно передать `release_ref`
+- `release_ref` должен быть ожидаемым deployed commit SHA
+- rev-check сначала подтверждает этот commit в админке и только потом запускает public/admin smoke
+- неверный `release_ref` даёт process failure, а не доказанный runtime regression
 
 Для каждого environment нужны свои secrets:
 
@@ -90,6 +103,7 @@ Production smoke запускается:
 Smoke идёт по живому URL:
 
 - ждёт доступности `/admin/login`
+- проверяет marker с ожидаемым deployed rev в админке
 - запускает `public.smoke.spec.ts`
 - запускает `admin.smoke.spec.ts`
 - сохраняет Playwright artifacts
@@ -99,3 +113,4 @@ Smoke идёт по живому URL:
 - workflow должен отражать реальный release process, а не идеальную будущую схему
 - автоматический smoke должен смотреть туда, куда реально ушёл новый merge
 - production smoke имеет смысл только после фактического production deploy
+- если падает именно rev-check, сначала нужно проверить deploy и правильность expected rev input
