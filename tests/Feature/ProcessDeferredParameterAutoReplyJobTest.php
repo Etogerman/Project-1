@@ -204,11 +204,47 @@ class ProcessDeferredParameterAutoReplyJobTest extends TestCase
             ->count());
     }
 
+    public function test_job_still_sends_delayed_reply_for_completed_contact_with_auto_first_name(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9706,
+                ],
+            ]),
+        ]);
+
+        [$dialog, $sourceMessage] = $this->createPendingDialogWithSource(contactOverrides: [
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+        ]);
+        AutoReplyRule::factory()->forChannel($dialog->channel)->create([
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'reply_text' => 'Delayed ответ для completed auto first name',
+        ]);
+
+        app()->call([new ProcessDeferredParameterAutoReplyJob($dialog->id), 'handle']);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === 'dialog-chat-current'
+            && $request['text'] === 'Delayed ответ для completed auto first name');
+        $this->assertNull($dialog->fresh()->pending_auto_reply_source_message_id);
+        $this->assertSame(1, Message::query()
+            ->where('reply_to_message_id', $sourceMessage->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_AUTO_REPLY)
+            ->count());
+    }
+
     /**
      * @param  array<string, mixed>  $sourceOverrides
+     * @param  array<string, mixed>  $contactOverrides
      * @return array{0: Dialog, 1: Message}
      */
-    private function createPendingDialogWithSource(array $sourceOverrides = []): array
+    private function createPendingDialogWithSource(array $sourceOverrides = [], array $contactOverrides = []): array
     {
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -219,7 +255,7 @@ class ProcessDeferredParameterAutoReplyJobTest extends TestCase
             'is_active' => true,
         ]);
 
-        $contact = Contact::factory()->create([
+        $contact = Contact::factory()->create(array_merge([
             'first_name' => 'Герман',
             'last_name' => 'Абрикосов',
             'age_range' => '24_29',
@@ -233,7 +269,7 @@ class ProcessDeferredParameterAutoReplyJobTest extends TestCase
             'bitrix24_sync_pending' => false,
             'bitrix24_linked_at' => now()->subDay(),
             'bitrix24_last_synced_at' => now()->subMinute(),
-        ]);
+        ], $contactOverrides));
 
         $sourceIdentity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
