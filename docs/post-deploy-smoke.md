@@ -35,6 +35,9 @@ production deploy.
 участвуют в текущем release flow. Формально включать нерабочий staging нельзя:
 это создаёт постоянный красный run без реальной диагностической ценности.
 
+И staging, и production smoke дополнительно проверяют rev задеплоенного
+приложения по marker в админке до запуска public/admin smoke.
+
 ## Где смотреть статус
 
 Статус staging smoke проверяется в GitHub, а не в админке приложения:
@@ -54,12 +57,34 @@ production deploy.
 - merge или push в `staging` должен проверяться staging smoke
 - staging становится главным автоматическим acceptance gate
 
+Если staging smoke запускается автоматически по `push` в `staging`:
+
+- ожидаемый deployed rev берётся из SHA этого push-коммита
+- rev-check должен подтвердить, что в staging реально появился именно этот rev
+
+Если staging smoke запускается вручную через `workflow_dispatch`:
+
+- нужно явно передать `expected_app_rev`
+- этот input должен соответствовать реально ожидаемому deployed commit SHA
+- запуск manual smoke с неверным `expected_app_rev` считается ошибкой запуска,
+  а не регрессией приложения
+
 Если staging не работает или не участвует в приёмке:
 
 - staging не должен оставаться формально включённым в автоматический smoke
 - workflow может временно проверять другое реально используемое окружение
 
 ## Production
+
+Manual workflow `Production Post-Deploy Smoke` запускается только после
+фактического production deploy.
+
+При запуске нужно обязательно передать:
+
+- `release_ref` — ожидаемый deployed commit SHA
+
+Production rev-check обязан сначала подтвердить, что в админке уже виден
+именно этот rev, и только потом запускать public/admin smoke.
 
 Проверить:
 
@@ -104,6 +129,12 @@ Production smoke делать только после фактического p
 - `qa/checklist issue`
 
 Потом соотнести проблему с конкретным PR или stream, а не с “релизом вообще”.
+
+Если падает именно rev-check:
+
+- сначала проверить, что deploy действительно завершён
+- затем проверить, что в workflow передан правильный expected rev
+- только после этого трактовать падение как возможную проблему rollout-а
 
 ## Минимальный формат фиксации результата
 
