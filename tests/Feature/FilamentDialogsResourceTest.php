@@ -64,6 +64,21 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee($dialog->contact->display_name);
     }
 
+    public function test_dialogs_inbox_page_enables_live_polling(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $this->createInboxDialog();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('wire:poll.10s', escape: false);
+    }
+
     public function test_dialogs_inbox_uses_separate_hidden_columns_for_identity_and_phone_details(): void
     {
         $admin = User::factory()->create([
@@ -182,6 +197,21 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
             ->assertOk()
             ->assertSee('Telegram Клиент');
+    }
+
+    public function test_dialog_view_exposes_live_refresh_polling_configuration(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-poll-interval-ms="5000"', escape: false)
+            ->assertSee('refreshDialogViewData', escape: false);
     }
 
     public function test_dialog_view_renders_current_dialog_messenger_name_in_technical_context(): void
@@ -883,6 +913,92 @@ class FilamentDialogsResourceTest extends TestCase
         $this->assertSame('Сообщение 70', $messages[49]['display_text']);
         $component->assertSet('hasMoreOlderMessages', true)
             ->assertSee('Загрузить более ранние сообщения');
+    }
+
+    public function test_dialog_view_live_refresh_appends_new_messages_without_losing_local_state(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $newOwner = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Новый ответственный',
+        ]);
+        $dialog = $this->createDialogWithMessages(3);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->set('dialogReplyText', 'Черновик без потери')
+            ->set('dialogReplyFormat', Message::TEXT_FORMAT_HTML)
+            ->set('conversationDisplayMode', ViewDialog::CONVERSATION_DISPLAY_MODE_HTML);
+
+        $dialog->contact->update([
+            'assigned_user_id' => $newOwner->id,
+        ]);
+
+        $newInboundMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Новое входящее без перезагрузки',
+            'received_at' => now()->addSecond(),
+            'external_message_id' => 'live-refresh-001',
+            'provider_event_key' => 'live-refresh-event-001',
+        ]);
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed')
+            ->assertSet('dialogReplyText', 'Черновик без потери')
+            ->assertSet('dialogReplyFormat', Message::TEXT_FORMAT_HTML)
+            ->assertSet('conversationDisplayMode', ViewDialog::CONVERSATION_DISPLAY_MODE_HTML)
+            ->assertSee('Новое входящее без перезагрузки')
+            ->assertSee('Новый ответственный');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(4, $messages);
+        $this->assertSame('Новое входящее без перезагрузки', $messages[3]['display_text']);
+        $this->assertSame($newInboundMessage->id, $component->get('latestVisibleMessageCursor')['id']);
+    }
+
+    public function test_dialog_view_live_refresh_does_not_duplicate_already_loaded_messages(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Сообщение только один раз',
+            'received_at' => now()->addSecond(),
+            'external_message_id' => 'live-refresh-002',
+            'provider_event_key' => 'live-refresh-event-002',
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('refreshDialogViewData')
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(2, $messages);
+        $this->assertSame([
+            'Сообщение 1',
+            'Сообщение только один раз',
+        ], array_column($messages, 'display_text'));
     }
 
     public function test_dialog_view_can_load_older_messages(): void

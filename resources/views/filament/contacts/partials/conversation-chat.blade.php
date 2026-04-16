@@ -15,7 +15,11 @@
             @php($previousDateKey = null)
             @foreach ($messages as $message)
                 @if ($previousDateKey !== $message['date_key'])
-                    <div data-role="conversation-date-separator" class="ac-thread__date">
+                    <div
+                        wire:key="conversation-date-{{ $message['date_key'] }}"
+                        data-role="conversation-date-separator"
+                        class="ac-thread__date"
+                    >
                         <span class="ac-thread__date-pill">
                             {{ $message['date_label'] }}
                         </span>
@@ -24,6 +28,7 @@
                 @endif
 
                 <div
+                    wire:key="conversation-message-{{ $message['id'] }}"
                     data-role="conversation-message"
                     data-direction="{{ $message['direction'] }}"
                     data-kind="{{ $message['kind'] }}"
