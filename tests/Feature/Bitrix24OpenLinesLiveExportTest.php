@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\IncomingBotMessage;
 use App\Jobs\DedupeBitrix24ContactPhonesJob;
@@ -9,6 +10,7 @@ use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\LogBitrix24RawContactPhoneSnapshotJob;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
+use App\Models\Bitrix24SyncLog;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -16,13 +18,12 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
-use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
+use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\BuildBitrix24OpenLinesMessagePayloadAction;
 use App\Services\Bitrix24\DedupeBitrix24ContactPhonesAction;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
 use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
-use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
@@ -385,7 +386,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'openlines_live_exported_fake',
-            'status' => \App\Models\Bitrix24SyncLog::STATUS_SUCCESS,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
             'entity_type' => 'message',
             'entity_id' => (string) $message->id,
         ]);
@@ -598,6 +599,93 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             return ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Клиент поделился номером телефона';
         });
+    }
+
+    public function test_max_bot_started_without_text_is_queued_for_live_export(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog(Channel::PLATFORM_MAX);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => null,
+            'message_parameter' => null,
+            'raw_payload' => [
+                'update_type' => 'bot_started',
+            ],
+        ]);
+
+        $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
+
+        $this->assertTrue($result->queued);
+        $this->assertTrue($result->ready);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message): bool {
+            return $job->messageId === $message->id;
+        });
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+        ]);
+    }
+
+    public function test_max_bot_started_live_payload_uses_bot_start_text(): void
+    {
+        $dialog = $this->createLiveReadyDialog(Channel::PLATFORM_MAX);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => null,
+            'message_parameter' => 'deep-link-payload',
+            'raw_payload' => [
+                'update_type' => 'bot_started',
+            ],
+            'received_at' => Carbon::parse('2026-04-01 13:49:00', 'Europe/Moscow'),
+        ]);
+
+        $payload = app(BuildBitrix24OpenLinesMessagePayloadAction::class)->handle(
+            $message,
+            new Bitrix24OpenLinesRouteData(
+                platform: Channel::PLATFORM_MAX,
+                connectorCode: 'abrikosoff_max',
+                lineId: 'line-max',
+            ),
+        );
+
+        $this->assertSame('Клиент запустил MAX-бота', $payload['MESSAGES'][0]['message']['text'] ?? null);
+    }
+
+    public function test_telegram_start_live_payload_uses_bot_start_text(): void
+    {
+        $dialog = $this->createLiveReadyDialog(Channel::PLATFORM_TELEGRAM);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => '/start promo_123',
+            'message_parameter' => 'promo_123',
+            'raw_payload' => [
+                'message' => [
+                    'text' => '/start promo_123',
+                ],
+            ],
+            'received_at' => Carbon::parse('2026-04-01 13:50:00', 'Europe/Moscow'),
+        ]);
+
+        $payload = app(BuildBitrix24OpenLinesMessagePayloadAction::class)->handle(
+            $message,
+            new Bitrix24OpenLinesRouteData(
+                platform: Channel::PLATFORM_TELEGRAM,
+                connectorCode: 'abrikosoff_telegram',
+                lineId: 'line-telegram',
+            ),
+        );
+
+        $this->assertSame('Клиент запустил Telegram-бота', $payload['MESSAGES'][0]['message']['text'] ?? null);
     }
 
     public function test_blocked_system_event_is_exported_as_system_text(): void
