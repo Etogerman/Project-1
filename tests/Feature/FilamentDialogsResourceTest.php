@@ -963,7 +963,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         $this->assertCount(4, $messages);
         $this->assertSame('Новое входящее без перезагрузки', $messages[3]['display_text']);
-        $this->assertSame($newInboundMessage->id, $component->get('latestVisibleMessageCursor')['id']);
+        $this->assertSame($newInboundMessage->id, $component->get('latestKnownMessageId'));
     }
 
     public function test_dialog_view_live_refresh_does_not_duplicate_already_loaded_messages(): void
@@ -998,6 +998,44 @@ class FilamentDialogsResourceTest extends TestCase
         $this->assertSame([
             'Сообщение 1',
             'Сообщение только один раз',
+        ], array_column($messages, 'display_text'));
+    }
+
+    public function test_dialog_view_live_refresh_inserts_late_arriving_message_into_chronological_position(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(3);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Поздно дошедшее сообщение',
+            'received_at' => now()->subSeconds(1),
+            'external_message_id' => 'live-refresh-late-001',
+            'provider_event_key' => 'live-refresh-late-event-001',
+        ]);
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(4, $messages);
+        $this->assertSame([
+            'Сообщение 1',
+            'Сообщение 2',
+            'Поздно дошедшее сообщение',
+            'Сообщение 3',
         ], array_column($messages, 'display_text'));
     }
 
