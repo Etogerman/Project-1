@@ -5,6 +5,11 @@ on:
     branches:
       - staging
   workflow_dispatch:
+    inputs:
+      expected_app_rev:
+        description: "Expected deployed commit SHA for manual reruns"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -24,7 +29,6 @@ jobs:
       PLAYWRIGHT_BASE_URL: ${{ secrets.PLAYWRIGHT_BASE_URL }}
       PLAYWRIGHT_ADMIN_EMAIL: ${{ secrets.PLAYWRIGHT_ADMIN_EMAIL }}
       PLAYWRIGHT_ADMIN_PASSWORD: ${{ secrets.PLAYWRIGHT_ADMIN_PASSWORD }}
-      PLAYWRIGHT_EXPECTED_APP_REV: ${{ github.sha }}
 
     steps:
       - name: Checkout repository
@@ -46,6 +50,26 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Resolve expected staging revision
+        env:
+          INPUT_EXPECTED_APP_REV: ${{ inputs.expected_app_rev }}
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            if [ -z "${INPUT_EXPECTED_APP_REV:-}" ]; then
+              echo "::error::workflow_dispatch requires expected_app_rev to verify the deployed staging revision."
+              exit 1
+            fi
+
+            resolved_rev="${INPUT_EXPECTED_APP_REV}"
+          else
+            resolved_rev="${GITHUB_SHA}"
+          fi
+
+          echo "PLAYWRIGHT_EXPECTED_APP_REV=${resolved_rev}" >> "$GITHUB_ENV"
+          echo "Staging smoke expects deployed rev: ${resolved_rev}"
 
       - name: Install npm dependencies
         run: npm ci
