@@ -2,9 +2,9 @@
 
 namespace App\Filament\Resources\Tags\Pages;
 
+use App\Filament\Resources\Pages\ManageRecords;
 use App\Filament\Resources\Tags\TagResource;
 use Filament\Actions\CreateAction;
-use Filament\Resources\Pages\ManageRecords;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 

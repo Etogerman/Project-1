@@ -3,9 +3,9 @@
 namespace App\Filament\Resources\Channels\Pages;
 
 use App\Filament\Resources\Channels\ChannelResource;
+use App\Filament\Resources\Pages\ManageRecords;
 use App\Models\Channel;
 use Filament\Actions\CreateAction;
-use Filament\Resources\Pages\ManageRecords;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 
