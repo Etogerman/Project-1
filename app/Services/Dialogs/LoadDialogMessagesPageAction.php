@@ -7,6 +7,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 
 class LoadDialogMessagesPageAction
 {
@@ -71,5 +72,36 @@ class LoadDialogMessagesPageAction
                 ]
                 : null,
         );
+    }
+
+    /**
+     * @param  array{sort_at:string,id:int}|null  $cursor
+     * @return Collection<int, Message>
+     */
+    public function loadMessagesAfter(Dialog $dialog, ?array $cursor, int $limit = 50): Collection
+    {
+        if (! is_array($cursor) || ! filled($cursor['sort_at'] ?? null) || ! filled($cursor['id'] ?? null)) {
+            return collect();
+        }
+
+        $cursorSortAt = Carbon::parse((string) $cursor['sort_at']);
+        $cursorMessageId = (int) $cursor['id'];
+
+        return Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->with(['channel', 'dialog.channel', 'sentByUser'])
+            ->where(function (Builder $builder) use ($cursorSortAt, $cursorMessageId): void {
+                $builder
+                    ->whereRaw($this->messageChronology->sqlSortAt('messages').' > ?', [$cursorSortAt->toDateTimeString()])
+                    ->orWhere(function (Builder $nested) use ($cursorSortAt, $cursorMessageId): void {
+                        $nested
+                            ->whereRaw($this->messageChronology->sqlSortAt('messages').' = ?', [$cursorSortAt->toDateTimeString()])
+                            ->where('id', '>', $cursorMessageId);
+                    });
+            })
+            ->tap(fn (Builder $builder): Builder => $this->messageChronology->applyOldestOrder($builder))
+            ->limit($limit)
+            ->get()
+            ->values();
     }
 }

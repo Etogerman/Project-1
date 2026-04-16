@@ -19,6 +19,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -29,6 +30,8 @@ class ViewDialog extends ViewRecord
     public const CONVERSATION_DISPLAY_MODE_FORMATTED = 'formatted';
 
     public const CONVERSATION_DISPLAY_MODE_HTML = 'html';
+
+    public const LIVE_REFRESH_INTERVAL_MS = 5000;
 
     protected static string $resource = DialogResource::class;
 
@@ -53,6 +56,11 @@ class ViewDialog extends ViewRecord
      * @var array{sort_at:string,id:int}|null
      */
     public ?array $nextOlderCursor = null;
+
+    /**
+     * @var array{sort_at:string,id:int}|null
+     */
+    public ?array $latestVisibleMessageCursor = null;
 
     public function mount(int|string $record): void
     {
@@ -131,6 +139,15 @@ class ViewDialog extends ViewRecord
         $this->dispatch('dialog-history-older-messages-loaded');
     }
 
+    public function refreshDialogViewData(): void
+    {
+        $this->refreshDialogRecord();
+
+        $appendedCount = $this->appendLatestConversationMessages();
+
+        $this->dispatch('dialog-history-refreshed', appendedCount: $appendedCount);
+    }
+
     public function sendDialogReply(): void
     {
         $validated = $this->validate([
@@ -186,6 +203,7 @@ class ViewDialog extends ViewRecord
             'contactSummary' => $this->getContactSummaryViewData(),
             'contactUrl' => $this->getContactViewUrl(),
             'conversationDisplayModeOptions' => $this->getConversationDisplayModeOptions(),
+            'liveRefreshPollIntervalMs' => static::LIVE_REFRESH_INTERVAL_MS,
             'replyComposer' => $this->getReplyComposerViewData(),
         ];
     }
@@ -197,6 +215,7 @@ class ViewDialog extends ViewRecord
         $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
         $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
         $this->nextOlderCursor = $page->nextOlderCursor;
+        $this->latestVisibleMessageCursor = $this->makeMessageCursor($page->messages->last());
     }
 
     /**
@@ -298,16 +317,7 @@ class ViewDialog extends ViewRecord
     {
         $message->loadMissing(['channel', 'dialog.channel', 'sentByUser']);
 
-        $outboundMessageViewData = app(BuildConversationFeedViewDataAction::class)->handle(collect([$message]));
-
-        if ($outboundMessageViewData === []) {
-            return;
-        }
-
-        $this->conversationMessages = [
-            ...$this->conversationMessages,
-            ...$outboundMessageViewData,
-        ];
+        $this->appendConversationMessages(collect([$message]));
     }
 
     protected function refreshDialogRecord(): void
@@ -316,6 +326,97 @@ class ViewDialog extends ViewRecord
         $dialog = DialogResource::getEloquentQuery()->findOrFail($this->getRecord()->getKey());
 
         $this->record = $dialog;
+    }
+
+    protected function appendLatestConversationMessages(): int
+    {
+        if ($this->conversationMessages === []) {
+            $page = app(LoadDialogMessagesPageAction::class)->handle($this->getRecord(), null, 50);
+
+            if ($page->messages->isEmpty()) {
+                $this->hasMoreOlderMessages = false;
+                $this->nextOlderCursor = null;
+                $this->latestVisibleMessageCursor = null;
+
+                return 0;
+            }
+
+            $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
+            $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
+            $this->nextOlderCursor = $page->nextOlderCursor;
+            $this->latestVisibleMessageCursor = $this->makeMessageCursor($page->messages->last());
+
+            return count($this->conversationMessages);
+        }
+
+        $messages = app(LoadDialogMessagesPageAction::class)->loadMessagesAfter(
+            $this->getRecord(),
+            $this->latestVisibleMessageCursor,
+            50,
+        );
+
+        return $this->appendConversationMessages($messages);
+    }
+
+    /**
+     * @param  Collection<int, Message>  $messages
+     */
+    protected function appendConversationMessages(Collection $messages): int
+    {
+        if ($messages->isEmpty()) {
+            return 0;
+        }
+
+        $existingMessageIds = collect($this->conversationMessages)
+            ->pluck('id')
+            ->filter()
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->flip();
+
+        $newMessages = $messages
+            ->filter(fn (Message $message): bool => ! $existingMessageIds->has($message->id))
+            ->values();
+
+        if ($newMessages->isEmpty()) {
+            $this->latestVisibleMessageCursor = $this->makeMessageCursor($messages->last()) ?? $this->latestVisibleMessageCursor;
+
+            return 0;
+        }
+
+        $newMessageViewData = app(BuildConversationFeedViewDataAction::class)->handle($newMessages);
+
+        if ($newMessageViewData === []) {
+            return 0;
+        }
+
+        $this->conversationMessages = [
+            ...$this->conversationMessages,
+            ...$newMessageViewData,
+        ];
+        $this->latestVisibleMessageCursor = $this->makeMessageCursor($newMessages->last()) ?? $this->latestVisibleMessageCursor;
+
+        return count($newMessageViewData);
+    }
+
+    /**
+     * @return array{sort_at:string,id:int}|null
+     */
+    protected function makeMessageCursor(?Message $message): ?array
+    {
+        if (! $message instanceof Message) {
+            return null;
+        }
+
+        $sortAt = app(BuildConversationFeedViewDataAction::class)->resolveMessageSortAt($message);
+
+        if ($sortAt === null) {
+            return null;
+        }
+
+        return [
+            'sort_at' => $sortAt->toIso8601String(),
+            'id' => $message->id,
+        ];
     }
 
     protected function getContactViewUrl(): string
