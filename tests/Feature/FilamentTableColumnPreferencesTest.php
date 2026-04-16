@@ -49,6 +49,19 @@ class FilamentTableColumnPreferencesTest extends TestCase
         $this->assertFalse($this->findColumnState($mountedState, 'id')['isToggled']);
     }
 
+    public function test_first_mount_does_not_create_a_table_preference_for_default_state(): void
+    {
+        $admin = $this->createAdmin();
+
+        $mountedState = $this->getMountedTableState(ManageUsers::class, $admin);
+
+        $this->assertNull($admin->fresh()->getTablePreference(ManageUsers::class));
+        $this->assertSame(
+            $this->flattenTableColumnNames($this->getDefaultTableState(ManageUsers::class, $admin)),
+            $this->flattenTableColumnNames($mountedState),
+        );
+    }
+
     public function test_table_column_preferences_are_scoped_per_user_and_page(): void
     {
         $firstAdmin = $this->createAdmin();
@@ -86,6 +99,24 @@ class FilamentTableColumnPreferencesTest extends TestCase
         $this->assertTrue($this->findColumnState($this->getMountedTableState(ManageUsers::class, $admin), 'email')['isToggled']);
     }
 
+    public function test_mount_after_reset_does_not_recreate_a_default_state_preference(): void
+    {
+        $admin = $this->createAdmin();
+        $defaultState = $this->getDefaultTableState(ManageUsers::class, $admin);
+        $customState = $this->buildCustomizedState($defaultState, hiddenColumnName: 'email');
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->call('applyTableColumnManager', $customState, false)
+            ->call('resetTableColumnManager');
+
+        $this->assertNull($admin->fresh()->getTablePreference(ManageUsers::class));
+
+        $this->getMountedTableState(ManageUsers::class, $admin);
+
+        $this->assertNull($admin->fresh()->getTablePreference(ManageUsers::class));
+    }
+
     public function test_saved_table_column_preferences_ignore_unknown_columns_and_keep_new_defaults(): void
     {
         $admin = $this->createAdmin();
@@ -116,6 +147,21 @@ class FilamentTableColumnPreferencesTest extends TestCase
             $this->flattenTableColumnNames($mountedState),
         );
         $this->assertFalse($this->findColumnState($mountedState, 'name')['isToggled']);
+    }
+
+    public function test_returning_to_default_state_removes_the_persisted_preference(): void
+    {
+        $admin = $this->createAdmin();
+        $defaultState = $this->getDefaultTableState(ManageUsers::class, $admin);
+        $customState = $this->buildCustomizedState($defaultState, hiddenColumnName: 'email');
+
+        $this->applyTableState(ManageUsers::class, $admin, $customState);
+
+        $this->assertNotNull($admin->fresh()->getTablePreference(ManageUsers::class));
+
+        $this->applyTableState(ManageUsers::class, $admin, $defaultState);
+
+        $this->assertNull($admin->fresh()->getTablePreference(ManageUsers::class));
     }
 
     public function test_stale_user_instances_do_not_overwrite_other_pages_table_preferences(): void

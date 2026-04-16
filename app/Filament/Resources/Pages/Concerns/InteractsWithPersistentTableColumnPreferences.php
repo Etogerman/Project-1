@@ -44,12 +44,21 @@ trait InteractsWithPersistentTableColumnPreferences
             return;
         }
 
-        $user->putTablePreference($this->getPersistentTablePreferenceKey(), [
+        $preferenceKey = $this->getPersistentTablePreferenceKey();
+        $hasReorderedColumns = $this->hasReorderableTableColumns() && $this->hasReorderedTableColumns();
+        $shouldPersistPreference = $hasReorderedColumns || ($this->tableColumns !== $this->getDefaultTableColumnState());
+
+        if (! $shouldPersistPreference) {
+            if ($user->getTablePreference($preferenceKey) !== null) {
+                $user->forgetTablePreference($preferenceKey);
+            }
+
+            return;
+        }
+
+        $user->putTablePreference($preferenceKey, [
             'columns' => $this->tableColumns,
-            'has_reordered_columns' => (bool) session()->get(
-                $this->getHasReorderedTableColumnsSessionKey(),
-                false,
-            ),
+            'has_reordered_columns' => $hasReorderedColumns,
         ]);
     }
 
