@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24MessageExport;
+use App\Models\Channel;
 use App\Models\Message;
 
 class IsMessageReadyForBitrix24LiveExportAction
@@ -85,6 +86,27 @@ class IsMessageReadyForBitrix24LiveExportAction
             return in_array($message->system_event_code, self::EXPORTABLE_SYSTEM_EVENT_CODES, true);
         }
 
+        if ($this->isMaxBotStartedMessage($message)) {
+            return true;
+        }
+
         return trim((string) $message->text) !== '';
+    }
+
+    private function isMaxBotStartedMessage(Message $message): bool
+    {
+        if (
+            $message->direction !== Message::DIRECTION_INBOUND
+            || $message->message_kind !== Message::KIND_INBOUND_USER
+            || data_get($message->raw_payload, 'update_type') !== 'bot_started'
+        ) {
+            return false;
+        }
+
+        $message->loadMissing(['dialog.channel', 'channel']);
+        $channel = $message->dialog?->channel ?? $message->channel;
+
+        return $channel instanceof Channel
+            && $channel->platform === Channel::PLATFORM_MAX;
     }
 }
