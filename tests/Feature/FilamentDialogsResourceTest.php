@@ -64,6 +64,83 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee($dialog->contact->display_name);
     }
 
+    public function test_dialogs_inbox_uses_separate_hidden_columns_for_identity_and_phone_details(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Только контакт',
+            'externalUserId' => 'tg-user-555',
+            'externalUsername' => 'dialog_hidden_user',
+        ]);
+        $dialog->forceFill([
+            'confirmed_phone_raw' => '+7 900 123 45 67',
+        ])->save();
+        $dialog = $dialog->fresh([
+            'channel',
+            'currentContactIdentity',
+            'contact.assignedUser',
+            'contact.primaryIdentity',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertTableColumnExists(
+                'contact_label',
+                fn ($column): bool => $column->getLabel() === 'Контакт' && $column->getDescriptionBelow() === null,
+                $dialog,
+            )
+            ->assertTableColumnVisible('contact_label')
+            ->assertTableColumnStateSet('contact_label', 'Только контакт', $dialog)
+            ->assertTableColumnExists(
+                'external_user_id',
+                fn ($column): bool => $column->getLabel() === 'Внешний ID',
+                $dialog,
+            )
+            ->assertTableColumnHidden('external_user_id')
+            ->assertTableColumnStateSet('external_user_id', 'tg-user-555', $dialog)
+            ->assertTableColumnExists(
+                'external_username',
+                fn ($column): bool => $column->getLabel() === 'Username',
+                $dialog,
+            )
+            ->assertTableColumnHidden('external_username')
+            ->assertTableColumnStateSet('external_username', '@dialog_hidden_user', $dialog)
+            ->assertTableColumnExists(
+                'phone_label',
+                fn ($column): bool => $column->getLabel() === 'Номер телефона',
+                $dialog,
+            )
+            ->assertTableColumnHidden('phone_label')
+            ->assertTableColumnStateSet('phone_label', '+7 900 123 45 67', $dialog);
+    }
+
+    public function test_dialogs_inbox_does_not_show_identity_and_phone_details_inside_contact_column_by_default(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Чистый контакт',
+            'externalUserId' => 'hidden-route-777',
+            'externalUsername' => 'hidden_dialog_username',
+        ]);
+        $dialog->forceFill([
+            'confirmed_phone_raw' => '+7 901 555 44 33',
+        ])->save();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Чистый контакт')
+            ->assertDontSee('hidden-route-777')
+            ->assertDontSee('@hidden_dialog_username')
+            ->assertDontSee('+7 901 555 44 33');
+    }
+
     public function test_dialogs_inbox_uses_current_dialog_identity_label_for_each_row(): void
     {
         $admin = User::factory()->create([
