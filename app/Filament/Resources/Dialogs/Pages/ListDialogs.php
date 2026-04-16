@@ -3,7 +3,7 @@
 namespace App\Filament\Resources\Dialogs\Pages;
 
 use App\Filament\Resources\Dialogs\DialogResource;
-use Filament\Resources\Pages\ListRecords;
+use App\Filament\Resources\Pages\ListRecords;
 use Illuminate\Database\Eloquent\Builder;
 
 class ListDialogs extends ListRecords
