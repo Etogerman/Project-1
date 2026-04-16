@@ -557,6 +557,74 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->fresh()->data_collection_current_field);
     }
 
+    public function test_job_starts_data_collection_from_first_name_when_contact_has_only_auto_first_name(): void
+    {
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 99141,
+                    ],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 99142,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '202',
+            'external_username' => 'telegram_user_auto_name',
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '302',
+            'external_message_id' => 'phone-share-auto-name',
+            'provider_event_key' => 'phone-share-auto-name',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '302'
+            && $request['text'] === 'Как вас зовут?');
+        $this->assertDatabaseHas('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Как вас зовут?',
+        ]);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $contact->fresh()->data_collection_current_field);
+    }
+
     public function test_job_starts_data_collection_from_city_when_first_name_and_country_are_already_filled(): void
     {
         config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');

@@ -971,6 +971,84 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_telegram_contact_share_with_profile_name_still_asks_for_first_name(): void
+    {
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9921,
+                    ],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9922,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $payload = $this->telegramPayload(messageId: 92, text: null);
+        $payload['message']['from']['first_name'] = 'German';
+        $payload['message']['from']['last_name'] = 'Abrikosov';
+        $payload['message']['contact'] = [
+            'phone_number' => '+7 999 123 45 67',
+            'user_id' => 200,
+        ];
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '300'
+            && $request['text'] === 'Спасибо, номер получили.'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '300'
+            && $request['text'] === 'Как вас зовут?');
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+        $contact = $storedMessage->contact()->firstOrFail()->fresh();
+        $identity = $storedMessage->contactIdentity()->firstOrFail()->fresh();
+
+        $this->assertSame('German Abrikosov', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->first_name_source);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $contact->data_collection_current_field);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $contact->data_collection_last_prompted_field);
+        $this->assertSame('German Abrikosov', $identity->display_name);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+            'reply_to_message_id' => $storedMessage->id,
+            'text' => 'Спасибо, номер получили.',
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $storedMessage->id,
+            'text' => 'Как вас зовут?',
+        ]);
+    }
+
     public function test_telegram_contact_share_skips_follow_up_when_scenario_dispatcher_consumes_message(): void
     {
         Queue::fake();
