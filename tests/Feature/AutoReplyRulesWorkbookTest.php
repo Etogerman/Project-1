@@ -187,6 +187,52 @@ class AutoReplyRulesWorkbookTest extends TestCase
         $this->assertStringContainsString('Укажите id для обновления', $preview->errors[0]->message);
     }
 
+    public function test_parse_preview_reports_existing_rule_uniqueness_conflict_for_create_row_with_zero_keyword(): void
+    {
+        $channel = Channel::factory()->create();
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => '0',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('0'),
+            'reply_text' => 'Existing reply',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Новое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                '0',
+                '',
+                'Импортируемый ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertSame(0, $preview->createCount());
+        $this->assertSame(0, $preview->updateCount());
+        $this->assertSame(1, $preview->errorCount());
+        $this->assertSame('id', $preview->errors[0]->column);
+        $this->assertStringContainsString('Укажите id для обновления', $preview->errors[0]->message);
+    }
+
     public function test_parse_preview_reports_duplicate_rule_key_inside_workbook(): void
     {
         $channel = Channel::factory()->create();
