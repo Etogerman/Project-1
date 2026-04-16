@@ -76,6 +76,11 @@ class ParseAutoReplyRulesWorkbookAction
                 }
             }
 
+            $errors = [
+                ...$errors,
+                ...$this->filterRowsWithUniquenessConflicts($createRows, $updateRows),
+            ];
+
             return new AutoReplyRuleWorkbookPreviewData($createRows, $updateRows, $errors);
         } finally {
             $spreadsheet->disconnectWorksheets();
@@ -657,6 +662,39 @@ class ParseAutoReplyRulesWorkbookAction
                 );
             }
         }
+
+        return $errors;
+    }
+
+    /**
+     * @param  list<AutoReplyRuleWorkbookRowData>  $createRows
+     * @param  list<AutoReplyRuleWorkbookRowData>  $updateRows
+     * @return list<AutoReplyRuleWorkbookRowErrorData>
+     */
+    protected function filterRowsWithUniquenessConflicts(array &$createRows, array &$updateRows): array
+    {
+        $errors = app(ValidateAutoReplyRulesWorkbookUniquenessAction::class)->handle([
+            ...$createRows,
+            ...$updateRows,
+        ]);
+
+        if ($errors === []) {
+            return [];
+        }
+
+        $erroredRowNumbers = array_values(array_unique(array_map(
+            fn (AutoReplyRuleWorkbookRowErrorData $error): int => $error->rowNumber,
+            $errors,
+        )));
+
+        $createRows = array_values(array_filter(
+            $createRows,
+            fn (AutoReplyRuleWorkbookRowData $row): bool => ! in_array($row->rowNumber, $erroredRowNumbers, true),
+        ));
+        $updateRows = array_values(array_filter(
+            $updateRows,
+            fn (AutoReplyRuleWorkbookRowData $row): bool => ! in_array($row->rowNumber, $erroredRowNumbers, true),
+        ));
 
         return $errors;
     }

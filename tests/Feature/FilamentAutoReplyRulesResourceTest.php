@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
+use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
+use App\Services\AutoReplyRules\ParseAutoReplyRulesWorkbookAction;
 use App\Models\AutoReplyCategory;
 use App\Models\AutoReplyRule;
 use App\Models\AutoReplyRuleTagCondition;
@@ -14,10 +16,13 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
 
 class FilamentAutoReplyRulesResourceTest extends TestCase
@@ -1246,6 +1251,71 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         ]);
     }
 
+    public function test_apply_workbook_import_returns_action_error_when_rule_conflicts_after_preview(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Импортируемое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Импортируемый ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertFalse($preview->hasErrors());
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'ONASA01',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('ONASA01'),
+            'reply_text' => 'Уже существующий ответ',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+
+        $token = 'auto-reply-rules-import-preview-test';
+
+        Cache::put($token, $preview->toArray(), now()->addMinutes(30));
+
+        try {
+            Livewire::actingAs($admin)
+                ->test(ManageAutoReplyRules::class)
+                ->set('workbookImportPreviewToken', $token)
+                ->callAction('applyWorkbookImport')
+                ->assertHasActionErrors(['workbook_0']);
+
+            $this->assertSame(1, AutoReplyRule::query()->count());
+        } finally {
+            Cache::forget($token);
+        }
+    }
+
     private function setRolePermission(string $role, string $permissionKey, bool $granted): void
     {
         DB::table('role_permissions')
@@ -1280,5 +1350,41 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             'is_active' => true,
             'priority' => 10,
         ], $buttonOverrides, $overrides);
+    }
+
+    /**
+     * @param  list<array<int, mixed>>  $rows
+     */
+    private function storeWorkbook(array $rows): string
+    {
+        $spreadsheet = new Spreadsheet();
+
+        try {
+            $sheet = $spreadsheet->getActiveSheet();
+            $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_RULES);
+
+            foreach ($rows as $index => $row) {
+                $sheet->fromArray([$row], null, 'A'.($index + 1));
+            }
+
+            $path = tempnam(sys_get_temp_dir(), 'auto-reply-rules-xlsx');
+
+            if ($path === false) {
+                $this->fail('Failed to allocate temporary workbook path.');
+            }
+
+            $finalPath = $path.'.xlsx';
+
+            if (file_exists($path)) {
+                unlink($path);
+            }
+
+            (new Xlsx($spreadsheet))->save($finalPath);
+
+            return $finalPath;
+        } finally {
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet);
+        }
     }
 }
