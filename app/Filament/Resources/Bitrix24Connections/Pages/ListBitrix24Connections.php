@@ -3,7 +3,7 @@
 namespace App\Filament\Resources\Bitrix24Connections\Pages;
 
 use App\Filament\Resources\Bitrix24Connections\Bitrix24ConnectionResource;
-use Filament\Resources\Pages\ListRecords;
+use App\Filament\Resources\Pages\ListRecords;
 
 class ListBitrix24Connections extends ListRecords
 {
