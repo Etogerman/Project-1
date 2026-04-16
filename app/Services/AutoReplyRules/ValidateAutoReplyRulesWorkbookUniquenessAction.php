@@ -137,10 +137,13 @@ class ValidateAutoReplyRulesWorkbookUniquenessAction
             fn (array $preparedRow): ?string => $preparedRow['match_scope'],
             $futureRows,
         ))));
-        $normalizedKeywords = array_values(array_unique(array_filter(array_map(
-            fn (array $preparedRow): ?string => $preparedRow['normalized_keyword'],
-            $futureRows,
-        ))));
+        $normalizedKeywords = array_values(array_unique(array_filter(
+            array_map(
+                fn (array $preparedRow): ?string => $preparedRow['normalized_keyword'],
+                $futureRows,
+            ),
+            fn (?string $normalizedKeyword): bool => $normalizedKeyword !== null,
+        )));
 
         if ($ruleIds === [] && ($primaryChannelIds === [] || $matchScopes === [] || $normalizedKeywords === [])) {
             return [
