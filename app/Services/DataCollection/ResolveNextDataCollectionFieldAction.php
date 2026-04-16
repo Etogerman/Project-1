@@ -8,7 +8,7 @@ class ResolveNextDataCollectionFieldAction
 {
     public function handle(Contact $contact): ?string
     {
-        if (! filled($contact->first_name)) {
+        if (! $this->hasCollectedFirstName($contact)) {
             return Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
         }
 
@@ -44,5 +44,14 @@ class ResolveNextDataCollectionFieldAction
         }
 
         return null;
+    }
+
+    private function hasCollectedFirstName(Contact $contact): bool
+    {
+        if (! filled($contact->first_name)) {
+            return false;
+        }
+
+        return $contact->first_name_source !== Contact::FIRST_NAME_SOURCE_AUTO;
     }
 }
