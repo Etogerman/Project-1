@@ -44,6 +44,8 @@ class Bitrix24WebhookEvent extends Model
         'processed_at',
         'failed_at',
         'failure_reason',
+        'recheck_scheduled_at',
+        'recheck_attempted_at',
         'attempts',
     ];
 
@@ -56,6 +58,8 @@ class Bitrix24WebhookEvent extends Model
         'query' => 'array',
         'processed_at' => 'datetime',
         'failed_at' => 'datetime',
+        'recheck_scheduled_at' => 'datetime',
+        'recheck_attempted_at' => 'datetime',
         'attempts' => 'integer',
     ];
 
