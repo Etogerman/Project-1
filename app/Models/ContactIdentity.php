@@ -21,6 +21,15 @@ class ContactIdentity extends Model
         'external_user_id',
         'display_name',
         'external_username',
+        'avatar_path',
+        'avatar_updated_at',
+    ];
+
+    /**
+     * @var array<string, string>
+     */
+    protected $casts = [
+        'avatar_updated_at' => 'datetime',
     ];
 
     public function contact(): BelongsTo

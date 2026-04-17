@@ -288,6 +288,7 @@ class BotIncomingMessageNormalizer
                 data_get($payload, 'timestamp'),
                 data_get($payload, 'created_at'),
             ]),
+            avatarUrl: $this->resolveMaxAvatarUrl(data_get($message, 'sender')),
         );
     }
 
@@ -323,6 +324,7 @@ class BotIncomingMessageNormalizer
                 data_get($payload, 'created_at'),
             ]),
             messageParameter: $messageParameter,
+            avatarUrl: $this->resolveMaxAvatarUrl(data_get($payload, 'user')),
         );
     }
 
@@ -544,6 +546,24 @@ class BotIncomingMessageNormalizer
             ?? data_get($container, 'max_info.user_id')
             ?? data_get($container, 'payload.max_info.user_id')
         );
+    }
+
+    /**
+     * @param  array<string, mixed>|mixed  $person
+     */
+    protected function resolveMaxAvatarUrl(mixed $person): ?string
+    {
+        if (! is_array($person)) {
+            return null;
+        }
+
+        $fullAvatarUrl = $this->normalizeText(data_get($person, 'full_avatar_url'));
+
+        if (filled($fullAvatarUrl)) {
+            return $fullAvatarUrl;
+        }
+
+        return $this->normalizeText(data_get($person, 'avatar_url'));
     }
 
     /**

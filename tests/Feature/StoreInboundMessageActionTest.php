@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Data\Bots\IncomingBotMessage;
 use App\Data\Bots\StoredInboundMessageResult;
+use App\Jobs\SyncContactIdentityAvatarJob;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
@@ -18,6 +19,7 @@ use App\Services\Contacts\MergeContactsAction;
 use App\Services\Dialogs\DialogConsolidationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Queue;
 use Mockery\MockInterface;
 use Tests\TestCase;
 
@@ -92,6 +94,69 @@ class StoreInboundMessageActionTest extends TestCase
             'id' => $storedResult->message->id,
             'message_parameter' => 'TEXT_1',
         ]);
+    }
+
+    public function test_store_inbound_message_queues_telegram_avatar_sync_job(): void
+    {
+        Queue::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-avatar-1',
+                externalMessageId: 'telegram-avatar-1',
+                text: 'Привет',
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-17 15:00:00'),
+                externalUserId: 'telegram-user-avatar',
+                externalChatId: 'telegram-chat-avatar',
+            ),
+        );
+
+        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult): bool {
+            return $job->contactIdentityId === $storedResult->message->contact_identity_id
+                && $job->avatarUrl === null;
+        });
+    }
+
+    public function test_store_inbound_message_queues_max_avatar_sync_job_when_payload_contains_avatar_url(): void
+    {
+        Queue::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: '700',
+                externalUserId: '500',
+                providerEventKey: 'max-avatar-1',
+                externalMessageId: 'max-avatar-1',
+                externalUsername: 'max_user',
+                contactName: 'MAX контакт',
+                text: 'Привет из MAX',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['body' => ['text' => 'Привет из MAX']]],
+                receivedAt: Carbon::parse('2026-04-17 15:05:00'),
+                avatarUrl: 'https://cdn.max.example/avatar.png',
+            ),
+        );
+
+        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult): bool {
+            return $job->contactIdentityId === $storedResult->message->contact_identity_id
+                && $job->avatarUrl === 'https://cdn.max.example/avatar.png';
+        });
     }
 
     public function test_store_inbound_message_assigns_start_tag_for_max_bot_started_payload(): void

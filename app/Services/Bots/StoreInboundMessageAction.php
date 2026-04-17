@@ -44,6 +44,7 @@ class StoreInboundMessageAction
         protected ChannelActivityLogger $channelActivityLogger,
         protected IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
         protected QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
+        protected QueueContactIdentityAvatarSyncAction $queueContactIdentityAvatarSyncAction,
         protected SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
         protected SyncDialogConfirmedPhoneAction $syncDialogConfirmedPhoneAction,
     ) {}
@@ -90,6 +91,8 @@ class StoreInboundMessageAction
             if ($this->shouldSyncInboundIdentityProfile($identity, $message)) {
                 $this->syncInboundIdentityProfile($identity, $message);
             }
+
+            $this->queueContactIdentityAvatarSyncAction->handle($channel, $identity, $message);
 
             if (
                 $contact instanceof Contact

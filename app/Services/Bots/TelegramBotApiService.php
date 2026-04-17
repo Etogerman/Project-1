@@ -4,8 +4,10 @@ namespace App\Services\Bots;
 
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotMetadata;
+use App\Data\Bots\DownloadedAvatarData;
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
+use App\Models\Message;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -26,9 +28,8 @@ class TelegramBotApiService
         ?string $externalUserId,
         string $text,
         ?array $replyMarkup = null,
-        string $textFormat = \App\Models\Message::TEXT_FORMAT_PLAIN_TEXT,
-    ): AutoReplyDeliveryResult
-    {
+        string $textFormat = Message::TEXT_FORMAT_PLAIN_TEXT,
+    ): AutoReplyDeliveryResult {
         if (! filled($externalChatId)) {
             throw new InvalidArgumentException("Telegram message for channel [{$channel->id}] does not have chat id.");
         }
@@ -38,7 +39,7 @@ class TelegramBotApiService
             'text' => $text,
         ];
 
-        if ($textFormat === \App\Models\Message::TEXT_FORMAT_HTML) {
+        if ($textFormat === Message::TEXT_FORMAT_HTML) {
             $payload['parse_mode'] = 'HTML';
         }
 
@@ -123,6 +124,52 @@ class TelegramBotApiService
             username: $username,
             name: filled($name) ? Str::limit($name, 255, '') : null,
             profileUrl: filled($username) ? 'https://t.me/'.$username : null,
+        );
+    }
+
+    public function downloadChatAvatar(Channel $channel, string $chatId): ?DownloadedAvatarData
+    {
+        $chatResponse = Http::asJson()
+            ->get(
+                sprintf('https://api.telegram.org/bot%s/getChat', $this->token($channel)),
+                ['chat_id' => $chatId],
+            )
+            ->throw()
+            ->json();
+
+        $fileId = data_get($chatResponse, 'result.photo.big_file_id')
+            ?? data_get($chatResponse, 'result.photo.small_file_id');
+
+        if (! filled($fileId)) {
+            return null;
+        }
+
+        $fileResponse = Http::asJson()
+            ->get(
+                sprintf('https://api.telegram.org/bot%s/getFile', $this->token($channel)),
+                ['file_id' => (string) $fileId],
+            )
+            ->throw()
+            ->json();
+
+        $filePath = data_get($fileResponse, 'result.file_path');
+
+        if (! filled($filePath)) {
+            return null;
+        }
+
+        $downloadResponse = Http::timeout(15)
+            ->get(sprintf('https://api.telegram.org/file/bot%s/%s', $this->token($channel), ltrim((string) $filePath, '/')))
+            ->throw();
+
+        if ($downloadResponse->body() === '') {
+            return null;
+        }
+
+        return new DownloadedAvatarData(
+            contents: $downloadResponse->body(),
+            contentType: $downloadResponse->header('Content-Type'),
+            filenameHint: (string) $filePath,
         );
     }
 
