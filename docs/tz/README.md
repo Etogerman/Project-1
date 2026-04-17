@@ -10,6 +10,7 @@ implementation stream по регламенту проекта.
 - `tz-inbound-improvements-plan.md`
 - `tz-bitrix24-openlines-blocked-dialog-follow-up.md`
 - `tz-collector-slash-command-during-active-flow.md`
+- `tz-dialog-stage-kanban-and-automation.md`
 
 ## Архив
 
