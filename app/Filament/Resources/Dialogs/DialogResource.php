@@ -94,6 +94,7 @@ class DialogResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->poll('10s')
             ->columns([
                 TextColumn::make('contact_label')
                     ->label('Контакт')

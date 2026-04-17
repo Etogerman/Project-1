@@ -28,6 +28,8 @@ class BuildConversationFeedViewDataAction
 
                 return [
                     'id' => $message->id,
+                    'sort_key' => $this->messageChronology->timestampAndIdSortKey($messageAt, $message->id),
+                    'sort_at_iso' => $messageAt?->toIso8601String(),
                     'direction' => $message->direction,
                     'kind' => $message->message_kind ?? 'unknown',
                     'is_system_event' => $message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT,
