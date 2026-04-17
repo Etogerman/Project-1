@@ -764,8 +764,11 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $this->runWebhookEventJob($event);
 
         $event->refresh();
+        $dialog->refresh();
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertNotNull($dialog->bitrix24_live_last_imported_at);
         $this->assertDatabaseCount('messages', 2);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'openlines_exact_echo_skipped',
@@ -903,9 +906,12 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $this->runWebhookEventJob($event);
 
         $event->refresh();
+        $dialog->refresh();
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertNotNull($event->recheck_attempted_at);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertNotNull($dialog->bitrix24_live_last_imported_at);
         $this->assertDatabaseCount('messages', 2);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'openlines_delayed_recheck_confirmed_echo',

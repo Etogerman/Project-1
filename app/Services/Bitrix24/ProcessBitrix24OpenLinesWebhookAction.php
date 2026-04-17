@@ -127,6 +127,8 @@ class ProcessBitrix24OpenLinesWebhookAction
                 $echoHandlingResult = $this->handleManualReplyEchoCallback($event, $dialog, $messageData);
 
                 if ($echoHandlingResult === self::ECHO_RESULT_SKIPPED) {
+                    $this->activateDialog($dialog, $event, $messageData->chatId);
+
                     continue;
                 }
 
