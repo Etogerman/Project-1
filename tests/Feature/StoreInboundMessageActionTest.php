@@ -25,6 +25,36 @@ class StoreInboundMessageActionTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_store_inbound_message_persists_received_at_in_application_timezone(): void
+    {
+        config()->set('app.timezone', 'Europe/Moscow');
+        date_default_timezone_set('Europe/Moscow');
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-timezone-1',
+                externalMessageId: 'timezone-1',
+                text: 'Привет',
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-17 09:00:00', 'UTC'),
+            ),
+        );
+
+        $storedResult->message->refresh();
+
+        $this->assertSame('2026-04-17 12:00:00', $storedResult->message->received_at?->format('Y-m-d H:i:s'));
+        $this->assertDatabaseHas('messages', [
+            'id' => $storedResult->message->id,
+            'received_at' => '2026-04-17 12:00:00',
+        ]);
+    }
+
     public function test_store_inbound_message_assigns_start_tag_for_telegram_start_payload(): void
     {
         $channel = Channel::factory()->create([
@@ -774,7 +804,7 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame('+7 999 123 45 67', $dialog->confirmed_phone_raw);
         $this->assertSame('+79991234567', $dialog->confirmed_phone_normalized);
         $this->assertSame('2026-03-28 18:00:00', $dialog->phone_confirmed_at?->format('Y-m-d H:i:s'));
-        $this->assertSame(\App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE, $dialog->phone_confirmed_via);
+        $this->assertSame(Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE, $dialog->phone_confirmed_via);
         $this->assertSame(StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW, $storedResult->phoneCaptureStatus);
         $this->assertDatabaseHas('contact_phone_numbers', [
             'contact_id' => $storedMessage->contact_id,
@@ -888,7 +918,7 @@ class StoreInboundMessageActionTest extends TestCase
             'id' => $duplicateResult->message->fresh()->dialog_id,
             'confirmed_phone_raw' => '+7 999 123 45 67',
             'confirmed_phone_normalized' => '+79991234567',
-            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
         ]);
         $this->assertDatabaseCount('contact_phone_numbers', 1);
         $this->assertDatabaseCount('contact_duplicate_reviews', 0);
@@ -1029,7 +1059,7 @@ class StoreInboundMessageActionTest extends TestCase
             'id' => $dialog->id,
             'confirmed_phone_raw' => '+7 999 123 45 67',
             'confirmed_phone_normalized' => '+79991234567',
-            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
         ]);
     }
 
@@ -1099,7 +1129,7 @@ class StoreInboundMessageActionTest extends TestCase
             'external_chat_id' => '301',
             'confirmed_phone_raw' => '8 (999) 123-45-67',
             'confirmed_phone_normalized' => '+79991234567',
-            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
         ]);
         $this->assertDatabaseCount('contact_duplicate_reviews', 0);
         $this->assertDatabaseHas('contact_merge_logs', [
@@ -1172,7 +1202,7 @@ class StoreInboundMessageActionTest extends TestCase
             'id' => $storedMessage->dialog_id,
             'confirmed_phone_raw' => '+7 999 123 45 67',
             'confirmed_phone_normalized' => '+79991234567',
-            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
         ]);
         $this->assertDatabaseCount('contact_merge_logs', 0);
         $this->assertDatabaseHas('channel_activity_logs', [
@@ -1226,7 +1256,7 @@ class StoreInboundMessageActionTest extends TestCase
             'id' => $secondResult->message->fresh()->dialog_id,
             'contact_id' => $otherRoot->id,
             'confirmed_phone_normalized' => '+79991234567',
-            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
         ]);
         $this->assertDatabaseCount('contact_duplicate_reviews', 0);
         $this->assertDatabaseCount('contact_merge_logs', 1);
@@ -1282,7 +1312,7 @@ class StoreInboundMessageActionTest extends TestCase
             'id' => $storedResult->message->dialog_id,
             'confirmed_phone_raw' => '+7 999 123 45 67',
             'confirmed_phone_normalized' => '+79991234567',
-            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
         ]);
         $this->assertDatabaseHas('contact_duplicate_reviews', [
             'contact_id' => $currentContact->id,
@@ -1347,7 +1377,7 @@ class StoreInboundMessageActionTest extends TestCase
             'id' => $storedResult->message->dialog_id,
             'confirmed_phone_raw' => '+7 999 123 45 67',
             'confirmed_phone_normalized' => '+79991234567',
-            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
         ]);
         $this->assertDatabaseHas('contact_duplicate_reviews', [
             'contact_id' => $currentContact->id,
@@ -1790,7 +1820,7 @@ class StoreInboundMessageActionTest extends TestCase
             'confirmed_phone_raw' => '+7 999 111 11 11',
             'confirmed_phone_normalized' => '+79991111111',
             'phone_confirmed_at' => Carbon::parse('2026-03-28 20:00:00'),
-            'phone_confirmed_via' => \App\Models\Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
             'last_message_at' => Carbon::parse('2026-03-28 20:00:00'),
             'last_inbound_at' => Carbon::parse('2026-03-28 20:00:00'),
         ]);
