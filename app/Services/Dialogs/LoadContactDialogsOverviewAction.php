@@ -6,6 +6,7 @@ use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 class LoadContactDialogsOverviewAction
