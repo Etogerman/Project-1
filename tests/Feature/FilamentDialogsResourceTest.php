@@ -15,11 +15,13 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
 use Filament\Facades\Filament;
-use Illuminate\Http\Client\Request;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Str;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -289,6 +291,45 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Telegram Клиент');
     }
 
+    public function test_dialog_view_renders_identity_avatar_in_dialog_header_when_avatar_exists(): void
+    {
+        Storage::fake('public');
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $identity = $dialog->currentContactIdentity()->firstOrFail();
+
+        Storage::disk('public')->put('contact-identities/'.$identity->id.'/avatar/test-avatar.jpg', 'avatar-image');
+
+        $identity->forceFill([
+            'avatar_path' => 'contact-identities/'.$identity->id.'/avatar/test-avatar.jpg',
+            'avatar_updated_at' => now(),
+        ])->save();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-role="dialog-contact-avatar-image"', false);
+    }
+
+    public function test_dialog_view_renders_avatar_fallback_when_identity_avatar_is_missing(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$telegramDialog] = $this->createMultiChannelDialogsForContactLabel();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
+            ->assertOk()
+            ->assertSee('data-role="dialog-contact-avatar-fallback"', false)
+            ->assertSee('ТК');
+    }
+
     public function test_employee_can_open_dialogs_inbox_page(): void
     {
         $user = User::factory()->create([
@@ -311,7 +352,7 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $dialog = $this->createDialogWithMessages();
 
-        \Illuminate\Support\Facades\DB::table('role_permissions')
+        DB::table('role_permissions')
             ->where('role', User::ROLE_EMPLOYEE)
             ->where('permission_key', 'dialogs.view')
             ->update(['granted' => false]);
@@ -336,16 +377,16 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $dialog = $this->createDialogWithMessages();
 
-        \Illuminate\Support\Facades\DB::table('role_permissions')
+        DB::table('role_permissions')
             ->where('role', User::ROLE_EMPLOYEE)
             ->where('permission_key', 'dialogs.edit')
             ->update(['granted' => false]);
 
         $user = User::query()->findOrFail($user->id);
 
-        $this->assertTrue(\Illuminate\Support\Facades\Gate::forUser($user)->allows('viewAny', Dialog::class));
-        $this->assertTrue(\Illuminate\Support\Facades\Gate::forUser($user)->allows('view', $dialog));
-        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($user)->allows('update', $dialog));
+        $this->assertTrue(Gate::forUser($user)->allows('viewAny', Dialog::class));
+        $this->assertTrue(Gate::forUser($user)->allows('view', $dialog));
+        $this->assertFalse(Gate::forUser($user)->allows('update', $dialog));
         $this->assertFalse($user->canReplyInDialogs());
     }
 

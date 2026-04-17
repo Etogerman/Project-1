@@ -28,6 +28,8 @@ class ContactIdentityFactory extends Factory
             'external_user_id' => (string) fake()->unique()->numerify('########'),
             'display_name' => null,
             'external_username' => fake()->optional()->userName(),
+            'avatar_path' => null,
+            'avatar_updated_at' => null,
         ];
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Dialogs\Pages;
 
 use App\Data\Dialogs\DialogInboxStatusData;
+use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
@@ -10,8 +11,8 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
-use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Bots\SendManualDialogReplyAction;
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
@@ -23,6 +24,7 @@ use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -335,6 +337,8 @@ class ViewDialog extends ViewRecord
      * @return array{
      *     channel_label:string,
      *     platform_label:string,
+     *     avatar_url:?string,
+     *     avatar_fallback_label:?string,
      *     messenger_name_label:string,
      *     route_source_label:string,
      *     external_chat_id_label:string,
@@ -353,6 +357,8 @@ class ViewDialog extends ViewRecord
             'platform_label' => $dialog->channel?->platform !== null
                 ? (Channel::platformOptions()[$dialog->channel->platform] ?? $dialog->channel->platform)
                 : '—',
+            'avatar_url' => $this->resolveDialogAvatarUrl($dialog),
+            'avatar_fallback_label' => $this->formatDialogAvatarFallbackLabel($dialog),
             'messenger_name_label' => $this->formatDialogMessengerNameLabel($dialog),
             'route_source_label' => $this->formatDialogRouteIdentityLabel($dialog),
             'external_chat_id_label' => $dialog->external_chat_id ?: 'Не задан',
@@ -677,7 +683,7 @@ class ViewDialog extends ViewRecord
         return $channel->name ?: $platformLabel ?: $fallback;
     }
 
-    protected function resolveDialogRouteStatus(Dialog $dialog): \App\Data\Dialogs\DialogRouteStatusData
+    protected function resolveDialogRouteStatus(Dialog $dialog): DialogRouteStatusData
     {
         return app(ResolveDialogRouteStatusAction::class)->handle($dialog);
     }
@@ -745,5 +751,53 @@ class ViewDialog extends ViewRecord
         }
 
         return 'Не задан';
+    }
+
+    protected function resolveDialogAvatarUrl(Dialog $dialog): ?string
+    {
+        $avatarPath = $dialog->currentContactIdentity?->avatar_path;
+
+        if (! filled($avatarPath)) {
+            return null;
+        }
+
+        $disk = Storage::disk('public');
+
+        if (! $disk->exists($avatarPath)) {
+            return null;
+        }
+
+        return $disk->url($avatarPath);
+    }
+
+    protected function formatDialogAvatarFallbackLabel(Dialog $dialog): ?string
+    {
+        $identity = $dialog->currentContactIdentity;
+        $candidate = null;
+
+        if (filled($identity?->display_name)) {
+            $candidate = trim((string) $identity->display_name);
+        } elseif (filled($identity?->external_username)) {
+            $candidate = ltrim((string) $identity->external_username, '@');
+        }
+
+        if (! filled($candidate)) {
+            return null;
+        }
+
+        $parts = preg_split('/\s+/u', $candidate, -1, PREG_SPLIT_NO_EMPTY);
+
+        if (is_array($parts) && count($parts) > 1) {
+            $initials = collect($parts)
+                ->take(2)
+                ->map(fn (string $part): string => mb_strtoupper(mb_substr($part, 0, 1)))
+                ->implode('');
+
+            return $initials !== '' ? $initials : null;
+        }
+
+        $initials = mb_strtoupper(mb_substr($candidate, 0, 2));
+
+        return $initials !== '' ? $initials : null;
     }
 }

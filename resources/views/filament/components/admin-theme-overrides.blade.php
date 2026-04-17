@@ -1409,6 +1409,46 @@
         gap: 0.3rem;
     }
 
+    .ac-dialog-header-identity {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.9rem;
+        min-width: 0;
+    }
+
+    .ac-dialog-avatar {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 3.25rem;
+        height: 3.25rem;
+        border-radius: 9999px;
+        overflow: hidden;
+        flex-shrink: 0;
+        border: 1px solid var(--ac-border);
+        background: linear-gradient(180deg, var(--ac-primary-soft) 0%, var(--ac-surface-strong) 100%);
+        color: var(--ac-primary);
+        box-shadow: var(--ac-shadow-sm);
+    }
+
+    .ac-dialog-avatar__image {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .ac-dialog-avatar__fallback {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        font-size: 0.95rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
     .ac-surface__eyebrow {
         margin: 0;
         font-size: 0.72rem;
