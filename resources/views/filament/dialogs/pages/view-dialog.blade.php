@@ -4,9 +4,6 @@
             <section data-role="dialog-contact-summary" class="ac-surface ac-surface--hero">
                 <div class="ac-surface__header ac-surface__header--centered">
                     <div class="ac-surface__title-group">
-                        <p class="ac-surface__eyebrow">
-                            Рабочее место оператора
-                        </p>
                         <h2 class="ac-surface__title ac-surface__title--hero">
                             {{ $contactSummary['contact_label'] }}
                         </h2>
@@ -24,10 +21,27 @@
                 </div>
 
                 <div class="ac-meta-grid ac-surface__divider">
-                    <div class="ac-meta">
-                        <label for="dialog-inbox-status" class="ac-meta__label">
-                            Статус диалога
-                        </label>
+                    <div
+                        class="ac-meta"
+                        x-data="{ statusHelpOpen: false }"
+                        x-on:keydown.escape.window="statusHelpOpen = false"
+                    >
+                        <div class="ac-meta__label-row">
+                            <label for="dialog-inbox-status" class="ac-meta__label">
+                                Статус диалога
+                            </label>
+                            <button
+                                type="button"
+                                class="ac-inline-help"
+                                aria-label="Показать подсказку: новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа»."
+                                aria-controls="dialog-inbox-status-help-panel"
+                                x-bind:aria-expanded="statusHelpOpen ? 'true' : 'false'"
+                                x-on:click="statusHelpOpen = ! statusHelpOpen"
+                                data-role="dialog-inbox-status-help"
+                            >
+                                <x-filament::icon icon="heroicon-m-information-circle" class="h-4 w-4" />
+                            </button>
+                        </div>
                         <select
                             id="dialog-inbox-status"
                             data-role="dialog-inbox-status-select"
@@ -42,9 +56,17 @@
                                 </option>
                             @endforeach
                         </select>
-                        <p class="ac-field-help">
+                        <div
+                            id="dialog-inbox-status-help-panel"
+                            data-role="dialog-inbox-status-help-panel"
+                            x-cloak
+                            x-show="statusHelpOpen"
+                            x-transition.opacity.duration.150ms
+                            x-on:click.outside="statusHelpOpen = false"
+                            class="ac-inline-popover"
+                        >
                             Новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».
-                        </p>
+                        </div>
                     </div>
                     <div class="ac-meta">
                         <p class="ac-meta__label">
@@ -209,6 +231,13 @@
                             this.$wire.refreshDialogViewData();
                         }, {{ $liveRefreshPollIntervalMs }});
                     },
+                    scheduleInitialScroll() {
+                        this.$nextTick(() => {
+                            this.scrollToBottom();
+                            window.requestAnimationFrame(() => this.scrollToBottom());
+                            window.setTimeout(() => this.scrollToBottom(), 60);
+                        });
+                    },
                     handleRefreshComplete(detail = {}) {
                         this.isRefreshing = false;
 
@@ -223,7 +252,7 @@
                         this.$nextTick(() => this.scrollToBottom());
                     },
                 }"
-                x-init="$nextTick(() => { if (! initialized) { scrollToBottom(); initialized = true; } startLiveRefresh(); })"
+                x-init="if (! initialized) { scheduleInitialScroll(); initialized = true; } startLiveRefresh();"
                 x-on:dialog-history-older-messages-loaded.window="$nextTick(() => restorePositionAfterPrepend())"
                 x-on:dialog-history-refreshed.window="$nextTick(() => handleRefreshComplete($event.detail))"
                 x-on:dialog-reply-sent.window="$nextTick(() => scrollToBottom())"
@@ -237,9 +266,6 @@
                         <h3 class="ac-surface__title">
                             Сообщения диалога
                         </h3>
-                        <p class="ac-surface__subtitle">
-                            Здесь показаны только сообщения текущего диалога в хронологическом порядке.
-                        </p>
                     </div>
 
                     <div class="ac-button-group ac-button-group--end">
