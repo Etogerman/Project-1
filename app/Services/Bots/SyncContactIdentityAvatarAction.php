@@ -55,6 +55,10 @@ class SyncContactIdentityAvatarAction
         }
 
         if (! $avatar instanceof DownloadedAvatarData) {
+            if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
+                $this->storeContactIdentityAvatarAction->clear($identity);
+            }
+
             return;
         }
 
