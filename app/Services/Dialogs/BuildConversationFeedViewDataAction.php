@@ -76,6 +76,10 @@ class BuildConversationFeedViewDataAction
             return 'Система';
         }
 
+        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
+            return 'Система';
+        }
+
         if ($message->direction !== Message::DIRECTION_OUTBOUND) {
             return null;
         }
@@ -109,6 +113,10 @@ class BuildConversationFeedViewDataAction
             return 'Системное';
         }
 
+        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
+            return 'Системное';
+        }
+
         return $message->direction === Message::DIRECTION_OUTBOUND
             ? 'Исходящее'
             : 'Входящее';
@@ -117,6 +125,10 @@ class BuildConversationFeedViewDataAction
     protected function resolveConversationDirectionTone(Message $message): string
     {
         if ($message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'gray';
+        }
+
+        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
             return 'gray';
         }
 

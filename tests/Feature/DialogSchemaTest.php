@@ -21,6 +21,7 @@ class DialogSchemaTest extends TestCase
             'contact_id',
             'channel_id',
             'current_contact_identity_id',
+            'manual_reply_dismissed_source_message_id',
             'external_chat_id',
             'confirmed_phone_raw',
             'confirmed_phone_normalized',
