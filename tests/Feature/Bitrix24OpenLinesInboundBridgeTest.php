@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessBitrix24WebhookEventJob;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -14,6 +15,7 @@ use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class Bitrix24OpenLinesInboundBridgeTest extends TestCase
@@ -720,6 +722,286 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         ]);
     }
 
+    public function test_exact_echo_callback_is_skipped_and_acked_using_existing_manual_reply(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+        $manualReply = $this->createManualReplyWithLiveExport(
+            dialog: $dialog,
+            text: 'Эхо manual reply',
+            externalMessageId: 'telegram-manual-echo-1',
+            exportStatus: Bitrix24MessageExport::STATUS_EXPORTED,
+            transportMethod: Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            remoteMessageId: 'bitrix-im-echo-1',
+        );
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([], 500),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-echo',
+                        'message_id' => 'bitrix-im-echo-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Эхо manual reply',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_exact_echo_skipped',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'success',
+        ]);
+
+        Http::assertNotSent(function (Request $request): bool {
+            return str_contains($request->url(), 'api.telegram.org');
+        });
+
+        Http::assertSent(function (Request $request) use ($manualReply): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === 'bitrix-im-echo-1'
+                && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === $manualReply->external_message_id;
+        });
+    }
+
+    public function test_suspicious_echo_candidate_is_delayed_without_delivery_or_ack(): void
+    {
+        Queue::fake();
+
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+        $this->createManualReplyWithLiveExport(
+            dialog: $dialog,
+            text: "Привет\r\nмир",
+            externalMessageId: 'telegram-manual-pending-1',
+            exportStatus: Bitrix24MessageExport::STATUS_PENDING,
+        );
+
+        Http::fake();
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-pending',
+                        'message_id' => 'bitrix-im-pending-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => "Привет\nмир",
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
+        $this->assertNotNull($event->recheck_scheduled_at);
+        $this->assertNull($event->recheck_attempted_at);
+        $this->assertSame(0, $event->attempts);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_delayed_recheck_scheduled',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'success',
+        ]);
+
+        Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, function (ProcessBitrix24WebhookEventJob $job) use ($event): bool {
+            return $job->webhookEventId === $event->id
+                && $job->delay !== null;
+        });
+
+        Http::assertNothingSent();
+    }
+
+    public function test_delayed_recheck_confirmed_echo_skips_delivery_and_acks_existing_manual_reply(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+        $manualReply = $this->createManualReplyWithLiveExport(
+            dialog: $dialog,
+            text: 'подтвержденное эхо',
+            externalMessageId: 'telegram-manual-echo-2',
+            exportStatus: Bitrix24MessageExport::STATUS_PENDING,
+        );
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([], 500),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-recheck-echo',
+                        'message_id' => 'bitrix-im-recheck-echo-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'подтвержденное эхо',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $event->forceFill([
+            'recheck_scheduled_at' => now()->subSecond(),
+            'recheck_attempted_at' => null,
+        ])->save();
+
+        Bitrix24MessageExport::query()
+            ->where('message_id', $manualReply->id)
+            ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->update([
+                'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+                'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+                'bitrix_remote_message_id' => 'bitrix-im-recheck-echo-1',
+                'exported_at' => now(),
+            ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertNotNull($event->recheck_attempted_at);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_delayed_recheck_confirmed_echo',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'success',
+        ]);
+
+        Http::assertNotSent(function (Request $request): bool {
+            return str_contains($request->url(), 'api.telegram.org');
+        });
+
+        Http::assertSent(function (Request $request) use ($manualReply): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === 'bitrix-im-recheck-echo-1'
+                && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === $manualReply->external_message_id;
+        });
+    }
+
+    public function test_delayed_recheck_without_exact_match_falls_through_to_real_operator_reply(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+        $this->createManualReplyWithLiveExport(
+            dialog: $dialog,
+            text: 'тот же текст',
+            externalMessageId: 'telegram-manual-fallthrough-1',
+            exportStatus: Bitrix24MessageExport::STATUS_PENDING,
+        );
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9001,
+                ],
+            ]),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-recheck-fallthrough',
+                        'message_id' => 'bitrix-im-recheck-fallthrough-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'тот же текст',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $event->forceFill([
+            'recheck_scheduled_at' => now()->subSecond(),
+            'recheck_attempted_at' => null,
+        ])->save();
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_delayed_recheck_fell_through',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'success',
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'provider_event_key' => 'bitrix24-openlines:bitrix-im-recheck-fallthrough-1',
+            'external_message_id' => '9001',
+            'text' => 'тот же текст',
+        ]);
+
+        Http::assertSent(function (Request $request): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage'
+                && $request['chat_id'] === 'telegram-chat-100'
+                && $request['text'] === 'тот же текст';
+        });
+    }
+
     public function test_invalid_chat_anchor_marks_openlines_event_as_failed(): void
     {
         $connection = $this->makeActiveConnection();
@@ -1180,5 +1462,49 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'install_payload' => [],
             'installed_at' => now(),
         ]);
+    }
+
+    private function createManualReplyWithLiveExport(
+        Dialog $dialog,
+        string $text,
+        string $externalMessageId,
+        string $exportStatus,
+        ?string $transportMethod = null,
+        ?string $remoteMessageId = null,
+    ): Message {
+        $dialog->loadMissing('contact');
+
+        $message = Message::query()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'provider_event_key' => null,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => $externalMessageId,
+            'text' => $text,
+            'received_at' => now(),
+        ]);
+
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'bitrix24_contact_id' => (string) $dialog->contact->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => $exportStatus,
+            'transport_method' => $transportMethod,
+            'resolved_bitrix_chat_id' => 'bitrix-chat-local',
+            'bitrix_remote_message_id' => $remoteMessageId,
+            'exported_at' => $exportStatus === Bitrix24MessageExport::STATUS_EXPORTED ? now() : null,
+            'failed_at' => null,
+            'failure_reason' => null,
+            'failure_code' => null,
+            'failure_uncertain' => false,
+        ]);
+
+        return $message;
     }
 }
