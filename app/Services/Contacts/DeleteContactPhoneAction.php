@@ -4,6 +4,7 @@ namespace App\Services\Contacts;
 
 use App\Models\ContactPhoneNumber;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Dialogs\SyncDialogsStageForContactAction;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -11,6 +12,7 @@ class DeleteContactPhoneAction
 {
     public function __construct(
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        private readonly SyncDialogsStageForContactAction $syncDialogsStageForContactAction,
     ) {}
 
     public function handle(ContactPhoneNumber $phoneNumber): void
@@ -47,6 +49,7 @@ class DeleteContactPhoneAction
         });
 
         if ($contact !== null) {
+            $this->syncDialogsStageForContactAction->handle($contact);
             $this->queueBitrix24ContactSyncAction->handle($contact);
         }
     }

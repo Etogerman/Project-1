@@ -524,6 +524,8 @@ class Contact extends Model
             'data_collection_completed_at' => null,
             'data_collection_attempts_count' => 0,
         ])->save();
+
+        app(\App\Services\Dialogs\SyncDialogsStageForContactAction::class)->handle($this);
     }
 
     public function completeDataCollection(): void

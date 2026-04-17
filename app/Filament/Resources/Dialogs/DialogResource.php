@@ -81,6 +81,7 @@ class DialogResource extends Resource
                 'channel',
                 'currentContactIdentity',
                 'contact.assignedUser',
+                'contact.phoneNumbers',
                 'contact.primaryIdentity',
                 'previewMessage.channel',
                 'previewMessage.sentByUser',

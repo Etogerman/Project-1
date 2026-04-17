@@ -109,6 +109,39 @@ class DialogStageTest extends TestCase
         ]);
     }
 
+    public function test_start_data_collection_demotes_completed_stage_back_to_phone_received(): void
+    {
+        [$contact, $dialog] = $this->createDialogWithoutPhone();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '79991234567',
+            'source' => ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        app(AddContactPhoneAction::class)->handle(
+            $contact,
+            '+7 999 123 45 67',
+            ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+        );
+
+        $contact->fresh()->completeDataCollection();
+        $contact->fresh()->startDataCollection(Contact::DATA_COLLECTION_FIELD_AGE_RANGE);
+
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $dialog->fresh()->stage_code);
+
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STAGE_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_user_id' => null,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'text' => 'Система изменила стадию диалога: Анкета заполнена -> Телефон получен',
+        ]);
+    }
+
     /**
      * @return array{Contact, Dialog}
      */

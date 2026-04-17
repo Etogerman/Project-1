@@ -84,6 +84,18 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertTableColumnStateSet('stage', 'Телефон получен', $dialog);
     }
 
+    public function test_dialogs_table_record_query_preloads_contact_phone_numbers_for_stage_column(): void
+    {
+        $dialog = $this->createDialogWithMessages();
+
+        $record = DialogResource::getTableRecordQuery()
+            ->whereKey($dialog->id)
+            ->firstOrFail();
+
+        $this->assertTrue($record->relationLoaded('contact'));
+        $this->assertTrue($record->contact->relationLoaded('phoneNumbers'));
+    }
+
     public function test_dialogs_inbox_page_enables_live_polling(): void
     {
         $admin = User::factory()->create([

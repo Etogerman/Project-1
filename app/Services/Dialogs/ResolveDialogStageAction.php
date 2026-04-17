@@ -42,13 +42,6 @@ class ResolveDialogStageAction
             ];
         }
 
-        if ($currentStageCode === Dialog::STAGE_QUESTIONNAIRE_COMPLETED) {
-            return [
-                'code' => Dialog::STAGE_QUESTIONNAIRE_COMPLETED,
-                'reason_code' => null,
-            ];
-        }
-
         if ($this->contactQuestionnaireCompleted($dialog->contact)) {
             return [
                 'code' => Dialog::STAGE_QUESTIONNAIRE_COMPLETED,
@@ -68,9 +61,7 @@ class ResolveDialogStageAction
         }
 
         return [
-            'code' => $currentStageCode === Dialog::STAGE_PHONE_RECEIVED
-                ? Dialog::STAGE_PHONE_RECEIVED
-                : Dialog::STAGE_NEW_DIALOG,
+            'code' => Dialog::STAGE_NEW_DIALOG,
             'reason_code' => null,
         ];
     }
