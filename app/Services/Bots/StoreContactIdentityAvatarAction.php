@@ -69,16 +69,19 @@ class StoreContactIdentityAvatarAction
 
     protected function detectContentTypeFromContents(string $contents): string
     {
-        $contentType = $this->normalizeContentType(
-            $this->detectMimeTypeWithFileInfo($contents)
-            ?? $this->detectMimeTypeWithImageSize($contents),
-        );
+        $contentType = $this->normalizeContentType($this->detectMimeTypeWithFileInfo($contents));
 
-        if ($contentType === '') {
-            throw new InvalidArgumentException('Unsupported avatar content type.');
+        if ($this->isSupportedContentType($contentType)) {
+            return $contentType;
         }
 
-        return $contentType;
+        $contentType = $this->normalizeContentType($this->detectMimeTypeWithImageSize($contents));
+
+        if ($this->isSupportedContentType($contentType)) {
+            return $contentType;
+        }
+
+        throw new InvalidArgumentException('Unsupported avatar content type.');
     }
 
     protected function detectMimeTypeWithFileInfo(string $contents): ?string
@@ -98,5 +101,16 @@ class StoreContactIdentityAvatarAction
         return is_array($imageInfo) && is_string($imageInfo['mime'] ?? null) && $imageInfo['mime'] !== ''
             ? (string) $imageInfo['mime']
             : null;
+    }
+
+    protected function isSupportedContentType(string $contentType): bool
+    {
+        return in_array($contentType, [
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'image/webp',
+            'image/gif',
+        ], true);
     }
 }

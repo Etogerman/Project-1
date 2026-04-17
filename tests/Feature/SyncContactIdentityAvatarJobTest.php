@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bots\DownloadedAvatarData;
 use App\Jobs\SyncContactIdentityAvatarJob;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ContactIdentity;
+use App\Services\Bots\StoreContactIdentityAvatarAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -139,6 +141,38 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         $job = new SyncContactIdentityAvatarJob($identity->id);
 
         app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertNotNull($identity->avatar_path);
+        $this->assertStringEndsWith('.jpg', (string) $identity->avatar_path);
+        Storage::disk('public')->assertExists((string) $identity->avatar_path);
+    }
+
+    public function test_store_contact_identity_avatar_action_falls_back_to_image_size_when_finfo_returns_generic_mime(): void
+    {
+        Storage::fake('public');
+
+        $identity = ContactIdentity::factory()->create();
+        $avatar = new DownloadedAvatarData(
+            contents: $this->tinyJpegAvatar(),
+            contentType: 'application/octet-stream',
+        );
+
+        $action = new class extends StoreContactIdentityAvatarAction
+        {
+            protected function detectMimeTypeWithFileInfo(string $contents): ?string
+            {
+                return 'application/octet-stream';
+            }
+
+            protected function detectMimeTypeWithImageSize(string $contents): ?string
+            {
+                return 'image/jpeg';
+            }
+        };
+
+        $action->handle($identity, $avatar);
 
         $identity->refresh();
 
