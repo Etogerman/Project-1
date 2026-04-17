@@ -199,4 +199,59 @@ class SyncContactIdentityAvatarJobTest extends TestCase
             'event' => 'contact.avatar_sync_failed',
         ]);
     }
+
+    public function test_sync_contact_identity_avatar_job_keeps_stale_telegram_avatar_when_avatar_fetch_partially_fails(): void
+    {
+        Storage::fake('public');
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+            'avatar_path' => 'contact-identities/temp/avatar/stale-avatar.jpg',
+            'avatar_updated_at' => now(),
+        ]);
+
+        $staleAvatarPath = sprintf('contact-identities/%d/avatar/stale-avatar.jpg', $identity->id);
+
+        $identity->forceFill([
+            'avatar_path' => $staleAvatarPath,
+        ])->save();
+
+        Storage::disk('public')->put($staleAvatarPath, 'stale-avatar');
+
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getChat*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'photo' => [
+                        'big_file_id' => 'big-photo-file',
+                    ],
+                ],
+            ]),
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [],
+            ]),
+        ]);
+
+        $job = new SyncContactIdentityAvatarJob($identity->id);
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertSame($staleAvatarPath, $identity->avatar_path);
+        $this->assertNotNull($identity->avatar_updated_at);
+        Storage::disk('public')->assertExists($staleAvatarPath);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'level' => ChannelActivityLog::LEVEL_WARNING,
+            'event' => 'contact.avatar_sync_failed',
+        ]);
+    }
 }

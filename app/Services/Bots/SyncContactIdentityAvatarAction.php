@@ -3,6 +3,7 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\DownloadedAvatarData;
+use App\Data\Bots\TelegramChatAvatarFetchResult;
 use App\Models\Channel;
 use App\Models\ContactIdentity;
 use Illuminate\Support\Facades\Http;
@@ -32,9 +33,15 @@ class SyncContactIdentityAvatarAction
             return;
         }
 
+        $shouldClearTelegramAvatar = false;
+
         try {
             $avatar = match ($channel->platform) {
-                Channel::PLATFORM_TELEGRAM => $this->downloadTelegramAvatar($channel, $identity),
+                Channel::PLATFORM_TELEGRAM => $this->resolveTelegramAvatar(
+                    $channel,
+                    $identity,
+                    $shouldClearTelegramAvatar,
+                ),
                 Channel::PLATFORM_MAX => $this->downloadMaxAvatar($maxAvatarUrl),
                 default => null,
             };
@@ -55,7 +62,7 @@ class SyncContactIdentityAvatarAction
         }
 
         if (! $avatar instanceof DownloadedAvatarData) {
-            if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
+            if ($shouldClearTelegramAvatar) {
                 $this->storeContactIdentityAvatarAction->clear($identity);
             }
 
@@ -65,13 +72,29 @@ class SyncContactIdentityAvatarAction
         $this->storeContactIdentityAvatarAction->handle($identity, $avatar);
     }
 
-    protected function downloadTelegramAvatar(Channel $channel, ContactIdentity $identity): ?DownloadedAvatarData
+    protected function downloadTelegramAvatar(Channel $channel, ContactIdentity $identity): ?TelegramChatAvatarFetchResult
     {
         if (! filled($identity->external_user_id)) {
             return null;
         }
 
         return $this->telegramBotApiService->downloadChatAvatar($channel, (string) $identity->external_user_id);
+    }
+
+    protected function resolveTelegramAvatar(
+        Channel $channel,
+        ContactIdentity $identity,
+        bool &$shouldClearTelegramAvatar,
+    ): ?DownloadedAvatarData {
+        $result = $this->downloadTelegramAvatar($channel, $identity);
+
+        if (! $result instanceof TelegramChatAvatarFetchResult) {
+            return null;
+        }
+
+        $shouldClearTelegramAvatar = $result->photoMissing;
+
+        return $result->avatar;
     }
 
     protected function downloadMaxAvatar(?string $avatarUrl): ?DownloadedAvatarData
