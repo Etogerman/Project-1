@@ -84,6 +84,10 @@ class BuildConversationFeedViewDataAction
             return null;
         }
 
+        if ($this->isBitrix24OpenLinesSender($message)) {
+            return 'Bitrix24';
+        }
+
         return match ($message->sent_by_type) {
             Message::SENT_BY_TYPE_OPERATOR => filled($message->sentByUser?->name)
                 ? 'Оператор: '.$message->sentByUser->name
@@ -147,6 +151,10 @@ class BuildConversationFeedViewDataAction
             return 'primary';
         }
 
+        if ($this->isBitrix24OpenLinesSender($message)) {
+            return 'primary';
+        }
+
         return match ($message->sent_by_type) {
             Message::SENT_BY_TYPE_OPERATOR => 'success',
             Message::SENT_BY_TYPE_AUTO_REPLY => 'warning',
@@ -154,6 +162,12 @@ class BuildConversationFeedViewDataAction
             Message::SENT_BY_TYPE_SYSTEM => 'gray',
             default => 'gray',
         };
+    }
+
+    protected function isBitrix24OpenLinesSender(Message $message): bool
+    {
+        return $message->direction === Message::DIRECTION_OUTBOUND
+            && $message->sent_by_system_code === Message::SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES;
     }
 
     protected function resolveConversationDisplayText(Message $message): string
