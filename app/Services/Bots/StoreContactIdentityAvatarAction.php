@@ -51,7 +51,7 @@ class StoreContactIdentityAvatarAction
 
     protected function resolveExtension(DownloadedAvatarData $avatar): string
     {
-        $contentType = $this->normalizeContentType($avatar->contentType);
+        $contentType = $this->detectContentTypeFromContents($avatar->contents);
 
         return match ($contentType) {
             'image/jpeg', 'image/jpg' => 'jpg',
@@ -65,5 +65,52 @@ class StoreContactIdentityAvatarAction
     protected function normalizeContentType(?string $contentType): string
     {
         return strtolower(trim((string) strtok((string) $contentType, ';')));
+    }
+
+    protected function detectContentTypeFromContents(string $contents): string
+    {
+        $contentType = $this->normalizeContentType($this->detectMimeTypeWithFileInfo($contents));
+
+        if ($this->isSupportedContentType($contentType)) {
+            return $contentType;
+        }
+
+        $contentType = $this->normalizeContentType($this->detectMimeTypeWithImageSize($contents));
+
+        if ($this->isSupportedContentType($contentType)) {
+            return $contentType;
+        }
+
+        throw new InvalidArgumentException('Unsupported avatar content type.');
+    }
+
+    protected function detectMimeTypeWithFileInfo(string $contents): ?string
+    {
+        $fileInfo = new \finfo(FILEINFO_MIME_TYPE);
+        $mimeType = $fileInfo->buffer($contents);
+
+        return is_string($mimeType) && $mimeType !== ''
+            ? $mimeType
+            : null;
+    }
+
+    protected function detectMimeTypeWithImageSize(string $contents): ?string
+    {
+        $imageInfo = @getimagesizefromstring($contents);
+
+        return is_array($imageInfo) && is_string($imageInfo['mime'] ?? null) && $imageInfo['mime'] !== ''
+            ? (string) $imageInfo['mime']
+            : null;
+    }
+
+    protected function isSupportedContentType(string $contentType): bool
+    {
+        return in_array($contentType, [
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'image/webp',
+            'image/gif',
+        ], true);
     }
 }

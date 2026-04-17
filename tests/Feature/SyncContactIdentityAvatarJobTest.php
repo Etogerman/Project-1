@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bots\DownloadedAvatarData;
 use App\Jobs\SyncContactIdentityAvatarJob;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ContactIdentity;
+use App\Services\Bots\StoreContactIdentityAvatarAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -18,6 +20,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
     public function test_sync_contact_identity_avatar_job_downloads_telegram_avatar_to_public_disk(): void
     {
         Storage::fake('public');
+        $telegramAvatar = $this->tinyJpegAvatar();
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -45,7 +48,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
                 ],
             ]),
             'https://api.telegram.org/file/bottelegram-token/photos/avatar-big.jpg' => Http::response(
-                'telegram-avatar-binary',
+                $telegramAvatar,
                 200,
                 ['Content-Type' => 'image/jpeg'],
             ),
@@ -59,12 +62,14 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
         $this->assertNotNull($identity->avatar_path);
         $this->assertNotNull($identity->avatar_updated_at);
+        $this->assertStringEndsWith('.jpg', (string) $identity->avatar_path);
         Storage::disk('public')->assertExists((string) $identity->avatar_path);
     }
 
     public function test_sync_contact_identity_avatar_job_downloads_max_avatar_to_public_disk(): void
     {
         Storage::fake('public');
+        $maxAvatar = $this->tinyPngAvatar();
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_MAX,
@@ -78,7 +83,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
         Http::fake([
             'https://cdn.max.ru/avatar.php' => Http::response(
-                'max-avatar-binary',
+                $maxAvatar,
                 200,
                 ['Content-Type' => 'image/png'],
             ),
@@ -93,6 +98,86 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         $this->assertNotNull($identity->avatar_path);
         $this->assertStringEndsWith('.png', (string) $identity->avatar_path);
         $this->assertStringEndsWith('.png', basename((string) $identity->avatar_path));
+        Storage::disk('public')->assertExists((string) $identity->avatar_path);
+    }
+
+    public function test_sync_contact_identity_avatar_job_detects_telegram_avatar_type_from_contents_when_provider_returns_octet_stream(): void
+    {
+        Storage::fake('public');
+        $telegramAvatar = $this->tinyJpegAvatar();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getChat*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'photo' => [
+                        'big_file_id' => 'big-photo-file',
+                    ],
+                ],
+            ]),
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'photos/avatar-big.jpg',
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/photos/avatar-big.jpg' => Http::response(
+                $telegramAvatar,
+                200,
+                ['Content-Type' => 'application/octet-stream'],
+            ),
+        ]);
+
+        $job = new SyncContactIdentityAvatarJob($identity->id);
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertNotNull($identity->avatar_path);
+        $this->assertStringEndsWith('.jpg', (string) $identity->avatar_path);
+        Storage::disk('public')->assertExists((string) $identity->avatar_path);
+    }
+
+    public function test_store_contact_identity_avatar_action_falls_back_to_image_size_when_finfo_returns_generic_mime(): void
+    {
+        Storage::fake('public');
+
+        $identity = ContactIdentity::factory()->create();
+        $avatar = new DownloadedAvatarData(
+            contents: $this->tinyJpegAvatar(),
+            contentType: 'application/octet-stream',
+        );
+
+        $action = new class extends StoreContactIdentityAvatarAction
+        {
+            protected function detectMimeTypeWithFileInfo(string $contents): ?string
+            {
+                return 'application/octet-stream';
+            }
+
+            protected function detectMimeTypeWithImageSize(string $contents): ?string
+            {
+                return 'image/jpeg';
+            }
+        };
+
+        $action->handle($identity, $avatar);
+
+        $identity->refresh();
+
+        $this->assertNotNull($identity->avatar_path);
+        $this->assertStringEndsWith('.jpg', (string) $identity->avatar_path);
         Storage::disk('public')->assertExists((string) $identity->avatar_path);
     }
 
@@ -284,5 +369,21 @@ class SyncContactIdentityAvatarJobTest extends TestCase
             'level' => ChannelActivityLog::LEVEL_WARNING,
             'event' => 'contact.avatar_sync_failed',
         ]);
+    }
+
+    protected function tinyPngAvatar(): string
+    {
+        return (string) base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=',
+            true,
+        );
+    }
+
+    protected function tinyJpegAvatar(): string
+    {
+        return (string) base64_decode(
+            '/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUWFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAbAAEAAwEBAQEAAAAAAAAAAAAABAUGAgMBB//EADYQAAIBAgQDBgQEBwAAAAAAAAECAAMRBBIhMQVBUQYiYXGBEzKRobHB0RQjQlJy8AcWJDNSYv/EABkBAAMBAQEAAAAAAAAAAAAAAAABAgMEBf/EACMRAAICAgICAgMBAAAAAAAAAAABAhEDIRIxBBNBUWEiMnH/2gAMAwEAAhEDEQA/APv4ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooor/2Q==',
+            true,
+        );
     }
 }
