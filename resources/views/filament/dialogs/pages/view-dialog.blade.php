@@ -17,7 +17,7 @@
 
                     <a
                         href="{{ $contactUrl }}"
-                        class="ac-button ac-button--primary"
+                        class="ac-button ac-button--warning"
                     >
                         Открыть контакт
                     </a>
@@ -227,7 +227,7 @@
                                 wire:click="$set('conversationDisplayMode', '{{ $displayModeValue }}')"
                                 @class([
                                     'ac-button',
-                                    'ac-button--primary-soft' => $conversationDisplayMode === $displayModeValue,
+                                    'ac-button--warning-soft' => $conversationDisplayMode === $displayModeValue,
                                     'ac-button--secondary' => $conversationDisplayMode !== $displayModeValue,
                                 ])
                             >
