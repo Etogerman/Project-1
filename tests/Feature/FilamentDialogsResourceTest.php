@@ -214,6 +214,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-poll-interval-ms="5000"', escape: false)
             ->assertSee('refreshDialogViewData', escape: false)
             ->assertSee("querySelector('[data-role=conversation-thread]')", escape: false)
+            ->assertSee('window.requestAnimationFrame(() => this.scrollToBottom())', escape: false)
             ->assertDontSee('[data-role=\\"conversation-thread\\"]', escape: false);
     }
 
