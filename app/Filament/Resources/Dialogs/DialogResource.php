@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Dialogs;
 
+use App\Data\Dialogs\DialogInboxStatusData;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
@@ -232,6 +233,7 @@ class DialogResource extends Resource
         return Message::query()
             ->select('id')
             ->whereColumn('dialog_id', 'dialogs.id')
+            ->where('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
             ->tap(fn (Builder $query): Builder => app(MessageChronology::class)->applyLatestOrder($query))
             ->limit(1);
     }
@@ -360,37 +362,57 @@ class DialogResource extends Resource
 
     protected static function dialogRequiresManualReply(Dialog $record): bool
     {
+        return static::resolveInboxStatusCode($record) === DialogInboxStatusData::CODE_REQUIRES_REPLY;
+    }
+
+    protected static function resolveInboxStatusCode(Dialog $record): string
+    {
         $latestInboundUserMessageId = $record->getAttribute('latest_inbound_user_message_id');
         $latestInboundUserMessageSortAt = $record->getAttribute('latest_inbound_user_message_sort_at');
         $latestOutboundManualReplyMessageId = $record->getAttribute('latest_outbound_manual_reply_message_id');
         $latestOutboundManualReplyMessageSortAt = $record->getAttribute('latest_outbound_manual_reply_message_sort_at');
+        $manualReplyDismissedSourceMessageId = $record->getAttribute('manual_reply_dismissed_source_message_id');
 
         if (! filled($latestInboundUserMessageId)) {
-            return false;
+            return DialogInboxStatusData::CODE_NO_NEW;
         }
 
         if (! filled($latestOutboundManualReplyMessageId)) {
-            return true;
+            return (int) $manualReplyDismissedSourceMessageId === (int) $latestInboundUserMessageId
+                ? DialogInboxStatusData::CODE_NOT_REQUIRED
+                : DialogInboxStatusData::CODE_REQUIRES_REPLY;
         }
 
-        return static::messageChronology()->isAfter(
+        if (! static::messageChronology()->isAfter(
             $latestInboundUserMessageSortAt,
             $latestInboundUserMessageId,
             $latestOutboundManualReplyMessageSortAt,
             $latestOutboundManualReplyMessageId,
-        );
+        )) {
+            return DialogInboxStatusData::CODE_NO_NEW;
+        }
+
+        return (int) $manualReplyDismissedSourceMessageId === (int) $latestInboundUserMessageId
+            ? DialogInboxStatusData::CODE_NOT_REQUIRED
+            : DialogInboxStatusData::CODE_REQUIRES_REPLY;
     }
 
     protected static function formatInboxStatus(Dialog $record): string
     {
-        return static::dialogRequiresManualReply($record)
-            ? 'Требует ответа'
-            : 'Нет новых';
+        return match (static::resolveInboxStatusCode($record)) {
+            DialogInboxStatusData::CODE_REQUIRES_REPLY => 'Требует ответа',
+            DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
+            default => 'Нет новых',
+        };
     }
 
     protected static function getInboxStatusColor(Dialog $record): string
     {
-        return static::dialogRequiresManualReply($record) ? 'warning' : 'success';
+        return match (static::resolveInboxStatusCode($record)) {
+            DialogInboxStatusData::CODE_REQUIRES_REPLY => 'warning',
+            DialogInboxStatusData::CODE_NOT_REQUIRED => 'gray',
+            default => 'success',
+        };
     }
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
@@ -432,6 +454,14 @@ class DialogResource extends Resource
                     ->orWhereRaw(
                         $latestInboundAfterOutboundManualReply['sql'],
                         $latestInboundAfterOutboundManualReply['bindings'],
+                    );
+            })
+            ->where(function (Builder $query) use ($latestInboundUserMessageId): Builder {
+                return $query
+                    ->whereNull('dialogs.manual_reply_dismissed_source_message_id')
+                    ->orWhereRaw(
+                        $latestInboundUserMessageId['sql'].' <> dialogs.manual_reply_dismissed_source_message_id',
+                        $latestInboundUserMessageId['bindings'],
                     );
             });
     }

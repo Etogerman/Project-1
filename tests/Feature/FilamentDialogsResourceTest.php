@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\Dialogs\DialogInboxStatusData;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
@@ -216,6 +217,23 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('[data-role=\\"conversation-thread\\"]', escape: false);
     }
 
+    public function test_dialog_view_renders_editable_status_select_for_pending_inbox_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('Статус диалога')
+            ->assertSee('Требует ответа')
+            ->assertSee('Не требует ответа')
+            ->assertSee('data-role="dialog-inbox-status-select"', escape: false);
+    }
+
     public function test_dialog_view_uses_yellow_highlight_buttons_and_green_send_button(): void
     {
         $admin = User::factory()->create([
@@ -392,6 +410,35 @@ class FilamentDialogsResourceTest extends TestCase
             ->test(ListDialogs::class)
             ->removeTableFilter('requires_manual_reply')
             ->assertCanSeeTableRecords([$openDialog, $closedDialog]);
+    }
+
+    public function test_dialogs_inbox_default_requires_reply_filter_hides_manually_dismissed_dialogs(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $openDialog = $this->createInboxDialog([
+            'contactName' => 'Нужен ответ',
+        ]);
+        $dismissedDialog = $this->createInboxDialog([
+            'contactName' => 'Ответ не нужен',
+        ]);
+        $dismissedInbound = Message::query()
+            ->where('dialog_id', $dismissedDialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $dismissedDialog->forceFill([
+            'manual_reply_dismissed_source_message_id' => $dismissedInbound->id,
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertCanSeeTableRecords([$openDialog])
+            ->assertCanNotSeeTableRecords([$dismissedDialog]);
     }
 
     public function test_dialogs_inbox_status_is_scoped_to_dialog_not_contact(): void
@@ -647,6 +694,37 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Автоответ системы')
             ->assertSee('Автоответчик')
             ->assertSee(DialogResource::getUrl('view', ['record' => $dialog]), escape: false);
+    }
+
+    public function test_dialogs_inbox_preview_ignores_dialog_status_history_note(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Диалог со статусом',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            'text' => 'Оператор изменил статус диалога',
+            'received_at' => now(),
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'));
+
+        $response->assertOk()
+            ->assertSee('Пользователь написал первым')
+            ->assertDontSee('Оператор изменил статус диалога');
     }
 
     public function test_dialogs_inbox_keeps_system_unsubscribe_preview_without_marking_dialog_as_requires_reply(): void
@@ -1463,6 +1541,93 @@ class FilamentDialogsResourceTest extends TestCase
             && str_contains($request->url(), 'chat_id=66552012')
             && $request['text'] === '<b>HTML ответ</b>'
             && $request['format'] === 'html');
+    }
+
+    public function test_dialog_view_can_mark_dialog_as_not_required_and_write_history_note(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Оператор Статуса',
+        ]);
+        $dialog = $this->createInboxDialog();
+        $latestInbound = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_REQUIRES_REPLY)
+            ->set('dialogInboxStatusSelection', DialogInboxStatusData::CODE_NOT_REQUIRED)
+            ->call('updateDialogInboxStatus')
+            ->assertNotified()
+            ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_NOT_REQUIRED)
+            ->assertSee('Не требует ответа')
+            ->assertSee('Оператор Оператор Статуса изменил статус диалога: Требует ответа -> Не требует ответа');
+
+        $this->assertSame(
+            $latestInbound->id,
+            $dialog->fresh()->manual_reply_dismissed_source_message_id,
+        );
+
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_user_id' => $admin->id,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            'reply_to_message_id' => $latestInbound->id,
+            'text' => 'Оператор Оператор Статуса изменил статус диалога: Требует ответа -> Не требует ответа',
+        ]);
+    }
+
+    public function test_dialog_view_live_refresh_returns_manually_dismissed_dialog_to_requires_reply_after_new_inbound(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $latestInbound = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $dialog->forceFill([
+            'manual_reply_dismissed_source_message_id' => $latestInbound->id,
+        ])->save();
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_NOT_REQUIRED);
+
+        $receivedAt = now()->addSecond();
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Новое сообщение после ручного закрытия',
+            'received_at' => $receivedAt,
+            'external_message_id' => 'dialog-status-refresh-001',
+            'provider_event_key' => 'dialog-status-refresh-event-001',
+        ]);
+
+        $dialog->forceFill([
+            'last_message_at' => $receivedAt,
+            'last_inbound_at' => $receivedAt,
+        ])->save();
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_REQUIRES_REPLY)
+            ->assertSee('Новое сообщение после ручного закрытия');
     }
 
     public function test_employee_can_send_reply_from_dialog_page_without_reassigning_foreign_contact(): void

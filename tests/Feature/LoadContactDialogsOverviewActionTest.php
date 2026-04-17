@@ -106,4 +106,53 @@ class LoadContactDialogsOverviewActionTest extends TestCase
         $this->assertSame('gray', $overview[0]['preview_sender_tone']);
         $this->assertSame('Бот заблокирован', $overview[0]['route_status_label']);
     }
+
+    public function test_overview_preview_ignores_dialog_status_history_note(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'overview-status-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'overview-status-chat',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Последнее реальное сообщение',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            'text' => 'Оператор изменил статус диалога',
+            'received_at' => now(),
+        ]);
+
+        $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
+
+        $this->assertCount(1, $overview);
+        $this->assertSame('Последнее реальное сообщение', $overview[0]['preview_text']);
+    }
 }
