@@ -1365,7 +1365,7 @@
     }
 
     .ac-dialog-workspace {
-        grid-template-columns: minmax(0, 1.55fr) minmax(20rem, 0.95fr);
+        grid-template-columns: minmax(0, 1.45fr) minmax(22rem, 1fr);
     }
 
     .ac-surface {
@@ -1471,6 +1471,40 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: var(--ac-text-soft);
+    }
+
+    .ac-meta__label-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin-bottom: 0.25rem;
+    }
+
+    .ac-meta__label-row .ac-meta__label {
+        margin-bottom: 0;
+    }
+
+    .ac-inline-help {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--ac-text-soft);
+        cursor: help;
+        line-height: 1;
+    }
+
+    .ac-inline-help:hover,
+    .ac-inline-help:focus-visible {
+        color: var(--ac-text);
+    }
+
+    .ac-inline-help:focus-visible {
+        outline: 2px solid rgba(15, 23, 42, 0.18);
+        outline-offset: 2px;
+        border-radius: 999px;
     }
 
     .ac-meta__value {
