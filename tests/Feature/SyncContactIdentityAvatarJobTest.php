@@ -126,6 +126,48 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         $this->assertNull($identity->avatar_updated_at);
     }
 
+    public function test_sync_contact_identity_avatar_job_clears_stale_telegram_avatar_when_chat_has_no_photo(): void
+    {
+        Storage::fake('public');
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+            'avatar_path' => 'contact-identities/temp/avatar/stale-avatar.jpg',
+            'avatar_updated_at' => now(),
+        ]);
+
+        $staleAvatarPath = sprintf('contact-identities/%d/avatar/stale-avatar.jpg', $identity->id);
+
+        $identity->forceFill([
+            'avatar_path' => $staleAvatarPath,
+        ])->save();
+
+        Storage::disk('public')->put($staleAvatarPath, 'stale-avatar');
+
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getChat*' => Http::response([
+                'ok' => true,
+                'result' => [],
+            ]),
+        ]);
+
+        $job = new SyncContactIdentityAvatarJob($identity->id);
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertNull($identity->avatar_path);
+        $this->assertNull($identity->avatar_updated_at);
+        Storage::disk('public')->assertMissing($staleAvatarPath);
+    }
+
     public function test_sync_contact_identity_avatar_job_logs_warning_when_provider_avatar_download_fails(): void
     {
         Storage::fake('public');

@@ -34,6 +34,20 @@ class StoreContactIdentityAvatarAction
         }
     }
 
+    public function clear(ContactIdentity $identity): void
+    {
+        $previousPath = $identity->avatar_path;
+
+        $identity->forceFill([
+            'avatar_path' => null,
+            'avatar_updated_at' => null,
+        ])->save();
+
+        if (filled($previousPath)) {
+            Storage::disk('public')->delete($previousPath);
+        }
+    }
+
     protected function resolveExtension(DownloadedAvatarData $avatar): string
     {
         $filenameHint = $avatar->filenameHint;
