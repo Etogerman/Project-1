@@ -42,6 +42,13 @@ class ResolveDialogStageAction
             ];
         }
 
+        if (! $this->contactHasPhone($dialog->contact)) {
+            return [
+                'code' => Dialog::STAGE_NEW_DIALOG,
+                'reason_code' => null,
+            ];
+        }
+
         if ($this->contactQuestionnaireCompleted($dialog->contact)) {
             return [
                 'code' => Dialog::STAGE_QUESTIONNAIRE_COMPLETED,
@@ -51,18 +58,11 @@ class ResolveDialogStageAction
             ];
         }
 
-        if ($this->dialogHasPhone($dialog)) {
-            return [
-                'code' => Dialog::STAGE_PHONE_RECEIVED,
-                'reason_code' => $currentStageCode !== Dialog::STAGE_PHONE_RECEIVED
-                    ? self::REASON_CONTACT_HAS_PHONE
-                    : null,
-            ];
-        }
-
         return [
-            'code' => Dialog::STAGE_NEW_DIALOG,
-            'reason_code' => null,
+            'code' => Dialog::STAGE_PHONE_RECEIVED,
+            'reason_code' => $currentStageCode !== Dialog::STAGE_PHONE_RECEIVED
+                ? self::REASON_CONTACT_HAS_PHONE
+                : null,
         ];
     }
 
@@ -71,18 +71,8 @@ class ResolveDialogStageAction
         return $this->resolveAutomaticTransition($dialog)['code'];
     }
 
-    protected function dialogHasPhone(Dialog $dialog): bool
+    protected function contactHasPhone(?Contact $contact): bool
     {
-        if (
-            filled($dialog->confirmed_phone_raw)
-            || filled($dialog->confirmed_phone_normalized)
-            || $dialog->phone_confirmed_at !== null
-        ) {
-            return true;
-        }
-
-        $contact = $dialog->contact;
-
         if (! $contact instanceof Contact) {
             return false;
         }

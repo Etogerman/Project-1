@@ -9,6 +9,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Dialogs\ResolveOrCreateDialogAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -139,6 +140,74 @@ class DialogStageTest extends TestCase
             'sent_by_user_id' => null,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
             'text' => 'Система изменила стадию диалога: Анкета заполнена -> Телефон получен',
+        ]);
+    }
+
+    public function test_delete_last_phone_demotes_completed_stage_back_to_new_dialog(): void
+    {
+        [$contact, $dialog] = $this->createDialogWithoutPhone();
+
+        $phoneNumber = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '79991234567',
+            'source' => ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        app(AddContactPhoneAction::class)->handle(
+            $contact,
+            '+7 999 123 45 67',
+            ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+        );
+
+        $contact->fresh()->completeDataCollection();
+
+        app(DeleteContactPhoneAction::class)->handle($phoneNumber);
+
+        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $dialog->fresh()->stage_code);
+
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STAGE_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_user_id' => null,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'text' => 'Система изменила стадию диалога: Анкета заполнена -> Новый диалог',
+        ]);
+    }
+
+    public function test_delete_last_contact_phone_ignores_historical_dialog_confirmed_phone_for_stage_resolution(): void
+    {
+        [$contact, $dialog] = $this->createDialogWithoutPhone();
+
+        $phoneNumber = ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '79991234567',
+            'source' => ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $dialog->forceFill([
+            'stage_code' => Dialog::STAGE_PHONE_RECEIVED,
+            'confirmed_phone_raw' => '+7 999 123 45 67',
+            'confirmed_phone_normalized' => '+79991234567',
+            'phone_confirmed_at' => now(),
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+        ])->save();
+
+        app(DeleteContactPhoneAction::class)->handle($phoneNumber);
+
+        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $dialog->fresh()->stage_code);
+
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STAGE_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_user_id' => null,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'text' => 'Система изменила стадию диалога: Телефон получен -> Новый диалог',
         ]);
     }
 
