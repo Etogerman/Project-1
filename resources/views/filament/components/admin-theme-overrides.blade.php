@@ -1571,7 +1571,7 @@
         box-shadow: 0 18px 34px -26px rgba(15, 23, 42, 0.6);
     }
 
-    .ac-button:not(.ac-button--primary):not(.ac-button--warning):not(.ac-button--primary-soft):not(.ac-button--success):not(.ac-button--danger):not(.ac-button--danger-soft):hover {
+    .ac-button:not(.ac-button--primary):not(.ac-button--warning):not(.ac-button--warning-soft):not(.ac-button--primary-soft):not(.ac-button--success):not(.ac-button--danger):not(.ac-button--danger-soft):hover {
         border-color: rgba(30, 41, 59, 0.96);
         background: linear-gradient(
             180deg,
@@ -1624,6 +1624,16 @@
             #facc15 0%,
             #eab308 100%
         );
+    }
+
+    .ac-button--warning-soft {
+        border-color: color-mix(in srgb, #facc15 44%, transparent);
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, #fde68a 82%, #ffffff 18%) 0%,
+            color-mix(in srgb, #facc15 88%, #ca8a04 12%) 100%
+        );
+        color: #111111;
     }
 
     .ac-button--accent {

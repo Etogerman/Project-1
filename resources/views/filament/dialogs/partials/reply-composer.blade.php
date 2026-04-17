@@ -46,7 +46,7 @@
                     wire:click="$set('{{ $replyFormatModel }}', '{{ $replyFormatValue }}')"
                     @class([
                         'ac-button',
-                        'ac-button--primary' => $this->{$replyFormatModel} === $replyFormatValue,
+                        'ac-button--warning-soft' => $this->{$replyFormatModel} === $replyFormatValue,
                         'ac-button--secondary' => $this->{$replyFormatModel} !== $replyFormatValue,
                     ])
                     @disabled(! $canReply)
