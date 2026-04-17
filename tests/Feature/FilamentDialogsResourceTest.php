@@ -704,6 +704,38 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee(DialogResource::getUrl('view', ['record' => $dialog]), escape: false);
     }
 
+    public function test_dialogs_inbox_shows_bitrix24_sender_badge_for_bitrix24_openlines_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Диалог с Bitrix24',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES,
+            'provider_event_key' => 'bitrix24-openlines:preview-1',
+            'text' => 'Ответ из Bitrix24',
+            'received_at' => now(),
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'));
+
+        $response->assertOk()
+            ->assertSee('Ответ из Bitrix24')
+            ->assertSee('Bitrix24');
+    }
+
     public function test_dialogs_inbox_preview_ignores_dialog_status_history_note(): void
     {
         $admin = User::factory()->create([
@@ -1326,6 +1358,38 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Автоответчик')
             ->assertSee('Автоответ')
             ->assertSee('Поделился номером телефона');
+    }
+
+    public function test_dialog_view_shows_bitrix24_sender_label_for_bitrix24_openlines_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $contact = $dialog->contact;
+        $identity = $dialog->currentContactIdentity;
+        $channel = $dialog->channel;
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $channel?->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES,
+            'provider_event_key' => 'bitrix24-openlines:view-1',
+            'text' => 'Сообщение из Bitrix24',
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('Bitrix24')
+            ->assertSee('Сообщение из Bitrix24')
+            ->assertDontSee('Оператор:');
     }
 
     public function test_dialog_view_shows_max_bot_started_payload_as_human_readable_system_event(): void

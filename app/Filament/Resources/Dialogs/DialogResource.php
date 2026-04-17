@@ -321,6 +321,7 @@ class DialogResource extends Resource
     protected static function resolvePreviewSenderTone(Dialog $record): string
     {
         $previewMessage = static::resolvePreviewMessage($record);
+        $previewFeed = static::resolvePreviewFeed($record);
 
         if (! $previewMessage instanceof Message) {
             return 'gray';
@@ -332,6 +333,10 @@ class DialogResource extends Resource
 
         if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
             return 'info';
+        }
+
+        if (is_array($previewFeed) && filled($previewFeed['sender_tone'] ?? null)) {
+            return (string) $previewFeed['sender_tone'];
         }
 
         return match ($previewMessage->sent_by_type) {
