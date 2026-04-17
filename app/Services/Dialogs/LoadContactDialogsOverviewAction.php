@@ -78,7 +78,7 @@ class LoadContactDialogsOverviewAction
                     'last_outbound_label' => $this->formatDialogTimestamp($dialog->last_outbound_at),
                     'preview_text' => is_array($previewFeed) ? (string) ($previewFeed['display_text'] ?? 'Сообщений ещё не было.') : 'Сообщений ещё не было.',
                     'preview_sender_label' => $this->resolvePreviewSenderLabel($previewMessage, $previewFeed),
-                    'preview_sender_tone' => $this->resolvePreviewSenderTone($previewMessage),
+                    'preview_sender_tone' => $this->resolvePreviewSenderTone($previewMessage, $previewFeed),
                     'sort_at_timestamp' => $sortAt?->getTimestamp(),
                 ];
             })
@@ -161,7 +161,7 @@ class LoadContactDialogsOverviewAction
         return 'Система';
     }
 
-    protected function resolvePreviewSenderTone(?Message $previewMessage): ?string
+    protected function resolvePreviewSenderTone(?Message $previewMessage, mixed $previewFeed): ?string
     {
         if (! $previewMessage instanceof Message) {
             return null;
@@ -173,6 +173,10 @@ class LoadContactDialogsOverviewAction
 
         if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
             return 'info';
+        }
+
+        if (is_array($previewFeed) && filled($previewFeed['sender_tone'] ?? null)) {
+            return (string) $previewFeed['sender_tone'];
         }
 
         return match ($previewMessage->sent_by_type) {

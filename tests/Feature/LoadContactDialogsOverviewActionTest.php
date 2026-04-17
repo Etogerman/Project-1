@@ -107,6 +107,48 @@ class LoadContactDialogsOverviewActionTest extends TestCase
         $this->assertSame('Бот заблокирован', $overview[0]['route_status_label']);
     }
 
+    public function test_overview_uses_bitrix24_sender_for_bitrix24_openlines_message(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'overview-bitrix-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'overview-bitrix-chat',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES,
+            'provider_event_key' => 'bitrix24-openlines:overview-1',
+            'external_chat_id' => 'overview-bitrix-chat',
+            'text' => 'Ответ из Bitrix24',
+            'received_at' => now(),
+        ]);
+
+        $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
+
+        $this->assertCount(1, $overview);
+        $this->assertSame('Ответ из Bitrix24', $overview[0]['preview_text']);
+        $this->assertSame('Bitrix24', $overview[0]['preview_sender_label']);
+        $this->assertSame('primary', $overview[0]['preview_sender_tone']);
+    }
+
     public function test_overview_preview_ignores_dialog_status_history_note(): void
     {
         $contact = Contact::factory()->create();
