@@ -199,4 +199,3 @@ rg -l "MergeContactsAction|ConsolidateDialogsForRootContactAction|RepairMergedCo
 3. Не объявляет mixed-identity history corruption автоматически.
 4. Не запускает repair.
 5. Не разрешает dangerous ops.
-
