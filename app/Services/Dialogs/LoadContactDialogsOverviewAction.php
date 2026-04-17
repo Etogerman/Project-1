@@ -132,7 +132,7 @@ class LoadContactDialogsOverviewAction
             ->where(function (Builder $query): Builder {
                 return $query
                     ->whereNull('message_kind')
-                    ->orWhere('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE);
+                    ->orWhereNotIn('message_kind', Message::previewExcludedMessageKinds());
             })
             ->with(['channel', 'dialog.channel', 'sentByUser'])
             ->orderBy('dialog_id')

@@ -5,6 +5,7 @@ namespace App\Services\Contacts;
 use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Dialogs\SyncDialogsStageForContactAction;
 use Illuminate\Database\QueryException;
 use RuntimeException;
 
@@ -14,6 +15,7 @@ class AddContactPhoneAction
         private readonly NormalizePhoneNumberAction $normalizePhoneNumberAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        private readonly SyncDialogsStageForContactAction $syncDialogsStageForContactAction,
     ) {}
 
     public function handle(Contact $contact, string $phoneRaw, string $source): ContactPhoneNumber
@@ -32,6 +34,8 @@ class AddContactPhoneAction
             ->first();
 
         if ($existing instanceof ContactPhoneNumber) {
+            $this->syncDialogsStageForContactAction->handle($contact);
+
             return $existing;
         }
 
@@ -43,6 +47,7 @@ class AddContactPhoneAction
                 'is_primary' => ! $contact->phoneNumbers()->exists(),
             ]);
 
+            $this->syncDialogsStageForContactAction->handle($contact);
             $this->queueBitrix24ContactSyncAction->handle($contact);
 
             return $phoneNumber;
@@ -51,9 +56,13 @@ class AddContactPhoneAction
                 throw $exception;
             }
 
-            return $contact->phoneNumbers()
+            $phoneNumber = $contact->phoneNumbers()
                 ->where('phone_normalized', $phoneNormalized)
                 ->firstOrFail();
+
+            $this->syncDialogsStageForContactAction->handle($contact);
+
+            return $phoneNumber;
         }
     }
 

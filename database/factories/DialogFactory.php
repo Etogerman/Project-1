@@ -26,6 +26,7 @@ class DialogFactory extends Factory
             'channel_id' => fn (array $attributes): int => ContactIdentity::query()
                 ->findOrFail($attributes['current_contact_identity_id'])
                 ->channel_id,
+            'stage_code' => Dialog::STAGE_NEW_DIALOG,
             'manual_reply_dismissed_source_message_id' => null,
             'bot_subscription_status' => null,
             'bot_subscription_changed_at' => null,

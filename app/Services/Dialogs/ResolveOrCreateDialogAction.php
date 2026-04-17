@@ -12,6 +12,7 @@ class ResolveOrCreateDialogAction
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly SyncDialogStageAction $syncDialogStageAction,
     ) {}
 
     public function handle(Contact|int $contact, Channel|int $channel): Dialog
@@ -25,23 +26,33 @@ class ResolveOrCreateDialogAction
             ->first();
 
         if ($dialog instanceof Dialog) {
-            return $dialog;
+            $this->syncDialogStageAction->handle($dialog, false);
+
+            return $dialog->fresh();
         }
 
         try {
-            return Dialog::query()->create([
+            $dialog = Dialog::query()->create([
                 'contact_id' => $rootContact->id,
                 'channel_id' => $channelId,
             ]);
+
+            $this->syncDialogStageAction->handle($dialog, false);
+
+            return $dialog->fresh();
         } catch (QueryException $exception) {
             if (! $this->wasUniqueConstraintViolation($exception)) {
                 throw $exception;
             }
 
-            return Dialog::query()
+            $dialog = Dialog::query()
                 ->where('contact_id', $rootContact->id)
                 ->where('channel_id', $channelId)
                 ->firstOrFail();
+
+            $this->syncDialogStageAction->handle($dialog, false);
+
+            return $dialog->fresh();
         }
     }
 

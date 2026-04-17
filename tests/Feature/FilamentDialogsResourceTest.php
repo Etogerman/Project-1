@@ -65,6 +65,25 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee($dialog->contact->display_name);
     }
 
+    public function test_dialogs_inbox_page_shows_resolved_dialog_stage_column(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertTableColumnExists(
+                'stage',
+                fn ($column): bool => $column->getLabel() === 'Стадия',
+                $dialog,
+            )
+            ->assertTableColumnVisible('stage')
+            ->assertTableColumnStateSet('stage', 'Телефон получен', $dialog);
+    }
+
     public function test_dialogs_inbox_page_enables_live_polling(): void
     {
         $admin = User::factory()->create([
@@ -229,6 +248,11 @@ class FilamentDialogsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
+            ->assertSee('Стадия диалога')
+            ->assertSee('Новый диалог')
+            ->assertSee('Передан в работу МПЛ')
+            ->assertSee('Передан в работу МПП')
+            ->assertSee('data-role="dialog-stage-select"', escape: false)
             ->assertSee('Статус диалога')
             ->assertSee('Требует ответа')
             ->assertSee('Не требует ответа')
@@ -1726,6 +1750,65 @@ class FilamentDialogsResourceTest extends TestCase
                     'label' => 'Не требует ответа',
                 ],
                 'reply_to_message_id' => $latestInbound->id,
+                'dialog_id' => $dialog->id,
+                'changed_by_user_id' => $admin->id,
+            ],
+            $historyMessage->raw_payload,
+        );
+
+        $this->assertNotNull($historyMessage->received_at);
+    }
+
+    public function test_dialog_view_can_transfer_dialog_stage_to_mpl_and_write_history_note(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Оператор Стадии',
+        ]);
+        $dialog = $this->createInboxDialog();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSet('dialogStageSelection', Dialog::STAGE_NEW_DIALOG)
+            ->set('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPL)
+            ->call('updateDialogStage')
+            ->assertNotified()
+            ->assertSet('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPL)
+            ->assertSee('Передан в работу МПЛ')
+            ->assertSee('Оператор Оператор Стадии изменил стадию диалога: Новый диалог -> Передан в работу МПЛ');
+
+        $this->assertSame(
+            Dialog::STAGE_TRANSFERRED_TO_MPL,
+            $dialog->fresh()->stage_code,
+        );
+
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STAGE_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_user_id' => $admin->id,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'text' => 'Оператор Оператор Стадии изменил стадию диалога: Новый диалог -> Передан в работу МПЛ',
+        ]);
+
+        $historyMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DIALOG_STAGE_CHANGE)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame(
+            [
+                'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+                'from_stage' => [
+                    'code' => Dialog::STAGE_NEW_DIALOG,
+                    'label' => 'Новый диалог',
+                ],
+                'to_stage' => [
+                    'code' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+                    'label' => 'Передан в работу МПЛ',
+                ],
                 'dialog_id' => $dialog->id,
                 'changed_by_user_id' => $admin->id,
             ],

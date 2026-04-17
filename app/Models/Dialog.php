@@ -13,6 +13,16 @@ class Dialog extends Model
 {
     use HasFactory;
 
+    public const STAGE_NEW_DIALOG = 'new_dialog';
+
+    public const STAGE_PHONE_RECEIVED = 'phone_received';
+
+    public const STAGE_QUESTIONNAIRE_COMPLETED = 'questionnaire_completed';
+
+    public const STAGE_TRANSFERRED_TO_MPL = 'transferred_to_mpl';
+
+    public const STAGE_TRANSFERRED_TO_MPP = 'transferred_to_mpp';
+
     public const PHONE_CONFIRMED_VIA_PHONE_CAPTURE = 'phone_capture';
 
     public const BITRIX24_LIVE_STATUS_NOT_LINKED = 'not_linked';
@@ -32,6 +42,7 @@ class Dialog extends Model
         'contact_id',
         'channel_id',
         'current_contact_identity_id',
+        'stage_code',
         'pending_auto_reply_source_message_id',
         'manual_reply_dismissed_source_message_id',
         'bot_subscription_status',
@@ -67,6 +78,72 @@ class Dialog extends Model
     public function isBotBlockedByUser(): bool
     {
         return $this->bot_subscription_status === self::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function stageOptions(): array
+    {
+        return [
+            self::STAGE_NEW_DIALOG => 'Новый диалог',
+            self::STAGE_PHONE_RECEIVED => 'Телефон получен',
+            self::STAGE_QUESTIONNAIRE_COMPLETED => 'Анкета заполнена',
+            self::STAGE_TRANSFERRED_TO_MPL => 'Передан в работу МПЛ',
+            self::STAGE_TRANSFERRED_TO_MPP => 'Передан в работу МПП',
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function manualStageOptions(): array
+    {
+        return [
+            self::STAGE_TRANSFERRED_TO_MPL => self::stageOptions()[self::STAGE_TRANSFERRED_TO_MPL],
+            self::STAGE_TRANSFERRED_TO_MPP => self::stageOptions()[self::STAGE_TRANSFERRED_TO_MPP],
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function automaticStageOptions(): array
+    {
+        return [
+            self::STAGE_NEW_DIALOG => self::stageOptions()[self::STAGE_NEW_DIALOG],
+            self::STAGE_PHONE_RECEIVED => self::stageOptions()[self::STAGE_PHONE_RECEIVED],
+            self::STAGE_QUESTIONNAIRE_COMPLETED => self::stageOptions()[self::STAGE_QUESTIONNAIRE_COMPLETED],
+        ];
+    }
+
+    public static function isManualStage(?string $stageCode): bool
+    {
+        return in_array($stageCode, array_keys(self::manualStageOptions()), true);
+    }
+
+    public static function normalizeStageCode(?string $stageCode): string
+    {
+        return array_key_exists((string) $stageCode, self::stageOptions())
+            ? (string) $stageCode
+            : self::STAGE_NEW_DIALOG;
+    }
+
+    public static function formatStageLabel(?string $stageCode): string
+    {
+        return self::stageOptions()[self::normalizeStageCode($stageCode)] ?? self::stageOptions()[self::STAGE_NEW_DIALOG];
+    }
+
+    public static function stageTone(?string $stageCode): string
+    {
+        return match (self::normalizeStageCode($stageCode)) {
+            self::STAGE_NEW_DIALOG => 'gray',
+            self::STAGE_PHONE_RECEIVED => 'info',
+            self::STAGE_QUESTIONNAIRE_COMPLETED => 'success',
+            self::STAGE_TRANSFERRED_TO_MPL => 'warning',
+            self::STAGE_TRANSFERRED_TO_MPP => 'primary',
+            default => 'gray',
+        };
     }
 
     public function isBitrix24LiveActive(): bool

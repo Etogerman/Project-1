@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Dialogs\Pages;
 
 use App\Data\Dialogs\DialogInboxStatusData;
+use App\Data\Dialogs\DialogStageData;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
@@ -17,7 +18,9 @@ use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
+use App\Services\Dialogs\UpdateDialogStageAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
@@ -54,6 +57,8 @@ class ViewDialog extends ViewRecord
     public string $dialogReplyFormat = Message::TEXT_FORMAT_PLAIN_TEXT;
 
     public string $dialogInboxStatusSelection = DialogInboxStatusData::CODE_NO_NEW;
+
+    public string $dialogStageSelection = Dialog::STAGE_NEW_DIALOG;
 
     public string $conversationDisplayMode = self::CONVERSATION_DISPLAY_MODE_FORMATTED;
 
@@ -143,6 +148,7 @@ class ViewDialog extends ViewRecord
     {
         $this->refreshDialogRecord();
         $this->syncDialogInboxStatusSelection();
+        $this->syncDialogStageSelection();
 
         $appendedCount = $this->appendLatestConversationMessages();
 
@@ -187,6 +193,49 @@ class ViewDialog extends ViewRecord
             Notification::make()
                 ->danger()
                 ->title('Не удалось изменить статус')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function updateDialogStage(): void
+    {
+        try {
+            $employee = $this->resolveCurrentEmployee();
+
+            $result = app(UpdateDialogStageAction::class)->handle(
+                $this->getRecord(),
+                $employee,
+                $this->dialogStageSelection,
+            );
+
+            if ($result->historyMessage instanceof Message) {
+                $result->historyMessage->loadMissing(['channel', 'dialog.channel', 'sentByUser']);
+                $this->appendOutboundMessageToConversation($result->historyMessage);
+            }
+
+            $this->refreshDialogRecord();
+            $this->syncDialogStageSelection();
+
+            Notification::make()
+                ->success()
+                ->title('Стадия обновлена')
+                ->body('Стадия диалога сохранена и добавлена в историю.')
+                ->send();
+        } catch (ValidationException $exception) {
+            $this->syncDialogStageSelection();
+
+            Notification::make()
+                ->danger()
+                ->title('Не удалось изменить стадию')
+                ->body((string) collect($exception->errors())->flatten()->first())
+                ->send();
+        } catch (Throwable $throwable) {
+            $this->syncDialogStageSelection();
+
+            Notification::make()
+                ->danger()
+                ->title('Не удалось изменить стадию')
                 ->body($throwable->getMessage())
                 ->send();
         }
@@ -248,6 +297,7 @@ class ViewDialog extends ViewRecord
             'contactSummary' => $this->getContactSummaryViewData(),
             'contactUrl' => $this->getContactViewUrl(),
             'dialogInboxStatus' => $this->getDialogInboxStatusViewData(),
+            'dialogStage' => $this->getDialogStageViewData(),
             'conversationDisplayModeOptions' => $this->getConversationDisplayModeOptions(),
             'liveRefreshPollIntervalMs' => static::LIVE_REFRESH_INTERVAL_MS,
             'replyComposer' => $this->getReplyComposerViewData(),
@@ -263,6 +313,7 @@ class ViewDialog extends ViewRecord
         $this->nextOlderCursor = $page->nextOlderCursor;
         $this->latestKnownMessageId = $this->resolveLatestKnownMessageId($page->messages);
         $this->syncDialogInboxStatusSelection();
+        $this->syncDialogStageSelection();
     }
 
     /**
@@ -328,6 +379,30 @@ class ViewDialog extends ViewRecord
             'status_model' => 'dialogInboxStatusSelection',
             'update_method' => 'updateDialogInboxStatus',
             'options' => $this->getDialogInboxStatusOptions($status),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     current_label:string,
+     *     current_tone:string,
+     *     is_editable:bool,
+     *     stage_model:string,
+     *     update_method:string,
+     *     options:array<string, string>
+     * }
+     */
+    protected function getDialogStageViewData(): array
+    {
+        $stage = $this->resolveDialogStage($this->getRecord());
+
+        return [
+            'current_label' => $stage->label,
+            'current_tone' => $stage->tone,
+            'is_editable' => $this->canCurrentUserManageDialogReplies(),
+            'stage_model' => 'dialogStageSelection',
+            'update_method' => 'updateDialogStage',
+            'options' => $this->getDialogStageOptions($stage),
         ];
     }
 
@@ -403,6 +478,11 @@ class ViewDialog extends ViewRecord
     protected function syncDialogInboxStatusSelection(): void
     {
         $this->dialogInboxStatusSelection = $this->resolveDialogInboxStatus($this->getRecord())->code;
+    }
+
+    protected function syncDialogStageSelection(): void
+    {
+        $this->dialogStageSelection = $this->resolveDialogStage($this->getRecord())->code;
     }
 
     protected function appendLatestConversationMessages(): int
@@ -638,6 +718,22 @@ class ViewDialog extends ViewRecord
         };
     }
 
+    /**
+     * @return array<string, string>
+     */
+    protected function getDialogStageOptions(DialogStageData $stage): array
+    {
+        $options = [
+            $stage->code => $stage->label,
+        ];
+
+        foreach (Dialog::manualStageOptions() as $stageCode => $stageLabel) {
+            $options[$stageCode] = $stageLabel;
+        }
+
+        return $options;
+    }
+
     protected function resolvePrimaryPhoneRaw(?Contact $contact): ?string
     {
         if (! $contact instanceof Contact) {
@@ -685,6 +781,11 @@ class ViewDialog extends ViewRecord
     protected function resolveDialogInboxStatus(Dialog $dialog): DialogInboxStatusData
     {
         return app(ResolveDialogInboxStatusAction::class)->handle($dialog);
+    }
+
+    protected function resolveDialogStage(Dialog $dialog): DialogStageData
+    {
+        return app(ResolveDialogStageAction::class)->handle($dialog);
     }
 
     protected function formatDialogPhoneLabel(Dialog $dialog): string

@@ -39,6 +39,8 @@ class Message extends Model
 
     public const KIND_OUTBOUND_DIALOG_STATUS_CHANGE = 'outbound_dialog_status_change';
 
+    public const KIND_OUTBOUND_DIALOG_STAGE_CHANGE = 'outbound_dialog_stage_change';
+
     public const SENT_BY_TYPE_CONTACT = 'contact';
 
     public const SENT_BY_TYPE_OPERATOR = 'operator';
@@ -68,6 +70,8 @@ class Message extends Model
     public const SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES = 'bitrix24_openlines';
 
     public const SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE = 'dialog_inbox_status_change';
+
+    public const SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE = 'dialog_stage_change';
 
     public const SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER = 'bot_blocked_by_user';
 
@@ -134,6 +138,17 @@ class Message extends Model
         return [
             self::TEXT_FORMAT_PLAIN_TEXT => 'Просто текст',
             self::TEXT_FORMAT_HTML => 'HTML',
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function previewExcludedMessageKinds(): array
+    {
+        return [
+            self::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            self::KIND_OUTBOUND_DIALOG_STAGE_CHANGE,
         ];
     }
 

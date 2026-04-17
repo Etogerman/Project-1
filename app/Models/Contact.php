@@ -536,6 +536,8 @@ class Contact extends Model
             'data_collection_completed_at' => now(),
             'data_collection_attempts_count' => 0,
         ])->save();
+
+        app(\App\Services\Dialogs\SyncDialogsStageForContactAction::class)->handle($this);
     }
 
     protected function displayName(): Attribute

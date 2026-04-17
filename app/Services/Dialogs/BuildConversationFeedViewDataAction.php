@@ -76,7 +76,7 @@ class BuildConversationFeedViewDataAction
             return 'Система';
         }
 
-        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
+        if ($this->isDialogLifecycleSystemMessage($message)) {
             return 'Система';
         }
 
@@ -117,7 +117,7 @@ class BuildConversationFeedViewDataAction
             return 'Системное';
         }
 
-        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
+        if ($this->isDialogLifecycleSystemMessage($message)) {
             return 'Системное';
         }
 
@@ -132,7 +132,7 @@ class BuildConversationFeedViewDataAction
             return 'gray';
         }
 
-        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
+        if ($this->isDialogLifecycleSystemMessage($message)) {
             return 'gray';
         }
 
@@ -162,6 +162,14 @@ class BuildConversationFeedViewDataAction
             Message::SENT_BY_TYPE_SYSTEM => 'gray',
             default => 'gray',
         };
+    }
+
+    protected function isDialogLifecycleSystemMessage(Message $message): bool
+    {
+        return in_array($message->message_kind, [
+            Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            Message::KIND_OUTBOUND_DIALOG_STAGE_CHANGE,
+        ], true);
     }
 
     protected function isBitrix24OpenLinesSender(Message $message): bool

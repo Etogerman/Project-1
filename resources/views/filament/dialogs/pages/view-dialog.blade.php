@@ -21,6 +21,25 @@
                 </div>
 
                 <div class="ac-meta-grid ac-surface__divider">
+                    <div class="ac-meta">
+                        <p class="ac-meta__label">
+                            Стадия диалога
+                        </p>
+                        <select
+                            id="dialog-stage"
+                            data-role="dialog-stage-select"
+                            wire:model="dialogStageSelection"
+                            wire:change="updateDialogStage"
+                            @disabled(! $dialogStage['is_editable'])
+                            class="ac-select"
+                        >
+                            @foreach ($dialogStage['options'] as $stageValue => $stageLabel)
+                                <option value="{{ $stageValue }}">
+                                    {{ $stageLabel }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
                     <div
                         class="ac-meta"
                         x-data="{ statusHelpOpen: false }"

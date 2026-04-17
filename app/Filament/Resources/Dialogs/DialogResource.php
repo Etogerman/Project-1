@@ -14,6 +14,7 @@ use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use BackedEnum;
 use Closure;
 use Filament\Resources\Resource;
@@ -107,6 +108,12 @@ class DialogResource extends Resource
                     ->state(fn (Dialog $record): string => static::formatInboxStatus($record))
                     ->badge()
                     ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
+                    ->toggleable(),
+                TextColumn::make('stage')
+                    ->label('Стадия')
+                    ->state(fn (Dialog $record): string => static::formatDialogStage($record))
+                    ->badge()
+                    ->color(fn (Dialog $record): string => static::getDialogStageColor($record))
                     ->toggleable(),
                 TextColumn::make('assigned_user')
                     ->label('Ответственный')
@@ -236,7 +243,7 @@ class DialogResource extends Resource
             ->where(function (Builder $query): Builder {
                 return $query
                     ->whereNull('message_kind')
-                    ->orWhere('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE);
+                    ->orWhereNotIn('message_kind', Message::previewExcludedMessageKinds());
             })
             ->tap(fn (Builder $query): Builder => app(MessageChronology::class)->applyLatestOrder($query))
             ->limit(1);
@@ -424,6 +431,16 @@ class DialogResource extends Resource
         };
     }
 
+    protected static function formatDialogStage(Dialog $record): string
+    {
+        return static::resolveDialogStage($record)->label;
+    }
+
+    protected static function getDialogStageColor(Dialog $record): string
+    {
+        return static::resolveDialogStage($record)->tone;
+    }
+
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
         $chronology = static::messageChronology();
@@ -519,6 +536,11 @@ class DialogResource extends Resource
     protected static function resolveDialogRouteStatus(Dialog $dialog): DialogRouteStatusData
     {
         return app(ResolveDialogRouteStatusAction::class)->handle($dialog);
+    }
+
+    protected static function resolveDialogStage(Dialog $dialog): \App\Data\Dialogs\DialogStageData
+    {
+        return app(ResolveDialogStageAction::class)->handle($dialog);
     }
 
     protected static function buildLatestMessageIdSubquery(?Closure $scope = null): Builder
