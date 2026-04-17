@@ -27,6 +27,7 @@ use App\Services\Dialogs\DialogConsolidationException;
 use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class StoreInboundMessageAction
@@ -50,8 +51,10 @@ class StoreInboundMessageAction
     public function handle(Channel $channel, IncomingBotMessage $message): ?StoredInboundMessageResult
     {
         return DB::transaction(function () use ($channel, $message): ?StoredInboundMessageResult {
+            $receivedAt = $this->normalizeReceivedAtForStorage($message->receivedAt);
+
             if ($this->isInboundSystemEvent($message)) {
-                return $this->storeInboundSystemEvent($channel, $message);
+                return $this->storeInboundSystemEvent($channel, $message, $receivedAt);
             }
 
             $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId)
@@ -114,7 +117,7 @@ class StoreInboundMessageAction
                     'text' => $message->text,
                     'message_parameter' => $message->messageParameter,
                     'raw_payload' => $message->rawPayload,
-                    'received_at' => $message->receivedAt,
+                    'received_at' => $receivedAt,
                 ]);
 
                 $phoneCaptureStatus = $this->captureSharedPhoneIfNeeded($channel, $contact, $storedMessage, $message);
@@ -162,8 +165,11 @@ class StoreInboundMessageAction
         });
     }
 
-    protected function storeInboundSystemEvent(Channel $channel, IncomingBotMessage $message): ?StoredInboundMessageResult
-    {
+    protected function storeInboundSystemEvent(
+        Channel $channel,
+        IncomingBotMessage $message,
+        Carbon $receivedAt,
+    ): ?StoredInboundMessageResult {
         $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId);
 
         if (! $identity instanceof ContactIdentity) {
@@ -208,7 +214,7 @@ class StoreInboundMessageAction
                 'text' => $message->text,
                 'message_parameter' => $message->messageParameter,
                 'raw_payload' => $message->rawPayload,
-                'received_at' => $message->receivedAt,
+                'received_at' => $receivedAt,
             ]);
 
             $this->syncStoredInboundMessageMetadata($channel, $identity->contact, $storedMessage, $message);
@@ -239,6 +245,11 @@ class StoreInboundMessageAction
             ->where('channel_id', $channel->id)
             ->where('external_user_id', $externalUserId)
             ->first();
+    }
+
+    protected function normalizeReceivedAtForStorage(Carbon $receivedAt): Carbon
+    {
+        return $receivedAt->copy()->setTimezone((string) config('app.timezone'));
     }
 
     protected function resolveOrCreateContactIdentity(Channel $channel, IncomingBotMessage $message): ContactIdentity
