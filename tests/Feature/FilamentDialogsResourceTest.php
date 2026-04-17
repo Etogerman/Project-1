@@ -211,7 +211,9 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('data-poll-interval-ms="5000"', escape: false)
-            ->assertSee('refreshDialogViewData', escape: false);
+            ->assertSee('refreshDialogViewData', escape: false)
+            ->assertSee("querySelector('[data-role=conversation-thread]')", escape: false)
+            ->assertDontSee('[data-role=\\"conversation-thread\\"]', escape: false);
     }
 
     public function test_dialog_view_renders_current_dialog_messenger_name_in_technical_context(): void
