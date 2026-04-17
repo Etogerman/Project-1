@@ -231,7 +231,14 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Статус диалога')
             ->assertSee('Требует ответа')
             ->assertSee('Не требует ответа')
-            ->assertSee('data-role="dialog-inbox-status-select"', escape: false);
+            ->assertSee('data-role="dialog-inbox-status-select"', escape: false)
+            ->assertSee('data-role="dialog-inbox-status-help"', escape: false)
+            ->assertSee('data-role="dialog-inbox-status-help-panel"', escape: false)
+            ->assertSee('aria-controls="dialog-inbox-status-help-panel"', escape: false)
+            ->assertSee('aria-label="Показать подсказку: новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».', escape: false)
+            ->assertDontSee('<p class="ac-field-help">', escape: false)
+            ->assertDontSee('Рабочее место оператора')
+            ->assertDontSee('Здесь показаны только сообщения текущего диалога в хронологическом порядке.');
     }
 
     public function test_dialog_view_uses_yellow_highlight_buttons_and_green_send_button(): void
