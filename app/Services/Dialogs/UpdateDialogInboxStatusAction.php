@@ -75,6 +75,8 @@ class UpdateDialogInboxStatusAction
                 ])->save();
             }
 
+            $targetStatusLabel = $this->resolveStatusLabel($targetStatusCode);
+
             $historyMessage = $dialog->messages()->create([
                 'contact_id' => $dialog->contact_id,
                 'contact_identity_id' => $dialog->current_contact_identity_id,
@@ -90,9 +92,23 @@ class UpdateDialogInboxStatusAction
                     'Оператор %s изменил статус диалога: %s -> %s',
                     $employee->name ?: 'без имени',
                     $currentStatus->label,
-                    $targetStatusCode === DialogInboxStatusData::CODE_NOT_REQUIRED ? 'Не требует ответа' : 'Требует ответа',
+                    $targetStatusLabel,
                 ),
                 'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                'raw_payload' => [
+                    'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+                    'from_status' => [
+                        'code' => $currentStatus->code,
+                        'label' => $currentStatus->label,
+                    ],
+                    'to_status' => [
+                        'code' => $targetStatusCode,
+                        'label' => $targetStatusLabel,
+                    ],
+                    'reply_to_message_id' => $latestInboundUserMessage->id,
+                    'dialog_id' => $dialog->id,
+                    'changed_by_user_id' => $employee->id,
+                ],
                 'received_at' => null,
             ]);
 
@@ -101,5 +117,14 @@ class UpdateDialogInboxStatusAction
                 historyMessage: $historyMessage,
             );
         });
+    }
+
+    protected function resolveStatusLabel(string $statusCode): string
+    {
+        return match ($statusCode) {
+            DialogInboxStatusData::CODE_REQUIRES_REPLY => 'Требует ответа',
+            DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
+            default => 'Неизвестный статус',
+        };
     }
 }
