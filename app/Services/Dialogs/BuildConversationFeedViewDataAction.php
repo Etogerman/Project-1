@@ -28,13 +28,19 @@ class BuildConversationFeedViewDataAction
 
                 return [
                     'id' => $message->id,
+                    'sort_key' => $this->messageChronology->timestampAndIdSortKey($messageAt, $message->id),
+                    'sort_at_iso' => $messageAt?->toIso8601String(),
                     'direction' => $message->direction,
                     'kind' => $message->message_kind ?? 'unknown',
+                    'is_system_event' => $message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT,
                     'dialog_id' => $message->dialog_id,
                     'has_dialog' => $message->dialog_id !== null,
                     'channel_label' => $this->resolveConversationChannelLabel($message),
                     'sender_label' => $this->resolveConversationSenderLabel($message),
                     'sender_type' => $message->sent_by_type,
+                    'direction_label' => $this->resolveConversationDirectionLabel($message),
+                    'direction_tone' => $this->resolveConversationDirectionTone($message),
+                    'sender_tone' => $this->resolveConversationSenderTone($message),
                     'text_format' => Message::normalizeTextFormat($message->text_format),
                     'is_html' => $message->usesHtmlFormat(),
                     'display_text' => $this->resolveConversationDisplayText($message),
@@ -63,6 +69,17 @@ class BuildConversationFeedViewDataAction
 
     protected function resolveConversationSenderLabel(Message $message): ?string
     {
+        if (
+            $message->direction === Message::DIRECTION_INBOUND
+            && $message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT
+        ) {
+            return 'Система';
+        }
+
+        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
+            return 'Система';
+        }
+
         if ($message->direction !== Message::DIRECTION_OUTBOUND) {
             return null;
         }
@@ -90,6 +107,55 @@ class BuildConversationFeedViewDataAction
         };
     }
 
+    protected function resolveConversationDirectionLabel(Message $message): string
+    {
+        if ($message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'Системное';
+        }
+
+        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
+            return 'Системное';
+        }
+
+        return $message->direction === Message::DIRECTION_OUTBOUND
+            ? 'Исходящее'
+            : 'Входящее';
+    }
+
+    protected function resolveConversationDirectionTone(Message $message): string
+    {
+        if ($message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'gray';
+        }
+
+        if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
+            return 'gray';
+        }
+
+        return $message->direction === Message::DIRECTION_OUTBOUND
+            ? 'success'
+            : 'info';
+    }
+
+    protected function resolveConversationSenderTone(Message $message): string
+    {
+        if ($message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'gray';
+        }
+
+        if ($message->direction !== Message::DIRECTION_OUTBOUND) {
+            return 'primary';
+        }
+
+        return match ($message->sent_by_type) {
+            Message::SENT_BY_TYPE_OPERATOR => 'success',
+            Message::SENT_BY_TYPE_AUTO_REPLY => 'warning',
+            Message::SENT_BY_TYPE_COLLECTOR => 'primary',
+            Message::SENT_BY_TYPE_SYSTEM => 'gray',
+            default => 'gray',
+        };
+    }
+
     protected function resolveConversationDisplayText(Message $message): string
     {
         $telegramStartPayloadDisplayText = $this->resolveTelegramStartPayloadDisplayText($message);
@@ -108,6 +174,12 @@ class BuildConversationFeedViewDataAction
             return $maxBotStartedDisplayText;
         }
 
+        $systemEventDisplayText = $this->resolveSystemEventDisplayText($message);
+
+        if ($systemEventDisplayText !== null) {
+            return $systemEventDisplayText;
+        }
+
         return match ($message->message_kind) {
             Message::KIND_INBOUND_CONTACT_SHARE => 'Поделился номером телефона',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Спасибо, номер получили.',
@@ -115,6 +187,19 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ответ оператора',
             Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
+            default => 'Системное сообщение',
+        };
+    }
+
+    protected function resolveSystemEventDisplayText(Message $message): ?string
+    {
+        if ($message->message_kind !== Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return null;
+        }
+
+        return match ($message->system_event_code) {
+            Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER => 'Клиент заблокировал бота',
+            Message::SYSTEM_EVENT_CODE_BOT_UNBLOCKED_BY_USER => 'Клиент разблокировал бота',
             default => 'Системное сообщение',
         };
     }

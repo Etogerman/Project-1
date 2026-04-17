@@ -179,7 +179,10 @@ class BotWebhookController extends Controller
             }
 
             $storedResult = $storeInboundMessageAction->handle($channel, $message);
-            $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult, $deliveryLagSeconds);
+
+            if ($storedResult !== null) {
+                $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult, $deliveryLagSeconds);
+            }
         }
 
         return response()->json([
@@ -348,7 +351,10 @@ class BotWebhookController extends Controller
         }
 
         $storedResult = $storeInboundMessageAction->handle($channel, $message);
-        $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult);
+
+        if ($storedResult !== null) {
+            $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult);
+        }
 
         return response()->json([
             'ok' => true,
@@ -420,7 +426,8 @@ class BotWebhookController extends Controller
         if (preg_match('/^scenario:warmup:(\d+):([a-z_]+)$/', $callbackData, $matches)) {
             $run = $this->findTelegramScenarioRun($channel, $payload, (int) ($matches[1] ?? 0));
 
-            return $run instanceof ScenarioRun && $run->scenario_code === 'warmup';
+            return $run instanceof ScenarioRun
+                && $this->activeRunSupportsTelegramScenarioCallback($run, $callbackData);
         }
 
         if (! preg_match('/^scenario:(\d+):([A-Za-z0-9_-]{1,32})$/', $callbackData, $matches)) {
@@ -433,7 +440,7 @@ class BotWebhookController extends Controller
             return false;
         }
 
-        return app(ScenarioRegistry::class)->type($run->scenario_code) === 'builtin';
+        return $this->activeRunSupportsTelegramScenarioCallback($run, $callbackData);
     }
 
     /**
@@ -469,6 +476,17 @@ class BotWebhookController extends Controller
         return $run;
     }
 
+    protected function activeRunSupportsTelegramScenarioCallback(ScenarioRun $run, string $callbackData): bool
+    {
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($run->scenario_code);
+
+        if ($runtime === null) {
+            return false;
+        }
+
+        return $runtime->supportsTelegramCallbackContinuation($run, $callbackData);
+    }
+
     /**
      * @param  array<string, mixed>  $payload
      */
@@ -476,6 +494,10 @@ class BotWebhookController extends Controller
     {
         if (isset($payload['callback_query'])) {
             return 'callback_query';
+        }
+
+        if (isset($payload['my_chat_member'])) {
+            return 'my_chat_member';
         }
 
         return isset($payload['message']) ? 'message' : null;

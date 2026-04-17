@@ -54,6 +54,7 @@ class User extends Authenticatable implements FilamentUser
         'is_active' => 'boolean',
         'is_admin' => 'boolean',
         'role' => 'string',
+        'table_preferences' => 'array',
         'password' => 'hashed',
     ];
 
@@ -177,6 +178,66 @@ class User extends Authenticatable implements FilamentUser
     }
 
     /**
+     * @return array<string, array<string, mixed>>
+     */
+    public function tablePreferences(): array
+    {
+        return is_array($this->table_preferences) ? $this->table_preferences : [];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function getTablePreference(string $pageClass): ?array
+    {
+        $preference = $this->tablePreferences()[$pageClass] ?? null;
+
+        return is_array($preference) ? $preference : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $preference
+     */
+    public function putTablePreference(string $pageClass, array $preference): void
+    {
+        static::query()
+            ->whereKey($this->getKey())
+            ->update([
+                'table_preferences' => DB::raw(
+                    sprintf(
+                        "coalesce(table_preferences, '{}'::jsonb) || jsonb_build_object(%s, %s::jsonb)",
+                        DB::getPdo()->quote($pageClass),
+                        DB::getPdo()->quote(json_encode($preference, JSON_THROW_ON_ERROR)),
+                    ),
+                ),
+            ]);
+
+        $preferences = $this->tablePreferences();
+        $preferences[$pageClass] = $preference;
+
+        $this->syncTablePreferencesAttribute($preferences);
+    }
+
+    public function forgetTablePreference(string $pageClass): void
+    {
+        static::query()
+            ->whereKey($this->getKey())
+            ->update([
+                'table_preferences' => DB::raw(
+                    sprintf(
+                        "coalesce(table_preferences, '{}'::jsonb) - %s",
+                        DB::getPdo()->quote($pageClass),
+                    ),
+                ),
+            ]);
+
+        $preferences = $this->tablePreferences();
+        unset($preferences[$pageClass]);
+
+        $this->syncTablePreferencesAttribute($preferences);
+    }
+
+    /**
      * @return array<string, bool>
      */
     protected function rolePermissions(): array
@@ -203,5 +264,14 @@ class User extends Authenticatable implements FilamentUser
                 ? mb_strtolower(trim($value))
                 : $value,
         );
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $preferences
+     */
+    protected function syncTablePreferencesAttribute(array $preferences): void
+    {
+        $this->setAttribute('table_preferences', $preferences);
+        $this->syncOriginalAttribute('table_preferences');
     }
 }

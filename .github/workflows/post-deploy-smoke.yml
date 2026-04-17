@@ -1,10 +1,15 @@
-name: Post-Deploy Smoke
+name: Staging Post-Deploy Smoke
 
 on:
   push:
     branches:
-      - main
+      - staging
   workflow_dispatch:
+    inputs:
+      expected_app_rev:
+        description: "Expected deployed commit SHA for manual reruns"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -46,6 +51,26 @@ jobs:
             fi
           done
 
+      - name: Resolve expected staging revision
+        env:
+          INPUT_EXPECTED_APP_REV: ${{ inputs.expected_app_rev }}
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            if [ -z "${INPUT_EXPECTED_APP_REV:-}" ]; then
+              echo "::error::workflow_dispatch requires expected_app_rev to verify the deployed staging revision."
+              exit 1
+            fi
+
+            resolved_rev="${INPUT_EXPECTED_APP_REV}"
+          else
+            resolved_rev="${GITHUB_SHA}"
+          fi
+
+          echo "PLAYWRIGHT_EXPECTED_APP_REV=${resolved_rev}" >> "$GITHUB_ENV"
+          echo "Staging smoke expects deployed rev: ${resolved_rev}"
+
       - name: Install npm dependencies
         run: npm ci
 
@@ -72,6 +97,9 @@ jobs:
 
           echo "::error::Timed out waiting for ${readiness_url}"
           exit 1
+
+      - name: Verify deployed revision
+        run: npx playwright test e2e/release-rev.smoke.spec.ts
 
       - name: Run public smoke
         run: npx playwright test e2e/public.smoke.spec.ts

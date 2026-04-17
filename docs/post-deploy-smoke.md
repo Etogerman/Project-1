@@ -19,8 +19,8 @@
 - `.github/workflows/post-deploy-smoke.yml`
 - `.github/workflows/production-post-deploy-smoke.yml`
 
-Если staging автодеплоится после merge в `main`, основной post-merge workflow
-должен быть привязан к staging environment.
+Если staging автодеплоится из ветки `staging`, основной automatic smoke
+должен запускаться после `push` в `staging`, а не после `push` в `main`.
 
 `production` environment нужен отдельно для manual smoke после ручного
 production deploy.
@@ -35,24 +35,39 @@ production deploy.
 участвуют в текущем release flow. Формально включать нерабочий staging нельзя:
 это создаёт постоянный красный run без реальной диагностической ценности.
 
+И staging, и production smoke дополнительно проверяют rev задеплоенного
+приложения по marker в админке до запуска public/admin smoke.
+
 ## Где смотреть статус
 
-Статус `Post-Deploy Smoke` проверяется в GitHub, а не в админке приложения:
+Статус staging smoke проверяется в GitHub, а не в админке приложения:
 
 - во вкладке `Actions` репозитория
-- в конкретном workflow `Post-Deploy Smoke`
-- в checks у merge-коммита в `main`
+- в конкретном workflow `Staging Post-Deploy Smoke`
+- в checks у push/merge-коммита в ветке `staging`
 
 До merge удобнее смотреть checks прямо в PR. После merge надёжнее смотреть
-конкретный workflow run или checks merge-коммита в `main`, но всегда с учётом
+конкретный workflow run или checks коммита в `staging`, но всегда с учётом
 того, в какое окружение реально ушёл текущий change-set.
 
 ## Staging
 
 Если staging реально участвует в release flow:
 
-- merge в `main` должен проверяться staging smoke
+- merge или push в `staging` должен проверяться staging smoke
 - staging становится главным автоматическим acceptance gate
+
+Если staging smoke запускается автоматически по `push` в `staging`:
+
+- ожидаемый deployed rev берётся из SHA этого push-коммита
+- rev-check должен подтвердить, что в staging реально появился именно этот rev
+
+Если staging smoke запускается вручную через `workflow_dispatch`:
+
+- нужно явно передать `expected_app_rev`
+- этот input должен соответствовать реально ожидаемому deployed commit SHA
+- запуск manual smoke с неверным `expected_app_rev` считается ошибкой запуска,
+  а не регрессией приложения
 
 Если staging не работает или не участвует в приёмке:
 
@@ -60,6 +75,16 @@ production deploy.
 - workflow может временно проверять другое реально используемое окружение
 
 ## Production
+
+Manual workflow `Production Post-Deploy Smoke` запускается только после
+фактического production deploy.
+
+При запуске нужно обязательно передать:
+
+- `release_ref` — ожидаемый deployed commit SHA
+
+Production rev-check обязан сначала подтвердить, что в админке уже виден
+именно этот rev, и только потом запускать public/admin smoke.
 
 Проверить:
 
@@ -104,6 +129,12 @@ Production smoke делать только после фактического p
 - `qa/checklist issue`
 
 Потом соотнести проблему с конкретным PR или stream, а не с “релизом вообще”.
+
+Если падает именно rev-check:
+
+- сначала проверить, что deploy действительно завершён
+- затем проверить, что в workflow передан правильный expected rev
+- только после этого трактовать падение как возможную проблему rollout-а
 
 ## Минимальный формат фиксации результата
 

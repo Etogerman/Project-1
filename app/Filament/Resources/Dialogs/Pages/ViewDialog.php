@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Dialogs\Pages;
 
+use App\Data\Dialogs\DialogInboxStatusData;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
@@ -9,15 +10,19 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
+use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
+use App\Services\Dialogs\UpdateDialogInboxStatusAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -28,6 +33,8 @@ class ViewDialog extends ViewRecord
     public const CONVERSATION_DISPLAY_MODE_FORMATTED = 'formatted';
 
     public const CONVERSATION_DISPLAY_MODE_HTML = 'html';
+
+    public const LIVE_REFRESH_INTERVAL_MS = 5000;
 
     protected static string $resource = DialogResource::class;
 
@@ -46,12 +53,16 @@ class ViewDialog extends ViewRecord
 
     public string $dialogReplyFormat = Message::TEXT_FORMAT_PLAIN_TEXT;
 
+    public string $dialogInboxStatusSelection = DialogInboxStatusData::CODE_NO_NEW;
+
     public string $conversationDisplayMode = self::CONVERSATION_DISPLAY_MODE_FORMATTED;
 
     /**
      * @var array{sort_at:string,id:int}|null
      */
     public ?array $nextOlderCursor = null;
+
+    public ?int $latestKnownMessageId = null;
 
     public function mount(int|string $record): void
     {
@@ -87,11 +98,14 @@ class ViewDialog extends ViewRecord
 
     public function getBreadcrumbs(): array
     {
-        $contact = $this->getRecord()->contact;
+        $dialog = $this->getRecord();
+        $contact = $dialog->contact;
 
         return [
             ContactResource::getUrl('index') => ContactResource::getBreadcrumb(),
-            $this->getContactViewUrl() => $contact?->display_name ?? 'Контакт',
+            $this->getContactViewUrl() => $contact instanceof Contact
+                ? app(ResolveContactDisplayNameAction::class)->handle($contact, $dialog)
+                : 'Контакт',
             $this->getBreadcrumb(),
         ];
     }
@@ -117,14 +131,65 @@ class ViewDialog extends ViewRecord
             return;
         }
 
-        $this->conversationMessages = [
-            ...$olderMessages,
-            ...$this->conversationMessages,
-        ];
+        $this->prependConversationMessageViewData($olderMessages);
         $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
         $this->nextOlderCursor = $page->nextOlderCursor;
+        $this->syncNextOlderCursorToVisibleConversationStart();
 
         $this->dispatch('dialog-history-older-messages-loaded');
+    }
+
+    public function refreshDialogViewData(): void
+    {
+        $this->refreshDialogRecord();
+        $this->syncDialogInboxStatusSelection();
+
+        $appendedCount = $this->appendLatestConversationMessages();
+
+        $this->dispatch('dialog-history-refreshed', appendedCount: $appendedCount);
+    }
+
+    public function updateDialogInboxStatus(): void
+    {
+        try {
+            $employee = $this->resolveCurrentEmployee();
+
+            $result = app(UpdateDialogInboxStatusAction::class)->handle(
+                $this->getRecord(),
+                $employee,
+                $this->dialogInboxStatusSelection,
+            );
+
+            if ($result->historyMessage instanceof Message) {
+                $result->historyMessage->loadMissing(['channel', 'dialog.channel', 'sentByUser']);
+                $this->appendOutboundMessageToConversation($result->historyMessage);
+            }
+
+            $this->refreshDialogRecord();
+            $this->syncDialogInboxStatusSelection();
+
+            Notification::make()
+                ->success()
+                ->title('Статус обновлён')
+                ->body('Статус диалога сохранён и добавлен в историю.')
+                ->send();
+        } catch (ValidationException $exception) {
+            $this->syncDialogInboxStatusSelection();
+
+            Notification::make()
+                ->danger()
+                ->title('Не удалось изменить статус')
+                ->body((string) collect($exception->errors())->flatten()->first())
+                ->send();
+        } catch (Throwable $throwable) {
+            $this->syncDialogInboxStatusSelection();
+
+            Notification::make()
+                ->danger()
+                ->title('Не удалось изменить статус')
+                ->body($throwable->getMessage())
+                ->send();
+        }
     }
 
     public function sendDialogReply(): void
@@ -156,6 +221,7 @@ class ViewDialog extends ViewRecord
             $this->dialogReplyText = '';
             $this->appendOutboundMessageToConversation($outboundMessage);
             $this->refreshDialogRecord();
+            $this->syncDialogInboxStatusSelection();
             $this->dispatch('dialog-reply-sent');
 
             Notification::make()
@@ -181,7 +247,9 @@ class ViewDialog extends ViewRecord
             'dialogHeader' => $this->getDialogHeaderViewData(),
             'contactSummary' => $this->getContactSummaryViewData(),
             'contactUrl' => $this->getContactViewUrl(),
+            'dialogInboxStatus' => $this->getDialogInboxStatusViewData(),
             'conversationDisplayModeOptions' => $this->getConversationDisplayModeOptions(),
+            'liveRefreshPollIntervalMs' => static::LIVE_REFRESH_INTERVAL_MS,
             'replyComposer' => $this->getReplyComposerViewData(),
         ];
     }
@@ -193,6 +261,8 @@ class ViewDialog extends ViewRecord
         $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
         $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
         $this->nextOlderCursor = $page->nextOlderCursor;
+        $this->latestKnownMessageId = $this->resolveLatestKnownMessageId($page->messages);
+        $this->syncDialogInboxStatusSelection();
     }
 
     /**
@@ -238,8 +308,34 @@ class ViewDialog extends ViewRecord
 
     /**
      * @return array{
+     *     current_label:string,
+     *     current_tone:string,
+     *     is_editable:bool,
+     *     status_model:string,
+     *     update_method:string,
+     *     options:array<string, string>
+     * }
+     */
+    protected function getDialogInboxStatusViewData(): array
+    {
+        $status = $this->resolveDialogInboxStatus($this->getRecord());
+
+        return [
+            'current_label' => $status->label,
+            'current_tone' => $status->tone,
+            'is_editable' => $this->canCurrentUserManageDialogReplies()
+                && $status->code !== DialogInboxStatusData::CODE_NO_NEW,
+            'status_model' => 'dialogInboxStatusSelection',
+            'update_method' => 'updateDialogInboxStatus',
+            'options' => $this->getDialogInboxStatusOptions($status),
+        ];
+    }
+
+    /**
+     * @return array{
      *     channel_label:string,
      *     platform_label:string,
+     *     messenger_name_label:string,
      *     route_source_label:string,
      *     external_chat_id_label:string,
      *     route_status_label:string,
@@ -257,6 +353,7 @@ class ViewDialog extends ViewRecord
             'platform_label' => $dialog->channel?->platform !== null
                 ? (Channel::platformOptions()[$dialog->channel->platform] ?? $dialog->channel->platform)
                 : '—',
+            'messenger_name_label' => $this->formatDialogMessengerNameLabel($dialog),
             'route_source_label' => $this->formatDialogRouteIdentityLabel($dialog),
             'external_chat_id_label' => $dialog->external_chat_id ?: 'Не задан',
             'route_status_label' => $routeStatus->label,
@@ -275,10 +372,13 @@ class ViewDialog extends ViewRecord
      */
     protected function getContactSummaryViewData(): array
     {
-        $contact = $this->getRecord()->contact;
+        $dialog = $this->getRecord();
+        $contact = $dialog->contact;
 
         return [
-            'contact_label' => $contact?->display_name ?? 'Контакт не найден',
+            'contact_label' => $contact instanceof Contact
+                ? app(ResolveContactDisplayNameAction::class)->handle($contact, $dialog)
+                : 'Контакт не найден',
             'contact_id' => $contact?->id,
             'phone_label' => $this->resolvePrimaryPhoneRaw($contact) ?? '—',
             'assigned_user_label' => $this->formatAssignedUserLabel($contact),
@@ -289,16 +389,7 @@ class ViewDialog extends ViewRecord
     {
         $message->loadMissing(['channel', 'dialog.channel', 'sentByUser']);
 
-        $outboundMessageViewData = app(BuildConversationFeedViewDataAction::class)->handle(collect([$message]));
-
-        if ($outboundMessageViewData === []) {
-            return;
-        }
-
-        $this->conversationMessages = [
-            ...$this->conversationMessages,
-            ...$outboundMessageViewData,
-        ];
+        $this->appendConversationMessages(collect([$message]));
     }
 
     protected function refreshDialogRecord(): void
@@ -307,6 +398,163 @@ class ViewDialog extends ViewRecord
         $dialog = DialogResource::getEloquentQuery()->findOrFail($this->getRecord()->getKey());
 
         $this->record = $dialog;
+    }
+
+    protected function syncDialogInboxStatusSelection(): void
+    {
+        $this->dialogInboxStatusSelection = $this->resolveDialogInboxStatus($this->getRecord())->code;
+    }
+
+    protected function appendLatestConversationMessages(): int
+    {
+        if ($this->conversationMessages === []) {
+            $page = app(LoadDialogMessagesPageAction::class)->handle($this->getRecord(), null, 50);
+
+            if ($page->messages->isEmpty()) {
+                $this->hasMoreOlderMessages = false;
+                $this->nextOlderCursor = null;
+                $this->latestKnownMessageId = null;
+
+                return 0;
+            }
+
+            $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
+            $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
+            $this->nextOlderCursor = $page->nextOlderCursor;
+            $this->latestKnownMessageId = $this->resolveLatestKnownMessageId($page->messages);
+
+            return count($this->conversationMessages);
+        }
+
+        $messages = app(LoadDialogMessagesPageAction::class)->loadMessagesAddedAfterId(
+            $this->getRecord(),
+            $this->latestKnownMessageId,
+            50,
+        );
+
+        return $this->appendConversationMessages($messages);
+    }
+
+    /**
+     * @param  Collection<int, Message>  $messages
+     */
+    protected function appendConversationMessages(Collection $messages): int
+    {
+        if ($messages->isEmpty()) {
+            return 0;
+        }
+
+        $existingMessageIds = collect($this->conversationMessages)
+            ->pluck('id')
+            ->filter()
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->flip();
+
+        $newMessages = $messages
+            ->filter(fn (Message $message): bool => ! $existingMessageIds->has($message->id))
+            ->values();
+
+        if ($newMessages->isEmpty()) {
+            $this->latestKnownMessageId = max($this->latestKnownMessageId ?? 0, $this->resolveLatestKnownMessageId($messages) ?? 0) ?: null;
+
+            return 0;
+        }
+
+        $newMessageViewData = app(BuildConversationFeedViewDataAction::class)->handle($newMessages);
+
+        if ($newMessageViewData === []) {
+            return 0;
+        }
+
+        $this->conversationMessages = [
+            ...$this->conversationMessages,
+            ...$newMessageViewData,
+        ];
+        $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
+        $this->latestKnownMessageId = max($this->latestKnownMessageId ?? 0, $this->resolveLatestKnownMessageId($newMessages) ?? 0) ?: null;
+        $this->syncNextOlderCursorToVisibleConversationStart();
+
+        return count($newMessageViewData);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $messages
+     */
+    protected function prependConversationMessageViewData(array $messages): void
+    {
+        if ($messages === []) {
+            return;
+        }
+
+        $existingMessageIds = collect($this->conversationMessages)
+            ->pluck('id')
+            ->filter()
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->flip();
+
+        $olderMessageViewData = collect($messages)
+            ->filter(function (array $message) use ($existingMessageIds): bool {
+                return ! $existingMessageIds->has((int) ($message['id'] ?? 0));
+            })
+            ->values()
+            ->all();
+
+        if ($olderMessageViewData === []) {
+            return;
+        }
+
+        $this->conversationMessages = [
+            ...$olderMessageViewData,
+            ...$this->conversationMessages,
+        ];
+        $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $messages
+     * @return list<array<string, mixed>>
+     */
+    protected function sortConversationMessages(array $messages): array
+    {
+        usort($messages, function (array $left, array $right): int {
+            return strcmp((string) ($left['sort_key'] ?? ''), (string) ($right['sort_key'] ?? ''));
+        });
+
+        return array_values($messages);
+    }
+
+    protected function syncNextOlderCursorToVisibleConversationStart(): void
+    {
+        if (! $this->hasMoreOlderMessages) {
+            return;
+        }
+
+        $oldestVisibleMessage = $this->conversationMessages[0] ?? null;
+
+        if (
+            ! is_array($oldestVisibleMessage)
+            || blank($oldestVisibleMessage['sort_at_iso'] ?? null)
+            || blank($oldestVisibleMessage['id'] ?? null)
+        ) {
+            return;
+        }
+
+        $this->nextOlderCursor = [
+            'sort_at' => (string) $oldestVisibleMessage['sort_at_iso'],
+            'id' => (int) $oldestVisibleMessage['id'],
+        ];
+    }
+
+    /**
+     * @param  Collection<int, Message>  $messages
+     */
+    protected function resolveLatestKnownMessageId(Collection $messages): ?int
+    {
+        $latestMessageId = $messages->max('id');
+
+        return is_numeric($latestMessageId)
+            ? (int) $latestMessageId
+            : null;
     }
 
     protected function getContactViewUrl(): string
@@ -370,6 +618,26 @@ class ViewDialog extends ViewRecord
         return $this->resolveDialogRouteStatus($this->getRecord())->blockedReason;
     }
 
+    /**
+     * @return array<string, string>
+     */
+    protected function getDialogInboxStatusOptions(DialogInboxStatusData $status): array
+    {
+        return match ($status->code) {
+            DialogInboxStatusData::CODE_REQUIRES_REPLY => [
+                DialogInboxStatusData::CODE_REQUIRES_REPLY => 'Требует ответа',
+                DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
+            ],
+            DialogInboxStatusData::CODE_NOT_REQUIRED => [
+                DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
+                DialogInboxStatusData::CODE_REQUIRES_REPLY => 'Требует ответа',
+            ],
+            default => [
+                DialogInboxStatusData::CODE_NO_NEW => 'Нет новых',
+            ],
+        };
+    }
+
     protected function resolvePrimaryPhoneRaw(?Contact $contact): ?string
     {
         if (! $contact instanceof Contact) {
@@ -414,6 +682,11 @@ class ViewDialog extends ViewRecord
         return app(ResolveDialogRouteStatusAction::class)->handle($dialog);
     }
 
+    protected function resolveDialogInboxStatus(Dialog $dialog): DialogInboxStatusData
+    {
+        return app(ResolveDialogInboxStatusAction::class)->handle($dialog);
+    }
+
     protected function formatDialogPhoneLabel(Dialog $dialog): string
     {
         if (filled($dialog->confirmed_phone_raw)) {
@@ -425,6 +698,29 @@ class ViewDialog extends ViewRecord
         }
 
         return 'Телефон в этом канале не подтвержден';
+    }
+
+    protected function formatDialogMessengerNameLabel(Dialog $dialog): string
+    {
+        $identity = $dialog->currentContactIdentity;
+
+        if (filled($identity?->display_name)) {
+            return trim((string) $identity->display_name);
+        }
+
+        if (filled($identity?->external_username)) {
+            return '@'.ltrim((string) $identity->external_username, '@');
+        }
+
+        if (filled($identity?->external_user_id)) {
+            return 'ID: '.$identity->external_user_id;
+        }
+
+        if ($dialog->current_contact_identity_id !== null) {
+            return 'Identity #'.$dialog->current_contact_identity_id;
+        }
+
+        return '—';
     }
 
     protected function formatDialogRouteIdentityLabel(Dialog $dialog): string

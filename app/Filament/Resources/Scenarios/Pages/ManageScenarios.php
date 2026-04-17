@@ -3,9 +3,9 @@
 namespace App\Filament\Resources\Scenarios\Pages;
 
 use App\Filament\Resources\Scenarios\ScenarioResource;
+use App\Filament\Resources\Pages\ManageRecords;
 use App\Models\Scenario;
 use Filament\Actions\CreateAction;
-use Filament\Resources\Pages\ManageRecords;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 

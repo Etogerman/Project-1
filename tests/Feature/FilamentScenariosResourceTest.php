@@ -17,10 +17,12 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
+use Tests\Feature\Concerns\BuildsIbizaMvpSchema;
 
 class FilamentScenariosResourceTest extends TestCase
 {
     use RefreshDatabase;
+    use BuildsIbizaMvpSchema;
 
     protected function setUp(): void
     {
@@ -41,6 +43,26 @@ class FilamentScenariosResourceTest extends TestCase
             ->get(ScenarioResource::getUrl())
             ->assertOk()
             ->assertSee('Сценарии');
+    }
+
+    public function test_active_admin_can_open_scenarios_page_with_existing_scenario(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        app(CreateScenarioAction::class)->handle([
+            'code' => 'slice3_page_open',
+            'name' => 'Проверка страницы сценариев',
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(ScenarioResource::getUrl())
+            ->assertOk()
+            ->assertSee('Сценарии')
+            ->assertSee('Проверка страницы сценариев');
     }
 
     public function test_employee_cannot_open_scenarios_page(): void
@@ -565,6 +587,153 @@ JSON,
         }
     }
 
+    public function test_admin_can_save_slice_three_schema_with_phone_capture(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_three_phone_capture',
+            'name' => 'Проверка slice 3',
+            'is_active' => true,
+        ]);
+
+        ScenarioResource::saveScenario([
+            'name' => $scenario->name,
+            'is_active' => true,
+            'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_three_phone_capture"
+        }
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "message",
+            "text": "Старт",
+            "next": "capture_phone"
+        },
+        "capture_phone": {
+            "type": "phone_capture",
+            "text": "Поделитесь номером телефона.",
+            "next": "done"
+        },
+        "done": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+        ], $scenario);
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $this->assertSame($this->sliceThreeSchema('slice_three_phone_capture'), $scenario->draftVersion?->schema_payload);
+    }
+
+    public function test_save_scenario_rejects_phone_capture_with_save_to(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'slice_three_phone_capture_invalid',
+            'name' => 'Проверка slice 3 invalid',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $scenario->name,
+                'is_active' => true,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "capture_phone",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "slice_three_phone_capture_invalid"
+        }
+    ],
+    "blocks": {
+        "capture_phone": {
+            "type": "phone_capture",
+            "text": "Поделитесь номером телефона.",
+            "save_to": "run.phone",
+            "next": "done"
+        },
+        "done": {
+            "type": "complete"
+        }
+    }
+
+    public function test_admin_can_save_and_publish_ibiza_mvp_schema(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $strongTag = Tag::factory()->create([
+            'name' => 'vip strong',
+        ]);
+        $borderlineTag = Tag::factory()->create([
+            'name' => 'vip borderline',
+        ]);
+        $weakTag = Tag::factory()->create([
+            'name' => 'vip weak',
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'vip_ibiza',
+            'name' => 'VIP Ibiza',
+            'is_active' => true,
+        ]);
+        $schema = $this->ibizaMvpSchema(
+            $strongTag->slug,
+            $borderlineTag->slug,
+            $weakTag->slug,
+        );
+
+        ScenarioResource::saveScenario([
+            'name' => $scenario->name,
+            'is_active' => true,
+            'draft_schema_payload_json' => json_encode(
+                $schema,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            ),
+        ], $scenario);
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $this->assertSame($schema, $scenario->draftVersion?->schema_payload);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('publishDraft', $scenario)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertNull($scenario->draftVersion);
+        $this->assertSame(1, $scenario->publishedVersion?->version_number);
+        $this->assertSame(ScenarioVersion::STATUS_PUBLISHED, $scenario->publishedVersion?->status);
+        $this->assertSame($schema, $scenario->publishedVersion?->schema_payload);
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 3 schema validation should reject phone_capture with save_to.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Блок capture_phone использует save_to, это не входит в текущий DB-runtime.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
+        }
+    }
+
     public function test_admin_cannot_publish_empty_draft_schema(): void
     {
         $admin = User::factory()->create([
@@ -681,6 +850,196 @@ JSON,
         $this->assertFalse($scenario->is_active);
     }
 
+    public function test_admin_can_restore_archived_published_scenario_and_it_remains_inactive(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'restore_published',
+            'name' => 'Restore published',
+            'is_active' => true,
+        ]);
+
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => $this->sliceOneSchema('restore_published'),
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('archiveScenario', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertTrue($scenario->is_archived);
+        $this->assertFalse($scenario->is_active);
+        $this->assertNull($scenario->draftVersion);
+        $this->assertSame(1, $scenario->publishedVersion?->version_number);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('restoreScenario', $scenario)
+            ->assertTableActionHidden('edit', $scenario)
+            ->callTableAction('restoreScenario', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertFalse($scenario->is_archived);
+        $this->assertFalse($scenario->is_active);
+        $this->assertNull($scenario->draftVersion);
+        $this->assertSame(1, $scenario->publishedVersion?->version_number);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('edit', $scenario)
+            ->assertTableActionVisible('createNextDraft', $scenario);
+    }
+
+    public function test_admin_can_restore_archived_draft_only_scenario_and_continue_editing_same_draft(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'restore_draft_only',
+            'name' => 'Restore draft only',
+            'is_active' => true,
+        ]);
+
+        $draftVersion = $scenario->draftVersion()->firstOrFail();
+
+        $draftVersion->forceFill([
+            'schema_payload' => $this->sliceOneSchema('restore_draft_only'),
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('archiveScenario', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertTrue($scenario->is_archived);
+        $this->assertSame($draftVersion->id, $scenario->draftVersion?->id);
+        $this->assertNull($scenario->publishedVersion);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('restoreScenario', $scenario)
+            ->assertTableActionHidden('edit', $scenario)
+            ->callTableAction('restoreScenario', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertFalse($scenario->is_archived);
+        $this->assertFalse($scenario->is_active);
+        $this->assertSame($draftVersion->id, $scenario->draftVersion?->id);
+        $this->assertNull($scenario->publishedVersion);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('edit', $scenario)
+            ->assertTableActionHidden('createNextDraft', $scenario)
+            ->callTableAction('edit', $scenario, [
+                'name' => 'Restore draft only updated',
+                'is_active' => false,
+                'draft_schema_payload_json' => <<<'JSON'
+{
+    "version": 1,
+    "start_block_id": "welcome",
+    "triggers": [
+        {
+            "type": "parameter",
+            "value": "restore_draft_only"
+        }
+    ],
+    "blocks": {
+        "welcome": {
+            "type": "message",
+            "text": "Привет",
+            "next": "end"
+        },
+        "end": {
+            "type": "complete"
+        }
+    }
+}
+JSON,
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertSame('Restore draft only updated', $scenario->name);
+        $this->assertSame(
+            [
+                'version' => 1,
+                'start_block_id' => 'welcome',
+                'triggers' => [
+                    [
+                        'type' => 'parameter',
+                        'value' => 'restore_draft_only',
+                    ],
+                ],
+                'blocks' => [
+                    'welcome' => [
+                        'type' => 'message',
+                        'text' => 'Привет',
+                        'text_format' => 'plain_text',
+                        'next' => 'end',
+                    ],
+                    'end' => [
+                        'type' => 'complete',
+                    ],
+                ],
+            ],
+            $scenario->draftVersion?->schema_payload,
+        );
+    }
+
+    public function test_archived_scenario_cannot_be_mutated_via_save_scenario_before_restore(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'archived_save_guard',
+            'name' => 'Archived save guard',
+            'is_active' => true,
+        ]);
+
+        $scenario->forceFill([
+            'is_active' => false,
+            'is_archived' => true,
+        ])->save();
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => 'Changed after archive',
+                'is_active' => true,
+            ], $scenario->fresh());
+
+            $this->fail('Archived scenario save should require restore first.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Архивный сценарий сначала нужно восстановить.',
+                $exception->errors()['scenario'][0] ?? null,
+            );
+        }
+    }
+
     public function test_scenarios_table_uses_inline_list_page_standard(): void
     {
         $admin = User::factory()->create([
@@ -740,6 +1099,40 @@ JSON,
                     'next' => 'end',
                 ],
                 'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sliceThreeSchema(string $triggerValue): array
+    {
+        return [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => $triggerValue,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Старт',
+                    'text_format' => 'plain_text',
+                    'next' => 'capture_phone',
+                ],
+                'capture_phone' => [
+                    'type' => 'phone_capture',
+                    'text' => 'Поделитесь номером телефона.',
+                    'text_format' => 'plain_text',
+                    'next' => 'done',
+                ],
+                'done' => [
                     'type' => 'complete',
                 ],
             ],

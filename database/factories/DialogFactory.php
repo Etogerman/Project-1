@@ -26,6 +26,10 @@ class DialogFactory extends Factory
             'channel_id' => fn (array $attributes): int => ContactIdentity::query()
                 ->findOrFail($attributes['current_contact_identity_id'])
                 ->channel_id,
+            'manual_reply_dismissed_source_message_id' => null,
+            'bot_subscription_status' => null,
+            'bot_subscription_changed_at' => null,
+            'bot_subscription_source_message_id' => null,
             'external_chat_id' => (string) fake()->numerify('########'),
             'confirmed_phone_raw' => null,
             'confirmed_phone_normalized' => null,

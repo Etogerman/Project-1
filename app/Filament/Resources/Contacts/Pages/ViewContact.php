@@ -291,8 +291,8 @@ class ViewContact extends ViewRecord
             : null;
 
         return [
-            $this->makeRow('Имя (мессенджер)', 'name', $record->name ?? '—'),
             $this->makeRow('Имя', 'first_name', $record->first_name ?? '—', $profileAction),
+            $this->makeRow('Откуда знаем имя?', 'first_name_source', $this->resolveFirstNameSourceValue($record)),
             $this->makeRow('Фамилия', 'last_name', $record->last_name ?? '—', $profileAction),
             $this->makeRow('Пол', 'gender', Contact::formatGender($record->gender), $profileAction),
             $this->makeRow('Возраст', 'effective_age_years', $record->effective_age_years !== null ? (string) $record->effective_age_years : '—'),
@@ -558,11 +558,28 @@ class ViewContact extends ViewRecord
             return implode(' ', $parts);
         }
 
-        if (filled($record->name)) {
-            return (string) $record->name;
+        $displayName = trim((string) $record->display_name);
+
+        if ($displayName !== '') {
+            return $displayName;
         }
 
         return 'Контакт #'.$record->id;
+    }
+
+    protected function resolveFirstNameSourceValue(Contact $record): string
+    {
+        if (! filled($record->first_name)) {
+            return '—';
+        }
+
+        $label = Contact::formatFirstNameSourceBadgeLabel($record->first_name_source);
+
+        if ($label === null) {
+            return 'Источник не определён';
+        }
+
+        return $label;
     }
 
     protected function formatDate(mixed $value): string

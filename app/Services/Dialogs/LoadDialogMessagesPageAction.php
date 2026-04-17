@@ -7,6 +7,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 
 class LoadDialogMessagesPageAction
 {
@@ -71,5 +72,24 @@ class LoadDialogMessagesPageAction
                 ]
                 : null,
         );
+    }
+
+    /**
+     * @return Collection<int, Message>
+     */
+    public function loadMessagesAddedAfterId(Dialog $dialog, ?int $messageId, int $limit = 50): Collection
+    {
+        if ($messageId === null) {
+            return collect();
+        }
+
+        return Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->with(['channel', 'dialog.channel', 'sentByUser'])
+            ->where('id', '>', $messageId)
+            ->orderBy('id')
+            ->limit($limit)
+            ->get()
+            ->values();
     }
 }

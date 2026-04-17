@@ -168,6 +168,34 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         ]);
     }
 
+    public function test_job_skips_question_when_dialog_is_blocked_by_user(): void
+    {
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake();
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel);
+        $dialog = $message->dialog()->firstOrFail();
+
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        ProcessDataCollectionQuestionJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_question_skipped_dialog_not_sendable',
+        ]);
+    }
+
     public function test_force_send_can_repeat_question_for_same_active_field(): void
     {
         config()->set('bots.data_collection.first_question', 'Как вас зовут?');

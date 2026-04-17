@@ -5,6 +5,7 @@ namespace App\Services\Bitrix24;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\MessageChronology;
 
@@ -12,6 +13,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly ResolveContactDisplayNameAction $resolveContactDisplayNameAction,
         private readonly CollectBitrix24ContactPhonesAction $collectBitrix24ContactPhonesAction,
         private readonly ResolveBitrix24LiveChatKeyAction $resolveBitrix24LiveChatKeyAction,
         private readonly MessageChronology $messageChronology,
@@ -34,10 +36,10 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $channel = $dialog->channel ?? $message->channel()->firstOrFail();
         $identity = $dialog->currentContactIdentity ?? $message->contactIdentity;
         $timestamp = $this->messageChronology->resolveSortAt($message);
-        $text = $this->resolveMessageText($message);
+        $text = $this->resolveMessageText($message, $channel);
         $chatKey = $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
         $userId = $this->resolveUserId($channel, $identity?->external_user_id, $rootContact->id);
-        $userName = $rootContact->display_name;
+        $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 
         $probePayload = $this->resolveRetryAfterSyncProbePayload($retryAfterSync, $rootContact->bitrix24_contact_id);
@@ -64,13 +66,52 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         ];
     }
 
-    private function resolveMessageText(Message $message): string
+    private function resolveMessageText(Message $message, Channel $channel): string
     {
+        if ($this->isTelegramBotStartedMessage($message, $channel)) {
+            return 'Клиент запустил Telegram-бота';
+        }
+
+        if ($this->isMaxBotStartedMessage($message, $channel)) {
+            return 'Клиент запустил MAX-бота';
+        }
+
         if ($message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
             return 'Клиент поделился номером телефона';
         }
 
+        if ($message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return match ($message->system_event_code) {
+                Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER => 'Система: Клиент заблокировал бота',
+                Message::SYSTEM_EVENT_CODE_BOT_UNBLOCKED_BY_USER => 'Система: Клиент разблокировал бота',
+                default => 'Система: Служебное событие канала',
+            };
+        }
+
         return trim((string) $message->text);
+    }
+
+    private function isTelegramBotStartedMessage(Message $message, Channel $channel): bool
+    {
+        if (
+            $channel->platform !== Channel::PLATFORM_TELEGRAM
+            || $message->direction !== Message::DIRECTION_INBOUND
+            || $message->message_kind !== Message::KIND_INBOUND_USER
+        ) {
+            return false;
+        }
+
+        $text = trim((string) $message->text);
+
+        return preg_match('/^\/start(?:@\S+)?(?:\s+.+)?$/u', $text) === 1;
+    }
+
+    private function isMaxBotStartedMessage(Message $message, Channel $channel): bool
+    {
+        return $channel->platform === Channel::PLATFORM_MAX
+            && $message->direction === Message::DIRECTION_INBOUND
+            && $message->message_kind === Message::KIND_INBOUND_USER
+            && data_get($message->raw_payload, 'update_type') === 'bot_started';
     }
 
     private function resolveUserId(Channel $channel, ?string $externalUserId, int $rootContactId): string

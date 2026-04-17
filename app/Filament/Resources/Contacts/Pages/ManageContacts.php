@@ -3,10 +3,12 @@
 namespace App\Filament\Resources\Contacts\Pages;
 
 use App\Filament\Resources\Contacts\ContactResource;
+use App\Filament\Resources\Pages\ManageRecords;
 use App\Models\Contact;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\AssignContactTagAction;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
@@ -21,7 +23,6 @@ use App\Services\Contacts\UpdateContactPhoneAction;
 use App\Services\DataCollection\ResumeContactDataCollectionAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
-use Filament\Resources\Pages\ManageRecords;
 use Illuminate\Database\Eloquent\Model;
 use RuntimeException;
 use Illuminate\Validation\Rule;
@@ -440,8 +441,30 @@ class ManageContacts extends ManageRecords
                 throw new RuntimeException('Не удалось определить текущий контакт.');
             }
 
-            $contact = app(UpdateContactProfileAction::class)->handle($record, [
-                'first_name' => $validated['editingFirstName'] ?? null,
+            $contact = app(ResolveRootContactAction::class)->handle($record);
+            $firstName = is_string($validated['editingFirstName'] ?? null)
+                ? trim((string) $validated['editingFirstName'])
+                : '';
+
+            if ($firstName === '') {
+                if (filled($contact->first_name)) {
+                    $applyResult = app(ApplyContactFirstNameAction::class)->clear(
+                        $contact,
+                        ApplyContactFirstNameAction::REASON_MANUAL_EDIT,
+                    );
+                    $contact = $applyResult->changed ? $contact->fresh() : $contact;
+                }
+            } elseif ($firstName !== trim((string) ($contact->first_name ?? ''))) {
+                $applyResult = app(ApplyContactFirstNameAction::class)->handle(
+                    $contact,
+                    $firstName,
+                    Contact::FIRST_NAME_SOURCE_MANUAL,
+                    ApplyContactFirstNameAction::REASON_MANUAL_EDIT,
+                );
+                $contact = $applyResult->changed ? $contact->fresh() : $contact;
+            }
+
+            $contact = app(UpdateContactProfileAction::class)->handle($contact, [
                 'last_name' => $validated['editingLastName'] ?? null,
                 'gender' => $validated['editingGender'] ?? null,
                 'age_years' => $validated['editingAgeYears'] ?? null,

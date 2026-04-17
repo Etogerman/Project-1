@@ -3,8 +3,8 @@
 namespace App\Filament\Resources\AutoReplyCategories\Pages;
 
 use App\Filament\Resources\AutoReplyCategories\AutoReplyCategoryResource;
+use App\Filament\Resources\Pages\ManageRecords;
 use Filament\Actions\CreateAction;
-use Filament\Resources\Pages\ManageRecords;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 

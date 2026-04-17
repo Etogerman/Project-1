@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\Dialogs\DialogInboxStatusData;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
@@ -64,6 +65,113 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee($dialog->contact->display_name);
     }
 
+    public function test_dialogs_inbox_page_enables_live_polling(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $this->createInboxDialog();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('wire:poll.10s', escape: false);
+    }
+
+    public function test_dialogs_inbox_uses_separate_hidden_columns_for_identity_and_phone_details(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Только контакт',
+            'externalUserId' => 'tg-user-555',
+            'externalUsername' => 'dialog_hidden_user',
+        ]);
+        $dialog->forceFill([
+            'confirmed_phone_raw' => '+7 900 123 45 67',
+        ])->save();
+        $dialog = $dialog->fresh([
+            'channel',
+            'currentContactIdentity',
+            'contact.assignedUser',
+            'contact.primaryIdentity',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertTableColumnExists(
+                'contact_label',
+                fn ($column): bool => $column->getLabel() === 'Контакт' && $column->getDescriptionBelow() === null,
+                $dialog,
+            )
+            ->assertTableColumnVisible('contact_label')
+            ->assertTableColumnStateSet('contact_label', 'Только контакт', $dialog)
+            ->assertTableColumnExists(
+                'external_user_id',
+                fn ($column): bool => $column->getLabel() === 'Внешний ID',
+                $dialog,
+            )
+            ->assertTableColumnHidden('external_user_id')
+            ->assertTableColumnStateSet('external_user_id', 'tg-user-555', $dialog)
+            ->assertTableColumnExists(
+                'external_username',
+                fn ($column): bool => $column->getLabel() === 'Username',
+                $dialog,
+            )
+            ->assertTableColumnHidden('external_username')
+            ->assertTableColumnStateSet('external_username', '@dialog_hidden_user', $dialog)
+            ->assertTableColumnExists(
+                'phone_label',
+                fn ($column): bool => $column->getLabel() === 'Номер телефона',
+                $dialog,
+            )
+            ->assertTableColumnHidden('phone_label')
+            ->assertTableColumnStateSet('phone_label', '+7 900 123 45 67', $dialog);
+    }
+
+    public function test_dialogs_inbox_does_not_show_identity_and_phone_details_inside_contact_column_by_default(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Чистый контакт',
+            'externalUserId' => 'hidden-route-777',
+            'externalUsername' => 'hidden_dialog_username',
+        ]);
+        $dialog->forceFill([
+            'confirmed_phone_raw' => '+7 901 555 44 33',
+        ])->save();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Чистый контакт')
+            ->assertDontSee('hidden-route-777')
+            ->assertDontSee('@hidden_dialog_username')
+            ->assertDontSee('+7 901 555 44 33');
+    }
+
+    public function test_dialogs_inbox_uses_current_dialog_identity_label_for_each_row(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$telegramDialog, $maxDialog] = $this->createMultiChannelDialogsForContactLabel();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Telegram Клиент')
+            ->assertSee('MAX Клиент');
+    }
+
     public function test_employee_can_open_dialog_view_page_with_reply_composer(): void
     {
         $user = User::factory()->create([
@@ -76,6 +184,109 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('data-role="conversation-reply-form"', false);
+    }
+
+    public function test_dialog_view_uses_current_dialog_identity_label_in_contact_summary(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$telegramDialog] = $this->createMultiChannelDialogsForContactLabel();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
+            ->assertOk()
+            ->assertSee('Telegram Клиент');
+    }
+
+    public function test_dialog_view_exposes_live_refresh_polling_configuration(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-poll-interval-ms="5000"', escape: false)
+            ->assertSee('refreshDialogViewData', escape: false)
+            ->assertSee("querySelector('[data-role=conversation-thread]')", escape: false)
+            ->assertSee('window.requestAnimationFrame(() => this.scrollToBottom())', escape: false)
+            ->assertDontSee('[data-role=\\"conversation-thread\\"]', escape: false);
+    }
+
+    public function test_dialog_view_renders_editable_status_select_for_pending_inbox_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('Статус диалога')
+            ->assertSee('Требует ответа')
+            ->assertSee('Не требует ответа')
+            ->assertSee('data-role="dialog-inbox-status-select"', escape: false)
+            ->assertSee('data-role="dialog-inbox-status-help"', escape: false)
+            ->assertSee('data-role="dialog-inbox-status-help-panel"', escape: false)
+            ->assertSee('aria-controls="dialog-inbox-status-help-panel"', escape: false)
+            ->assertSee('aria-label="Показать подсказку: новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».', escape: false)
+            ->assertDontSee('<p class="ac-field-help">', escape: false)
+            ->assertDontSee('Рабочее место оператора')
+            ->assertDontSee('Здесь показаны только сообщения текущего диалога в хронологическом порядке.');
+    }
+
+    public function test_dialog_view_uses_yellow_highlight_buttons_and_green_send_button(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $html = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->getContent();
+
+        $this->assertMatchesRegularExpression(
+            '~class="[^"]*ac-button[^"]*ac-button--warning[^"]*"[^>]*>\s*Открыть контакт\s*</a>~su',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '~class="[^"]*ac-button[^"]*ac-button--warning-soft[^"]*"[^>]*>\s*Форматированный\s*</button>~su',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '~class="[^"]*ac-button[^"]*ac-button--warning-soft[^"]*"[^>]*>\s*Просто текст\s*</button>~su',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '~class="[^"]*ac-button[^"]*ac-button--success[^"]*"[^>]*>\s*<span[^>]*>Отправить</span>~su',
+            $html,
+        );
+    }
+
+    public function test_dialog_view_renders_current_dialog_messenger_name_in_technical_context(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$telegramDialog] = $this->createMultiChannelDialogsForContactLabel();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
+            ->assertOk()
+            ->assertSee('Имя из мессенджера')
+            ->assertSee('data-role="dialog-messenger-name"', false)
+            ->assertSee('Telegram Клиент');
     }
 
     public function test_employee_can_open_dialogs_inbox_page(): void
@@ -207,6 +418,35 @@ class FilamentDialogsResourceTest extends TestCase
             ->test(ListDialogs::class)
             ->removeTableFilter('requires_manual_reply')
             ->assertCanSeeTableRecords([$openDialog, $closedDialog]);
+    }
+
+    public function test_dialogs_inbox_default_requires_reply_filter_hides_manually_dismissed_dialogs(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $openDialog = $this->createInboxDialog([
+            'contactName' => 'Нужен ответ',
+        ]);
+        $dismissedDialog = $this->createInboxDialog([
+            'contactName' => 'Ответ не нужен',
+        ]);
+        $dismissedInbound = Message::query()
+            ->where('dialog_id', $dismissedDialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $dismissedDialog->forceFill([
+            'manual_reply_dismissed_source_message_id' => $dismissedInbound->id,
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertCanSeeTableRecords([$openDialog])
+            ->assertCanNotSeeTableRecords([$dismissedDialog]);
     }
 
     public function test_dialogs_inbox_status_is_scoped_to_dialog_not_contact(): void
@@ -464,6 +704,177 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee(DialogResource::getUrl('view', ['record' => $dialog]), escape: false);
     }
 
+    public function test_dialogs_inbox_preview_ignores_dialog_status_history_note(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Диалог со статусом',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            'text' => 'Оператор изменил статус диалога',
+            'received_at' => now(),
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'));
+
+        $response->assertOk()
+            ->assertSee('Пользователь написал первым')
+            ->assertDontSee('Оператор изменил статус диалога');
+    }
+
+    public function test_dialogs_inbox_preview_keeps_latest_legacy_message_with_null_kind(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Диалог с legacy preview',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Старое обычное сообщение',
+            'received_at' => now()->subMinutes(2),
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => null,
+            'text' => 'Последнее legacy сообщение',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            'text' => 'Оператор изменил статус диалога',
+            'received_at' => now(),
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'));
+
+        $response->assertOk()
+            ->assertSee('Последнее legacy сообщение')
+            ->assertDontSee('Старое обычное сообщение')
+            ->assertDontSee('Оператор изменил статус диалога');
+    }
+
+    public function test_dialogs_inbox_keeps_system_unsubscribe_preview_without_marking_dialog_as_requires_reply(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Системный диалог',
+            'channelName' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $latestInbound = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->createDialogMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'reply_to_message_id' => $latestInbound->id,
+            'text' => 'Оператор уже ответил',
+            'received_at' => now()->subSeconds(10),
+        ]);
+
+        $this->createDialogMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_SYSTEM_EVENT,
+            'system_event_code' => Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION,
+            'text' => null,
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertCanNotSeeTableRecords([$dialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->removeTableFilter('requires_manual_reply')
+            ->assertCanSeeTableRecords([$dialog])
+            ->assertSee('Клиент заблокировал бота')
+            ->assertSee('Система')
+            ->assertSee('Нет новых');
+    }
+
+    public function test_dialog_view_renders_telegram_unsubscribe_as_system_message_badge(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $dialog->channel()->update([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'name' => 'Telegram Support',
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $this->createDialogMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_SYSTEM_EVENT,
+            'system_event_code' => Message::SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_BOT_SUBSCRIPTION,
+            'text' => null,
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('Клиент заблокировал бота')
+            ->assertSee('Системное')
+            ->assertSee('Система')
+            ->assertDontSee('Входящее');
+    }
+
     public function test_dialog_view_route_status_matches_inbox_route_badge_for_same_dialog(): void
     {
         $admin = User::factory()->create([
@@ -495,22 +906,28 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Нет токена');
     }
 
-    public function test_dialogs_inbox_searches_contact_identity_chat_and_phone(): void
+    public function test_dialogs_inbox_searches_contact_profile_identity_chat_and_phone_without_legacy_name(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
         $targetDialog = $this->createInboxDialog([
-            'contactName' => 'Герман Абрикосов',
+            'contactName' => 'Legacy target name',
+            'contactFirstName' => 'Герман',
+            'contactLastName' => 'Абрикосов',
             'externalUserId' => 'target-user-100',
             'externalUsername' => 'german_target',
+            'displayName' => 'Telegram Клиент',
             'externalChatId' => 'target-chat-100',
         ]);
         $otherDialog = $this->createInboxDialog([
-            'contactName' => 'Другой контакт',
+            'contactName' => 'Legacy other name',
+            'contactFirstName' => 'Другой',
+            'contactLastName' => 'Контакт',
             'externalUserId' => 'other-user-200',
             'externalUsername' => 'other_target',
+            'displayName' => 'MAX Клиент',
             'externalChatId' => 'other-chat-200',
         ]);
 
@@ -535,6 +952,12 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
+            ->searchTable('Telegram Клиент')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
             ->searchTable('target-chat-100')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
@@ -544,6 +967,11 @@ class FilamentDialogsResourceTest extends TestCase
             ->searchTable('3527111')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('Legacy target name')
+            ->assertCanNotSeeTableRecords([$targetDialog, $otherDialog]);
     }
 
     public function test_dialogs_inbox_queries_messages_by_dialog_id_not_contact_id(): void
@@ -658,6 +1086,172 @@ class FilamentDialogsResourceTest extends TestCase
         $this->assertSame('Сообщение 70', $messages[49]['display_text']);
         $component->assertSet('hasMoreOlderMessages', true)
             ->assertSee('Загрузить более ранние сообщения');
+    }
+
+    public function test_dialog_view_live_refresh_appends_new_messages_without_losing_local_state(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $newOwner = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Новый ответственный',
+        ]);
+        $dialog = $this->createDialogWithMessages(3);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->set('dialogReplyText', 'Черновик без потери')
+            ->set('dialogReplyFormat', Message::TEXT_FORMAT_HTML)
+            ->set('conversationDisplayMode', ViewDialog::CONVERSATION_DISPLAY_MODE_HTML);
+
+        $dialog->contact->update([
+            'assigned_user_id' => $newOwner->id,
+        ]);
+
+        $newInboundMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Новое входящее без перезагрузки',
+            'received_at' => now()->addSecond(),
+            'external_message_id' => 'live-refresh-001',
+            'provider_event_key' => 'live-refresh-event-001',
+        ]);
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed')
+            ->assertSet('dialogReplyText', 'Черновик без потери')
+            ->assertSet('dialogReplyFormat', Message::TEXT_FORMAT_HTML)
+            ->assertSet('conversationDisplayMode', ViewDialog::CONVERSATION_DISPLAY_MODE_HTML)
+            ->assertSee('Новое входящее без перезагрузки')
+            ->assertSee('Новый ответственный');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(4, $messages);
+        $this->assertSame('Новое входящее без перезагрузки', $messages[3]['display_text']);
+        $this->assertSame($newInboundMessage->id, $component->get('latestKnownMessageId'));
+    }
+
+    public function test_dialog_view_live_refresh_does_not_duplicate_already_loaded_messages(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Сообщение только один раз',
+            'received_at' => now()->addSecond(),
+            'external_message_id' => 'live-refresh-002',
+            'provider_event_key' => 'live-refresh-event-002',
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('refreshDialogViewData')
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(2, $messages);
+        $this->assertSame([
+            'Сообщение 1',
+            'Сообщение только один раз',
+        ], array_column($messages, 'display_text'));
+    }
+
+    public function test_dialog_view_live_refresh_inserts_late_arriving_message_into_chronological_position(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(3);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Поздно дошедшее сообщение',
+            'received_at' => now()->subSeconds(1),
+            'external_message_id' => 'live-refresh-late-001',
+            'provider_event_key' => 'live-refresh-late-event-001',
+        ]);
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(4, $messages);
+        $this->assertSame([
+            'Сообщение 1',
+            'Сообщение 2',
+            'Поздно дошедшее сообщение',
+            'Сообщение 3',
+        ], array_column($messages, 'display_text'));
+    }
+
+    public function test_dialog_view_load_older_messages_does_not_duplicate_late_message_inserted_by_live_refresh(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(70);
+
+        $lateMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Поздно дошедшее сообщение',
+            'received_at' => now()->subSeconds(50),
+            'external_message_id' => 'live-refresh-late-older-001',
+            'provider_event_key' => 'live-refresh-late-older-event-001',
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('refreshDialogViewData')
+            ->assertSet('nextOlderCursor.id', $lateMessage->id)
+            ->call('loadOlderMessages')
+            ->assertDispatched('dialog-history-older-messages-loaded');
+
+        $messages = $component->get('conversationMessages');
+        $messageIds = array_column($messages, 'id');
+        $messageTexts = array_column($messages, 'display_text');
+
+        $this->assertCount(71, $messages);
+        $this->assertCount(71, array_unique($messageIds));
+        $this->assertSame([
+            'Сообщение 20',
+            'Поздно дошедшее сообщение',
+            'Сообщение 21',
+        ], array_slice($messageTexts, 19, 3));
+        $this->assertSame('Сообщение 1', $messageTexts[0]);
+        $this->assertSame('Сообщение 70', $messageTexts[70]);
     }
 
     public function test_dialog_view_can_load_older_messages(): void
@@ -1011,6 +1605,119 @@ class FilamentDialogsResourceTest extends TestCase
             && $request['format'] === 'html');
     }
 
+    public function test_dialog_view_can_mark_dialog_as_not_required_and_write_history_note(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Оператор Статуса',
+        ]);
+        $dialog = $this->createInboxDialog();
+        $latestInbound = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_REQUIRES_REPLY)
+            ->set('dialogInboxStatusSelection', DialogInboxStatusData::CODE_NOT_REQUIRED)
+            ->call('updateDialogInboxStatus')
+            ->assertNotified()
+            ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_NOT_REQUIRED)
+            ->assertSee('Не требует ответа')
+            ->assertSee('Оператор Оператор Статуса изменил статус диалога: Требует ответа -> Не требует ответа');
+
+        $this->assertSame(
+            $latestInbound->id,
+            $dialog->fresh()->manual_reply_dismissed_source_message_id,
+        );
+
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_user_id' => $admin->id,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            'reply_to_message_id' => $latestInbound->id,
+            'text' => 'Оператор Оператор Статуса изменил статус диалога: Требует ответа -> Не требует ответа',
+        ]);
+
+        $historyMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame(
+            [
+                'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+                'from_status' => [
+                    'code' => DialogInboxStatusData::CODE_REQUIRES_REPLY,
+                    'label' => 'Требует ответа',
+                ],
+                'to_status' => [
+                    'code' => DialogInboxStatusData::CODE_NOT_REQUIRED,
+                    'label' => 'Не требует ответа',
+                ],
+                'reply_to_message_id' => $latestInbound->id,
+                'dialog_id' => $dialog->id,
+                'changed_by_user_id' => $admin->id,
+            ],
+            $historyMessage->raw_payload,
+        );
+
+        $this->assertNotNull($historyMessage->received_at);
+    }
+
+    public function test_dialog_view_live_refresh_returns_manually_dismissed_dialog_to_requires_reply_after_new_inbound(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $latestInbound = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $dialog->forceFill([
+            'manual_reply_dismissed_source_message_id' => $latestInbound->id,
+        ])->save();
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_NOT_REQUIRED);
+
+        $receivedAt = now()->addSecond();
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Новое сообщение после ручного закрытия',
+            'received_at' => $receivedAt,
+            'external_message_id' => 'dialog-status-refresh-001',
+            'provider_event_key' => 'dialog-status-refresh-event-001',
+        ]);
+
+        $dialog->forceFill([
+            'last_message_at' => $receivedAt,
+            'last_inbound_at' => $receivedAt,
+        ])->save();
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_REQUIRES_REPLY)
+            ->assertSee('Новое сообщение после ручного закрытия');
+    }
+
     public function test_employee_can_send_reply_from_dialog_page_without_reassigning_foreign_contact(): void
     {
         Http::fake([
@@ -1187,6 +1894,79 @@ class FilamentDialogsResourceTest extends TestCase
     }
 
     /**
+     * @return array{Dialog, Dialog}
+     */
+    protected function createMultiChannelDialogsForContactLabel(): array
+    {
+        $contact = Contact::factory()->create([
+            'name' => null,
+            'first_name' => null,
+            'last_name' => null,
+        ]);
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+            'is_active' => true,
+        ]);
+        $telegramIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'platform' => $telegramChannel->platform,
+            'external_user_id' => 'telegram-contact-label',
+            'display_name' => 'Telegram Клиент',
+        ]);
+        $maxIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'platform' => $maxChannel->platform,
+            'external_user_id' => 'max-contact-label',
+            'display_name' => 'MAX Клиент',
+        ]);
+
+        $telegramDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $telegramChannel->id,
+            'current_contact_identity_id' => $telegramIdentity->id,
+            'external_chat_id' => 'telegram-contact-label-chat',
+            'last_message_at' => now()->subMinute(),
+            'last_inbound_at' => now()->subMinute(),
+        ]);
+        $maxDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'current_contact_identity_id' => $maxIdentity->id,
+            'external_chat_id' => 'max-contact-label-chat',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+
+        $this->createDialogMessage($telegramDialog, [
+            'contact_identity_id' => $telegramIdentity->id,
+            'channel_id' => $telegramChannel->id,
+            'text' => 'Телеграм диалог',
+            'received_at' => now()->subMinute(),
+        ]);
+        $this->createDialogMessage($maxDialog, [
+            'contact_identity_id' => $maxIdentity->id,
+            'channel_id' => $maxChannel->id,
+            'text' => 'MAX диалог',
+            'received_at' => now(),
+        ]);
+
+        return [
+            $telegramDialog->fresh(['channel', 'currentContactIdentity', 'contact.assignedUser', 'contact.identities']),
+            $maxDialog->fresh(['channel', 'currentContactIdentity', 'contact.assignedUser', 'contact.identities']),
+        ];
+    }
+
+    /**
      * @param  array{
      *     contactName?:string,
      *     assignedUserId?:?int,
@@ -1194,6 +1974,7 @@ class FilamentDialogsResourceTest extends TestCase
      *     platform?:string,
      *     externalUserId?:string,
      *     externalUsername?:?string,
+     *     displayName?:?string,
      *     externalChatId?:?string,
      *     hasToken?:bool
      * }  $attributes
@@ -1210,6 +1991,8 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $contact = Contact::factory()->create([
             'name' => $attributes['contactName'] ?? 'Inbox contact',
+            'first_name' => $attributes['contactFirstName'] ?? null,
+            'last_name' => $attributes['contactLastName'] ?? null,
             'assigned_user_id' => $attributes['assignedUserId'] ?? null,
         ]);
         $identity = ContactIdentity::factory()->create([
@@ -1217,6 +2000,7 @@ class FilamentDialogsResourceTest extends TestCase
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
             'external_user_id' => $attributes['externalUserId'] ?? 'external-user-'.fake()->unique()->numerify('###'),
+            'display_name' => $attributes['displayName'] ?? null,
             'external_username' => $attributes['externalUsername'] ?? null,
         ]);
         $dialog = Dialog::factory()->create([

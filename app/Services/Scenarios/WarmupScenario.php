@@ -6,11 +6,10 @@ use App\Data\Scenarios\ScenarioInboundResult;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\ScenarioRun;
-use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
-use App\Services\Bots\TelegramBotApiService;
 
-class WarmupScenario implements ScenarioHandler
+class WarmupScenario implements ScenarioHandler, SupportsTelegramScenarioCallbackContinuation
 {
     public const STEP_AWAITING_REACTION = 'awaiting_reaction';
 
@@ -26,8 +25,7 @@ class WarmupScenario implements ScenarioHandler
     }
 
     public function __construct(
-        private readonly TelegramBotApiService $telegramBotApiService,
-        private readonly MaxBotApiService $maxBotApiService,
+        private readonly SendBotDialogTextAction $sendBotDialogTextAction,
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
     ) {}
 
@@ -67,35 +65,25 @@ class WarmupScenario implements ScenarioHandler
         }
 
         $buttonLabels = $this->buttonLabelsForPlatform($channel->platform);
-        $deliveryResult = match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->sendTextMessage(
-                $channel,
-                $message->external_chat_id,
-                $message->contactIdentity?->external_user_id,
-                $this->messageTextForPlatform($channel->platform),
-                [
-                    'inline_keyboard' => $this->telegramInlineKeyboard($run->id, $buttonLabels),
-                ],
-            ),
-            Channel::PLATFORM_MAX => $this->maxBotApiService->sendTextMessage(
-                $channel,
-                $message->external_chat_id,
-                $message->contactIdentity?->external_user_id,
-                $this->messageTextForPlatform($channel->platform),
-                $this->maxAttachments($buttonLabels),
-            ),
-            default => null,
-        };
+        $sendResult = $this->sendBotDialogTextAction->handleMessage(
+            $message,
+            $this->messageTextForPlatform($channel->platform),
+            telegramReplyMarkup: [
+                'inline_keyboard' => $this->telegramInlineKeyboard($run->id, $buttonLabels),
+            ],
+            maxAttachments: $this->maxAttachments($buttonLabels),
+        );
 
-        if ($deliveryResult === null) {
+        if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
             return;
         }
 
         $outboundMessage = $this->storeOutboundScenarioMessageAction->handle(
-            $channel,
-            $message,
-            $deliveryResult,
-            Message::SENT_BY_SYSTEM_CODE_SCENARIO_WARMUP,
+            channel: $channel,
+            inboundMessage: $message,
+            deliveryResult: $sendResult->deliveryResult,
+            systemCode: Message::SENT_BY_SYSTEM_CODE_SCENARIO_WARMUP,
+            routeDialog: $sendResult->dialog,
         );
 
         $channel->markReplySent();
@@ -193,6 +181,20 @@ class WarmupScenario implements ScenarioHandler
             ]),
             exitOutcome: $this->exitOutcomeForAction($action),
         );
+    }
+
+    public function supportsTelegramScenarioCallbackContinuation(ScenarioRun $run, string $callbackData): bool
+    {
+        $callback = $this->parseTelegramCallbackData($callbackData);
+
+        if ($callback === null || (int) $callback['run_id'] !== (int) $run->id) {
+            return false;
+        }
+
+        $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
+        $expectedLabels = $this->expectedLabelsFromStatePayload($statePayload, Channel::PLATFORM_TELEGRAM);
+
+        return array_key_exists($callback['action'], $expectedLabels);
     }
 
     /**

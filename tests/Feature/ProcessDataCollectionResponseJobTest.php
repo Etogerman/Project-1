@@ -9,6 +9,7 @@ use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -45,6 +46,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $contact = $message->contact()->firstOrFail()->fresh();
 
         $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_last_prompted_field);
@@ -89,6 +91,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $contact = $message->contact()->firstOrFail()->fresh();
 
         $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);
@@ -172,6 +175,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $contact = $message->contact()->firstOrFail()->fresh();
 
         $this->assertSame('Герман', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);
@@ -209,6 +213,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $contact = $message->contact()->firstOrFail()->fresh();
 
         $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);
@@ -240,6 +245,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $contact = $message->contact()->firstOrFail()->fresh();
 
         $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
     }
 
@@ -269,6 +275,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $contact = $message->contact()->firstOrFail()->fresh();
 
         $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
     }
 
@@ -308,6 +315,123 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
             'reply_to_message_id' => $message->id,
             'text' => 'Подскажите, пожалуйста, как к вам обращаться? Можно только имя.',
+        ]);
+    }
+
+    public function test_job_repeats_current_country_question_for_start_command_without_incrementing_attempts(): void
+    {
+        $fieldStartedAt = now()->subMinute();
+        $questionText = 'Подскажите, пожалуйста, страну, где вы живёте. Для города «Москва» это нужно уточнить.';
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9949],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '/start',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'data_collection_current_field_started_at' => $fieldStartedAt,
+            'data_collection_attempts_count' => 1,
+            'city' => 'Москва',
+        ]);
+
+        Message::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'message_parameter' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'text' => $questionText,
+            'received_at' => $fieldStartedAt->copy()->addSecond(),
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->data_collection_current_field);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_COUNTRY, $contact->data_collection_last_prompted_field);
+        $this->assertSame(1, $contact->data_collection_attempts_count);
+        $this->assertSame(
+            $fieldStartedAt->toDateTimeString(),
+            $contact->data_collection_current_field_started_at?->toDateTimeString(),
+        );
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === $questionText);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => $questionText,
+        ]);
+    }
+
+    public function test_job_repeats_current_age_range_question_for_other_slash_command_without_incrementing_attempts(): void
+    {
+        $fieldStartedAt = now()->subMinute();
+        $questionText = 'Пожалуйста, выберите один из вариантов: 1, 2, 3, 4 или 5.';
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => ['message_id' => 'max-repeat-after-slash'],
+            ]),
+        ]);
+
+        $channel = $this->createMaxChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => '/help',
+            'external_chat_id' => '700',
+        ], [
+            'external_user_id' => '500',
+        ], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_current_field_started_at' => $fieldStartedAt,
+            'data_collection_attempts_count' => 1,
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+        ]);
+
+        Message::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'message_parameter' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'text' => $questionText,
+            'received_at' => $fieldStartedAt->copy()->addSecond(),
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_last_prompted_field);
+        $this->assertSame(1, $contact->data_collection_attempts_count);
+        $this->assertSame(
+            $fieldStartedAt->toDateTimeString(),
+            $contact->data_collection_current_field_started_at?->toDateTimeString(),
+        );
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+            && $request['text'] === $questionText
+            && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'message'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'До 18 лет');
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => $questionText,
         ]);
     }
 
@@ -2270,6 +2394,57 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
             'reply_to_message_id' => $message->id,
             'text' => 'Хорошо, возраст пропустим.',
+        ]);
+    }
+
+    public function test_job_skips_collector_reply_when_dialog_is_blocked_by_user(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
+
+        Http::fake();
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Николай',
+            'external_chat_id' => 'blocked-collector-chat',
+        ], [
+            'external_user_id' => 'blocked-collector-user',
+        ]);
+
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $message->contact_identity_id,
+            'external_chat_id' => 'blocked-collector-chat',
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ]);
+
+        $message->forceFill([
+            'dialog_id' => $dialog->id,
+        ])->save();
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
+        $this->assertNull($contact->data_collection_last_prompted_field);
+        $this->assertNull($contact->data_collection_current_field_started_at);
+        $this->assertDatabaseMissing('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_reply_skipped_dialog_not_sendable',
+            'level' => 'info',
         ]);
     }
 

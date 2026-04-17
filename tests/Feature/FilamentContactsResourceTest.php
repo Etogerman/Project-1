@@ -146,6 +146,7 @@ class FilamentContactsResourceTest extends TestCase
         $contact = Contact::factory()->create([
             'name' => 'Имя из мессенджера',
             'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             'last_name' => 'Абрикосов',
             'gender' => 'male',
             'age_years' => 34,
@@ -189,7 +190,9 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('История')
             ->assertSee('Диагностика')
             ->assertSee('Данные клиента')
-            ->assertSee('Имя (мессенджер)')
+            ->assertSee('Откуда знаем имя?')
+            ->assertSee('Клиент назвал')
+            ->assertDontSee('Имя (мессенджер)')
             ->assertSee('Работа с контактом')
             ->assertSee('Локация')
             ->assertSee('Анкета')
@@ -205,6 +208,65 @@ class FilamentContactsResourceTest extends TestCase
             ->assertDontSee('Диагностика webhook')
             ->assertDontSee('Профиль')
             ->assertDontSee('Служебные данные');
+    }
+
+    public function test_contacts_table_shows_first_name_source_indicator_next_to_display_name(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            'last_name' => 'Абрикосов',
+            'name' => 'Legacy name',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertCanSeeTableRecords([$contact])
+            ->assertSee('Герман Абрикосов')
+            ->assertSee('Клиент назвал');
+    }
+
+    public function test_contact_view_page_header_uses_display_name_instead_of_legacy_name_fallback(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Legacy имя',
+            'first_name' => null,
+            'last_name' => null,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'header-contact-100',
+            'display_name' => 'Telegram Клиент',
+        ]);
+
+        Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'header-contact-chat',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->assertSee('Telegram Клиент')
+            ->assertDontSee('Legacy имя')
+            ->assertDontSee('Имя (мессенджер)');
     }
 
     public function test_admin_can_view_contact_diagnostics_tab_with_runtime_data(): void
@@ -713,6 +775,62 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Связаться после проверки анкеты.');
     }
 
+    public function test_contact_history_renders_first_name_changed_event_with_source_details(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+
+        ContactTimelineEvent::query()->create([
+            'contact_id' => $contact->id,
+            'event_type' => ContactTimelineEvent::EVENT_FIRST_NAME_CHANGED,
+            'payload' => [
+                'previous_value' => null,
+                'new_value' => 'Герман',
+                'previous_source' => null,
+                'new_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+                'reason' => 'scenario_confirmed',
+            ],
+            'occurred_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('Имя изменено')
+            ->assertSee('«—» → «Герман»')
+            ->assertSee('Источник: Клиент назвал');
+    }
+
+    public function test_contact_history_renders_merge_name_conflict_event_with_source_details(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+
+        ContactTimelineEvent::query()->create([
+            'contact_id' => $contact->id,
+            'event_type' => ContactTimelineEvent::EVENT_MERGE_NAME_CONFLICT,
+            'payload' => [
+                'merged_contact_id' => 77,
+                'merged_first_name' => 'Другое имя',
+                'merged_first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+            ],
+            'occurred_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_HISTORY)
+            ->assertSee('Конфликт имени при объединении')
+            ->assertSee('При объединении с контактом #77 найдено другое имя: «Другое имя»')
+            ->assertSee('Источник: Авто (из мессенджера)');
+    }
+
     public function test_merged_contact_cannot_add_operator_comment_via_direct_action_call(): void
     {
         $admin = User::factory()->create([
@@ -1148,6 +1266,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Герман');
 
         $this->assertSame('Герман', $root->fresh()->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $root->fresh()->first_name_source);
         $this->assertNull($merged->fresh()->first_name);
     }
 
@@ -1917,6 +2036,7 @@ class FilamentContactsResourceTest extends TestCase
         $contact->refresh();
 
         $this->assertSame('Герман', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $contact->first_name_source);
         $this->assertSame('Абрикосов', $contact->last_name);
         $this->assertSame('male', $contact->gender);
         $this->assertSame('Россия', $contact->country);
@@ -1958,6 +2078,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Герман');
 
         $this->assertSame('Герман', $root->fresh()->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $root->fresh()->first_name_source);
         $this->assertNull($merged->fresh()->first_name);
     }
 
@@ -2763,12 +2884,14 @@ class FilamentContactsResourceTest extends TestCase
             'channel_id' => $telegramChannel->id,
             'platform' => $telegramChannel->platform,
             'external_user_id' => 'telegram-dialog-1',
+            'display_name' => 'Telegram Клиент',
             'external_username' => 'telegram_customer',
         ]);
         $maxIdentity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $maxChannel->id,
             'platform' => $maxChannel->platform,
+            'display_name' => 'MAX Клиент',
             'external_user_id' => '',
         ]);
 
@@ -2827,8 +2950,11 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertStringContainsString('data-role="contact-dialogs"', $dialogsHtml);
         $this->assertStringContainsString('data-role="contact-dialog"', $dialogsHtml);
+        $this->assertStringContainsString('data-role="dialog-messenger-name"', $dialogsHtml);
         $this->assertStringContainsString('Telegram Support', $dialogsHtml);
         $this->assertStringContainsString('MAX Sales', $dialogsHtml);
+        $this->assertStringContainsString('Telegram Клиент', $dialogsHtml);
+        $this->assertStringContainsString('MAX Клиент', $dialogsHtml);
         $this->assertStringContainsString('Маршрут готов', $dialogsHtml);
         $this->assertStringContainsString('Нет route source', $dialogsHtml);
         $this->assertStringContainsString('+7 999 111-11-11', $dialogsHtml);

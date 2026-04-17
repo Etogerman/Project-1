@@ -338,6 +338,8 @@ class ContactResource extends Resource
             ->columns([
                 TextColumn::make('display_name')
                     ->label('Контакт')
+                    ->html()
+                    ->state(fn (Contact $record): HtmlString => static::renderContactTableDisplayName($record))
                     ->toggleable()
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search)),
                 TextColumn::make('inbox_status')
@@ -701,12 +703,17 @@ class ContactResource extends Resource
     protected static function applyTableSearch(Builder $query, string $search): Builder
     {
         $normalizedPhoneSearch = AddContactPhoneAction::normalizePhone($search);
+        $likeSearch = "%{$search}%";
 
-        return $query->where(function (Builder $query) use ($search, $normalizedPhoneSearch): void {
-            $query->where('name', 'ilike', "%{$search}%")
+        return $query->where(function (Builder $query) use ($likeSearch, $search, $normalizedPhoneSearch): void {
+            $query->where('first_name', 'ilike', $likeSearch)
+                ->orWhere('last_name', 'ilike', $likeSearch)
+                ->orWhereRaw("trim(concat_ws(' ', first_name, last_name)) ilike ?", [$likeSearch])
+                ->orWhere('name', 'ilike', $likeSearch)
                 ->orWhereHas('identities', function (Builder $identityQuery) use ($search): void {
                     $identityQuery
-                        ->where('external_user_id', 'ilike', "%{$search}%")
+                        ->where('display_name', 'ilike', "%{$search}%")
+                        ->orWhere('external_user_id', 'ilike', "%{$search}%")
                         ->orWhere('external_username', 'ilike', "%{$search}%");
                 });
 
@@ -1475,15 +1482,33 @@ class ContactResource extends Resource
         return new HtmlString($visibleTags);
     }
 
+    protected static function renderContactTableDisplayName(Contact $record): HtmlString
+    {
+        $displayName = e($record->display_name);
+        $label = Contact::formatFirstNameSourceBadgeLabel($record->first_name_source);
+        $tone = Contact::firstNameSourceBadgeTone($record->first_name_source);
+
+        if (! filled($record->first_name) || $label === null || $tone === null) {
+            return new HtmlString($displayName);
+        }
+
+        return new HtmlString(sprintf(
+            '<span class="inline-flex items-center gap-2"><span>%s</span><span class="ac-pill" data-tone="%s">%s</span></span>',
+            $displayName,
+            e($tone),
+            e($label),
+        ));
+    }
+
     /**
      * @return array{
-     *     messengerName: string,
      *     dialogs: list<array{
      *         id:int,
      *         url:string,
      *         channel_label:string,
      *         route_status_label:string,
      *         route_status_tone:string,
+     *         messenger_name_label:string,
      *         phone_label:string,
      *         route_identity_label:string,
      *         external_chat_id_label:string,
@@ -1499,7 +1524,6 @@ class ContactResource extends Resource
     public static function buildDialogsViewData(Contact $record): array
     {
         return [
-            'messengerName' => $record->name ?? '—',
             'dialogs' => app(LoadContactDialogsOverviewAction::class)->handle($record)->all(),
         ];
     }

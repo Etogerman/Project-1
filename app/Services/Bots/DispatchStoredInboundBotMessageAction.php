@@ -4,17 +4,26 @@ namespace App\Services\Bots;
 
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Jobs\ProcessAutoReplyJob;
+use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
+use App\Models\Contact;
 use App\Models\Message;
+use App\Services\DataCollection\DataCollectionPromptHelper;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 
 class DispatchStoredInboundBotMessageAction
 {
+    private const VIP_IBIZA_BUSY_STATE_REPLY = 'У тебя уже есть активная анкета. Сначала заверши её.';
+
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
         protected DispatchStoredInboundScenarioAction $dispatchStoredInboundScenarioAction,
+        protected SendBotDialogTextAction $sendBotDialogTextAction,
+        protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
+        protected DataCollectionPromptHelper $dataCollectionPromptHelper,
     ) {}
 
     public function handle(
@@ -48,7 +57,26 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
+        if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
+            if (
+                $storedResult->shouldQueuePhoneCaptureFollowUp()
+                && $this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)
+            ) {
+                return;
+            }
+
+            $this->dispatchContactShareFollowUp($channel, $storedMessage, $storedResult, $deliveryLagSeconds);
+
+            return;
+        }
+
         if ($this->isStoredMaxBotStartedEventWithoutParameter($channel, $storedMessage)) {
+            return;
+        }
+
+        if ($this->dispatchStoredInboundScenarioAction->shouldBlockVipIbizaParameterStartBecauseBusyState($storedMessage)) {
+            $this->sendVipIbizaBusyStateReply($channel, $storedMessage, $duplicateContext);
+
             return;
         }
 
@@ -58,16 +86,6 @@ class DispatchStoredInboundBotMessageAction
             }
 
             $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
-
-            return;
-        }
-
-        if ($storedMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
-            if ($this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)) {
-                return;
-            }
-
-            $this->dispatchContactShareFollowUp($channel, $storedMessage, $storedResult, $deliveryLagSeconds);
 
             return;
         }
@@ -97,6 +115,29 @@ class DispatchStoredInboundBotMessageAction
         }
 
         if ($storedMessage->contact?->isInDataCollection()) {
+            if ($this->currentDataCollectionFieldIsPendingPrompt($channel, $storedMessage)) {
+                ProcessDataCollectionQuestionJob::dispatch(
+                    $storedMessage->id,
+                    false,
+                    $storedMessage->contact_id,
+                    $storedMessage->contact?->data_collection_current_field,
+                )->afterCommit();
+
+                $this->channelActivityLogger->info(
+                    $channel,
+                    'contact.data_collection_pending_question_queued',
+                    'Текущий шаг анкеты ещё не был задан пользователю: вместо обработки ответа поставлена в очередь повторная отправка вопроса.',
+                    [
+                        'platform' => $channel->platform,
+                        'message_id' => $storedMessage->id,
+                        'contact_id' => $storedMessage->contact_id,
+                        'current_field' => $storedMessage->contact?->data_collection_current_field,
+                    ],
+                );
+
+                return;
+            }
+
             ProcessDataCollectionResponseJob::dispatch(
                 $storedMessage->id,
                 $storedMessage->contact_id,
@@ -123,6 +164,118 @@ class DispatchStoredInboundBotMessageAction
         }
 
         $this->queueAutoReply($channel, $storedMessage, $duplicateContext);
+    }
+
+    protected function currentDataCollectionFieldIsPendingPrompt(Channel $channel, Message $storedMessage): bool
+    {
+        $storedMessage->loadMissing('contact');
+        $contact = $storedMessage->contact;
+
+        if (! $contact instanceof Contact) {
+            return false;
+        }
+
+        $currentField = $contact->data_collection_current_field;
+
+        if (! filled($currentField)) {
+            return false;
+        }
+
+        if ($this->contactAlreadyHasPromptForCurrentField($channel, $contact, $currentField)) {
+            return false;
+        }
+
+        return $contact->data_collection_last_prompted_field !== $currentField;
+    }
+
+    protected function contactAlreadyHasPromptForCurrentField(Channel $channel, Contact $contact, string $currentField): bool
+    {
+        $query = $contact->messages()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->where('message_parameter', $currentField);
+
+        $this->applyReceivedAtBoundary(
+            $query,
+            $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at,
+        );
+
+        if ($query->exists()) {
+            return true;
+        }
+
+        if ($this->legacyQuestionWasLoggedForCurrentField($contact, $currentField)) {
+            return true;
+        }
+
+        if ($currentField === Contact::DATA_COLLECTION_FIELD_CITY) {
+            return false;
+        }
+
+        $questionText = $this->resolveCurrentFieldQuestionText($channel, $contact, $currentField);
+
+        if (! filled($questionText)) {
+            return false;
+        }
+
+        $legacyQuery = $contact->messages()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->whereNull('message_parameter')
+            ->where('text', $questionText);
+
+        $this->applyReceivedAtBoundary(
+            $legacyQuery,
+            $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at,
+        );
+
+        return $legacyQuery->exists();
+    }
+
+    protected function legacyQuestionWasLoggedForCurrentField(Contact $contact, string $currentField): bool
+    {
+        $query = ChannelActivityLog::query()
+            ->where('event', 'contact.data_collection_question_sent')
+            ->where('context->contact_id', $contact->id)
+            ->where('context->current_field', $currentField);
+
+        $this->applyCreatedAtBoundary(
+            $query,
+            $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at,
+        );
+
+        return $query->exists();
+    }
+
+    protected function resolveCurrentFieldQuestionText(Channel $channel, Contact $contact, string $currentField): ?string
+    {
+        return match ($currentField) {
+            Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM => $this->dataCollectionPromptHelper->russianRegionConfirmQuestionText($contact),
+            Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY,
+            Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            Contact::DATA_COLLECTION_FIELD_CITY,
+            Contact::DATA_COLLECTION_FIELD_AGE_RANGE => $this->dataCollectionPromptHelper->questionText($currentField, $channel->platform),
+            default => null,
+        };
+    }
+
+    protected function applyReceivedAtBoundary($query, $boundary): void
+    {
+        if ($boundary === null) {
+            return;
+        }
+
+        $query->where('received_at', '>=', $boundary);
+    }
+
+    protected function applyCreatedAtBoundary($query, $boundary): void
+    {
+        if ($boundary === null) {
+            return;
+        }
+
+        $query->where('created_at', '>=', $boundary);
     }
 
     protected function dispatchContactShareFollowUp(
@@ -217,6 +370,52 @@ class DispatchStoredInboundBotMessageAction
                 'provider_event_key' => $storedMessage->provider_event_key,
                 'external_message_id' => $storedMessage->external_message_id,
                 'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            ],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $duplicateContext
+     */
+    protected function sendVipIbizaBusyStateReply(Channel $channel, Message $storedMessage, array $duplicateContext): void
+    {
+        $sendResult = $this->sendBotDialogTextAction->handleMessage(
+            $storedMessage,
+            self::VIP_IBIZA_BUSY_STATE_REPLY,
+        );
+
+        if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'scenario.vip_ibiza_start_blocked_dialog_not_sendable',
+                'Deep link VIP Ibiza не отправил busy-state reply: диалог сейчас недоступен для отправки.',
+                $duplicateContext + [
+                    'dialog_id' => $sendResult->dialog?->id ?? $storedMessage->dialog_id,
+                    'route_status_code' => $sendResult->routeStatus->code,
+                    'blocked_reason' => $sendResult->routeStatus->blockedReason,
+                ],
+            );
+
+            return;
+        }
+
+        $deliveryResult = $sendResult->deliveryResult;
+
+        $outboundMessage = $this->storeOutboundAutoReplyMessageAction->handle(
+            $channel,
+            $storedMessage,
+            $deliveryResult,
+            null,
+            $sendResult->dialog,
+        );
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'scenario.vip_ibiza_start_blocked_busy_state',
+            'Deep link VIP Ibiza отклонён: в диалоге уже есть активный процесс или активная анкета.',
+            $duplicateContext + [
+                'outbound_message_id' => $outboundMessage->id,
+                'dialog_id' => $storedMessage->dialog_id,
             ],
         );
     }

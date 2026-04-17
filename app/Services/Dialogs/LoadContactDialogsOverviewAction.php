@@ -23,6 +23,7 @@ class LoadContactDialogsOverviewAction
      *     channel_label:string,
      *     route_status_label:string,
      *     route_status_tone:string,
+     *     messenger_name_label:string,
      *     phone_label:string,
      *     route_identity_label:string,
      *     external_chat_id_label:string,
@@ -68,6 +69,7 @@ class LoadContactDialogsOverviewAction
                     'channel_label' => $this->formatChannelLabel($dialog),
                     'route_status_label' => $routeStatus->label,
                     'route_status_tone' => $routeStatus->tone,
+                    'messenger_name_label' => $this->formatDialogMessengerNameLabel($dialog),
                     'phone_label' => $this->formatDialogPhoneLabel($dialog),
                     'route_identity_label' => $this->formatDialogRouteIdentityLabel($dialog),
                     'external_chat_id_label' => $dialog->external_chat_id ?: 'Не задан',
@@ -126,6 +128,11 @@ class LoadContactDialogsOverviewAction
         return Message::query()
             ->selectRaw('distinct on (dialog_id) messages.*')
             ->whereIn('dialog_id', $dialogIds->all())
+            ->where(function (Builder $query): Builder {
+                return $query
+                    ->whereNull('message_kind')
+                    ->orWhere('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE);
+            })
             ->with(['channel', 'dialog.channel', 'sentByUser'])
             ->orderBy('dialog_id')
             ->orderByRaw($this->messageChronology->sqlSortAt('messages').' desc')
@@ -137,6 +144,10 @@ class LoadContactDialogsOverviewAction
     {
         if (! $previewMessage instanceof Message) {
             return null;
+        }
+
+        if ($previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'Система';
         }
 
         if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
@@ -154,6 +165,10 @@ class LoadContactDialogsOverviewAction
     {
         if (! $previewMessage instanceof Message) {
             return null;
+        }
+
+        if ($previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'gray';
         }
 
         if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
@@ -204,6 +219,29 @@ class LoadContactDialogsOverviewAction
         }
 
         return 'Телефон в этом канале не подтвержден';
+    }
+
+    protected function formatDialogMessengerNameLabel(Dialog $dialog): string
+    {
+        $identity = $dialog->currentContactIdentity;
+
+        if (filled($identity?->display_name)) {
+            return trim((string) $identity->display_name);
+        }
+
+        if (filled($identity?->external_username)) {
+            return '@'.ltrim((string) $identity->external_username, '@');
+        }
+
+        if (filled($identity?->external_user_id)) {
+            return 'ID: '.$identity->external_user_id;
+        }
+
+        if ($dialog->current_contact_identity_id !== null) {
+            return 'Identity #'.$dialog->current_contact_identity_id;
+        }
+
+        return '—';
     }
 
     protected function formatDialogRouteIdentityLabel(Dialog $dialog): string

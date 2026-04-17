@@ -26,6 +26,7 @@ class ContactIdentityFactory extends Factory
                 ->findOrFail($attributes['channel_id'])
                 ->platform,
             'external_user_id' => (string) fake()->unique()->numerify('########'),
+            'display_name' => null,
             'external_username' => fake()->optional()->userName(),
         ];
     }

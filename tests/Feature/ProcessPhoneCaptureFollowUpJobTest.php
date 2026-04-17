@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Models\Channel;
@@ -11,6 +12,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class ProcessPhoneCaptureFollowUpJobTest extends TestCase
@@ -555,6 +557,74 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->fresh()->data_collection_current_field);
     }
 
+    public function test_job_starts_data_collection_from_first_name_when_contact_has_only_auto_first_name(): void
+    {
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 99141,
+                    ],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 99142,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '202',
+            'external_username' => 'telegram_user_auto_name',
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => '302',
+            'external_message_id' => 'phone-share-auto-name',
+            'provider_event_key' => 'phone-share-auto-name',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === '302'
+            && $request['text'] === 'Как вас зовут?');
+        $this->assertDatabaseHas('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Как вас зовут?',
+        ]);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $contact->fresh()->data_collection_current_field);
+    }
+
     public function test_job_starts_data_collection_from_city_when_first_name_and_country_are_already_filled(): void
     {
         config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
@@ -951,6 +1021,161 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
             'contact_identity_id' => $routeIdentity->id,
             'external_chat_id' => '406',
             'text' => 'Укажите ваш возраст:',
+        ]);
+    }
+
+    public function test_job_starts_collector_even_when_confirmation_is_skipped_for_blocked_dialog(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
+        config()->set('bots.data_collection.first_question', 'Как вас зовут?');
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $message = $this->createContactShareInboundMessage($channel, [
+            'external_chat_id' => 'blocked-phone-share-chat',
+            'external_message_id' => 'blocked-phone-share',
+            'provider_event_key' => 'blocked-phone-share',
+        ]);
+
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $message->contact_identity_id,
+            'external_chat_id' => 'blocked-phone-share-chat',
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ]);
+
+        $message->forceFill([
+            'dialog_id' => $dialog->id,
+        ])->save();
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+        Queue::assertPushed(ProcessDataCollectionQuestionJob::class, function (ProcessDataCollectionQuestionJob $job) use ($message): bool {
+            return $job->sourceMessageId === $message->id
+                && $job->contactId === $message->contact_id
+                && $job->expectedField === Contact::DATA_COLLECTION_FIELD_FIRST_NAME
+                && $job->forceSend === false;
+        });
+
+        $contact = $message->contact()->firstOrFail()->fresh();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $contact->data_collection_current_field);
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_confirmation_skipped_dialog_not_sendable',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_started',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_follow_up_continued_after_skipped_confirmation',
+        ]);
+    }
+
+    public function test_job_continues_active_collector_after_merge_even_when_confirmation_is_skipped_for_blocked_dialog(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        config()->set('bots.phone_capture_recognition_continue_text', 'Спасибо! Мы вас узнали, {name}. У нас осталось несколько вопросов.');
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        $contact = Contact::factory()->create([
+            'first_name' => 'Герман',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'data_collection_started_at' => now()->subDay(),
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '226',
+            'external_username' => 'telegram_merge_blocked_old',
+        ]);
+        $routeIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '227',
+            'external_username' => 'telegram_merge_blocked_current',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $routeIdentity->id,
+            'external_chat_id' => 'blocked-merge-chat',
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'external_chat_id' => 'legacy-merge-chat',
+            'external_message_id' => 'merge-continue-blocked',
+            'provider_event_key' => 'merge-continue-blocked',
+            'text' => null,
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        ProcessPhoneCaptureFollowUpJob::dispatchSync($message->id, StoredInboundMessageResult::PHONE_CAPTURE_STATUS_MERGED_TO_ROOT);
+
+        Http::assertNothingSent();
+        Queue::assertPushed(ProcessDataCollectionQuestionJob::class, function (ProcessDataCollectionQuestionJob $job) use ($message, $contact): bool {
+            return $job->sourceMessageId === $message->id
+                && $job->contactId === $contact->id
+                && $job->expectedField === Contact::DATA_COLLECTION_FIELD_AGE_RANGE
+                && $job->forceSend === false;
+        });
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->fresh()->data_collection_status);
+        $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->fresh()->data_collection_current_field);
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_confirmation_skipped_dialog_not_sendable',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.data_collection_continued_after_merge',
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_follow_up_continued_after_skipped_confirmation',
         ]);
     }
 

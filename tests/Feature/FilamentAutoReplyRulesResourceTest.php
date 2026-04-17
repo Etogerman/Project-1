@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
+use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
+use App\Services\AutoReplyRules\ParseAutoReplyRulesWorkbookAction;
 use App\Models\AutoReplyCategory;
 use App\Models\AutoReplyRule;
 use App\Models\AutoReplyRuleTagCondition;
@@ -14,10 +16,13 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
 
 class FilamentAutoReplyRulesResourceTest extends TestCase
@@ -414,6 +419,116 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             [$telegramChannel->id, $maxChannel->id],
             $rule->channels->modelKeys(),
         );
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($telegramChannel));
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
+    }
+
+    public function test_admin_can_edit_multichannel_rule_with_shared_request_phone_button(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Telegram Sales',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Мульти',
+                    'reply_text' => 'Общий ответ',
+                ],
+                [
+                    'button_kind' => 'request_phone',
+                ],
+            ))
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('edit', $rule, $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Мульти',
+                    'reply_text' => 'Обновлённый ответ',
+                    'is_active' => true,
+                ],
+                [
+                    'button_kind' => 'request_phone',
+                ],
+            ))
+            ->assertHasNoTableActionErrors();
+
+        $rule = $rule->fresh()->load('channels');
+
+        $this->assertSame('Обновлённый ответ', $rule->reply_text);
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($telegramChannel));
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
+    }
+
+    public function test_admin_can_disable_multichannel_rule_with_shared_request_phone_button(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $telegramChannel = Channel::factory()->create([
+            'name' => 'Telegram Sales',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $maxChannel = Channel::factory()->create([
+            'name' => 'MAX Support',
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Мульти',
+                    'reply_text' => 'Общий ответ',
+                ],
+                [
+                    'button_kind' => 'request_phone',
+                ],
+            ))
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callTableAction('edit', $rule, $this->buildRuleFormData(
+                [$telegramChannel, $maxChannel],
+                [
+                    'keyword' => 'Мульти',
+                    'reply_text' => 'Общий ответ',
+                    'is_active' => false,
+                ],
+                [
+                    'button_kind' => 'request_phone',
+                ],
+            ))
+            ->assertHasNoTableActionErrors();
+
+        $rule = $rule->fresh()->load('channels');
+
+        $this->assertFalse($rule->is_active);
         $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($telegramChannel));
         $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
     }
@@ -1136,6 +1251,71 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         ]);
     }
 
+    public function test_apply_workbook_import_returns_action_error_when_rule_conflicts_after_preview(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Импортируемое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Импортируемый ответ',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertFalse($preview->hasErrors());
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'ONASA01',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('ONASA01'),
+            'reply_text' => 'Уже существующий ответ',
+            'is_active' => true,
+            'priority' => 10,
+        ]);
+
+        $token = 'auto-reply-rules-import-preview-test';
+
+        Cache::put($token, $preview->toArray(), now()->addMinutes(30));
+
+        try {
+            Livewire::actingAs($admin)
+                ->test(ManageAutoReplyRules::class)
+                ->set('workbookImportPreviewToken', $token)
+                ->callAction('applyWorkbookImport')
+                ->assertHasActionErrors(['workbook_0']);
+
+            $this->assertSame(1, AutoReplyRule::query()->count());
+        } finally {
+            Cache::forget($token);
+        }
+    }
+
     private function setRolePermission(string $role, string $permissionKey, bool $granted): void
     {
         DB::table('role_permissions')
@@ -1170,5 +1350,41 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             'is_active' => true,
             'priority' => 10,
         ], $buttonOverrides, $overrides);
+    }
+
+    /**
+     * @param  list<array<int, mixed>>  $rows
+     */
+    private function storeWorkbook(array $rows): string
+    {
+        $spreadsheet = new Spreadsheet();
+
+        try {
+            $sheet = $spreadsheet->getActiveSheet();
+            $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_RULES);
+
+            foreach ($rows as $index => $row) {
+                $sheet->fromArray([$row], null, 'A'.($index + 1));
+            }
+
+            $path = tempnam(sys_get_temp_dir(), 'auto-reply-rules-xlsx');
+
+            if ($path === false) {
+                $this->fail('Failed to allocate temporary workbook path.');
+            }
+
+            $finalPath = $path.'.xlsx';
+
+            if (file_exists($path)) {
+                unlink($path);
+            }
+
+            (new Xlsx($spreadsheet))->save($finalPath);
+
+            return $finalPath;
+        } finally {
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet);
+        }
     }
 }

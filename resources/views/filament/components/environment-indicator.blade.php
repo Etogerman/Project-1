@@ -3,7 +3,8 @@
 
     $centered ??= false;
     $environment = app()->environment();
-    $version = AppVersion::display();
+    $normalizedVersion = AppVersion::resolve();
+    $version = AppVersion::displayFromVersion($normalizedVersion);
     $style = $centered
         ? 'position: fixed; left: 50%; top: 2rem; transform: translate(-50%, -50%); z-index: 60; pointer-events: none;'
         : null;
@@ -14,6 +15,10 @@
 @endphp
 
 <div
+    data-role="environment-indicator"
+    @if (filled($normalizedVersion))
+        data-app-version="{{ $normalizedVersion }}"
+    @endif
     @class([
         'inline-flex items-center gap-2',
     ])

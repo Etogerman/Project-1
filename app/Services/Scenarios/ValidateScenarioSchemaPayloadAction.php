@@ -26,7 +26,7 @@ class ValidateScenarioSchemaPayloadAction
         $version = $schemaPayload['version'] ?? 1;
 
         if ((int) $version !== 1) {
-            $this->fail($errorKey, 'Для Slice 2 lite поддерживается только schema version = 1.');
+            $this->fail($errorKey, 'Для текущего DB-runtime поддерживается только schema version = 1.');
         }
 
         $startBlockId = $this->normalizeRequiredString(
@@ -38,7 +38,7 @@ class ValidateScenarioSchemaPayloadAction
         $triggers = $schemaPayload['triggers'] ?? null;
 
         if (! is_array($triggers) || array_is_list($triggers) === false || $triggers === []) {
-            $this->fail($errorKey, 'Для Slice 2 lite нужен хотя бы один parameter trigger.');
+            $this->fail($errorKey, 'Для текущего DB-runtime нужен хотя бы один parameter trigger.');
         }
 
         $normalizedTriggers = [];
@@ -55,7 +55,7 @@ class ValidateScenarioSchemaPayloadAction
             );
 
             if ($triggerType !== 'parameter') {
-                $this->fail($errorKey, 'В Slice 2 lite поддерживаются только triggers типа parameter.');
+                $this->fail($errorKey, 'В текущем DB-runtime поддерживаются только triggers типа parameter.');
             }
 
             $triggerValue = $this->normalizeRequiredString(
@@ -142,6 +142,7 @@ class ValidateScenarioSchemaPayloadAction
             'message' => $this->normalizeMessageBlock($blockId, $block, $errorKey),
             'question' => $this->normalizeQuestionBlock($blockId, $block, $errorKey),
             'condition' => $this->normalizeConditionBlock($blockId, $block, $errorKey),
+            'phone_capture' => $this->normalizePhoneCaptureBlock($blockId, $block, $errorKey),
             'complete' => $this->normalizeCompleteBlock($blockId, $block, $errorKey),
             default => $this->fail($errorKey, "Блок {$blockId} использует неподдерживаемый type {$blockType}."),
         };
@@ -200,7 +201,7 @@ class ValidateScenarioSchemaPayloadAction
         $expects = $block['expects'] ?? 'text';
 
         if (! is_string($expects) || trim($expects) !== 'text') {
-            $this->fail($errorKey, "Блок {$blockId} в Slice 2 lite поддерживает только expects = text.");
+            $this->fail($errorKey, "Блок {$blockId} поддерживает только expects = text.");
         }
 
         $saveTo = $this->normalizeRequiredString(
@@ -323,6 +324,35 @@ class ValidateScenarioSchemaPayloadAction
 
     /**
      * @param  array<string, mixed>  $block
+     * @return array{type: 'phone_capture', text: string, text_format: string, next: string}
+     */
+    private function normalizePhoneCaptureBlock(string $blockId, array $block, string $errorKey): array
+    {
+        $this->guardUnsupportedKeys(
+            $blockId,
+            $block,
+            ['save_to', 'expects', 'buttons', 'actions', 'button_label', 'branches'],
+            $errorKey,
+        );
+
+        return [
+            'type' => 'phone_capture',
+            'text' => $this->normalizeRequiredString(
+                $block['text'] ?? null,
+                $errorKey,
+                "Блок {$blockId} должен содержать text.",
+            ),
+            'text_format' => $this->normalizeTextFormat($blockId, $block['text_format'] ?? null, $errorKey),
+            'next' => $this->normalizeRequiredString(
+                $block['next'] ?? null,
+                $errorKey,
+                "Блок {$blockId} типа phone_capture должен содержать next.",
+            ),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
      * @return array{type: 'complete', actions?: list<array{type: 'set_tag'|'remove_tag', value: string}>}
      */
     private function normalizeCompleteBlock(string $blockId, array $block, string $errorKey): array
@@ -355,7 +385,7 @@ class ValidateScenarioSchemaPayloadAction
     {
         foreach ($unsupportedKeys as $unsupportedKey) {
             if (array_key_exists($unsupportedKey, $payload)) {
-                $this->fail($errorKey, "Блок {$blockId} использует {$unsupportedKey}, это не входит в Slice 2 lite.");
+                $this->fail($errorKey, "Блок {$blockId} использует {$unsupportedKey}, это не входит в текущий DB-runtime.");
             }
         }
     }

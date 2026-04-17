@@ -15,7 +15,9 @@ use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\SyncContactRussianRegionAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
@@ -81,6 +83,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
         SyncContactRussianRegionAction $syncContactRussianRegionAction,
         QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        ApplyContactFirstNameAction $applyContactFirstNameAction,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
@@ -160,6 +163,21 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
+        if ($this->isSlashCommand($replyText)) {
+            $this->repeatCurrentQuestionAfterSlashCommand(
+                message: $message,
+                channel: $channel,
+                contact: $contact,
+                currentField: $currentField,
+                telegramBotApiService: $telegramBotApiService,
+                maxBotApiService: $maxBotApiService,
+                storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+                channelActivityLogger: $channelActivityLogger,
+            );
+
+            return;
+        }
+
         if ($this->isLocalSkipCommand($replyText, $currentField)) {
             $this->handleLocalSkip(
                 message: $message,
@@ -185,6 +203,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
                 extractFirstNameAction: $extractFirstNameAction,
+                applyContactFirstNameAction: $applyContactFirstNameAction,
             ),
             Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => $this->handleResidenceCityReply(
                 message: $message,
@@ -287,9 +306,13 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ExtractFirstNameAction $extractFirstNameAction,
+        ApplyContactFirstNameAction $applyContactFirstNameAction,
     ): void {
         try {
-            $extraction = $extractFirstNameAction->handle($replyText, $contact->name);
+            $extraction = $extractFirstNameAction->handle(
+                $replyText,
+                $this->resolveFirstNameMessengerContext($message, $contact),
+            );
         } catch (Throwable $throwable) {
             Log::warning('contact.first_name_extraction_exception', [
                 'contact_id' => $contact->id,
@@ -334,13 +357,19 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $firstName = (string) ($extraction['first_name'] ?? '');
 
-        $contact->forceFill([
-            'first_name' => $firstName,
-        ])->save();
+        $result = $applyContactFirstNameAction->handle(
+            $contact,
+            $firstName,
+            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+        );
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
 
-        if (! filled($contact->gender)) {
+        if (
+            $result->newSource === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED
+            && ! filled($contact->gender)
+        ) {
             InferContactGenderFromFirstNameJob::dispatch($contact->id, $firstName);
         }
 
@@ -353,6 +382,41 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
         );
+    }
+
+    private function resolveFirstNameMessengerContext(Message $message, Contact $contact): ?string
+    {
+        $message->loadMissing(['dialog.currentContactIdentity', 'contactIdentity']);
+
+        $dialogIdentity = $message->dialog?->currentContactIdentity;
+
+        if ($dialogIdentity instanceof \App\Models\ContactIdentity && filled($dialogIdentity->display_name)) {
+            return trim((string) $dialogIdentity->display_name);
+        }
+
+        $messageIdentity = $message->contactIdentity;
+
+        if ($messageIdentity instanceof \App\Models\ContactIdentity && filled($messageIdentity->display_name)) {
+            return trim((string) $messageIdentity->display_name);
+        }
+
+        $latestDialogIdentityId = $contact->dialogs()
+            ->whereNotNull('current_contact_identity_id')
+            ->orderByDesc('last_message_at')
+            ->orderByDesc('id')
+            ->value('current_contact_identity_id');
+
+        if ($latestDialogIdentityId !== null) {
+            $displayName = \App\Models\ContactIdentity::query()
+                ->whereKey($latestDialogIdentityId)
+                ->value('display_name');
+
+            if (filled($displayName)) {
+                return trim((string) $displayName);
+            }
+        }
+
+        return null;
     }
 
     protected function handleResidenceCityReply(
@@ -815,6 +879,34 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
     }
 
+    protected function repeatCurrentQuestionAfterSlashCommand(
+        Message $message,
+        Channel $channel,
+        Contact $contact,
+        ?string $currentField,
+        TelegramBotApiService $telegramBotApiService,
+        MaxBotApiService $maxBotApiService,
+        StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
+        ChannelActivityLogger $channelActivityLogger,
+    ): void {
+        $currentField = $currentField ?? Contact::DATA_COLLECTION_FIELD_FIRST_NAME;
+
+        $this->sendReply(
+            message: $message,
+            channel: $channel,
+            text: $this->currentPromptText($contact, $channel, $currentField),
+            messageKind: Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+            telegramBotApiService: $telegramBotApiService,
+            maxBotApiService: $maxBotApiService,
+            storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
+            channelActivityLogger: $channelActivityLogger,
+            activityEvent: 'contact.data_collection_current_question_repeated',
+            activityMessage: 'Повторно отправлен текущий вопрос сбора профиля после slash-команды.',
+            telegramReplyMarkup: $this->telegramReplyMarkupForField($currentField, $contact),
+            maxAttachments: $this->maxAttachmentsForField($currentField, $contact),
+        );
+    }
+
     protected function handleRetry(
         Message $message,
         Channel $channel,
@@ -892,6 +984,11 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $normalized = mb_strtolower(trim($text));
 
         return in_array($normalized, (array) $this->fieldConfig($currentField, 'skip_commands', ['пропустить', 'skip']), true);
+    }
+
+    protected function isSlashCommand(string $text): bool
+    {
+        return str_starts_with(trim($text), '/');
     }
 
     protected function retryMessage(?string $field): string
@@ -1464,6 +1561,30 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         return $this->promptHelper()->questionText($field, $platform);
     }
 
+    protected function currentPromptText(Contact $contact, Channel $channel, string $field): string
+    {
+        $boundary = $contact->data_collection_current_field_started_at ?? $contact->data_collection_started_at;
+
+        $latestPromptText = $contact->messages()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION)
+            ->where(function ($query) use ($field): void {
+                $query->where('message_parameter', $field)
+                    ->orWhereNull('message_parameter');
+            })
+            ->when($boundary !== null, fn ($query) => $query->where('received_at', '>=', $boundary))
+            ->orderByDesc('id')
+            ->value('text');
+
+        if (filled($latestPromptText)) {
+            return (string) $latestPromptText;
+        }
+
+        return $field === Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM
+            ? $this->russianRegionConfirmQuestionText($contact)
+            : $this->questionText($field, $channel->platform);
+    }
+
     protected function cityMatchesCountry(string $city, string $country, ExtractCityAction $extractCityAction): bool
     {
         $validation = $extractCityAction->handle($city, $country);
@@ -1664,25 +1785,43 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ?array $maxAttachments = null,
     ): void {
         try {
-            $deliveryResult = match ($channel->platform) {
-                Channel::PLATFORM_TELEGRAM => $telegramBotApiService->sendTextMessage(
-                    $channel,
-                    $message->external_chat_id,
-                    $message->contactIdentity?->external_user_id,
-                    $text,
-                    $telegramReplyMarkup,
-                ),
-                Channel::PLATFORM_MAX => $maxBotApiService->sendTextMessage(
-                    $channel,
-                    $message->external_chat_id,
-                    $message->contactIdentity?->external_user_id,
-                    $text,
-                    $maxAttachments,
-                ),
-                default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
-            };
+            $sendResult = app(SendBotDialogTextAction::class)->handleMessage(
+                $message,
+                $text,
+                telegramReplyMarkup: $telegramReplyMarkup,
+                maxAttachments: $maxAttachments,
+            );
 
-            $storeDataCollectionOutboundMessageAction->handle($message, $deliveryResult, $messageKind);
+            if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
+                if ($messageKind === Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION) {
+                    $this->markCurrentFieldPromptPending($message->contact);
+                }
+
+                $channelActivityLogger->info(
+                    $channel,
+                    'contact.data_collection_reply_skipped_dialog_not_sendable',
+                    'Сообщение сбора профиля не отправлено: диалог сейчас недоступен для отправки.',
+                    [
+                        'contact_id' => $message->contact_id,
+                        'channel_id' => $channel->id,
+                        'message_id' => $message->id,
+                        'dialog_id' => $sendResult->dialog?->id ?? $message->dialog_id,
+                        'message_kind' => $messageKind,
+                        'current_field' => $message->contact?->data_collection_current_field,
+                        'route_status_code' => $sendResult->routeStatus->code,
+                        'blocked_reason' => $sendResult->routeStatus->blockedReason,
+                    ],
+                );
+
+                return;
+            }
+
+            $storeDataCollectionOutboundMessageAction->handle(
+                $message,
+                $sendResult->deliveryResult,
+                $messageKind,
+                $sendResult->dialog,
+            );
 
             $channel->markReplySent();
 
@@ -1723,6 +1862,18 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
             throw $throwable;
         }
+    }
+
+    protected function markCurrentFieldPromptPending(?Contact $contact): void
+    {
+        if (! $contact instanceof Contact || ! filled($contact->data_collection_current_field)) {
+            return;
+        }
+
+        $contact->forceFill([
+            'data_collection_last_prompted_field' => null,
+            'data_collection_current_field_started_at' => null,
+        ])->save();
     }
 
     /**

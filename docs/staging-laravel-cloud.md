@@ -6,8 +6,8 @@
 
 При текущем контуре:
 
-- merge в `main` должен давать staging candidate через auto-deploy
-- staging используется для интеграционной приёмки после merge
+- staging деплоится из ветки `staging`
+- staging используется для интеграционной приёмки после push или merge в `staging`
 - production выкатывается отдельно, вручную
 - production smoke имеет смысл только после фактического production deploy
 
@@ -26,14 +26,14 @@ Use Laravel Cloud for staging:
 ## Repository
 
 - GitHub repo: `Etogerman/Project-1`
-- current branch: `main`
+- release branch for staging: `staging`
 
 ## Create the staging environment
 
 1. Open Laravel Cloud and create a new application from the GitHub repository.
 2. Create an environment named `staging`.
 3. Attach a PostgreSQL database to that environment.
-4. Deploy the `main` branch first, or create a dedicated `staging` branch if you want isolated releases.
+4. Bind the application to the `staging` branch.
 
 ## Environment variables
 
@@ -84,10 +84,11 @@ The application needs the following tables in staging:
 
 1. Write code locally.
 2. Run PHPUnit locally before pushing.
-3. Push to `main`.
-4. Дождаться staging auto-deploy от `main`.
+3. Push or merge the validated change-set into `staging`.
+4. Дождаться staging auto-deploy от `staging`.
 5. Verify all webhook and bot behavior on staging.
-6. Отдельно решать, нужен ли production deploy для этого шага.
+6. Отдельно продвинуть тот же validated diff в `main`.
+7. Отдельно решать, нужен ли production deploy для этого шага.
 
 This keeps local development fast while avoiding multiple temporary bot setups.
 Production smoke не должен использоваться как release confirmation, если

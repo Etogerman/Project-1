@@ -15,7 +15,11 @@
             @php($previousDateKey = null)
             @foreach ($messages as $message)
                 @if ($previousDateKey !== $message['date_key'])
-                    <div data-role="conversation-date-separator" class="ac-thread__date">
+                    <div
+                        wire:key="conversation-date-{{ $message['date_key'] }}"
+                        data-role="conversation-date-separator"
+                        class="ac-thread__date"
+                    >
                         <span class="ac-thread__date-pill">
                             {{ $message['date_label'] }}
                         </span>
@@ -24,13 +28,15 @@
                 @endif
 
                 <div
+                    wire:key="conversation-message-{{ $message['id'] }}"
                     data-role="conversation-message"
                     data-direction="{{ $message['direction'] }}"
                     data-kind="{{ $message['kind'] }}"
                     @class([
                         'ac-message',
-                        'ac-message--outbound' => $message['is_outbound'],
-                        'ac-message--inbound' => ! $message['is_outbound'],
+                        'ac-message--system' => $message['is_system_event'] ?? false,
+                        'ac-message--outbound' => $message['is_outbound'] && ! ($message['is_system_event'] ?? false),
+                        'ac-message--inbound' => ! $message['is_outbound'] && ! ($message['is_system_event'] ?? false),
                     ])
                 >
                     <article class="ac-message__bubble">
@@ -38,16 +44,16 @@
                             <div class="ac-message__meta-main">
                                 <span
                                     class="ac-pill"
-                                    data-tone="{{ $message['is_outbound'] ? 'success' : 'info' }}"
+                                    data-tone="{{ $message['direction_tone'] ?? ($message['is_outbound'] ? 'success' : 'info') }}"
                                 >
-                                    {{ $message['is_outbound'] ? 'Исходящее' : 'Входящее' }}
+                                    {{ $message['direction_label'] ?? ($message['is_outbound'] ? 'Исходящее' : 'Входящее') }}
                                 </span>
 
                                 @if (filled($message['sender_label']))
                                     <span
                                         data-role="conversation-sender"
                                         class="ac-pill"
-                                        data-tone="primary"
+                                        data-tone="{{ $message['sender_tone'] ?? 'primary' }}"
                                     >
                                         {{ $message['sender_label'] }}
                                     </span>

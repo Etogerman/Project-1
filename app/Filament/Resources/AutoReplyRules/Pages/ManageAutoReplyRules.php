@@ -4,6 +4,7 @@ namespace App\Filament\Resources\AutoReplyRules\Pages;
 
 use App\Data\AutoReplyRules\AutoReplyRuleWorkbookPreviewData;
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
+use App\Filament\Resources\Pages\ManageRecords;
 use App\Models\AutoReplyRule;
 use App\Services\AutoReplyRules\ApplyAutoReplyRulesWorkbookImportAction;
 use App\Services\AutoReplyRules\ExportAutoReplyRulesWorkbookAction;
@@ -12,7 +13,6 @@ use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
 use Filament\Forms\Components\FileUpload;
 use Filament\Notifications\Notification;
-use Filament\Resources\Pages\ManageRecords;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;

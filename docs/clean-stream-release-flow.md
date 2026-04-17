@@ -14,6 +14,8 @@
 - residual diff audit обязателен только когда extraction идёт из mixed или
   reference-only контекста
 - каждый clean stream публикуется отдельной веткой и отдельным draft PR
+- `staging` является основным интеграционным gate
+- `main` не считается staging candidate сам по себе
 - integration branch нужна только когда реально требуется общий staging candidate
 - auto-deploy не закрывает релиз без post-deploy smoke-check
 
@@ -25,10 +27,11 @@
 Новый stream запрещён, если существует хотя бы один незавершённый хвост:
 
 - локальный незапубликованный diff по текущему шагу
-- открытый draft PR
-- открытый PR, ожидающий review или merge
-- смерженный PR, который ещё не выкачен в production
-- завершившийся deploy без закрытого post-deploy smoke-check
+- открытый draft PR или обычный PR в `staging` или `main`
+- смерженный PR в `staging`, у которого ещё не закрыты staging deploy или staging smoke
+- staging smoke завершён, но тот же validated diff ещё не проведён отдельным PR в `main`
+- смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
+- завершившийся production deploy без закрытого production smoke-check
 
 Пока такой хвост существует, допустимы только три действия:
 
@@ -39,14 +42,16 @@
 Перед запуском нового clean stream обязателен preflight-check:
 
 1. проверить, есть ли активный PR по предыдущему шагу
-2. проверить, есть ли незавершённый deploy или post-deploy smoke
-3. если хвост найден, остановить новую реализацию и явно сообщить об этом
+2. проверить, есть ли незавершённый staging deploy или staging smoke
+3. проверить, есть ли незавершённый production deploy или production smoke
+4. если хвост найден, остановить новую реализацию и явно сообщить об этом
    пользователю
 
 Переход к следующему implementation step разрешён только если выполнено одно
 из условий:
 
-- предыдущий шаг смержен, выкачен и проверен post-deploy smoke-check
+- предыдущий шаг прошёл staging deploy и staging smoke, а если production входит
+  в release flow, то ещё и проведён в `main`, выкачен и проверен production smoke-check
 - предыдущий PR закрыт без merge
 - пользователь явно подтвердил, что предыдущий шаг отменяется или откладывается
 
@@ -87,11 +92,15 @@ scope с drift относительно `origin/main`.
 Для каждого clean stream:
 
 1. push отдельной ветки
-2. открытие отдельного draft PR
-3. GitHub checks внутри этого PR
-4. внутренний review внутри этого PR
-5. перевод в `Ready for review` только по отдельному выбору пользователя
-6. merge только по отдельному выбору пользователя
+2. открытие отдельного draft PR в `staging`
+3. GitHub checks внутри PR в `staging`
+4. внутренний review внутри PR в `staging`
+5. перевод staging PR в `Ready for review` только по отдельному выбору пользователя
+6. merge staging PR только по отдельному выбору пользователя
+7. staging deploy и staging smoke
+8. отдельный PR в `main` из проверенного diff
+9. GitHub checks и внутренний review уже в PR в `main`
+10. merge в `main` только по отдельному выбору пользователя
 
 Правило оформления:
 
@@ -130,22 +139,24 @@ scope с drift относительно `origin/main`.
 
 ## Integration branch
 
-`integration/*` используется только если нужен общий staging candidate.
+`integration/*` используется только если нужен временный общий staging candidate
+поверх обычной ветки `staging`.
 
 Когда integration branch уместна:
 
 - нужно проверить совместимость нескольких уже очищенных потоков
-- staging должен видеть итоговый combined scope до merge в `main`
+- staging должен видеть итоговый combined scope до обычного продвижения
+  validated diff в `main`
 
 Когда integration branch не нужна:
 
 - поток один и он уже проверяется отдельно
-- merge в `main` уже даёт staging candidate через auto-deploy
+- staging сам уже является интеграционным gate
 - production остаётся отдельным ручным шагом
 
 ## Post-deploy rule
 
-Даже если staging deploy уходит автоматически после merge в `main`:
+Если staging deploy уходит автоматически после push в `staging`:
 
 - релиз не считается закрытым, пока не пройден post-deploy smoke-check
 - smoke-check проводится по реально рабочим окружениям текущего release flow

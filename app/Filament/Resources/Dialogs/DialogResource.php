@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Dialogs;
 
+use App\Data\Dialogs\DialogInboxStatusData;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
@@ -9,6 +10,7 @@ use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\AddContactPhoneAction;
+use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
@@ -93,11 +95,11 @@ class DialogResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->poll('10s')
             ->columns([
                 TextColumn::make('contact_label')
                     ->label('Контакт')
-                    ->state(fn (Dialog $record): string => $record->contact?->display_name ?? 'Контакт не найден')
-                    ->description(fn (Dialog $record): ?string => static::formatDialogTableIdentitySummary($record))
+                    ->state(fn (Dialog $record): string => static::resolveContactLabel($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search))
                     ->toggleable(),
                 TextColumn::make('inbox_status')
@@ -148,9 +150,20 @@ class DialogResource extends Resource
                     ->label('ID')
                     ->sortable()
                     ->toggleable(),
+                TextColumn::make('external_user_id')
+                    ->label('Внешний ID')
+                    ->state(fn (Dialog $record): ?string => static::resolveDialogExternalUserId($record))
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('external_username')
+                    ->label('Username')
+                    ->state(fn (Dialog $record): ?string => static::resolveDialogUsername($record))
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('phone_label')
-                    ->label('Телефон канала')
-                    ->state(fn (Dialog $record): string => static::formatDialogPhoneLabel($record))
+                    ->label('Номер телефона')
+                    ->state(fn (Dialog $record): ?string => static::resolveDialogPhoneValue($record))
+                    ->placeholder('—')
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('route_source')
                     ->label('Источник маршрута')
@@ -220,6 +233,11 @@ class DialogResource extends Resource
         return Message::query()
             ->select('id')
             ->whereColumn('dialog_id', 'dialogs.id')
+            ->where(function (Builder $query): Builder {
+                return $query
+                    ->whereNull('message_kind')
+                    ->orWhere('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE);
+            })
             ->tap(fn (Builder $query): Builder => app(MessageChronology::class)->applyLatestOrder($query))
             ->limit(1);
     }
@@ -283,6 +301,10 @@ class DialogResource extends Resource
             return null;
         }
 
+        if ($previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
+            return 'Система';
+        }
+
         if ($previewMessage->direction === Message::DIRECTION_INBOUND) {
             return 'Контакт';
         }
@@ -301,6 +323,10 @@ class DialogResource extends Resource
         $previewMessage = static::resolvePreviewMessage($record);
 
         if (! $previewMessage instanceof Message) {
+            return 'gray';
+        }
+
+        if ($previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
             return 'gray';
         }
 
@@ -326,7 +352,9 @@ class DialogResource extends Resource
         }
 
         $parts = [
-            $previewMessage->direction === Message::DIRECTION_INBOUND ? 'Входящее' : 'Исходящее',
+            $previewMessage->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT
+                ? 'Системное'
+                : ($previewMessage->direction === Message::DIRECTION_INBOUND ? 'Входящее' : 'Исходящее'),
         ];
 
         if (filled($record->channel?->display_title)) {
@@ -338,37 +366,57 @@ class DialogResource extends Resource
 
     protected static function dialogRequiresManualReply(Dialog $record): bool
     {
+        return static::resolveInboxStatusCode($record) === DialogInboxStatusData::CODE_REQUIRES_REPLY;
+    }
+
+    protected static function resolveInboxStatusCode(Dialog $record): string
+    {
         $latestInboundUserMessageId = $record->getAttribute('latest_inbound_user_message_id');
         $latestInboundUserMessageSortAt = $record->getAttribute('latest_inbound_user_message_sort_at');
         $latestOutboundManualReplyMessageId = $record->getAttribute('latest_outbound_manual_reply_message_id');
         $latestOutboundManualReplyMessageSortAt = $record->getAttribute('latest_outbound_manual_reply_message_sort_at');
+        $manualReplyDismissedSourceMessageId = $record->getAttribute('manual_reply_dismissed_source_message_id');
 
         if (! filled($latestInboundUserMessageId)) {
-            return false;
+            return DialogInboxStatusData::CODE_NO_NEW;
         }
 
         if (! filled($latestOutboundManualReplyMessageId)) {
-            return true;
+            return (int) $manualReplyDismissedSourceMessageId === (int) $latestInboundUserMessageId
+                ? DialogInboxStatusData::CODE_NOT_REQUIRED
+                : DialogInboxStatusData::CODE_REQUIRES_REPLY;
         }
 
-        return static::messageChronology()->isAfter(
+        if (! static::messageChronology()->isAfter(
             $latestInboundUserMessageSortAt,
             $latestInboundUserMessageId,
             $latestOutboundManualReplyMessageSortAt,
             $latestOutboundManualReplyMessageId,
-        );
+        )) {
+            return DialogInboxStatusData::CODE_NO_NEW;
+        }
+
+        return (int) $manualReplyDismissedSourceMessageId === (int) $latestInboundUserMessageId
+            ? DialogInboxStatusData::CODE_NOT_REQUIRED
+            : DialogInboxStatusData::CODE_REQUIRES_REPLY;
     }
 
     protected static function formatInboxStatus(Dialog $record): string
     {
-        return static::dialogRequiresManualReply($record)
-            ? 'Требует ответа'
-            : 'Нет новых';
+        return match (static::resolveInboxStatusCode($record)) {
+            DialogInboxStatusData::CODE_REQUIRES_REPLY => 'Требует ответа',
+            DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
+            default => 'Нет новых',
+        };
     }
 
     protected static function getInboxStatusColor(Dialog $record): string
     {
-        return static::dialogRequiresManualReply($record) ? 'warning' : 'success';
+        return match (static::resolveInboxStatusCode($record)) {
+            DialogInboxStatusData::CODE_REQUIRES_REPLY => 'warning',
+            DialogInboxStatusData::CODE_NOT_REQUIRED => 'gray',
+            default => 'success',
+        };
     }
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
@@ -411,6 +459,14 @@ class DialogResource extends Resource
                         $latestInboundAfterOutboundManualReply['sql'],
                         $latestInboundAfterOutboundManualReply['bindings'],
                     );
+            })
+            ->where(function (Builder $query) use ($latestInboundUserMessageId): Builder {
+                return $query
+                    ->whereNull('dialogs.manual_reply_dismissed_source_message_id')
+                    ->orWhereRaw(
+                        $latestInboundUserMessageId['sql'].' <> dialogs.manual_reply_dismissed_source_message_id',
+                        $latestInboundUserMessageId['bindings'],
+                    );
             });
     }
 
@@ -429,14 +485,16 @@ class DialogResource extends Resource
     {
         $normalizedPhoneSearch = AddContactPhoneAction::normalizePhone($search);
 
-        return $query->where(function (Builder $query) use ($search, $normalizedPhoneSearch): void {
+        $likeSearch = "%{$search}%";
+
+        return $query->where(function (Builder $query) use ($search, $normalizedPhoneSearch, $likeSearch): void {
             $query
-                ->where('external_chat_id', 'ilike', "%{$search}%")
-                ->orWhereHas('contact', function (Builder $contactQuery) use ($search, $normalizedPhoneSearch): void {
+                ->where('external_chat_id', 'ilike', $likeSearch)
+                ->orWhereHas('contact', function (Builder $contactQuery) use ($search, $normalizedPhoneSearch, $likeSearch): void {
                     $contactQuery
-                        ->where('name', 'ilike', "%{$search}%")
-                        ->orWhere('first_name', 'ilike', "%{$search}%")
-                        ->orWhere('last_name', 'ilike', "%{$search}%");
+                        ->where('first_name', 'ilike', $likeSearch)
+                        ->orWhere('last_name', 'ilike', $likeSearch)
+                        ->orWhereRaw("trim(concat_ws(' ', first_name, last_name)) ilike ?", [$likeSearch]);
 
                     if ($normalizedPhoneSearch !== '') {
                         $contactQuery->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($normalizedPhoneSearch): void {
@@ -444,10 +502,11 @@ class DialogResource extends Resource
                         });
                     }
                 })
-                ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($search): void {
+                ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($likeSearch): void {
                     $identityQuery
-                        ->where('external_user_id', 'ilike', "%{$search}%")
-                        ->orWhere('external_username', 'ilike', "%{$search}%");
+                        ->where('display_name', 'ilike', $likeSearch)
+                        ->orWhere('external_user_id', 'ilike', $likeSearch)
+                        ->orWhere('external_username', 'ilike', $likeSearch);
                 });
         });
     }
@@ -499,7 +558,7 @@ class DialogResource extends Resource
         return $channel->name ?: $platformLabel ?: 'Неизвестный канал';
     }
 
-    protected static function formatDialogPhoneLabel(Dialog $dialog): string
+    protected static function resolveDialogPhoneValue(Dialog $dialog): ?string
     {
         if (filled($dialog->confirmed_phone_raw)) {
             return (string) $dialog->confirmed_phone_raw;
@@ -509,7 +568,7 @@ class DialogResource extends Resource
             return (string) $dialog->confirmed_phone_normalized;
         }
 
-        return 'Телефон в этом канале не подтвержден';
+        return null;
     }
 
     protected static function formatDialogRouteIdentityLabel(Dialog $dialog): string
@@ -536,21 +595,26 @@ class DialogResource extends Resource
         return 'Не задан';
     }
 
-    protected static function formatDialogTableIdentitySummary(Dialog $dialog): ?string
+    protected static function resolveContactLabel(Dialog $dialog): string
     {
-        $parts = [];
-        $routeIdentityLabel = static::formatDialogRouteIdentityLabel($dialog);
-
-        if ($routeIdentityLabel !== 'Не задан') {
-            $parts[] = $routeIdentityLabel;
+        if (! $dialog->contact instanceof \App\Models\Contact) {
+            return 'Контакт не найден';
         }
 
-        $phoneLabel = static::formatDialogPhoneLabel($dialog);
+        return app(ResolveContactDisplayNameAction::class)->handle($dialog->contact, $dialog);
+    }
 
-        if ($phoneLabel !== 'Телефон в этом канале не подтвержден') {
-            $parts[] = $phoneLabel;
-        }
+    protected static function resolveDialogExternalUserId(Dialog $dialog): ?string
+    {
+        return filled($dialog->currentContactIdentity?->external_user_id)
+            ? (string) $dialog->currentContactIdentity->external_user_id
+            : null;
+    }
 
-        return $parts === [] ? null : implode(' · ', $parts);
+    protected static function resolveDialogUsername(Dialog $dialog): ?string
+    {
+        return filled($dialog->currentContactIdentity?->external_username)
+            ? '@'.ltrim((string) $dialog->currentContactIdentity->external_username, '@')
+            : null;
     }
 }
