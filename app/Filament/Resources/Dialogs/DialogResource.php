@@ -233,7 +233,11 @@ class DialogResource extends Resource
         return Message::query()
             ->select('id')
             ->whereColumn('dialog_id', 'dialogs.id')
-            ->where('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
+            ->where(function (Builder $query): Builder {
+                return $query
+                    ->whereNull('message_kind')
+                    ->orWhere('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE);
+            })
             ->tap(fn (Builder $query): Builder => app(MessageChronology::class)->applyLatestOrder($query))
             ->limit(1);
     }

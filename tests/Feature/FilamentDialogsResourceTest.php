@@ -727,6 +727,60 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('Оператор изменил статус диалога');
     }
 
+    public function test_dialogs_inbox_preview_keeps_latest_legacy_message_with_null_kind(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Диалог с legacy preview',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Старое обычное сообщение',
+            'received_at' => now()->subMinutes(2),
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => null,
+            'text' => 'Последнее legacy сообщение',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            'text' => 'Оператор изменил статус диалога',
+            'received_at' => now(),
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'));
+
+        $response->assertOk()
+            ->assertSee('Последнее legacy сообщение')
+            ->assertDontSee('Старое обычное сообщение')
+            ->assertDontSee('Оператор изменил статус диалога');
+    }
+
     public function test_dialogs_inbox_keeps_system_unsubscribe_preview_without_marking_dialog_as_requires_reply(): void
     {
         $admin = User::factory()->create([
@@ -1581,6 +1635,30 @@ class FilamentDialogsResourceTest extends TestCase
             'reply_to_message_id' => $latestInbound->id,
             'text' => 'Оператор Оператор Статуса изменил статус диалога: Требует ответа -> Не требует ответа',
         ]);
+
+        $historyMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame(
+            [
+                'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+                'from_status' => [
+                    'code' => DialogInboxStatusData::CODE_REQUIRES_REPLY,
+                    'label' => 'Требует ответа',
+                ],
+                'to_status' => [
+                    'code' => DialogInboxStatusData::CODE_NOT_REQUIRED,
+                    'label' => 'Не требует ответа',
+                ],
+                'reply_to_message_id' => $latestInbound->id,
+                'dialog_id' => $dialog->id,
+                'changed_by_user_id' => $admin->id,
+            ],
+            $historyMessage->raw_payload,
+        );
     }
 
     public function test_dialog_view_live_refresh_returns_manually_dismissed_dialog_to_requires_reply_after_new_inbound(): void
