@@ -1507,6 +1507,23 @@
         border-radius: 999px;
     }
 
+    [x-cloak] {
+        display: none !important;
+    }
+
+    .ac-inline-popover {
+        margin-top: 0.6rem;
+        max-width: 22rem;
+        border: 1px solid color-mix(in srgb, var(--ac-border) 84%, transparent);
+        border-radius: 0.9rem;
+        background: color-mix(in srgb, var(--ac-surface-muted) 88%, var(--ac-surface-strong));
+        padding: 0.7rem 0.8rem;
+        font-size: 0.78rem;
+        line-height: 1.5;
+        color: var(--ac-text-soft);
+        box-shadow: 0 18px 32px -28px rgba(15, 23, 42, 0.45);
+    }
+
     .ac-meta__value {
         margin: 0;
         font-size: 0.95rem;

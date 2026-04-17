@@ -21,7 +21,11 @@
                 </div>
 
                 <div class="ac-meta-grid ac-surface__divider">
-                    <div class="ac-meta">
+                    <div
+                        class="ac-meta"
+                        x-data="{ statusHelpOpen: false }"
+                        x-on:keydown.escape.window="statusHelpOpen = false"
+                    >
                         <div class="ac-meta__label-row">
                             <label for="dialog-inbox-status" class="ac-meta__label">
                                 Статус диалога
@@ -29,8 +33,10 @@
                             <button
                                 type="button"
                                 class="ac-inline-help"
-                                title="Новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа»."
-                                aria-label="Подсказка о статусе диалога"
+                                aria-label="Показать подсказку: новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа»."
+                                aria-controls="dialog-inbox-status-help-panel"
+                                x-bind:aria-expanded="statusHelpOpen ? 'true' : 'false'"
+                                x-on:click="statusHelpOpen = ! statusHelpOpen"
                                 data-role="dialog-inbox-status-help"
                             >
                                 <x-filament::icon icon="heroicon-m-information-circle" class="h-4 w-4" />
@@ -50,6 +56,17 @@
                                 </option>
                             @endforeach
                         </select>
+                        <div
+                            id="dialog-inbox-status-help-panel"
+                            data-role="dialog-inbox-status-help-panel"
+                            x-cloak
+                            x-show="statusHelpOpen"
+                            x-transition.opacity.duration.150ms
+                            x-on:click.outside="statusHelpOpen = false"
+                            class="ac-inline-popover"
+                        >
+                            Новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».
+                        </div>
                     </div>
                     <div class="ac-meta">
                         <p class="ac-meta__label">
