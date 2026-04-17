@@ -122,12 +122,25 @@
         <div data-role="dialog-workspace" class="ac-dialog-workspace">
             <section
                 data-role="dialog-history"
+                data-poll-interval-ms="{{ $liveRefreshPollIntervalMs }}"
                 x-data="{
                     thread: null,
                     initialized: false,
                     previousHeight: null,
+                    refreshIntervalId: null,
+                    isRefreshing: false,
+                    shouldScrollOnRefresh: false,
                     captureThread() {
                         this.thread = this.$root.querySelector('[data-role=\"conversation-thread\"]');
+                    },
+                    isNearBottom() {
+                        this.captureThread();
+
+                        if (! this.thread) {
+                            return false;
+                        }
+
+                        return (this.thread.scrollHeight - this.thread.scrollTop - this.thread.clientHeight) <= 48;
                     },
                     scrollToBottom() {
                         this.captureThread();
@@ -159,9 +172,38 @@
                         this.thread.scrollTop = this.thread.scrollTop + delta;
                         this.previousHeight = null;
                     },
+                    startLiveRefresh() {
+                        if (this.refreshIntervalId) {
+                            window.clearInterval(this.refreshIntervalId);
+                        }
+
+                        this.refreshIntervalId = window.setInterval(() => {
+                            if (document.visibilityState !== 'visible' || this.isRefreshing) {
+                                return;
+                            }
+
+                            this.shouldScrollOnRefresh = this.isNearBottom();
+                            this.isRefreshing = true;
+                            this.$wire.refreshDialogViewData();
+                        }, {{ $liveRefreshPollIntervalMs }});
+                    },
+                    handleRefreshComplete(detail = {}) {
+                        this.isRefreshing = false;
+
+                        if ((detail.appendedCount ?? 0) < 1) {
+                            return;
+                        }
+
+                        if (! this.shouldScrollOnRefresh) {
+                            return;
+                        }
+
+                        this.$nextTick(() => this.scrollToBottom());
+                    },
                 }"
-                x-init="$nextTick(() => { if (! initialized) { scrollToBottom(); initialized = true; } })"
+                x-init="$nextTick(() => { if (! initialized) { scrollToBottom(); initialized = true; } startLiveRefresh(); })"
                 x-on:dialog-history-older-messages-loaded.window="$nextTick(() => restorePositionAfterPrepend())"
+                x-on:dialog-history-refreshed.window="$nextTick(() => handleRefreshComplete($event.detail))"
                 x-on:dialog-reply-sent.window="$nextTick(() => scrollToBottom())"
                 class="ac-surface"
             >
