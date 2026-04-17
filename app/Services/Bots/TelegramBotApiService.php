@@ -6,6 +6,7 @@ use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotMetadata;
 use App\Data\Bots\DownloadedAvatarData;
 use App\Data\Bots\IncomingBotMessage;
+use App\Data\Bots\TelegramChatAvatarFetchResult;
 use App\Models\Channel;
 use App\Models\Message;
 use Illuminate\Support\Facades\Http;
@@ -127,7 +128,7 @@ class TelegramBotApiService
         );
     }
 
-    public function downloadChatAvatar(Channel $channel, string $chatId): ?DownloadedAvatarData
+    public function downloadChatAvatar(Channel $channel, string $chatId): TelegramChatAvatarFetchResult
     {
         $chatResponse = Http::asJson()
             ->get(
@@ -141,7 +142,7 @@ class TelegramBotApiService
             ?? data_get($chatResponse, 'result.photo.small_file_id');
 
         if (! filled($fileId)) {
-            return null;
+            return TelegramChatAvatarFetchResult::photoMissing();
         }
 
         $fileResponse = Http::asJson()
@@ -155,7 +156,7 @@ class TelegramBotApiService
         $filePath = data_get($fileResponse, 'result.file_path');
 
         if (! filled($filePath)) {
-            return null;
+            throw new InvalidArgumentException("Telegram API did not return avatar file path for channel [{$channel->id}] and chat [{$chatId}].");
         }
 
         $downloadResponse = Http::timeout(15)
@@ -163,13 +164,15 @@ class TelegramBotApiService
             ->throw();
 
         if ($downloadResponse->body() === '') {
-            return null;
+            throw new InvalidArgumentException("Telegram API returned an empty avatar file for channel [{$channel->id}] and chat [{$chatId}].");
         }
 
-        return new DownloadedAvatarData(
-            contents: $downloadResponse->body(),
-            contentType: $downloadResponse->header('Content-Type'),
-            filenameHint: (string) $filePath,
+        return TelegramChatAvatarFetchResult::avatar(
+            new DownloadedAvatarData(
+                contents: $downloadResponse->body(),
+                contentType: $downloadResponse->header('Content-Type'),
+                filenameHint: (string) $filePath,
+            ),
         );
     }
 
