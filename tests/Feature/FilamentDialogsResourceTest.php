@@ -1659,6 +1659,8 @@ class FilamentDialogsResourceTest extends TestCase
             ],
             $historyMessage->raw_payload,
         );
+
+        $this->assertNotNull($historyMessage->received_at);
     }
 
     public function test_dialog_view_live_refresh_returns_manually_dismissed_dialog_to_requires_reply_after_new_inbound(): void

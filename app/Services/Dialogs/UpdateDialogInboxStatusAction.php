@@ -76,6 +76,7 @@ class UpdateDialogInboxStatusAction
             }
 
             $targetStatusLabel = $this->resolveStatusLabel($targetStatusCode);
+            $statusChangedAt = now();
 
             $historyMessage = $dialog->messages()->create([
                 'contact_id' => $dialog->contact_id,
@@ -109,7 +110,7 @@ class UpdateDialogInboxStatusAction
                     'dialog_id' => $dialog->id,
                     'changed_by_user_id' => $employee->id,
                 ],
-                'received_at' => null,
+                'received_at' => $statusChangedAt,
             ]);
 
             return new DialogInboxStatusUpdateResultData(
