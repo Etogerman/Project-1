@@ -5,6 +5,7 @@ namespace App\Services\Bots;
 use App\Data\Bots\DownloadedAvatarData;
 use App\Models\ContactIdentity;
 use Illuminate\Support\Facades\Storage;
+use InvalidArgumentException;
 
 class StoreContactIdentityAvatarAction
 {
@@ -50,22 +51,19 @@ class StoreContactIdentityAvatarAction
 
     protected function resolveExtension(DownloadedAvatarData $avatar): string
     {
-        $filenameHint = $avatar->filenameHint;
+        $contentType = $this->normalizeContentType($avatar->contentType);
 
-        if (filled($filenameHint)) {
-            $path = parse_url($filenameHint, PHP_URL_PATH);
-            $extension = $path !== false ? pathinfo((string) $path, PATHINFO_EXTENSION) : null;
-
-            if (is_string($extension) && $extension !== '') {
-                return strtolower($extension);
-            }
-        }
-
-        return match ($avatar->contentType) {
+        return match ($contentType) {
+            'image/jpeg', 'image/jpg' => 'jpg',
             'image/png' => 'png',
             'image/webp' => 'webp',
             'image/gif' => 'gif',
-            default => 'jpg',
+            default => throw new InvalidArgumentException('Unsupported avatar content type.'),
         };
+    }
+
+    protected function normalizeContentType(?string $contentType): string
+    {
+        return strtolower(trim((string) strtok((string) $contentType, ';')));
     }
 }

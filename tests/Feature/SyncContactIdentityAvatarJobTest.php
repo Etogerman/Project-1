@@ -77,14 +77,14 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         ]);
 
         Http::fake([
-            'https://cdn.max.example/avatar.png' => Http::response(
+            'https://cdn.max.ru/avatar.php' => Http::response(
                 'max-avatar-binary',
                 200,
                 ['Content-Type' => 'image/png'],
             ),
         ]);
 
-        $job = new SyncContactIdentityAvatarJob($identity->id, 'https://cdn.max.example/avatar.png');
+        $job = new SyncContactIdentityAvatarJob($identity->id, 'https://cdn.max.ru/avatar.php');
 
         app()->call([$job, 'handle']);
 
@@ -92,6 +92,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
         $this->assertNotNull($identity->avatar_path);
         $this->assertStringEndsWith('.png', (string) $identity->avatar_path);
+        $this->assertStringEndsWith('.png', basename((string) $identity->avatar_path));
         Storage::disk('public')->assertExists((string) $identity->avatar_path);
     }
 
@@ -193,6 +194,36 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         $identity->refresh();
 
         $this->assertNull($identity->avatar_path);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'level' => ChannelActivityLog::LEVEL_WARNING,
+            'event' => 'contact.avatar_sync_failed',
+        ]);
+    }
+
+    public function test_sync_contact_identity_avatar_job_rejects_untrusted_max_avatar_host_without_http_request(): void
+    {
+        Storage::fake('public');
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        $job = new SyncContactIdentityAvatarJob($identity->id, 'https://evil.example/avatar.png');
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertNull($identity->avatar_path);
+        Http::assertNothingSent();
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'level' => ChannelActivityLog::LEVEL_WARNING,

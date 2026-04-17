@@ -138,9 +138,11 @@ message payload.
 2. иначе `avatar_url` — использовать его как fallback-source.
 
 Далее система должна:
-1. скачать файл по URL;
-2. сохранить его локально на `public` disk;
-3. обновить `avatar_path` и `avatar_updated_at`.
+1. скачивать файл только по `https` URL с trusted host внутри домена `max.ru`;
+2. не следовать redirect chain при загрузке MAX avatar;
+3. определять расширение локального файла только по allowlist image `Content-Type`, а не по URL;
+4. сохранить файл локально на `public` disk;
+5. обновить `avatar_path` и `avatar_updated_at`.
 
 Если во входящем MAX payload нет avatar fields:
 1. дополнительных provider API call в этом slice не делать;
