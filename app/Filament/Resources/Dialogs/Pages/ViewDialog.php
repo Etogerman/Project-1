@@ -126,12 +126,10 @@ class ViewDialog extends ViewRecord
             return;
         }
 
-        $this->conversationMessages = [
-            ...$olderMessages,
-            ...$this->conversationMessages,
-        ];
+        $this->prependConversationMessageViewData($olderMessages);
         $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
         $this->nextOlderCursor = $page->nextOlderCursor;
+        $this->syncNextOlderCursorToVisibleConversationStart();
 
         $this->dispatch('dialog-history-older-messages-loaded');
     }
@@ -392,8 +390,42 @@ class ViewDialog extends ViewRecord
         ];
         $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
         $this->latestKnownMessageId = max($this->latestKnownMessageId ?? 0, $this->resolveLatestKnownMessageId($newMessages) ?? 0) ?: null;
+        $this->syncNextOlderCursorToVisibleConversationStart();
 
         return count($newMessageViewData);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $messages
+     */
+    protected function prependConversationMessageViewData(array $messages): void
+    {
+        if ($messages === []) {
+            return;
+        }
+
+        $existingMessageIds = collect($this->conversationMessages)
+            ->pluck('id')
+            ->filter()
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->flip();
+
+        $olderMessageViewData = collect($messages)
+            ->filter(function (array $message) use ($existingMessageIds): bool {
+                return ! $existingMessageIds->has((int) ($message['id'] ?? 0));
+            })
+            ->values()
+            ->all();
+
+        if ($olderMessageViewData === []) {
+            return;
+        }
+
+        $this->conversationMessages = [
+            ...$olderMessageViewData,
+            ...$this->conversationMessages,
+        ];
+        $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
     }
 
     /**
@@ -407,6 +439,28 @@ class ViewDialog extends ViewRecord
         });
 
         return array_values($messages);
+    }
+
+    protected function syncNextOlderCursorToVisibleConversationStart(): void
+    {
+        if (! $this->hasMoreOlderMessages) {
+            return;
+        }
+
+        $oldestVisibleMessage = $this->conversationMessages[0] ?? null;
+
+        if (
+            ! is_array($oldestVisibleMessage)
+            || blank($oldestVisibleMessage['sort_at_iso'] ?? null)
+            || blank($oldestVisibleMessage['id'] ?? null)
+        ) {
+            return;
+        }
+
+        $this->nextOlderCursor = [
+            'sort_at' => (string) $oldestVisibleMessage['sort_at_iso'],
+            'id' => (int) $oldestVisibleMessage['id'],
+        ];
     }
 
     /**

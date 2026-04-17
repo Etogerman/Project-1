@@ -1039,6 +1039,48 @@ class FilamentDialogsResourceTest extends TestCase
         ], array_column($messages, 'display_text'));
     }
 
+    public function test_dialog_view_load_older_messages_does_not_duplicate_late_message_inserted_by_live_refresh(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(70);
+
+        $lateMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Поздно дошедшее сообщение',
+            'received_at' => now()->subSeconds(50),
+            'external_message_id' => 'live-refresh-late-older-001',
+            'provider_event_key' => 'live-refresh-late-older-event-001',
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('refreshDialogViewData')
+            ->assertSet('nextOlderCursor.id', $lateMessage->id)
+            ->call('loadOlderMessages')
+            ->assertDispatched('dialog-history-older-messages-loaded');
+
+        $messages = $component->get('conversationMessages');
+        $messageIds = array_column($messages, 'id');
+        $messageTexts = array_column($messages, 'display_text');
+
+        $this->assertCount(71, $messages);
+        $this->assertCount(71, array_unique($messageIds));
+        $this->assertSame([
+            'Сообщение 20',
+            'Поздно дошедшее сообщение',
+            'Сообщение 21',
+        ], array_slice($messageTexts, 19, 3));
+        $this->assertSame('Сообщение 1', $messageTexts[0]);
+        $this->assertSame('Сообщение 70', $messageTexts[70]);
+    }
+
     public function test_dialog_view_can_load_older_messages(): void
     {
         $admin = User::factory()->create([
