@@ -131,7 +131,7 @@
                     isRefreshing: false,
                     shouldScrollOnRefresh: false,
                     captureThread() {
-                        this.thread = this.$root.querySelector('[data-role=\"conversation-thread\"]');
+                        this.thread = this.$root.querySelector('[data-role=conversation-thread]');
                     },
                     isNearBottom() {
                         this.captureThread();
