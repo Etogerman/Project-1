@@ -37,6 +37,8 @@ class Message extends Model
 
     public const KIND_OUTBOUND_SCENARIO_MESSAGE = 'outbound_scenario_message';
 
+    public const KIND_OUTBOUND_DIALOG_STATUS_CHANGE = 'outbound_dialog_status_change';
+
     public const SENT_BY_TYPE_CONTACT = 'contact';
 
     public const SENT_BY_TYPE_OPERATOR = 'operator';
@@ -64,6 +66,8 @@ class Message extends Model
     public const SENT_BY_SYSTEM_CODE_LEGACY_UNKNOWN_KIND = 'legacy_unknown_kind';
 
     public const SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES = 'bitrix24_openlines';
+
+    public const SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE = 'dialog_inbox_status_change';
 
     public const SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER = 'bot_blocked_by_user';
 

@@ -25,6 +25,28 @@
 
                 <div class="ac-meta-grid ac-surface__divider">
                     <div class="ac-meta">
+                        <label for="dialog-inbox-status" class="ac-meta__label">
+                            Статус диалога
+                        </label>
+                        <select
+                            id="dialog-inbox-status"
+                            data-role="dialog-inbox-status-select"
+                            wire:model="dialogInboxStatusSelection"
+                            wire:change="updateDialogInboxStatus"
+                            @disabled(! $dialogInboxStatus['is_editable'])
+                            class="ac-select"
+                        >
+                            @foreach ($dialogInboxStatus['options'] as $statusValue => $statusLabel)
+                                <option value="{{ $statusValue }}">
+                                    {{ $statusLabel }}
+                                </option>
+                            @endforeach
+                        </select>
+                        <p class="ac-field-help">
+                            Новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».
+                        </p>
+                    </div>
+                    <div class="ac-meta">
                         <p class="ac-meta__label">
                             Ответственный
                         </p>

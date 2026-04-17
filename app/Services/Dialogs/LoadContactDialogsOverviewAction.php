@@ -128,6 +128,7 @@ class LoadContactDialogsOverviewAction
         return Message::query()
             ->selectRaw('distinct on (dialog_id) messages.*')
             ->whereIn('dialog_id', $dialogIds->all())
+            ->where('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
             ->with(['channel', 'dialog.channel', 'sentByUser'])
             ->orderBy('dialog_id')
             ->orderByRaw($this->messageChronology->sqlSortAt('messages').' desc')

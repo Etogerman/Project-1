@@ -33,6 +33,7 @@ class Dialog extends Model
         'channel_id',
         'current_contact_identity_id',
         'pending_auto_reply_source_message_id',
+        'manual_reply_dismissed_source_message_id',
         'bot_subscription_status',
         'bot_subscription_changed_at',
         'bot_subscription_source_message_id',
@@ -96,6 +97,11 @@ class Dialog extends Model
     public function botSubscriptionSourceMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'bot_subscription_source_message_id');
+    }
+
+    public function manualReplyDismissedSourceMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'manual_reply_dismissed_source_message_id');
     }
 
     public function messages(): HasMany
