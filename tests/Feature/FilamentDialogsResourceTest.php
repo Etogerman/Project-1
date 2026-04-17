@@ -216,6 +216,37 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('[data-role=\\"conversation-thread\\"]', escape: false);
     }
 
+    public function test_dialog_view_uses_yellow_highlight_buttons_and_green_send_button(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $html = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->getContent();
+
+        $this->assertMatchesRegularExpression(
+            '~class="[^"]*ac-button[^"]*ac-button--warning[^"]*"[^>]*>\s*Открыть контакт\s*</a>~su',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '~class="[^"]*ac-button[^"]*ac-button--warning-soft[^"]*"[^>]*>\s*Форматированный\s*</button>~su',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '~class="[^"]*ac-button[^"]*ac-button--warning-soft[^"]*"[^>]*>\s*Просто текст\s*</button>~su',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '~class="[^"]*ac-button[^"]*ac-button--success[^"]*"[^>]*>\s*<span[^>]*>Отправить</span>~su',
+            $html,
+        );
+    }
+
     public function test_dialog_view_renders_current_dialog_messenger_name_in_technical_context(): void
     {
         $admin = User::factory()->create([
