@@ -36,5 +36,6 @@ final readonly class IncomingBotMessage
         public Carbon $receivedAt,
         public ?string $messageParameter = null,
         public ?string $systemEventCode = null,
+        public ?string $avatarUrl = null,
     ) {}
 }
