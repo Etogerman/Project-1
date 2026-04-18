@@ -14,6 +14,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Bots\ContactIdentityAvatarStorage;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -334,6 +335,41 @@ class FilamentDialogsResourceTest extends TestCase
             'avatar_path' => 'contact-identities/'.$identity->id.'/avatar/test-avatar.jpg',
             'avatar_updated_at' => now(),
         ])->save();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-role="dialog-contact-avatar-image"', false);
+    }
+
+    public function test_dialog_view_falls_back_to_legacy_public_avatar_when_contact_avatar_storage_read_fails(): void
+    {
+        Storage::fake('contact_avatars');
+        Storage::fake('public');
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $identity = $dialog->currentContactIdentity()->firstOrFail();
+        $avatarPath = 'contact-identities/'.$identity->id.'/avatar/test-avatar.jpg';
+
+        Storage::disk('public')->put($avatarPath, 'avatar-image');
+
+        $identity->forceFill([
+            'avatar_path' => $avatarPath,
+            'avatar_updated_at' => now(),
+        ])->save();
+
+        $avatarStorage = \Mockery::mock(ContactIdentityAvatarStorage::class);
+        $avatarStorage->shouldReceive('exists')
+            ->once()
+            ->with($avatarPath)
+            ->andThrow(new \RuntimeException('Temporary object storage failure.'));
+        $avatarStorage->shouldReceive('url')->never();
+
+        app()->instance(ContactIdentityAvatarStorage::class, $avatarStorage);
 
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
