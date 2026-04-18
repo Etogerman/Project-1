@@ -293,6 +293,32 @@ class FilamentDialogsResourceTest extends TestCase
 
     public function test_dialog_view_renders_identity_avatar_in_dialog_header_when_avatar_exists(): void
     {
+        Storage::fake('contact_avatars');
+        Storage::fake('public');
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $identity = $dialog->currentContactIdentity()->firstOrFail();
+
+        Storage::disk('contact_avatars')->put('contact-identities/'.$identity->id.'/avatar/test-avatar.jpg', 'avatar-image');
+
+        $identity->forceFill([
+            'avatar_path' => 'contact-identities/'.$identity->id.'/avatar/test-avatar.jpg',
+            'avatar_updated_at' => now(),
+        ])->save();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-role="dialog-contact-avatar-image"', false);
+    }
+
+    public function test_dialog_view_renders_identity_avatar_in_dialog_header_when_only_legacy_public_avatar_exists(): void
+    {
+        Storage::fake('contact_avatars');
         Storage::fake('public');
 
         $admin = User::factory()->create([

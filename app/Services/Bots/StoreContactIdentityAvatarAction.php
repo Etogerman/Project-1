@@ -15,7 +15,7 @@ class StoreContactIdentityAvatarAction
             return;
         }
 
-        $disk = Storage::disk('public');
+        $disk = $this->avatarStorage()->disk();
         $extension = $this->resolveExtension($avatar);
         $hash = sha1($avatar->contents);
         $path = sprintf('contact-identities/%d/avatar/%s.%s', $identity->id, $hash, $extension);
@@ -31,7 +31,7 @@ class StoreContactIdentityAvatarAction
         ])->save();
 
         if (filled($previousPath) && $previousPath !== $path) {
-            $disk->delete($previousPath);
+            $this->deleteFromKnownDisks($previousPath);
         }
     }
 
@@ -45,8 +45,19 @@ class StoreContactIdentityAvatarAction
         ])->save();
 
         if (filled($previousPath)) {
-            Storage::disk('public')->delete($previousPath);
+            $this->deleteFromKnownDisks($previousPath);
         }
+    }
+
+    protected function avatarStorage(): ContactIdentityAvatarStorage
+    {
+        return app(ContactIdentityAvatarStorage::class);
+    }
+
+    protected function deleteFromKnownDisks(string $path): void
+    {
+        $this->avatarStorage()->disk()->delete($path);
+        Storage::disk('public')->delete($path);
     }
 
     protected function resolveExtension(DownloadedAvatarData $avatar): string

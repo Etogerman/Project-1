@@ -11,6 +11,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
@@ -761,13 +762,19 @@ class ViewDialog extends ViewRecord
             return null;
         }
 
-        $disk = Storage::disk('public');
+        $avatarStorage = app(ContactIdentityAvatarStorage::class);
 
-        if (! $disk->exists($avatarPath)) {
+        if ($avatarStorage->exists($avatarPath)) {
+            return $avatarStorage->url($avatarPath);
+        }
+
+        $legacyDisk = Storage::disk('public');
+
+        if (! $legacyDisk->exists($avatarPath)) {
             return null;
         }
 
-        return $disk->url($avatarPath);
+        return $legacyDisk->url($avatarPath);
     }
 
     protected function formatDialogAvatarFallbackLabel(Dialog $dialog): ?string
