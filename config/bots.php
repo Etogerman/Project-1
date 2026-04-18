@@ -307,6 +307,7 @@ return [
         'delayed_webhook_threshold_seconds' => (int) env('BOT_MAX_DELAYED_WEBHOOK_THRESHOLD_SECONDS', 60),
         'trusted_avatar_hosts' => [
             'max.ru',
+            'oneme.ru',
         ],
         'update_types' => [
             'message_created',
