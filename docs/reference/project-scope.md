@@ -28,7 +28,7 @@ Abrikosoff Connector — операторская платформа для ра
 - после точного определения российской локации асинхронно считается `distance_to_moscow_km`; special-case `Москва -> 0`, остальные города РФ идут через `Yandex Geocoder + Haversine`
 - ambiguous-city кейсы считают расстояние только после подтверждения `region` и deterministic geocode query
 - подтверждённый локальный Bitrix24 happy-path со стороны приложения: `contact sync -> deal sync -> history export`
-- Bitrix24 Open Lines happy-path уже подтверждён через box-side пакет; зафиксированная рабочая конфигурация: Telegram line id `32`, MAX line id `31`
+- Bitrix24 Open Lines happy-path уже подтверждён через box-side пакет; текущая подтверждённая локальная runtime/setup-конфигурация: Telegram line id `30`, MAX line id `31`
 - existing-contact rebinding happy-path подтверждён для Telegram и MAX
 - любое новое расширение Bitrix24 вне подтверждённого happy-path требует отдельного ТЗ
 - возможно подключение дополнительных мессенджеров, но не через преждевременные абстракции

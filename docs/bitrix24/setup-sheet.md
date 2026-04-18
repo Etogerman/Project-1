@@ -34,14 +34,16 @@
 | Alternate last name | `UF_CRM_ABRIKOSOFF_ALT_LAST_NAME` |
 | Name conflict flag | `UF_CRM_ABRIKOSOFF_NAME_CONFLICT` |
 
-## Required production values
+## Обязательные интеграционные значения
 
-Fill these in `.env` or the deployment environment before starting the integration foundation stage:
+Заполните их в `.env` или deployment environment до начала integration foundation stage:
 
 | Key | Value |
 | --- | --- |
 | `BITRIX24_CLIENT_ID` | set in local `.env`, do not commit |
 | `BITRIX24_CLIENT_SECRET` | set in local `.env`, do not commit |
+| `BITRIX24_APP_CODE` | set in local `.env`, do not commit |
+| `BITRIX24_AUTH_SERVER_URL` | set in local `.env`, do not commit |
 | `BITRIX24_INSTALL_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/install` |
 | `BITRIX24_EVENTS_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/events` |
 | `BITRIX24_OPENLINES_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/openlines` |
@@ -63,6 +65,7 @@ Fill these in `.env` or the deployment environment before starting the integrati
 - Do not reuse the temporary `Abrikosoff Probe` source as a production `SOURCE_ID`.
 - Telegram and MAX must use different `connector_code` values.
 - Telegram and MAX must use different Open Lines.
+- Текущий подтверждённый Open Lines mapping фиксирован: Telegram `30`, MAX `31`.
 - `user_id = 1` is frozen as the default assignee for contacts, deals, and manual-review tasks.
 
 ## Readiness check

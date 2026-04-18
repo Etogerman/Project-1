@@ -38,9 +38,9 @@ Use Laravel Cloud for staging:
 
 ## Environment variables
 
-Use values from [.env.staging.example](/Users/abrikosov/Documents/Проект-1/.env.staging.example) as the baseline.
+Используйте [.env.staging.example](/Users/abrikosov/Documents/Проект-1/.env.staging.example) только как deploy baseline.
 
-Required values to set in Laravel Cloud:
+Базовые deploy-значения для Laravel Cloud:
 
 - `APP_NAME="Abrikosoff Connector"`
 - `APP_ENV=staging`
@@ -54,6 +54,49 @@ Required values to set in Laravel Cloud:
 - `BITRIX24_FAKE_HAPPY_PATH_ENABLED=false`
 
 Database host, port, database, username, and password should come from the attached managed PostgreSQL service.
+
+`.env.staging.example` не является полным integration baseline для real Bitrix24 acceptance.
+Для real Bitrix24 integration flow staging должен дополнительно нести текущую runtime-required env matrix из
+`config/bitrix24.php`, `config/services.php` и readiness-check из
+[BuildBitrix24SetupReportAction.php](/Users/abrikosov/Documents/Проект-1/app/Services/Bitrix24/BuildBitrix24SetupReportAction.php).
+
+## Обязательные env для real Bitrix24 integration flow
+
+Задайте эти значения в staging environment до того, как считать staging реальной
+Bitrix24 integration target:
+
+- `YANDEX_GEOCODER_API_KEY=<real key>`
+- `BITRIX24_PORTAL_DOMAIN=crm.alexlesley.biz`
+- `BITRIX24_CLIENT_ID=<real client id>`
+- `BITRIX24_CLIENT_SECRET=<real client secret>`
+- `BITRIX24_APP_CODE=<real Bitrix24 application code>`
+- `BITRIX24_AUTH_SERVER_URL=<real trusted OAuth host>`
+- `BITRIX24_INSTALL_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/install`
+- `BITRIX24_EVENTS_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/events`
+- `BITRIX24_OPENLINES_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/openlines`
+- `BITRIX24_TELEGRAM_SOURCE_ID=ABRIKOSOFF_TELEGRAM`
+- `BITRIX24_MAX_SOURCE_ID=ABRIKOSOFF_MAX`
+- `BITRIX24_TELEGRAM_LINE_ID=30`
+- `BITRIX24_MAX_LINE_ID=31`
+- `BITRIX24_TELEGRAM_CONNECTOR_CODE=abrikosoff_telegram`
+- `BITRIX24_MAX_CONNECTOR_CODE=abrikosoff_max`
+- `BITRIX24_CONTACTS_SYNC_ENABLED=true`
+- `BITRIX24_DEALS_SYNC_ENABLED=true`
+- `BITRIX24_OPENLINES_ENABLED=true`
+- `BITRIX24_FAKE_HAPPY_PATH_ENABLED=false`
+
+Текущий подтверждённый Open Lines mapping проекта:
+
+- Telegram line id `30`
+- MAX line id `31`
+
+Перед тем как считать staging ready для real Bitrix24 acceptance, выполните:
+
+```bash
+php artisan bitrix24:setup-report
+```
+
+Отчёт должен завершиться без missing required values.
 
 ## First deploy checklist
 
