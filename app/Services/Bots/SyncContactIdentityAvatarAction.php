@@ -46,6 +46,16 @@ class SyncContactIdentityAvatarAction
                 Channel::PLATFORM_MAX => $this->downloadMaxAvatar($maxAvatarUrl),
                 default => null,
             };
+
+            if (! $avatar instanceof DownloadedAvatarData) {
+                if ($shouldClearTelegramAvatar) {
+                    $this->storeContactIdentityAvatarAction->clear($identity);
+                }
+
+                return;
+            }
+
+            $this->storeContactIdentityAvatarAction->handle($identity, $avatar);
         } catch (Throwable $throwable) {
             $this->channelActivityLogger->warning(
                 $channel,
@@ -61,16 +71,6 @@ class SyncContactIdentityAvatarAction
 
             return;
         }
-
-        if (! $avatar instanceof DownloadedAvatarData) {
-            if ($shouldClearTelegramAvatar) {
-                $this->storeContactIdentityAvatarAction->clear($identity);
-            }
-
-            return;
-        }
-
-        $this->storeContactIdentityAvatarAction->handle($identity, $avatar);
     }
 
     protected function downloadTelegramAvatar(Channel $channel, ContactIdentity $identity): ?TelegramChatAvatarFetchResult
