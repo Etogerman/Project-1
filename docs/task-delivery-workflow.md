@@ -239,6 +239,8 @@ Helper-review не заменяет author self-review.
 
 Контрольные точки обязательны:
 - перед первым неразрешённым действием
+- после зелёного `CI` на `draft` PR
+- после перевода PR в `ready`
 - перед `merge` в `staging`
 - перед `merge` в `main`
 - перед dangerous ops
@@ -258,9 +260,12 @@ Helper-review не заменяет author self-review.
 1. Если действует локальный режим и `commit` не разрешён, рекомендуемый вариант — `1. Остановиться`.
 2. Если действует локальный режим и `commit` разрешён, рекомендуемый вариант — `1. Commit`.
 3. Если действует уровень `PR в staging`, рекомендуемый вариант после локальной готовности — `1. Commit + push + draft PR в staging`.
-4. Если действует уровень `через staging` и validated PR в `staging` всё ещё draft, рекомендуемый вариант — `1. Перевести PR в ready`.
-5. Если действует уровень `через staging` и PR в `staging` уже ready, рекомендуемый вариант — `1. Merge в staging`.
-6. Если действует уровень `до merge в main` и `staging smoke` уже зелёный, рекомендуемый вариант зависит от стадии: `1. PR в main`, `1. Перевести PR в ready` или `1. Merge в main`.
+4. Если действует уровень `PR в staging` и `draft` PR в `staging` уже validated, рекомендуемый вариант — `1. Остановиться на контрольной точке перед ready`.
+5. Если действует уровень `через staging` и validated PR в `staging` всё ещё `draft`, рекомендуемый вариант — `1. Перевести PR в ready`.
+6. Если действует уровень `через staging` и PR в `staging` уже `ready`, рекомендуемый вариант — `1. Остановиться на контрольной точке перед merge` или `1. Merge в staging`, если команда на merge уже дана.
+7. Если действует уровень `до merge в main` и `staging smoke` уже зелёный, рекомендуемый вариант до публикации — `1. Commit + push + draft PR в main`.
+8. Если действует уровень `до merge в main` и `draft` PR в `main` уже validated, рекомендуемый вариант — `1. Перевести PR в ready`.
+9. Если действует уровень `до merge в main` и PR в `main` уже `ready`, рекомендуемый вариант — `1. Остановиться на контрольной точке перед merge` или `1. Merge в main`, если команда на merge уже дана.
 
 Правило следующего шага процесса:
 1. Если пользователь спрашивает о следующем логичном и правильном шаге, агент называет следующий delivery-уровень потока, если текущий уровень уже закрыт и blocker-ов нет.
@@ -284,9 +289,9 @@ Helper-review не заменяет author self-review.
 - `CI`
 - исправления в рамках того же scope
 - финальный author self-review опубликованного PR после зелёного `CI`
-- перевод PR в `ready` только после того, как он стал validated PR
 
 Не разрешает:
+- перевод PR в `ready`
 - `merge` в `staging`
 - staging smoke
 - PR в `main`
@@ -299,7 +304,7 @@ Helper-review не заменяет author self-review.
 Готовый PR в `staging` — это публикационная и CI-точка, но не staging-verification.
 
 Результат:
-- получен validated PR в `staging`, готовый к отдельному решению о переходе через `staging`.
+- получен validated `draft` PR в `staging`, готовый к отдельной контрольной точке и отдельному решению о переводе в `ready`.
 
 ## Этап 14. Уровень `через staging`
 
@@ -307,6 +312,7 @@ Helper-review не заменяет author self-review.
 
 Разрешает:
 - при необходимости перевести validated PR в `staging` из draft в `ready`
+- отдельную контрольную точку после перевода PR в `ready`
 - `merge` в ветку `staging`
 - staging deploy-check
 - staging smoke
@@ -322,12 +328,13 @@ Helper-review не заменяет author self-review.
 Требует отдельной явной делегации и начинается только после успешного прохождения через `staging`.
 
 Разрешает:
-- PR в `main` только из validated diff текущего шага, а не из накопленного состояния `staging`
+- draft PR в `main` только из validated diff текущего шага, а не из накопленного состояния `staging`
 - `CI`
 - self-review и helper-review
 - исправления в том же scope
 - финальный author self-review опубликованного PR после зелёного `CI`
 - перевод PR в `main` из draft в `ready` только после того, как он стал validated PR
+- отдельную контрольную точку после перевода PR в `ready`
 - `merge` в `main`
 
 `merge` в `main` не включает автоматически `production deploy`.
