@@ -5,6 +5,7 @@ namespace App\Services\Bots;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotMetadata;
 use App\Data\Bots\IncomingBotMessage;
+use App\Data\Bots\MaxChatAvatarData;
 use App\Models\Channel;
 use App\Models\Message;
 use Illuminate\Http\Client\PendingRequest;
@@ -145,6 +146,33 @@ class MaxBotApiService
         );
     }
 
+    public function fetchChatAvatarData(Channel $channel, string $externalChatId): MaxChatAvatarData
+    {
+        if (! filled($externalChatId)) {
+            throw new InvalidArgumentException("MAX chat id is required for channel [{$channel->id}].");
+        }
+
+        $chat = $this->client($channel)
+            ->get('https://platform-api.max.ru/chats/'.urlencode($externalChatId))
+            ->throw()
+            ->json();
+
+        if (! is_array($chat)) {
+            throw new InvalidArgumentException("MAX API did not return chat metadata for channel [{$channel->id}] chat [{$externalChatId}].");
+        }
+
+        $dialogWithUser = data_get($chat, 'dialog_with_user');
+
+        if (! is_array($dialogWithUser)) {
+            throw new InvalidArgumentException("MAX API did not return dialog_with_user for channel [{$channel->id}] chat [{$externalChatId}].");
+        }
+
+        return new MaxChatAvatarData(
+            avatarUrl: $this->normalizeOptionalUrl(data_get($dialogWithUser, 'avatar_url')),
+            fullAvatarUrl: $this->normalizeOptionalUrl(data_get($dialogWithUser, 'full_avatar_url')),
+        );
+    }
+
     protected function client(Channel $channel): PendingRequest
     {
         return Http::withHeaders([
@@ -177,6 +205,17 @@ class MaxBotApiService
         }
 
         return $token;
+    }
+
+    protected function normalizeOptionalUrl(mixed $value): ?string
+    {
+        if (! filled($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     /**
