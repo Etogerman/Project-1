@@ -1,18 +1,12 @@
 # ТЗ
 
-В этой папке лежат только активные рабочие технические задания проекта.
+Полные технические задания проекта больше не живут в кодовом репозитории.
 
-Закрытые ТЗ нужно переносить в `docs/tz/archive/` после полного закрытия
-implementation stream по регламенту проекта.
+Source of truth для существенных stream-ов:
 
-## Текущие документы
+1. внешний `specs`-repo
+2. конкретный `Spec doc`
+3. конкретная `Spec revision`
 
-- `tz-inbound-improvements-plan.md`
-- `tz-bitrix24-openlines-blocked-dialog-follow-up.md`
-- `tz-collector-slash-command-during-active-flow.md`
-- `tz-dialog-stage-kanban-and-automation.md`
-
-## Архив
-
-- закрытые ТЗ: `docs/tz/archive/`
-- активные ТЗ: `docs/tz/`
+Локальный `docs/tz/` больше не используется как место хранения полных stream-ТЗ.
+Здесь допускается только короткий указатель на внешний контур требований.
