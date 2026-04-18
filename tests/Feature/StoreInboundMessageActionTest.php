@@ -155,7 +155,44 @@ class StoreInboundMessageActionTest extends TestCase
 
         Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult): bool {
             return $job->contactIdentityId === $storedResult->message->contact_identity_id
-                && $job->avatarUrl === 'https://cdn.max.example/avatar.png';
+                && $job->avatarUrl === 'https://cdn.max.example/avatar.png'
+                && $job->externalChatId === '700';
+        });
+    }
+
+    public function test_store_inbound_message_queues_max_avatar_sync_job_when_payload_has_chat_id_without_avatar_url(): void
+    {
+        Queue::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: '701',
+                externalUserId: '501',
+                providerEventKey: 'max-avatar-chat-fallback-1',
+                externalMessageId: 'max-avatar-chat-fallback-1',
+                externalUsername: 'max_user',
+                contactName: 'MAX контакт',
+                text: 'Привет из MAX',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['body' => ['text' => 'Привет из MAX']]],
+                receivedAt: Carbon::parse('2026-04-19 10:00:00'),
+                avatarUrl: null,
+            ),
+        );
+
+        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult): bool {
+            return $job->contactIdentityId === $storedResult->message->contact_identity_id
+                && $job->avatarUrl === null
+                && $job->externalChatId === '701';
         });
     }
 

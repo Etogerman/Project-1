@@ -3,6 +3,7 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\DownloadedAvatarData;
+use App\Data\Bots\MaxChatAvatarData;
 use App\Data\Bots\TelegramChatAvatarFetchResult;
 use App\Models\Channel;
 use App\Models\ContactIdentity;
@@ -13,13 +14,17 @@ use Throwable;
 class SyncContactIdentityAvatarAction
 {
     public function __construct(
+        protected MaxBotApiService $maxBotApiService,
         protected TelegramBotApiService $telegramBotApiService,
         protected ChannelActivityLogger $channelActivityLogger,
         protected StoreContactIdentityAvatarAction $storeContactIdentityAvatarAction,
     ) {}
 
-    public function handle(int $contactIdentityId, ?string $maxAvatarUrl = null): void
-    {
+    public function handle(
+        int $contactIdentityId,
+        ?string $maxAvatarUrl = null,
+        ?string $maxExternalChatId = null,
+    ): void {
         $identity = ContactIdentity::query()
             ->with('channel')
             ->find($contactIdentityId);
@@ -43,7 +48,11 @@ class SyncContactIdentityAvatarAction
                     $identity,
                     $shouldClearTelegramAvatar,
                 ),
-                Channel::PLATFORM_MAX => $this->downloadMaxAvatar($maxAvatarUrl),
+                Channel::PLATFORM_MAX => $this->resolveMaxAvatar(
+                    $channel,
+                    $maxAvatarUrl,
+                    $maxExternalChatId,
+                ),
                 default => null,
             };
 
@@ -96,6 +105,28 @@ class SyncContactIdentityAvatarAction
         $shouldClearTelegramAvatar = $result->photoMissing;
 
         return $result->avatar;
+    }
+
+    protected function resolveMaxAvatar(
+        Channel $channel,
+        ?string $avatarUrl,
+        ?string $externalChatId,
+    ): ?DownloadedAvatarData {
+        if (filled($avatarUrl)) {
+            return $this->downloadMaxAvatar($avatarUrl);
+        }
+
+        if (! filled($externalChatId)) {
+            return null;
+        }
+
+        $avatarData = $this->maxBotApiService->fetchChatAvatarData($channel, $externalChatId);
+
+        if (! $avatarData instanceof MaxChatAvatarData) {
+            return null;
+        }
+
+        return $this->downloadMaxAvatar($avatarData->preferredAvatarUrl());
     }
 
     protected function downloadMaxAvatar(?string $avatarUrl): ?DownloadedAvatarData
