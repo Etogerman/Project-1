@@ -13,15 +13,14 @@
 
 Сейчас в основном репозитории зафиксирован один открытый существенный stream:
 
-### MAX avatar via chats API
+### Deployment-safe avatar storage
 
 - `Spec repo`: `Etogerman/Project-1-specs`
-- `Spec doc`: `streams/tz-max-avatar-via-chats-api.md`
-- `Spec revision`: `c0cc3737ceecb6868569c26938086fb85b4575e7`
+- `Spec doc`: `streams/tz-deployment-safe-avatar-storage.md`
+- `Spec revision`: `4c596b1dc3b662f28bc015ceeed5c806d48f65d2`
 - внешний статус документа: `planned`
 - локальный смысл: source of truth для следующего implementation stream по
-  `MAX avatar via chats API` уже зафиксирован, но реализация в основном repo
-  ещё не начата
+  deployment-safe хранению аватарок уже зафиксирован и открыт в основном repo
 
 ## Как использовать этот файл
 
