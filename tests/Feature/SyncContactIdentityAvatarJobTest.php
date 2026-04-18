@@ -17,9 +17,9 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_sync_contact_identity_avatar_job_downloads_telegram_avatar_to_public_disk(): void
+    public function test_sync_contact_identity_avatar_job_downloads_telegram_avatar_to_contact_avatars_disk(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
         $telegramAvatar = $this->tinyJpegAvatar();
 
         $channel = Channel::factory()->create([
@@ -63,12 +63,12 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         $this->assertNotNull($identity->avatar_path);
         $this->assertNotNull($identity->avatar_updated_at);
         $this->assertStringEndsWith('.jpg', (string) $identity->avatar_path);
-        Storage::disk('public')->assertExists((string) $identity->avatar_path);
+        Storage::disk('contact_avatars')->assertExists((string) $identity->avatar_path);
     }
 
-    public function test_sync_contact_identity_avatar_job_downloads_max_avatar_to_public_disk(): void
+    public function test_sync_contact_identity_avatar_job_downloads_max_avatar_to_contact_avatars_disk(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
         $maxAvatar = $this->tinyPngAvatar();
 
         $channel = Channel::factory()->create([
@@ -98,12 +98,12 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         $this->assertNotNull($identity->avatar_path);
         $this->assertStringEndsWith('.png', (string) $identity->avatar_path);
         $this->assertStringEndsWith('.png', basename((string) $identity->avatar_path));
-        Storage::disk('public')->assertExists((string) $identity->avatar_path);
+        Storage::disk('contact_avatars')->assertExists((string) $identity->avatar_path);
     }
 
     public function test_sync_contact_identity_avatar_job_detects_telegram_avatar_type_from_contents_when_provider_returns_octet_stream(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
         $telegramAvatar = $this->tinyJpegAvatar();
 
         $channel = Channel::factory()->create([
@@ -146,12 +146,12 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
         $this->assertNotNull($identity->avatar_path);
         $this->assertStringEndsWith('.jpg', (string) $identity->avatar_path);
-        Storage::disk('public')->assertExists((string) $identity->avatar_path);
+        Storage::disk('contact_avatars')->assertExists((string) $identity->avatar_path);
     }
 
     public function test_store_contact_identity_avatar_action_falls_back_to_image_size_when_finfo_returns_generic_mime(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
 
         $identity = ContactIdentity::factory()->create();
         $avatar = new DownloadedAvatarData(
@@ -178,12 +178,12 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
         $this->assertNotNull($identity->avatar_path);
         $this->assertStringEndsWith('.jpg', (string) $identity->avatar_path);
-        Storage::disk('public')->assertExists((string) $identity->avatar_path);
+        Storage::disk('contact_avatars')->assertExists((string) $identity->avatar_path);
     }
 
     public function test_sync_contact_identity_avatar_job_keeps_identity_without_avatar_when_telegram_chat_has_no_photo(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -214,7 +214,49 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
     public function test_sync_contact_identity_avatar_job_clears_stale_telegram_avatar_when_chat_has_no_photo(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+            'avatar_path' => 'contact-identities/temp/avatar/stale-avatar.jpg',
+            'avatar_updated_at' => now(),
+        ]);
+
+        $staleAvatarPath = sprintf('contact-identities/%d/avatar/stale-avatar.jpg', $identity->id);
+
+        $identity->forceFill([
+            'avatar_path' => $staleAvatarPath,
+        ])->save();
+
+        Storage::disk('contact_avatars')->put($staleAvatarPath, 'stale-avatar');
+
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getChat*' => Http::response([
+                'ok' => true,
+                'result' => [],
+            ]),
+        ]);
+
+        $job = new SyncContactIdentityAvatarJob($identity->id);
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertNull($identity->avatar_path);
+        $this->assertNull($identity->avatar_updated_at);
+        Storage::disk('contact_avatars')->assertMissing($staleAvatarPath);
+    }
+
+    public function test_sync_contact_identity_avatar_job_clears_legacy_public_avatar_when_telegram_chat_has_no_photo(): void
+    {
+        $this->fakeAvatarDisks();
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -256,7 +298,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
     public function test_sync_contact_identity_avatar_job_logs_warning_when_provider_avatar_download_fails(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_MAX,
@@ -288,7 +330,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
     public function test_sync_contact_identity_avatar_job_rejects_untrusted_max_avatar_host_without_http_request(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
         Http::fake();
 
         $channel = Channel::factory()->create([
@@ -318,7 +360,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
     public function test_sync_contact_identity_avatar_job_keeps_stale_telegram_avatar_when_avatar_fetch_partially_fails(): void
     {
-        Storage::fake('public');
+        $this->fakeAvatarDisks();
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -338,7 +380,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
             'avatar_path' => $staleAvatarPath,
         ])->save();
 
-        Storage::disk('public')->put($staleAvatarPath, 'stale-avatar');
+        Storage::disk('contact_avatars')->put($staleAvatarPath, 'stale-avatar');
 
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getChat*' => Http::response([
@@ -363,12 +405,18 @@ class SyncContactIdentityAvatarJobTest extends TestCase
 
         $this->assertSame($staleAvatarPath, $identity->avatar_path);
         $this->assertNotNull($identity->avatar_updated_at);
-        Storage::disk('public')->assertExists($staleAvatarPath);
+        Storage::disk('contact_avatars')->assertExists($staleAvatarPath);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'level' => ChannelActivityLog::LEVEL_WARNING,
             'event' => 'contact.avatar_sync_failed',
         ]);
+    }
+
+    protected function fakeAvatarDisks(): void
+    {
+        Storage::fake('contact_avatars');
+        Storage::fake('public');
     }
 
     protected function tinyPngAvatar(): string
