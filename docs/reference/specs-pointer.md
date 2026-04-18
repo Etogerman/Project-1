@@ -30,7 +30,7 @@ Spec revision: <commit-hash>
 
 Структура [Project-1-specs](/Users/abrikosov/Documents/Project-1-specs):
 
-1. `streams/` — активные и рабочие ТЗ
+1. `streams/` — текущие stream-документы; их канонический текущий статус фиксируется во внешнем [streams/README.md](/Users/abrikosov/Documents/Project-1-specs/streams/README.md)
 2. `archive/` — закрытые ТЗ
 3. `reference/` — перенесённые или historical документы
 4. `templates/` — шаблоны для новых ТЗ
@@ -41,14 +41,33 @@ Spec revision: <commit-hash>
 2. если нужен старый контекст — `reference/`
 3. закрытые документы искать в `archive/`
 
+## Как проверить, что реально открыто в основном repo
+
+Внешний `specs`-repo хранит общий контур stream-документов, но вопрос
+`что действительно открыто сейчас в основном репозитории` решается через
+локальный реестр:
+
+1. [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md)
+
+Если в этом файле явно указано, что активных существенных stream-ов нет, значит
+в основном repo сейчас нет открытого существенного stream-а реализации с
+зафиксированным `Spec revision`.
+
 ## Как найти active Spec doc
 
-Обычно active документ лежит в `streams/`.
+Сначала открой внешний [streams/README.md](/Users/abrikosov/Documents/Project-1-specs/streams/README.md).
+
+Практический порядок такой:
+
+1. сначала смотри статус документа в `streams/README.md`
+2. если уже открыт существенный stream, ориентируйся на документ, который там явно помечен как текущий рабочий
+3. если открывается новый stream, сначала выбери документ и только потом фиксируй новый `Spec revision`
 
 На этой машине можно начать так:
 
 ```bash
 cd /Users/abrikosov/Documents/Project-1-specs
+sed -n '1,200p' streams/README.md
 find streams -maxdepth 2 -type f
 ```
 
@@ -89,3 +108,4 @@ Spec revision: <commit-hash>
 1. [AGENTS.md](/Users/abrikosov/Documents/Проект-1/AGENTS.md)
 2. [docs/task-delivery-workflow.md](/Users/abrikosov/Documents/Проект-1/docs/task-delivery-workflow.md)
 3. [docs/tz/README.md](/Users/abrikosov/Documents/Проект-1/docs/tz/README.md)
+4. [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md)
