@@ -11,8 +11,17 @@
 
 ## Текущее состояние
 
-На текущий момент активных существенных stream-ов реализации с зафиксированным
-внешним `Spec revision` в основном репозитории не зафиксировано.
+Сейчас в основном репозитории зафиксирован один открытый существенный stream:
+
+### MAX avatar via chats API
+
+- `Spec repo`: `Etogerman/Project-1-specs`
+- `Spec doc`: `streams/tz-max-avatar-via-chats-api.md`
+- `Spec revision`: `c0cc3737ceecb6868569c26938086fb85b4575e7`
+- внешний статус документа: `planned`
+- локальный смысл: source of truth для следующего implementation stream по
+  `MAX avatar via chats API` уже зафиксирован, но реализация в основном repo
+  ещё не начата
 
 ## Как использовать этот файл
 
