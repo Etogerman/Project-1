@@ -8,6 +8,11 @@ use Illuminate\Support\Facades\Log;
 
 class LogBitrix24CallbackOutcomeAction
 {
+    public function __construct(
+        private readonly SanitizeBitrix24LogPayloadAction $sanitizeLogPayload,
+        private readonly SanitizeBitrix24ApplicationTokenPayloadAction $sanitizeApplicationTokenPayload,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $payload
      */
@@ -21,13 +26,17 @@ class LogBitrix24CallbackOutcomeAction
         ?string $errorMessage = null,
         ?Bitrix24Connection $connection = null,
     ): void {
+        $sanitizedPayload = $this->sanitizeApplicationTokenPayload->handle(
+            $this->sanitizeLogPayload->handle($payload),
+        );
+
         Bitrix24SyncLog::query()->create([
             'connection_id' => $connection?->id,
             'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
             'operation' => $operation,
             'entity_type' => $callbackType,
             'entity_id' => $eventName,
-            'request_payload' => $payload,
+            'request_payload' => $sanitizedPayload,
             'status' => $status,
             'error_message' => $errorMessage,
             'fingerprint' => $fingerprint,
