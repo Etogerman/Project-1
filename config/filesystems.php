@@ -15,6 +15,8 @@ return [
 
     'default' => env('FILESYSTEM_DISK', 'local'),
 
+    'contact_avatars_disk' => env('CONTACT_AVATARS_DISK', 'contact_avatars'),
+
     /*
     |--------------------------------------------------------------------------
     | Filesystem Disks
@@ -56,6 +58,20 @@ return [
             'url' => env('AWS_URL'),
             'endpoint' => env('AWS_ENDPOINT'),
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+            'throw' => false,
+            'report' => false,
+        ],
+
+        'contact_avatars' => [
+            'driver' => 's3',
+            'key' => env('CONTACT_AVATARS_ACCESS_KEY_ID', env('AWS_ACCESS_KEY_ID')),
+            'secret' => env('CONTACT_AVATARS_SECRET_ACCESS_KEY', env('AWS_SECRET_ACCESS_KEY')),
+            'region' => env('CONTACT_AVATARS_DEFAULT_REGION', env('AWS_DEFAULT_REGION')),
+            'bucket' => env('CONTACT_AVATARS_BUCKET', env('AWS_BUCKET')),
+            'url' => env('CONTACT_AVATARS_URL', env('AWS_URL')),
+            'endpoint' => env('CONTACT_AVATARS_ENDPOINT', env('AWS_ENDPOINT')),
+            'use_path_style_endpoint' => env('CONTACT_AVATARS_USE_PATH_STYLE_ENDPOINT', env('AWS_USE_PATH_STYLE_ENDPOINT', false)),
+            'visibility' => 'public',
             'throw' => false,
             'report' => false,
         ],
