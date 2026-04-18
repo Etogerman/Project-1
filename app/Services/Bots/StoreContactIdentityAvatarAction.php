@@ -6,6 +6,7 @@ use App\Data\Bots\DownloadedAvatarData;
 use App\Models\ContactIdentity;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
+use RuntimeException;
 
 class StoreContactIdentityAvatarAction
 {
@@ -15,14 +16,14 @@ class StoreContactIdentityAvatarAction
             return;
         }
 
-        $disk = Storage::disk('public');
+        $disk = $this->avatarStorage()->disk();
         $extension = $this->resolveExtension($avatar);
         $hash = sha1($avatar->contents);
         $path = sprintf('contact-identities/%d/avatar/%s.%s', $identity->id, $hash, $extension);
         $previousPath = $identity->avatar_path;
 
-        if (! $disk->exists($path)) {
-            $disk->put($path, $avatar->contents);
+        if (! $disk->exists($path) && ! $disk->put($path, $avatar->contents)) {
+            throw new RuntimeException('Avatar storage write failed.');
         }
 
         $identity->forceFill([
@@ -31,7 +32,7 @@ class StoreContactIdentityAvatarAction
         ])->save();
 
         if (filled($previousPath) && $previousPath !== $path) {
-            $disk->delete($previousPath);
+            $this->deleteFromKnownDisks($previousPath);
         }
     }
 
@@ -45,8 +46,19 @@ class StoreContactIdentityAvatarAction
         ])->save();
 
         if (filled($previousPath)) {
-            Storage::disk('public')->delete($previousPath);
+            $this->deleteFromKnownDisks($previousPath);
         }
+    }
+
+    protected function avatarStorage(): ContactIdentityAvatarStorage
+    {
+        return app(ContactIdentityAvatarStorage::class);
+    }
+
+    protected function deleteFromKnownDisks(string $path): void
+    {
+        $this->avatarStorage()->disk()->delete($path);
+        Storage::disk('public')->delete($path);
     }
 
     protected function resolveExtension(DownloadedAvatarData $avatar): string
