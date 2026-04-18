@@ -7,7 +7,9 @@ use App\Jobs\SyncContactIdentityAvatarJob;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ContactIdentity;
+use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Bots\StoreContactIdentityAvatarAction;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -321,6 +323,71 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         $identity->refresh();
 
         $this->assertNull($identity->avatar_path);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'level' => ChannelActivityLog::LEVEL_WARNING,
+            'event' => 'contact.avatar_sync_failed',
+        ]);
+    }
+
+    public function test_sync_contact_identity_avatar_job_keeps_existing_avatar_when_contact_avatar_storage_write_fails(): void
+    {
+        $this->fakeAvatarDisks();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+            'avatar_path' => 'contact-identities/temp/avatar/stale-avatar.jpg',
+            'avatar_updated_at' => now(),
+        ]);
+
+        $originalAvatarPath = sprintf('contact-identities/%d/avatar/stale-avatar.jpg', $identity->id);
+        $originalAvatarUpdatedAt = $identity->avatar_updated_at;
+
+        $identity->forceFill([
+            'avatar_path' => $originalAvatarPath,
+        ])->save();
+
+        Storage::disk('public')->put($originalAvatarPath, 'stale-avatar');
+
+        $failingDisk = \Mockery::mock(FilesystemAdapter::class);
+        $failingDisk->shouldReceive('exists')
+            ->once()
+            ->with(\Mockery::type('string'))
+            ->andReturnFalse();
+        $failingDisk->shouldReceive('put')
+            ->once()
+            ->with(\Mockery::type('string'), $this->tinyPngAvatar())
+            ->andReturnFalse();
+        $failingDisk->shouldReceive('delete')->never();
+
+        $avatarStorage = \Mockery::mock(ContactIdentityAvatarStorage::class);
+        $avatarStorage->shouldReceive('disk')->andReturn($failingDisk);
+
+        app()->instance(ContactIdentityAvatarStorage::class, $avatarStorage);
+
+        Http::fake([
+            'https://cdn.max.ru/avatar.php' => Http::response(
+                $this->tinyPngAvatar(),
+                200,
+                ['Content-Type' => 'image/png'],
+            ),
+        ]);
+
+        $job = new SyncContactIdentityAvatarJob($identity->id, 'https://cdn.max.ru/avatar.php');
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertSame($originalAvatarPath, $identity->avatar_path);
+        $this->assertTrue($identity->avatar_updated_at?->equalTo($originalAvatarUpdatedAt));
+        Storage::disk('public')->assertExists($originalAvatarPath);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'level' => ChannelActivityLog::LEVEL_WARNING,

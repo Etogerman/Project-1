@@ -6,6 +6,7 @@ use App\Data\Bots\DownloadedAvatarData;
 use App\Models\ContactIdentity;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
+use RuntimeException;
 
 class StoreContactIdentityAvatarAction
 {
@@ -21,8 +22,8 @@ class StoreContactIdentityAvatarAction
         $path = sprintf('contact-identities/%d/avatar/%s.%s', $identity->id, $hash, $extension);
         $previousPath = $identity->avatar_path;
 
-        if (! $disk->exists($path)) {
-            $disk->put($path, $avatar->contents);
+        if (! $disk->exists($path) && ! $disk->put($path, $avatar->contents)) {
+            throw new RuntimeException('Avatar storage write failed.');
         }
 
         $identity->forceFill([
