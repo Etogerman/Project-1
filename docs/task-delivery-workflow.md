@@ -280,6 +280,30 @@ Helper-review не заменяет `author self-check` и не заменяет
 Варианты нумеруются.
 Формат рекомендации: `Рекомендация: 1. ...`
 
+## Этап 12A. Выбор workflow
+
+Перед рекомендацией следующего шага агент сначала определяет, какой workflow
+применим к текущему active slice.
+
+Порядок:
+1. определить фактический write-set текущего slice
+2. определить тип slice: `code stream` или `docs-only`
+3. определить целевой delivery-path текущего slice
+4. определить, есть ли branch/worktree contamination от более раннего stream-а
+5. только после этого выбирать следующий шаг процесса
+
+Правило приоритета:
+- текущий active slice важнее истории ветки
+- текущий write-set важнее прошлого delivery-контура
+- `docs-only path` имеет приоритет над обычной цепочкой `staging -> main`,
+  если текущий slice удовлетворяет условиям `docs-only`
+
+Если текущий slice является `docs-only`, но рабочая ветка или worktree
+содержит историю более раннего stream-а, следующим правильным шагом считается:
+1. clean branch/worktree от `origin/main`
+2. перенос только текущего `docs-only` diff
+3. `draft PR` сразу в `main`
+
 Правило рекомендации:
 1. Если действует локальный режим и `commit` не разрешён, рекомендуемый вариант — `1. Остановиться`.
 2. Если действует локальный режим и `commit` разрешён, рекомендуемый вариант — `1. Commit`.
@@ -290,6 +314,9 @@ Helper-review не заменяет `author self-check` и не заменяет
 7. Если действует уровень `до merge в main` и `staging smoke` уже зелёный, рекомендуемый вариант до публикации — `1. Commit + push + draft PR в main`.
 8. Если действует уровень `до merge в main` и `draft` PR в `main` уже validated, рекомендуемый вариант — `1. Перевести PR в ready`.
 9. Если действует уровень `до merge в main` и PR в `main` уже `ready`, рекомендуемый вариант — `1. Merge в main`.
+10. Если `merge` в `main` уже выполнен, рекомендуемый вариант — `1. Ручной production deploy`.
+11. Если ручной production deploy уже выполнен, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
+12. Если production smoke закрыт успешно, рекомендуемый вариант — `1. Cleanup` или `1. Следующая задача`.
 
 Правило следующего шага процесса:
 1. Правило следующего шага процесса имеет приоритет над локальной паузой на контрольной точке.
@@ -301,6 +328,9 @@ Helper-review не заменяет `author self-check` и не заменяет
    - acceptance текущей точки не закрыт
    - следующий шаг выходит за согласованный execution ceiling
    - пользователь сам хочет паузу
+6. Для Abrikosoff Connector после `merge` в `main` следующим шагом процесса считается `Ручной production deploy`.
+7. После production deploy следующим шагом процесса считается `Production Post-Deploy Smoke`.
+8. Статус dangerous op ограничивает исполнение, но не подменяет собой рекомендацию следующего шага процесса.
 
 Результат:
 - пользователь видит честную следующую точку выбора без скрытого расширения полномочий агента.
@@ -366,10 +396,10 @@ Helper-review не заменяет `author self-check` и не заменяет
 - отдельную контрольную точку после перевода PR в `ready`
 - `merge` в `main`
 
-`merge` в `main` не включает автоматически `production deploy`.
+Для Abrikosoff Connector после `merge` в `main` следующим шагом release-flow считается ручной production deploy.
 
 Результат:
-- validated diff доведён до `merge` в `main` в рамках отдельной явной делегации.
+- validated diff доведён до `merge` в `main` в рамках отдельной явной делегации и передан в production handoff.
 
 ## Этап 16. Dangerous ops
 
@@ -396,6 +426,13 @@ Helper-review не заменяет `author self-check` и не заменяет
 - другие markdown/текстовые регламенты
 
 И только если stream стартует из clean branch/worktree от `origin/main` без недокументального хвоста в рабочем контексте.
+
+Для `docs-only` slice рекомендация следующего шага строится по `docs-only path`,
+а не по предыдущему code stream.
+
+Если текущая ветка или worktree содержит историю более раннего stream-а,
+агент рекомендует не публикацию этой истории как есть, а clean branch/worktree
+от `origin/main` с переносом только текущего `docs-only` slice.
 
 По команде пользователя на документальный путь агент может пройти:
 - clean branch/worktree от `origin/main`
@@ -454,7 +491,8 @@ Handoff-точка — это допустимая точка остановки
 
 Stream считается полностью закрытым только когда выполнены все follow-up для того уровня, до которого он был делегирован.
 
-Если для текущего release-flow после `merge` в `main` ещё обязателен ручной production deploy и post-deploy smoke, `merge` в `main` остаётся только handoff-точкой, а хвост не считается закрытым до завершения этого post-deploy контура по правилам `docs/post-deploy-smoke.md`.
+Для Abrikosoff Connector `merge` в `main` остаётся только handoff-точкой.
+Хвост stream-а остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
 
 Результат:
 - у stream есть честная точка завершения без путаницы между локальной готовностью, `staging` и `main`.
