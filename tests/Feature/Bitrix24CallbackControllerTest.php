@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\ProcessBitrix24InstallCallbackJob;
 use App\Jobs\ProcessBitrix24WebhookEventJob;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -49,6 +50,7 @@ class Bitrix24CallbackControllerTest extends TestCase
                 'scope' => ['crm', 'tasks'],
                 'access_token' => 'secret-access-token',
                 'refresh_token' => 'secret-refresh-token',
+                'client_secret' => 'secret-client-secret',
                 'expires' => (string) now()->addHour()->timestamp,
             ],
         ]);
@@ -76,6 +78,7 @@ class Bitrix24CallbackControllerTest extends TestCase
         $this->assertArrayNotHasKey('refresh_token', $connection->install_payload['auth']);
 
         $event = Bitrix24WebhookEvent::query()->firstOrFail();
+        $syncLog = Bitrix24SyncLog::query()->latest('id')->firstOrFail();
 
         $this->assertSame(Bitrix24WebhookEvent::TYPE_INSTALL, $event->callback_type);
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
@@ -84,6 +87,13 @@ class Bitrix24CallbackControllerTest extends TestCase
         $this->assertSame($expectedTokenHash, $event->payload['auth']['application_token_hash']);
         $this->assertArrayNotHasKey('access_token', $event->payload['auth']);
         $this->assertArrayNotHasKey('refresh_token', $event->payload['auth']);
+        $this->assertSame('install_callback_stored', $syncLog->operation);
+        $this->assertSame(Bitrix24SyncLog::STATUS_SUCCESS, $syncLog->status);
+        $this->assertArrayNotHasKey('application_token', $syncLog->request_payload['auth']);
+        $this->assertSame($expectedTokenHash, $syncLog->request_payload['auth']['application_token_hash']);
+        $this->assertArrayNotHasKey('access_token', $syncLog->request_payload['auth']);
+        $this->assertArrayNotHasKey('refresh_token', $syncLog->request_payload['auth']);
+        $this->assertArrayNotHasKey('client_secret', $syncLog->request_payload['auth']);
 
         Http::assertSent(function ($request): bool {
             return $request->url() === 'https://crm.alexlesley.biz/rest/app.info.json'
@@ -182,6 +192,9 @@ class Bitrix24CallbackControllerTest extends TestCase
                 'application_token' => 'app-token',
                 'client_endpoint' => 'https://client-endpoint.example/rest/',
                 'server_endpoint' => 'https://server-endpoint.example/rest/',
+                'access_token' => 'runtime-secret-access-token',
+                'refresh_token' => 'runtime-secret-refresh-token',
+                'client_secret' => 'runtime-secret-client-secret',
             ],
         ]);
 
@@ -190,11 +203,20 @@ class Bitrix24CallbackControllerTest extends TestCase
             ->assertJsonPath('method', 'POST');
 
         $event = Bitrix24WebhookEvent::query()->firstOrFail();
+        $syncLog = Bitrix24SyncLog::query()->latest('id')->firstOrFail();
+        $expectedTokenHash = hash('sha256', 'app-token');
 
         $this->assertSame(Bitrix24WebhookEvent::TYPE_EVENTS, $event->callback_type);
         $this->assertSame('ONCRMCONTACTUPDATE', $event->event_name);
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
         $this->assertSame($connection->id, $event->connection_id);
+        $this->assertSame('events_callback_stored', $syncLog->operation);
+        $this->assertSame(Bitrix24SyncLog::STATUS_SUCCESS, $syncLog->status);
+        $this->assertArrayNotHasKey('application_token', $syncLog->request_payload['auth']);
+        $this->assertSame($expectedTokenHash, $syncLog->request_payload['auth']['application_token_hash']);
+        $this->assertArrayNotHasKey('access_token', $syncLog->request_payload['auth']);
+        $this->assertArrayNotHasKey('refresh_token', $syncLog->request_payload['auth']);
+        $this->assertArrayNotHasKey('client_secret', $syncLog->request_payload['auth']);
 
         $connection->refresh();
 
