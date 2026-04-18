@@ -9,7 +9,7 @@
 - staging деплоится из ветки `staging`
 - staging используется для интеграционной приёмки после push или merge в `staging`
 - production выкатывается отдельно, вручную
-- следующий шаг release-flow после `merge` в `main` — ручной production deploy
+- для code/release stream следующий шаг release-flow после `merge` в `main` — ручной production deploy
 - production smoke имеет смысл только после фактического production deploy
 
 ## Goal

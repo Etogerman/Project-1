@@ -52,9 +52,9 @@
    - для продолжения не хватает данных
    - пользователь сам хочет паузу
 27. Если следующий шаг требует отдельной команды пользователя, агент рекомендует именно этот следующий шаг процесса и отдельной строкой указывает: `Для исполнения нужна команда пользователя.`
-28. Для Abrikosoff Connector production release всегда включает ручной production deploy после `merge` в `main`.
-29. Если пользователь спрашивает о следующем логичном и правильном шаге после `merge` в `main`, агент рекомендует `Ручной production deploy`.
-30. После завершённого production deploy следующим шагом процесса считается `Production Post-Deploy Smoke` по `docs/post-deploy-smoke.md`.
+28. Для Abrikosoff Connector production release code/runtime stream-а включает ручной production deploy после `merge` в `main`.
+29. Если пользователь спрашивает о следующем логичном и правильном шаге после `merge` в `main` для code/release stream, агент рекомендует `Ручной production deploy`.
+30. После завершённого production deploy для code/release stream следующим шагом процесса считается `Production Post-Deploy Smoke` по `docs/post-deploy-smoke.md`.
 31. Статус dangerous op ограничивает исполнение, но не подменяет собой рекомендацию следующего шага процесса.
 32. Перед рекомендацией следующего шага агент сначала определяет workflow текущего active slice по фактическому write-set и целевому delivery-path.
 33. Рекомендация следующего шага строится по текущему active slice, а не по имени ветки, истории предыдущего stream или прошлому delivery-контуру.

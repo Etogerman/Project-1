@@ -314,8 +314,8 @@ Helper-review не заменяет `author self-check` и не заменяет
 7. Если действует уровень `до merge в main` и `staging smoke` уже зелёный, рекомендуемый вариант до публикации — `1. Commit + push + draft PR в main`.
 8. Если действует уровень `до merge в main` и `draft` PR в `main` уже validated, рекомендуемый вариант — `1. Перевести PR в ready`.
 9. Если действует уровень `до merge в main` и PR в `main` уже `ready`, рекомендуемый вариант — `1. Merge в main`.
-10. Если `merge` в `main` уже выполнен, рекомендуемый вариант — `1. Ручной production deploy`.
-11. Если ручной production deploy уже выполнен, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
+10. Если `merge` в `main` уже выполнен для code/release stream, рекомендуемый вариант — `1. Ручной production deploy`.
+11. Если ручной production deploy уже выполнен для code/release stream, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
 12. Если production smoke закрыт успешно, рекомендуемый вариант — `1. Cleanup` или `1. Следующая задача`.
 
 Правило следующего шага процесса:
@@ -328,8 +328,8 @@ Helper-review не заменяет `author self-check` и не заменяет
    - acceptance текущей точки не закрыт
    - следующий шаг выходит за согласованный execution ceiling
    - пользователь сам хочет паузу
-6. Для Abrikosoff Connector после `merge` в `main` следующим шагом процесса считается `Ручной production deploy`.
-7. После production deploy следующим шагом процесса считается `Production Post-Deploy Smoke`.
+6. Для Abrikosoff Connector после `merge` в `main` следующим шагом процесса считается `Ручной production deploy`, если текущий stream является code/release stream.
+7. После production deploy следующим шагом процесса считается `Production Post-Deploy Smoke`, если текущий stream является code/release stream.
 8. Статус dangerous op ограничивает исполнение, но не подменяет собой рекомендацию следующего шага процесса.
 
 Результат:
@@ -396,7 +396,7 @@ Helper-review не заменяет `author self-check` и не заменяет
 - отдельную контрольную точку после перевода PR в `ready`
 - `merge` в `main`
 
-Для Abrikosoff Connector после `merge` в `main` следующим шагом release-flow считается ручной production deploy.
+Для Abrikosoff Connector после `merge` в `main` следующим шагом release-flow считается ручной production deploy только для code/release stream.
 
 Результат:
 - validated diff доведён до `merge` в `main` в рамках отдельной явной делегации и передан в production handoff.
@@ -491,8 +491,9 @@ Handoff-точка — это допустимая точка остановки
 
 Stream считается полностью закрытым только когда выполнены все follow-up для того уровня, до которого он был делегирован.
 
-Для Abrikosoff Connector `merge` в `main` остаётся только handoff-точкой.
-Хвост stream-а остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
+Для Abrikosoff Connector `merge` в `main` остаётся только handoff-точкой для code/release stream.
+Для code/release stream хвост остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
+Для `docs-only` path после `merge` в `main` следующим шагом считается cleanup временных артефактов или переход к следующей задаче.
 
 Результат:
 - у stream есть честная точка завершения без путаницы между локальной готовностью, `staging` и `main`.
