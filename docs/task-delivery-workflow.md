@@ -78,6 +78,7 @@
 1. ссылка на конкретный документ
 2. ссылка на конкретный commit/hash (`Spec revision`)
 3. явная фиксация, что именно эта revision является source of truth для текущего implementation stream
+4. обновление локального реестра [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md), если существенный stream реально открыт в основном repo
 
 ### Чего недостаточно
 
@@ -169,6 +170,7 @@
 
 Для мелких исправлений и коротких локальных действий ТЗ может оставаться в чате.
 Для существенных stream-ов должно существовать versioned ТЗ во внешнем spec-repo на конкретной `Spec revision`.
+Если такой stream реально открыт в основном repo, его нужно явно зафиксировать в [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md).
 К существенным stream-ам относятся как минимум:
 - staging-based rollout
 - multi-step implementation
