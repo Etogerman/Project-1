@@ -103,6 +103,127 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         Storage::disk('contact_avatars')->assertExists((string) $identity->avatar_path);
     }
 
+    public function test_sync_contact_identity_avatar_job_fetches_max_avatar_via_chats_api_when_direct_url_is_missing(): void
+    {
+        $this->fakeAvatarDisks();
+        $maxAvatar = $this->tinyPngAvatar();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        Http::fake([
+            'https://platform-api.max.ru/chats/65238156' => Http::response([
+                'dialog_with_user' => [
+                    'avatar_url' => 'https://i.oneme.ru/i?r=avatar-small',
+                    'full_avatar_url' => 'https://i.oneme.ru/i?r=avatar-full',
+                ],
+            ]),
+            'https://i.oneme.ru/i?r=avatar-full' => Http::response(
+                $maxAvatar,
+                200,
+                ['Content-Type' => 'image/png'],
+            ),
+        ]);
+
+        $job = new SyncContactIdentityAvatarJob($identity->id, null, '65238156');
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertNotNull($identity->avatar_path);
+        $this->assertStringEndsWith('.png', (string) $identity->avatar_path);
+        Storage::disk('contact_avatars')->assertExists((string) $identity->avatar_path);
+
+        Http::assertSentCount(2);
+    }
+
+    public function test_sync_contact_identity_avatar_job_handles_legacy_serialized_payload_without_external_chat_id(): void
+    {
+        $this->fakeAvatarDisks();
+        $maxAvatar = $this->tinyPngAvatar();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        Http::fake([
+            'https://cdn.max.ru/avatar.php' => Http::response(
+                $maxAvatar,
+                200,
+                ['Content-Type' => 'image/png'],
+            ),
+        ]);
+
+        $legacySerializedJob = sprintf(
+            'O:%d:"%s":2:{s:17:"contactIdentityId";i:%d;s:9:"avatarUrl";s:29:"https://cdn.max.ru/avatar.php";}',
+            strlen(SyncContactIdentityAvatarJob::class),
+            SyncContactIdentityAvatarJob::class,
+            $identity->id,
+        );
+
+        /** @var SyncContactIdentityAvatarJob $job */
+        $job = unserialize($legacySerializedJob);
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertNull($job->externalChatId);
+        $this->assertNotNull($identity->avatar_path);
+        $this->assertStringEndsWith('.png', (string) $identity->avatar_path);
+        Storage::disk('contact_avatars')->assertExists((string) $identity->avatar_path);
+    }
+
+    public function test_sync_contact_identity_avatar_job_keeps_identity_without_avatar_when_max_chat_has_no_avatar_fields(): void
+    {
+        $this->fakeAvatarDisks();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '228532008',
+        ]);
+
+        Http::fake([
+            'https://platform-api.max.ru/chats/65238156' => Http::response([
+                'dialog_with_user' => [
+                    'name' => 'MAX user',
+                ],
+            ]),
+        ]);
+
+        $job = new SyncContactIdentityAvatarJob($identity->id, null, '65238156');
+
+        app()->call([$job, 'handle']);
+
+        $identity->refresh();
+
+        $this->assertNull($identity->avatar_path);
+        $this->assertNull($identity->avatar_updated_at);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.avatar_sync_failed',
+        ]);
+    }
+
     public function test_sync_contact_identity_avatar_job_detects_telegram_avatar_type_from_contents_when_provider_returns_octet_stream(): void
     {
         $this->fakeAvatarDisks();
