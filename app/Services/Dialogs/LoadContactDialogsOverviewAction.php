@@ -2,10 +2,12 @@
 
 namespace App\Services\Dialogs;
 
+use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 class LoadContactDialogsOverviewAction
@@ -188,7 +190,7 @@ class LoadContactDialogsOverviewAction
         };
     }
 
-    protected function resolveDialogRouteStatus(Dialog $dialog): \App\Data\Dialogs\DialogRouteStatusData
+    protected function resolveDialogRouteStatus(Dialog $dialog): DialogRouteStatusData
     {
         return $this->resolveDialogRouteStatusAction->handle($dialog);
     }
