@@ -148,6 +148,6 @@ package пишет fallback-лог в:
 
 ## Runbook
 
-Короткий operational runbook лежит в:
+Короткий operational runbook лежит во внешнем specs-репозитории:
 
-- `/Users/abrikosov/Documents/Проект-1/docs/bitrix24/openlines-box-crm-rebinding-runbook.md`
+- `/Users/abrikosov/Documents/Project-1-specs/reference/bitrix24/openlines-box-crm-rebinding-runbook.md`
