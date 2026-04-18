@@ -762,10 +762,14 @@ class ViewDialog extends ViewRecord
             return null;
         }
 
-        $avatarStorage = app(ContactIdentityAvatarStorage::class);
+        try {
+            $avatarStorage = app(ContactIdentityAvatarStorage::class);
 
-        if ($avatarStorage->exists($avatarPath)) {
-            return $avatarStorage->url($avatarPath);
+            if ($avatarStorage->exists($avatarPath)) {
+                return $avatarStorage->url($avatarPath);
+            }
+        } catch (Throwable) {
+            // Fallback to the legacy disk when object storage is temporarily unavailable.
         }
 
         $legacyDisk = Storage::disk('public');
