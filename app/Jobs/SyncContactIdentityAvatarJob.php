@@ -18,11 +18,21 @@ class SyncContactIdentityAvatarJob implements ShouldQueue
 
     public int $tries = 1;
 
+    public int $contactIdentityId;
+
+    public ?string $avatarUrl = null;
+
+    public ?string $externalChatId = null;
+
     public function __construct(
-        public int $contactIdentityId,
-        public ?string $avatarUrl = null,
-        public ?string $externalChatId = null,
-    ) {}
+        int $contactIdentityId,
+        ?string $avatarUrl = null,
+        ?string $externalChatId = null,
+    ) {
+        $this->contactIdentityId = $contactIdentityId;
+        $this->avatarUrl = $avatarUrl;
+        $this->externalChatId = $externalChatId;
+    }
 
     public function handle(SyncContactIdentityAvatarAction $syncContactIdentityAvatarAction): void
     {
