@@ -90,6 +90,26 @@ git -C /Users/abrikosov/Documents/Project-1-specs rev-parse HEAD
 2. потом фиксируется новый `Spec revision`
 3. только после этого продолжается implementation stream
 
+## Как закрывать внешний spec
+
+После закрытия acceptance существенного stream-а нужно синхронизировать весь
+spec-контур, а не только остановить code/runtime delivery.
+
+Практический порядок такой:
+
+1. сверить фактический runtime и delivery-результат с текущим `Spec doc`
+2. если stream всё ещё открыт, обновить статус документа до `active` или `partial`
+3. если acceptance документа закрыт полностью, перевести документ как минимум в `implemented`
+4. отдельно обновить канонический статус в `streams/README.md`
+5. синхронизировать локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md): в нём должны оставаться только реально открытые существенные stream-ы
+6. если архивирование не делается в том же шаге, оставить явный follow-up `archive pending` и не возвращать документ в `planned`
+7. отдельным `docs-only` шагом перенести полностью закрытый документ в `archive/`
+
+Жёсткое правило:
+
+- статус `planned` недопустим для документа, acceptance которого уже
+  материализован в основном repo
+
 ## Как ссылаться на внешний spec в работе
 
 В чате, commit/PR и delivery-контуре полезно использовать один и тот же блок:

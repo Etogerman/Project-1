@@ -94,6 +94,21 @@
 3. явная фиксация, что именно эта revision является source of truth для текущего implementation stream
 4. обновление локального реестра [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md), если существенный stream реально открыт в основном repo
 
+### Жизненный цикл внешнего spec-doc
+
+Статусы внешнего `Spec doc` интерпретируются так:
+
+1. `planned` — направление согласовано, но implementation stream по документу ещё не открыт в основном repo и acceptance ещё не материализован в runtime
+2. `active` — существенный implementation stream реально открыт; `Spec revision` зафиксирован; документ является текущим source of truth для активного slice
+3. `partial` — часть acceptance уже материализована или завершён отдельный slice, но документ ещё не закрыт полностью и имеет следующий рабочий follow-up
+4. `implemented` — acceptance документа в рамках согласованного scope закрыт и материализован в основном repo; перенос в `archive/` может быть отдельным `docs-only` follow-up
+
+Жёсткие правила:
+
+1. закрытый runtime-acceptance не может оставаться в статусе `planned`
+2. если acceptance уже материализован, но архивирование ещё не выполнено, допустимо состояние `implemented` + явный `archive pending`, но не `planned`
+3. если существенный stream реально открыт в основном repo, локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md) должен отражать тот же `Spec doc`, актуальную `Spec revision` и фактический внешний статус
+
 ### Чего недостаточно
 
 Недостаточно как единственного source of truth:
@@ -549,6 +564,20 @@ Handoff-точка — это допустимая точка остановки
 Новый code stream по умолчанию не начинается, пока этот хвост не закрыт или пользователь явно не разрешил исключение после перечисления хвоста и связанных рисков.
 
 Stream считается полностью закрытым только когда выполнены все follow-up для того уровня, до которого он был делегирован.
+
+Для существенного stream-а полное закрытие включает `spec closure`.
+
+### Spec Closure Checklist
+
+Перед тем как считать существенный stream закрытым, нужно:
+
+1. сверить фактический runtime / validated diff / acceptance с внешним `Spec doc`
+2. обновить статус в самом `Spec doc`, если документ всё ещё содержит собственный статусный блок
+3. обновить каноническую запись во внешнем `streams/README.md`
+4. синхронизировать локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md): оставить там только реально открытые существенные stream-ы, а закрытую запись удалить или заменить актуальной
+5. если перенос документа в `archive/` не делается в том же шаге, явно оставить документ в состоянии `implemented` с отдельным follow-up `archive pending`
+
+Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
 
 Для Abrikosoff Connector `merge` в `main` остаётся только handoff-точкой для code/release stream.
 Для code/release stream хвост остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
