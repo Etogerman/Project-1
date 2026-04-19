@@ -55,12 +55,13 @@
 3. Новый кодовый шаг не начинается, пока не проверен хвост предыдущего stream.
 4. По умолчанию реализация идёт только после read-only анализа и согласованного ТЗ.
 5. Если пользователь явно ограничил шаг локальной работой или явно запретил публикацию, действует локальный режим.
-6. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, для нового code slice обязательный normal default delivery-path: `локальная реализация -> draft PR в staging -> ready/merge в staging -> staging smoke -> draft PR в main -> ready/merge в main -> production deploy -> production smoke`.
+6. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, для нового code slice normal default rollout path: `локальная реализация -> draft PR в staging -> ready/merge в staging -> staging smoke -> draft PR в main -> ready/merge в main -> production deploy -> production smoke`.
 7. Первый внешний publish-level для нового code slice по умолчанию — `draft PR в staging`.
-8. Уровень `PR в staging` доводит шаг до validated PR и не считается staging-verification.
-9. Прямой `PR` в `main` для нового code slice запрещён без отдельной явной команды пользователя.
-10. Если команда двусмысленна, агент выбирает более безопасный вариант и останавливается на нём.
-11. Для существенных stream-ов требуется versioned ТЗ; чат-only ТЗ достаточно только для мелких исправлений и коротких локальных действий.
+8. Этот rollout path не расширяет execution ceiling текущей делегации. Команда `реализовать` по умолчанию доводит новый code slice только до ближайшего publish-level в рамках согласованного уровня; если не оговорено иное, это `draft PR в staging`.
+9. Уровень `PR в staging` доводит шаг до validated PR и не считается staging-verification.
+10. Прямой `PR` в `main` для нового code slice запрещён без отдельной явной команды пользователя.
+11. Если команда двусмысленна, агент выбирает более безопасный вариант и останавливается на нём.
+12. Для существенных stream-ов требуется versioned ТЗ; chat-only ТЗ остаётся допустимым для мелких исправлений и маленьких публикуемых фиксов, пока stream не признан существенным.
 
 ## Приоритет rollout discipline
 
@@ -71,6 +72,7 @@
    - остановиться
    - назвать это process-risk или process-ошибкой
    - запросить явное решение пользователя
+5. Staging-first rollout сам по себе не делает любой новый code slice существенным stream-ом с обязательным внешним versioned ТЗ.
 
 ## Где хранится ТЗ
 
@@ -185,8 +187,10 @@
 Если такой stream реально открыт в основном repo, его нужно явно зафиксировать в [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md).
 По умолчанию согласование нового code slice означает staging-first rollout.
 Если пользователь хочет пропустить `staging`, это должно быть оговорено отдельно и явно.
+По умолчанию это не поднимает execution ceiling выше `draft PR в staging`; `ready`, `merge`, `staging smoke`, `PR в main`, `merge` в `main`, `production deploy` и `production smoke` требуют отдельной явной делегации, если иное заранее не согласовано.
+Мелкий публикуемый fix может оставаться на chat-only ТЗ, если stream не признан существенным.
 К существенным stream-ам относятся как минимум:
-- staging-based rollout
+- rollout, заранее делегированный выше уровня `draft PR в staging`
 - multi-step implementation
 - изменения с runtime/data-flow/delivery риском
 - новая интеграционная модель или новый сложный slice внутри интеграции
