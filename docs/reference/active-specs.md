@@ -11,7 +11,7 @@
 
 ## Текущее состояние
 
-Сейчас в основном репозитории зафиксирован один открытый существенный stream:
+Сейчас в основном репозитории зафиксированы два открытых существенных stream-а:
 
 ### Deployment-safe avatar storage
 
@@ -21,6 +21,18 @@
 - внешний статус документа: `planned`
 - локальный смысл: source of truth для следующего implementation stream по
   deployment-safe хранению аватарок уже зафиксирован и открыт в основном repo
+
+### Critical fixes v7
+
+- `Spec repo`: `Etogerman/Project-1-specs`
+- `Spec doc`: `streams/tz-critical-fixes-v7.md`
+- `Spec revision`: `320c45169e52e1f39b1fe6de910c0701a8ebbb84`
+- внешний статус документа: `partial`
+- текущий активный slice при продолжении stream-а:
+  `Slice 2A: Auto-Reply Duplicate Re-Dispatch Guard`
+- локальный смысл: stream открыт в основном repo как следующий active stream;
+  запуск implementation path требует отдельной явной делегации пользователя и
+  согласования execution ceiling
 
 ## Как использовать этот файл
 
