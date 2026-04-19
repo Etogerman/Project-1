@@ -388,6 +388,9 @@ Helper-review не заменяет `author self-check` и не заменяет
 
 Требует отдельной явной делегации и начинается только после успешного прохождения через `staging`.
 
+Это не `merge staging -> main`.
+`PR` в `main` не открывается из накопленного состояния `staging`; источник этого шага — только `validated diff` текущего active slice.
+
 Разрешает:
 - draft PR в `main` только из validated diff текущего шага, а не из накопленного состояния `staging`
 - `CI`
@@ -398,10 +401,29 @@ Helper-review не заменяет `author self-check` и не заменяет
 - отдельную контрольную точку после перевода PR в `ready`
 - `merge` в `main`
 
-Для Abrikosoff Connector после `merge` в `main` следующим шагом release-flow считается ручной production deploy только для code/release stream.
+### Частая ошибка
+
+Неправильно:
+- после успешного прохождения через `staging` описывать следующий шаг как `staging -> main`
+- открывать `PR` в `main` из накопленного состояния ветки `staging`
+
+Правильно:
+- после успешного этапа `через staging` открывать отдельный `draft PR` в `main`
+- строить этот `PR` только из `validated diff` текущего active slice
+
+Для Abrikosoff Connector после `merge` в `main` следующим шагом release-flow считается `Ручной production deploy` только для code/release stream.
 
 Результат:
 - validated diff доведён до `merge` в `main` в рамках отдельной явной делегации и передан в production handoff.
+
+### Короткая таблица переходов
+
+| Текущий уровень | Следующий правильный уровень |
+| --- | --- |
+| `PR в staging` | `через staging` |
+| `через staging` | `до merge в main` |
+| `до merge в main` | `Ручной production deploy` |
+| `Ручной production deploy` | `Production Post-Deploy Smoke` |
 
 ## Этап 16. Dangerous ops
 
