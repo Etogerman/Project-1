@@ -17,7 +17,7 @@
 
 - `Spec repo`: `Etogerman/Project-1-specs`
 - `Spec doc`: `streams/tz-deployment-safe-avatar-storage.md`
-- `Spec revision`: `4c596b1dc3b662f28bc015ceeed5c806d48f65d2`
+- `Spec revision`: `5d50917db8773fcb221002bf28b1a2f77a7ac61a`
 - внешний статус документа: `partial`
 - локальный смысл: source of truth для следующего implementation stream по
   deployment-safe хранению аватарок уже зафиксирован и открыт в основном repo
