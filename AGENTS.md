@@ -63,23 +63,25 @@
 36. Статус dangerous op ограничивает исполнение, но не подменяет собой рекомендацию следующего шага процесса.
 37. Перед рекомендацией следующего шага агент сначала определяет workflow текущего active slice по фактическому write-set и целевому delivery-path.
 38. Рекомендация следующего шага строится по текущему active slice, а не по имени ветки, истории предыдущего stream или прошлому delivery-контуру.
-39. Если текущий active slice удовлетворяет условиям `docs-only path`, агент рекомендует следующий шаг только из `docs-only path`.
-40. Если текущий `docs-only` slice находится на ветке или в worktree с более ранней историей другого stream-а, следующим правильным шагом считается clean branch/worktree от `origin/main` с переносом только текущего `docs-only` diff.
-41. После любого локального изменения файлов агент обязан явно сообщить:
+39. Перед рекомендацией следующего delivery-шагa агент обязан назвать точный delivery-level из `docs/task-delivery-workflow.md` и не имеет права выводить шаг из общей топологии веток или заменять именованный этап общим git-ярлыком вроде `staging -> main`.
+40. Для уровня `до merge в main` агент обязан явно проговаривать, что `draft PR` в `main` строится из `validated diff` текущего active slice, а не из состояния ветки `staging`.
+41. Если текущий active slice удовлетворяет условиям `docs-only path`, агент рекомендует следующий шаг только из `docs-only path`.
+42. Если текущий `docs-only` slice находится на ветке или в worktree с более ранней историей другого stream-а, следующим правильным шагом считается clean branch/worktree от `origin/main` с переносом только текущего `docs-only` diff.
+43. После любого локального изменения файлов агент обязан явно сообщить:
    - какие файлы изменены
    - опубликованы ли изменения или остаются только локальным diff
    - является ли это новым хвостом stream-а
-42. Если локальный diff создан намеренно, acceptance текущей локальной точки закрыт и blocker-ов нет, агент обязан рекомендовать следующий delivery-шаг процесса, а не останавливаться на констатации локального статуса.
-43. Для docs-only, policy-only и reference-only изменений следующим шагом по умолчанию считается отдельный docs-only stream: commit -> draft PR, если пользователь явно не выбрал revert, pause или отказ от публикации.
-44. Если публикация требует отдельной команды пользователя, агент всё равно обязан назвать именно следующий publish-шаг и отдельно указать: `Для исполнения нужна команда пользователя.`
-45. Для любого нового code stream, кроме `docs-only` stream и явно разрешённого пользователем direct-to-main exception, normal default rollout path: `локальная реализация -> draft PR в staging -> ready/merge в staging -> staging smoke -> draft PR в main -> ready/merge в main -> production deploy -> production smoke`.
-46. Этот rollout path не расширяет execution ceiling текущей делегации. Если пользователь просто сказал `реализовать` для нового code slice, ближайший publish-level по умолчанию — `draft PR в staging`; `ready`, `merge`, `staging smoke`, `PR в main`, `merge` в `main`, `production deploy` и `production smoke` требуют отдельной явной делегации, если иное заранее не согласовано.
-47. Первый publish-level для нового code slice по умолчанию — `staging`. Прямой `PR` в `main` для нового code slice запрещён без отдельной явной команды пользователя.
-48. Агент не имеет права самовольно переориентировать уже согласованный staging-first slice на main-first только потому, что `main` ближе к production runtime, выглядит свежее или кажется удобнее для сборки diff.
-49. Если локальный slice уже ошибочно собран от `origin/main`, агент обязан остановиться, явно назвать это process-ошибкой и запросить решение пользователя: пересобрать slice под `staging` или сознательно разрешить direct-to-main exception.
-50. Truth текущего runtime используется для анализа и диагностики, но не отменяет staging-first rollout для нового code slice.
-51. Для мелкого publishable fix chat-only ТЗ остаётся допустимым, если stream не признан существенным; staging-first rollout сам по себе не делает любой новый code slice существенным stream-ом.
-52. Если пользователь не сказал иное, формулировка `реализовать` для нового code slice означает staging-first rollout path в рамках текущего execution ceiling, а не публикацию сразу в `main` и не автоматический проход до `production`.
+44. Если локальный diff создан намеренно, acceptance текущей локальной точки закрыт и blocker-ов нет, агент обязан рекомендовать следующий delivery-шаг процесса, а не останавливаться на констатации локального статуса.
+45. Для docs-only, policy-only и reference-only изменений следующим шагом по умолчанию считается отдельный docs-only stream: commit -> draft PR, если пользователь явно не выбрал revert, pause или отказ от публикации.
+46. Если публикация требует отдельной команды пользователя, агент всё равно обязан назвать именно следующий publish-шаг и отдельно указать: `Для исполнения нужна команда пользователя.`
+47. Для любого нового code stream, кроме `docs-only` stream и явно разрешённого пользователем direct-to-main exception, normal default rollout path: `локальная реализация -> draft PR в staging -> ready/merge в staging -> staging smoke -> draft PR в main -> ready/merge в main -> production deploy -> production smoke`.
+48. Этот rollout path не расширяет execution ceiling текущей делегации. Если пользователь просто сказал `реализовать` для нового code slice, ближайший publish-level по умолчанию — `draft PR в staging`; `ready`, `merge`, `staging smoke`, `PR в main`, `merge` в `main`, `production deploy` и `production smoke` требуют отдельной явной делегации, если иное заранее не согласовано.
+49. Первый publish-level для нового code slice по умолчанию — `staging`. Прямой `PR` в `main` для нового code slice запрещён без отдельной явной команды пользователя.
+50. Агент не имеет права самовольно переориентировать уже согласованный staging-first slice на main-first только потому, что `main` ближе к production runtime, выглядит свежее или кажется удобнее для сборки diff.
+51. Если локальный slice уже ошибочно собран от `origin/main`, агент обязан остановиться, явно назвать это process-ошибкой и запросить решение пользователя: пересобрать slice под `staging` или сознательно разрешить direct-to-main exception.
+52. Truth текущего runtime используется для анализа и диагностики, но не отменяет staging-first rollout для нового code slice.
+53. Для мелкого publishable fix chat-only ТЗ остаётся допустимым, если stream не признан существенным; staging-first rollout сам по себе не делает любой новый code slice существенным stream-ом.
+54. Если пользователь не сказал иное, формулировка `реализовать` для нового code slice означает staging-first rollout path в рамках текущего execution ceiling, а не публикацию сразу в `main` и не автоматический проход до `production`.
 
 ## Стиль взаимодействия
 
