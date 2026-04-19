@@ -22,19 +22,6 @@
 - локальный смысл: source of truth для следующего implementation stream по
   deployment-safe хранению аватарок уже зафиксирован и открыт в основном repo
 
-### Ещё не открытый stream: Critical fixes v7
-
-- `Spec repo`: `Etogerman/Project-1-specs`
-- `Spec doc`: `streams/tz-critical-fixes-v7.md`
-- `Spec revision`: `320c45169e52e1f39b1fe6de910c0701a8ebbb84`
-- внешний статус документа: `partial`
-- следующий активный slice после отдельного открытия этого stream-а:
-  `Slice 2A: Auto-Reply Duplicate Re-Dispatch Guard`
-- локальный смысл: внешний spec уже опубликован и готов к следующему
-  существенному stream-у, но сам stream ещё не открыт в основном repo и не
-  считается active, пока не закрыт текущий active stream и не принято
-  отдельное решение пользователя
-
 ## Как использовать этот файл
 
 1. Если нужно понять, какой внешний spec реально открыт сейчас, сначала смотри этот файл.
