@@ -55,10 +55,22 @@
 3. Новый кодовый шаг не начинается, пока не проверен хвост предыдущего stream.
 4. По умолчанию реализация идёт только после read-only анализа и согласованного ТЗ.
 5. Если пользователь явно ограничил шаг локальной работой или явно запретил публикацию, действует локальный режим.
-6. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, normal default для code stream — уровень `PR в staging`.
-7. Уровень `PR в staging` доводит шаг до validated PR и не считается staging-verification.
-8. Если команда двусмысленна, агент выбирает более безопасный вариант и останавливается на нём.
-9. Для существенных stream-ов требуется versioned ТЗ; чат-only ТЗ достаточно только для мелких исправлений и коротких локальных действий.
+6. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, для нового code slice обязательный normal default delivery-path: `локальная реализация -> draft PR в staging -> ready/merge в staging -> staging smoke -> draft PR в main -> ready/merge в main -> production deploy -> production smoke`.
+7. Первый внешний publish-level для нового code slice по умолчанию — `draft PR в staging`.
+8. Уровень `PR в staging` доводит шаг до validated PR и не считается staging-verification.
+9. Прямой `PR` в `main` для нового code slice запрещён без отдельной явной команды пользователя.
+10. Если команда двусмысленна, агент выбирает более безопасный вариант и останавливается на нём.
+11. Для существенных stream-ов требуется versioned ТЗ; чат-only ТЗ достаточно только для мелких исправлений и коротких локальных действий.
+
+## Приоритет rollout discipline
+
+1. Для нового code slice приоритет у rollout discipline, а не у того, какая ветка ближе к текущему production runtime.
+2. Truth текущего runtime нужен для анализа, диагностики и проверки текущего поведения.
+3. Truth текущего runtime не даёт агенту права самовольно менять normal default rollout с `staging-first` на `main-first`.
+4. Если `main` содержит более свежий runtime-контур, но новый slice ещё не проходил через `staging`, агент обязан:
+   - остановиться
+   - назвать это process-risk или process-ошибкой
+   - запросить явное решение пользователя
 
 ## Где хранится ТЗ
 
@@ -171,6 +183,8 @@
 Для мелких исправлений и коротких локальных действий ТЗ может оставаться в чате.
 Для существенных stream-ов должно существовать versioned ТЗ во внешнем spec-repo на конкретной `Spec revision`.
 Если такой stream реально открыт в основном repo, его нужно явно зафиксировать в [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md).
+По умолчанию согласование нового code slice означает staging-first rollout.
+Если пользователь хочет пропустить `staging`, это должно быть оговорено отдельно и явно.
 К существенным stream-ам относятся как минимум:
 - staging-based rollout
 - multi-step implementation
@@ -200,7 +214,11 @@ Preflight делается непосредственно перед запус�
 ## Этап 8. Запуск stream
 
 Если ТЗ согласовано и preflight чистый:
-- начать новый stream с clean branch от `origin/main`, если это новый шаг
+- если это новый code slice, первый publish-level branch/worktree создаётся от `origin/staging`
+- `origin/main` используется только:
+  - для clean PR в `main` после успешного прохождения через `staging`
+  - для `docs-only` stream
+  - для direct-to-main path, отдельно и явно разрешённого пользователем
 - для существенного stream-а сначала зафиксировать ссылку на внешнее ТЗ и конкретную `Spec revision`
 - для мелкого шага сохранять ТЗ только в чате или как короткий локальный reference-документ при явной договорённости, но не как полный stream-ТЗ в основном репозитории
 - запустить implementation stream в рамках активного slice и согласованного уровня делегации
@@ -305,6 +323,19 @@ Helper-review не заменяет `author self-check` и не заменяет
 1. clean branch/worktree от `origin/main`
 2. перенос только текущего `docs-only` diff
 3. `draft PR` сразу в `main`
+
+## Выбор базовой ветки и publish-level
+
+1. Новый code slice с runtime/data-flow/integration изменением:
+   - локальная реализация от clean worktree/branch на базе `origin/staging`
+   - первый внешний publish-level — `draft PR` в `staging`
+2. Code slice после успешного `staging` path:
+   - clean worktree/branch от `origin/main`
+   - отдельный clean PR в `main`
+3. `Docs-only` stream:
+   - может идти сразу в `main`
+4. Direct-to-main code path:
+   - допустим только по отдельной явной команде пользователя
 
 Правило рекомендации:
 1. Если действует локальный режим и `commit` не разрешён, рекомендуемый вариант — `1. Остановиться`.
