@@ -30,6 +30,7 @@
    - `origin/main`
    - merge commit `1b2c39770894e9b42375d32ce1a89edcfb4b3e91`
    - merge PR `#392`
+   - это frozen analytical/spec baseline, а не branch-base по умолчанию для нового code slice
 3. preparatory `Slice 0A` уже закрыт;
 4. `Slice 1A` уже материализован и прошёл delivery path;
 5. текущий активный implementation slice по spec — `Slice 1B`;
@@ -39,7 +40,8 @@
    - author self-check
 7. execution ceiling текущего active slice:
    - `draft PR` в `staging`
-8. code stream по `Slice 1B` ещё не стартовал и требует отдельной явной команды пользователя.
+8. фактический старт нового code slice остаётся `staging-first`; если к моменту старта `main` свежее `staging`, агент обязан остановиться и запросить отдельное решение пользователя.
+9. code stream по `Slice 1B` ещё не стартовал и требует отдельной явной команды пользователя.
 
 ## Как использовать этот файл
 
