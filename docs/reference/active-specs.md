@@ -11,8 +11,26 @@
 
 ## Текущее состояние
 
-Сейчас в основном репозитории нет открытых существенных stream-ов с
-зафиксированным внешним `Spec revision`.
+Сейчас в основном репозитории зафиксирован один открытый существенный stream:
+
+### Rollback phase 1a Open Lines switch для manual reply на staging
+
+- `Spec repo`: `Etogerman/Project-1-specs`
+- `Spec doc`: `streams/tz-bitrix24-manual-reply-phase-1a-rollback-staging.md`
+- `Spec revision`: `ac6e5fee9f9b49e757cc02ae9592727aad0dbc9a`
+- внешний статус документа: `active`
+- текущий активный slice:
+  `Rollback Slice A: revert #321 + revert #317 + transition quarantine`
+- execution ceiling текущего slice:
+  `draft PR в staging`
+- frozen baseline:
+  - current staging baseline: `332e687669f8bbacdd4658ea2a6f58871ae3eba5`
+  - rollback target `#321`: `f8e8d2f7e3276e9775d4234248947dbab07cdd31`
+  - rollback target `#317`: `00d30bf09137e65a77eca96fd2eb832f6c6f5ff4`
+- локальный смысл:
+  source of truth для rollback stream по возврату manual reply к pre-phase-1a
+  runtime на staging уже открыт; code stream ограничен staging rollback path и
+  не включает `main` или production
 
 ## Как использовать этот файл
 
