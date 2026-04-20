@@ -297,14 +297,20 @@ class BuildBitrix24SetupReportAction
         }
 
         if ($fakeHappyPathEnabled) {
-            return $this->check(
-                'openlines.service_user_id',
-                $label,
-                $trimmed === '' ? '—' : $trimmed,
-                Bitrix24SetupReportResult::STATUS_OK,
-                false,
-                'Fake happy-path is enabled, so the service user is not a blocking requirement until real transport acceptance.',
-            );
+            $fakeHappyPathAllowed = ! app()->environment('production');
+
+            if (! $fakeHappyPathAllowed) {
+                $notes .= ' Fake happy-path is ignored in production.';
+            } else {
+                return $this->check(
+                    'openlines.service_user_id',
+                    $label,
+                    $trimmed === '' ? '—' : $trimmed,
+                    Bitrix24SetupReportResult::STATUS_OK,
+                    false,
+                    'Fake happy-path is enabled outside production, so the service user is not a blocking requirement until real transport acceptance.',
+                );
+            }
         }
 
         if ($trimmed === '' || ! ctype_digit($trimmed) || (int) $trimmed <= 0) {
