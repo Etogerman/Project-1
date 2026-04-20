@@ -141,14 +141,6 @@ Recommended rule of thumb:
 
 If the staging environment is reused continuously, avoid creating extra bots unless the platform or product boundary really requires it.
 
-## Real Open Lines acceptance
-
-Before any real staging acceptance for the Bitrix24 Open Lines manual reply path:
-
-- set `BITRIX24_FAKE_HAPPY_PATH_ENABLED=false`
-- set `BITRIX24_OPENLINES_SERVICE_USER_ID` to the Bitrix user that is allowed to write into the target Open Lines chat
-- verify that the service user can post the manual reply as an operator, not as a client echo
-
 ## Notes
 
 - Do not reuse the temporary Cloudflare tunnel URL as the permanent `APP_URL`.

@@ -69,12 +69,6 @@ production deploy.
 - запуск manual smoke с неверным `expected_app_rev` считается ошибкой запуска,
   а не регрессией приложения
 
-Перед real Bitrix Open Lines manual-reply smoke на staging дополнительно проверить:
-
-- `BITRIX24_FAKE_HAPPY_PATH_ENABLED=false`
-- `BITRIX24_OPENLINES_SERVICE_USER_ID` задан
-- service user реально может писать в целевой Open Lines chat
-
 Если staging не работает или не участвует в приёмке:
 
 - staging не должен оставаться формально включённым в автоматический smoke
@@ -91,11 +85,6 @@ Manual workflow `Production Post-Deploy Smoke` запускается тольк
 
 Production rev-check обязан сначала подтвердить, что в админке уже виден
 именно этот rev, и только потом запускать public/admin smoke.
-
-Перед real production manual-reply smoke дополнительно проверить:
-
-- `BITRIX24_OPENLINES_SERVICE_USER_ID` задан
-- service user реально может писать в целевой Open Lines chat
 
 Проверить:
 

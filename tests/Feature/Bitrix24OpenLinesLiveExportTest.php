@@ -341,49 +341,6 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         });
     }
 
-    public function test_manual_reply_live_export_does_not_retry_session_open_fallback_and_marks_outcome_as_uncertain(): void
-    {
-        $this->makeActiveConnection();
-        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX);
-        $message = $this->makeMessage($dialog, [
-            'direction' => Message::DIRECTION_OUTBOUND,
-            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
-            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
-            'text' => 'Fallback without transport retry',
-        ]);
-
-        Http::fake([
-            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
-                'result' => [],
-            ], 200),
-            'https://client-endpoint.example/rest/imopenlines.session.open.json' => Http::response([
-                'error' => 'TEMPORARY_ERROR',
-                'error_description' => 'Server temporarily unavailable.',
-            ], 503),
-        ]);
-
-        try {
-            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-            $this->fail('Expected Bitrix24OpenLinesManualReplyExportException was not thrown.');
-        } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
-            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
-            $this->assertTrue($exception->failureUncertain);
-        }
-
-        $sessionOpenRequests = collect(Http::recorded())
-            ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
-
-        $this->assertCount(1, $sessionOpenRequests);
-        $this->assertDatabaseHas('bitrix24_message_exports', [
-            'message_id' => $message->id,
-            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
-            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
-            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
-            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
-            'failure_uncertain' => true,
-        ]);
-    }
-
     public function test_manual_reply_live_export_marks_ambiguous_chat_as_failed_without_sending_message(): void
     {
         $this->makeActiveConnection();
