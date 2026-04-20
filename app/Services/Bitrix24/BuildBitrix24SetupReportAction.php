@@ -90,6 +90,7 @@ class BuildBitrix24SetupReportAction
             ),
             $this->buildOpenLinesServiceUserCheck(
                 openLinesEnabled: (bool) data_get($config, 'features.openlines_enabled', false),
+                fakeHappyPathEnabled: (bool) data_get($config, 'features.fake_happy_path_enabled', false),
                 value: (string) data_get($config, 'openlines.service_user_id', ''),
             ),
             $this->buildDistinctConnectorCodesCheck(
@@ -274,7 +275,11 @@ class BuildBitrix24SetupReportAction
     /**
      * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
      */
-    private function buildOpenLinesServiceUserCheck(bool $openLinesEnabled, string $value): array
+    private function buildOpenLinesServiceUserCheck(
+        bool $openLinesEnabled,
+        bool $fakeHappyPathEnabled,
+        string $value,
+    ): array
     {
         $trimmed = trim($value);
         $label = 'Open Lines service user ID';
@@ -288,6 +293,17 @@ class BuildBitrix24SetupReportAction
                 Bitrix24SetupReportResult::STATUS_OK,
                 false,
                 'Open Lines live export is disabled, so the service user is not a blocking requirement.',
+            );
+        }
+
+        if ($fakeHappyPathEnabled) {
+            return $this->check(
+                'openlines.service_user_id',
+                $label,
+                $trimmed === '' ? '—' : $trimmed,
+                Bitrix24SetupReportResult::STATUS_OK,
+                false,
+                'Fake happy-path is enabled, so the service user is not a blocking requirement until real transport acceptance.',
             );
         }
 

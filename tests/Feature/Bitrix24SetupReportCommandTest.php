@@ -82,6 +82,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
         config()->set('bitrix24', array_replace_recursive(config('bitrix24'), [
             'features' => [
                 'openlines_enabled' => true,
+                'fake_happy_path_enabled' => false,
             ],
             'application' => [
                 'client_id' => 'client-id',
@@ -113,6 +114,44 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->expectsOutputToContain('Open Lines service user ID')
             ->expectsOutputToContain('Set a positive BITRIX24_OPENLINES_SERVICE_USER_ID.')
             ->assertFailed();
+    }
+
+    public function test_command_allows_missing_openlines_service_user_id_for_fake_happy_path(): void
+    {
+        config()->set('bitrix24', array_replace_recursive(config('bitrix24'), [
+            'features' => [
+                'openlines_enabled' => true,
+                'fake_happy_path_enabled' => true,
+            ],
+            'application' => [
+                'client_id' => 'client-id',
+                'client_secret' => 'client-secret',
+                'code' => 'local.app.code',
+            ],
+            'oauth' => [
+                'server_url' => 'https://oauth.example',
+            ],
+            'callbacks' => [
+                'install_url' => 'https://project.example.com/callbacks/bitrix24/install',
+                'events_url' => 'https://project.example.com/callbacks/bitrix24/events',
+                'openlines_url' => 'https://project.example.com/callbacks/bitrix24/openlines',
+            ],
+            'sources' => [
+                'telegram_id' => 'ABRIKOSOFF_TG',
+                'max_id' => 'ABRIKOSOFF_MAX',
+            ],
+            'openlines' => [
+                'telegram_line_id' => '101',
+                'max_line_id' => '102',
+                'telegram_connector_code' => 'abrikosoff_telegram',
+                'max_connector_code' => 'abrikosoff_max',
+                'service_user_id' => null,
+            ],
+        ]));
+
+        $this->artisan('bitrix24:setup-report')
+            ->doesntExpectOutputToContain('Set a positive BITRIX24_OPENLINES_SERVICE_USER_ID.')
+            ->assertSuccessful();
     }
 
     public function test_command_succeeds_when_setup_contract_is_fully_frozen(): void

@@ -152,14 +152,25 @@ class ExportManualReplyToBitrix24OpenLinesAction
             );
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24OpenLinesManualReplyExportException(
-                'Bitrix24 Open Lines session fallback failed.',
-                Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
-                false,
+                'Bitrix24 Open Lines session fallback transport outcome is uncertain.',
+                Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                true,
                 $exception,
             );
         }
 
         if (! $response->successful) {
+            if ($this->isUncertainResponse($response)) {
+                throw new Bitrix24OpenLinesManualReplyExportException(
+                    sprintf(
+                        'Bitrix24 Open Lines session fallback transport outcome is uncertain: %s',
+                        $response->errorMessage ?? 'Unknown error.'
+                    ),
+                    Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                    true,
+                );
+            }
+
             throw new Bitrix24OpenLinesManualReplyExportException(
                 sprintf(
                     'Bitrix24 Open Lines session fallback failed: %s',

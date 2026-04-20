@@ -341,7 +341,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         });
     }
 
-    public function test_manual_reply_live_export_does_not_retry_session_open_fallback(): void
+    public function test_manual_reply_live_export_does_not_retry_session_open_fallback_and_marks_outcome_as_uncertain(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX);
@@ -366,8 +366,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
             $this->fail('Expected Bitrix24OpenLinesManualReplyExportException was not thrown.');
         } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
-            $this->assertSame(Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED, $exception->failureCode);
-            $this->assertFalse($exception->failureUncertain);
+            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
+            $this->assertTrue($exception->failureUncertain);
         }
 
         $sessionOpenRequests = collect(Http::recorded())
@@ -379,8 +379,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
-            'failure_code' => Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
-            'failure_uncertain' => false,
+            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            'failure_uncertain' => true,
         ]);
     }
 

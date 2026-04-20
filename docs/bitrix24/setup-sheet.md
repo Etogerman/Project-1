@@ -75,4 +75,4 @@ php artisan bitrix24:setup-report
 ```
 
 The command must finish without missing required items before Этап 2 starts.
-If `BITRIX24_OPENLINES_ENABLED=true`, missing `BITRIX24_OPENLINES_SERVICE_USER_ID` is a blocking setup issue.
+If `BITRIX24_OPENLINES_ENABLED=true` and `BITRIX24_FAKE_HAPPY_PATH_ENABLED=false`, missing `BITRIX24_OPENLINES_SERVICE_USER_ID` is a blocking setup issue.
