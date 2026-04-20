@@ -88,6 +88,11 @@ class BuildBitrix24SetupReportAction
                 value: (string) data_get($config, 'openlines.max_connector_code', ''),
                 notes: 'Required for stable custom connector registration.',
             ),
+            $this->buildOpenLinesServiceUserCheck(
+                openLinesEnabled: (bool) data_get($config, 'features.openlines_enabled', false),
+                fakeHappyPathEnabled: (bool) data_get($config, 'features.fake_happy_path_enabled', false),
+                value: (string) data_get($config, 'openlines.service_user_id', ''),
+            ),
             $this->buildDistinctConnectorCodesCheck(
                 (string) data_get($config, 'openlines.telegram_connector_code', ''),
                 (string) data_get($config, 'openlines.max_connector_code', ''),
@@ -264,6 +269,68 @@ class BuildBitrix24SetupReportAction
             Bitrix24SetupReportResult::STATUS_OK,
             true,
             'Connector codes are distinct.',
+        );
+    }
+
+    /**
+     * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
+     */
+    private function buildOpenLinesServiceUserCheck(
+        bool $openLinesEnabled,
+        bool $fakeHappyPathEnabled,
+        string $value,
+    ): array
+    {
+        $trimmed = trim($value);
+        $label = 'Open Lines service user ID';
+        $notes = 'Required for manual reply author export via imopenlines.crm.message.add.';
+
+        if (! $openLinesEnabled) {
+            return $this->check(
+                'openlines.service_user_id',
+                $label,
+                $trimmed === '' ? '—' : $trimmed,
+                Bitrix24SetupReportResult::STATUS_OK,
+                false,
+                'Open Lines live export is disabled, so the service user is not a blocking requirement.',
+            );
+        }
+
+        if ($fakeHappyPathEnabled) {
+            $fakeHappyPathAllowed = ! app()->environment('production');
+
+            if (! $fakeHappyPathAllowed) {
+                $notes .= ' Fake happy-path is ignored in production.';
+            } else {
+                return $this->check(
+                    'openlines.service_user_id',
+                    $label,
+                    $trimmed === '' ? '—' : $trimmed,
+                    Bitrix24SetupReportResult::STATUS_OK,
+                    false,
+                    'Fake happy-path is enabled outside production, so the service user is not a blocking requirement until real transport acceptance.',
+                );
+            }
+        }
+
+        if ($trimmed === '' || ! ctype_digit($trimmed) || (int) $trimmed <= 0) {
+            return $this->check(
+                'openlines.service_user_id',
+                $label,
+                $trimmed === '' ? '—' : $trimmed,
+                Bitrix24SetupReportResult::STATUS_MISSING,
+                true,
+                'Set a positive BITRIX24_OPENLINES_SERVICE_USER_ID. '.$notes
+            );
+        }
+
+        return $this->check(
+            'openlines.service_user_id',
+            $label,
+            $trimmed,
+            Bitrix24SetupReportResult::STATUS_OK,
+            true,
+            $notes,
         );
     }
 

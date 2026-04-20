@@ -49,6 +49,7 @@ Fill these in `.env` or the deployment environment before starting the integrati
 | `BITRIX24_MAX_SOURCE_ID` | `ABRIKOSOFF_MAX` |
 | `BITRIX24_TELEGRAM_LINE_ID` | `30` |
 | `BITRIX24_MAX_LINE_ID` | `31` |
+| `BITRIX24_OPENLINES_SERVICE_USER_ID` | positive Bitrix user id that can post operator replies into the target Open Lines chat |
 | `BITRIX24_TELEGRAM_CONNECTOR_CODE` | `abrikosoff_telegram` |
 | `BITRIX24_MAX_CONNECTOR_CODE` | `abrikosoff_max` |
 
@@ -74,3 +75,4 @@ php artisan bitrix24:setup-report
 ```
 
 The command must finish without missing required items before Этап 2 starts.
+If `BITRIX24_OPENLINES_ENABLED=true`, missing `BITRIX24_OPENLINES_SERVICE_USER_ID` is a blocking setup issue unless fake happy-path is enabled in a non-production environment.
