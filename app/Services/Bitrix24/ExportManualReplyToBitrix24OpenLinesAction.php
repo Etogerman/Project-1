@@ -37,6 +37,22 @@ class ExportManualReplyToBitrix24OpenLinesAction
         }
 
         $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
+
+        if ($reusableChat = $this->resolveReusableChat($dialog)) {
+            try {
+                return $this->sendMessage(
+                    message: $message,
+                    rootContact: $rootContact,
+                    serviceUserId: $serviceUserId,
+                    resolvedChat: $reusableChat,
+                );
+            } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
+                if (! $this->shouldContinueAfterReusableFailure($exception)) {
+                    throw $exception;
+                }
+            }
+        }
+
         $resolvedChat = $this->resolveChat($dialog, $rootContact, $route);
 
         return $this->sendMessage(
@@ -45,6 +61,41 @@ class ExportManualReplyToBitrix24OpenLinesAction
             serviceUserId: $serviceUserId,
             resolvedChat: $resolvedChat,
         );
+    }
+
+    private function resolveReusableChat(Dialog $dialog): ?Bitrix24OpenLinesManualReplyChatData
+    {
+        $chatId = Bitrix24MessageExport::query()
+            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
+            ->where('messages.dialog_id', $dialog->id)
+            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
+            ->where('bitrix24_message_exports.transport_method', Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD)
+            ->whereNotNull('bitrix24_message_exports.resolved_bitrix_chat_id')
+            ->latest('bitrix24_message_exports.id')
+            ->value('bitrix24_message_exports.resolved_bitrix_chat_id');
+
+        if (! is_scalar($chatId) || trim((string) $chatId) === '') {
+            return null;
+        }
+
+        return new Bitrix24OpenLinesManualReplyChatData(
+            chatId: trim((string) $chatId),
+            usedFallback: false,
+        );
+    }
+
+    private function shouldContinueAfterReusableFailure(Bitrix24OpenLinesManualReplyExportException $exception): bool
+    {
+        if ($exception->failureUncertain || $exception->failureCode === Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN) {
+            return false;
+        }
+
+        return in_array($exception->failureCode, [
+            Bitrix24MessageExport::FAILURE_CHAT_ACCESS_DENIED,
+            Bitrix24MessageExport::FAILURE_CHAT_USER_ADD_FAILED,
+            Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+        ], true);
     }
 
     private function resolveChat(
