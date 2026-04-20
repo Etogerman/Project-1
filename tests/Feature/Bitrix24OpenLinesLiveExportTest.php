@@ -294,7 +294,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
     }
 
-    public function test_manual_reply_reuses_last_successful_remote_chat_before_lookup(): void
+    public function test_manual_reply_reuses_last_successful_remote_chat_when_route_validation_passes(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX);
@@ -308,6 +308,14 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
 
         Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'bitrix-reuse-chat-210',
+                        'CONNECTOR_ID' => 'abrikosoff_max',
+                    ],
+                ],
+            ], 200),
             'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
                 'result' => [
                     'MESSAGE_ID' => 'remote-message-210',
@@ -336,7 +344,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 && $request['MESSAGE'] === 'Ручной ответ через reuse';
         });
 
-        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
     }
 
@@ -354,6 +362,14 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
 
         Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'bitrix-reuse-chat-220',
+                        'CONNECTOR_ID' => 'abrikosoff_telegram',
+                    ],
+                ],
+            ], 200),
             'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::sequence()
                 ->push([
                     'error' => 'ACCESS_DENIED',
@@ -389,7 +405,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertCount(2, $messageAddRequests);
         $this->assertCount(1, $chatUserAddRequests);
 
-        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
     }
 
@@ -464,6 +480,14 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
 
         Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'bitrix-reuse-chat-240',
+                        'CONNECTOR_ID' => 'abrikosoff_telegram',
+                    ],
+                ],
+            ], 200),
             'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
                 'error' => 'TEMPORARY_ERROR',
                 'error_description' => 'Server temporarily unavailable.',
@@ -487,7 +511,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'failure_uncertain' => true,
         ]);
 
-        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
     }
 
@@ -664,6 +688,64 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             return $request['CHAT_ID'] === 'bitrix-fallback-chat-201';
         });
+    }
+
+    public function test_manual_reply_ignores_poisoned_reusable_chat_from_other_connector_and_uses_session_open_fallback(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX);
+        $this->seedSuccessfulManualReplyTransportExport($dialog, 'telegram-chat-998');
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Ручной ответ не должен переиспользовать telegram history',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'telegram-chat-998',
+                        'CONNECTOR_ID' => 'abrikosoff_telegram',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.session.open.json' => Http::response([
+                'result' => [
+                    'CHAT_ID' => 'bitrix-fallback-chat-202',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
+                'result' => [
+                    'MESSAGE_ID' => 'remote-message-202',
+                ],
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            'resolved_bitrix_chat_id' => 'bitrix-fallback-chat-202',
+            'bitrix_remote_message_id' => 'remote-message-202',
+        ]);
+
+        $messageAddRequests = collect(Http::recorded())
+            ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json')
+            ->values();
+
+        $this->assertCount(1, $messageAddRequests);
+        $this->assertSame('bitrix-fallback-chat-202', $messageAddRequests[0][0]['CHAT_ID']);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json'
+            && $request['CHAT_ID'] === 'telegram-chat-998');
     }
 
     public function test_manual_reply_live_export_falls_back_to_old_transport_when_service_user_id_is_missing(): void
