@@ -22,15 +22,16 @@
 - текущий активный slice:
   `Rollback Slice A: revert #321 + revert #317 + transition quarantine`
 - execution ceiling текущего slice:
-  `draft PR в staging`
+  `ready PR в staging`
 - frozen baseline:
   - current staging baseline: `332e687669f8bbacdd4658ea2a6f58871ae3eba5`
   - rollback target `#321`: `f8e8d2f7e3276e9775d4234248947dbab07cdd31`
   - rollback target `#317`: `00d30bf09137e65a77eca96fd2eb832f6c6f5ff4`
 - локальный смысл:
   source of truth для rollback stream по возврату manual reply к pre-phase-1a
-  runtime на staging уже открыт; code stream ограничен staging rollback path и
-  не включает `main` или production
+  runtime на staging уже открыт; rollback PR доведён до `ready`, а `merge` в
+  `staging` остаётся отдельным следующим шагом процесса; `main` и production
+  в этот stream не входят
 
 ## Как использовать этот файл
 
