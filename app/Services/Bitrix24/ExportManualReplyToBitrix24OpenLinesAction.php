@@ -37,7 +37,26 @@ class ExportManualReplyToBitrix24OpenLinesAction
         }
 
         $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
-        $resolvedChat = $this->resolveChat($dialog, $rootContact, $route);
+        $excludedChatIds = [];
+
+        if ($reusableChat = $this->resolveReusableChat($dialog)) {
+            try {
+                return $this->sendMessage(
+                    message: $message,
+                    rootContact: $rootContact,
+                    serviceUserId: $serviceUserId,
+                    resolvedChat: $reusableChat,
+                );
+            } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
+                if (! $this->shouldContinueAfterReusableFailure($exception)) {
+                    throw $exception;
+                }
+
+                $excludedChatIds[] = $reusableChat->chatId;
+            }
+        }
+
+        $resolvedChat = $this->resolveChat($dialog, $rootContact, $route, $excludedChatIds);
 
         return $this->sendMessage(
             message: $message,
@@ -47,10 +66,46 @@ class ExportManualReplyToBitrix24OpenLinesAction
         );
     }
 
+    private function resolveReusableChat(Dialog $dialog): ?Bitrix24OpenLinesManualReplyChatData
+    {
+        $chatId = Bitrix24MessageExport::query()
+            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
+            ->where('messages.dialog_id', $dialog->id)
+            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
+            ->where('bitrix24_message_exports.transport_method', Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD)
+            ->whereNotNull('bitrix24_message_exports.resolved_bitrix_chat_id')
+            ->latest('bitrix24_message_exports.id')
+            ->value('bitrix24_message_exports.resolved_bitrix_chat_id');
+
+        if (! is_scalar($chatId) || trim((string) $chatId) === '') {
+            return null;
+        }
+
+        return new Bitrix24OpenLinesManualReplyChatData(
+            chatId: trim((string) $chatId),
+            usedFallback: false,
+        );
+    }
+
+    private function shouldContinueAfterReusableFailure(Bitrix24OpenLinesManualReplyExportException $exception): bool
+    {
+        if ($exception->failureUncertain || $exception->failureCode === Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN) {
+            return false;
+        }
+
+        return in_array($exception->failureCode, [
+            Bitrix24MessageExport::FAILURE_CHAT_ACCESS_DENIED,
+            Bitrix24MessageExport::FAILURE_CHAT_USER_ADD_FAILED,
+            Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+        ], true);
+    }
+
     private function resolveChat(
         Dialog $dialog,
         Contact $rootContact,
         Bitrix24OpenLinesRouteData $route,
+        array $excludedChatIds = [],
     ): Bitrix24OpenLinesManualReplyChatData {
         try {
             $response = $this->bitrix24ApiClient->call('imopenlines.crm.chat.get', array_merge(
@@ -79,7 +134,10 @@ class ExportManualReplyToBitrix24OpenLinesAction
             );
         }
 
-        $candidateChats = $this->extractChatRows($response->result);
+        $candidateChats = $this->excludeChatIds(
+            $this->extractChatRows($response->result),
+            $excludedChatIds,
+        );
 
         if (count($candidateChats) === 1) {
             return new Bitrix24OpenLinesManualReplyChatData(
@@ -116,6 +174,25 @@ class ExportManualReplyToBitrix24OpenLinesAction
         }
 
         return $this->resolveFallbackChat($dialog, $route);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $candidateChats
+     * @param  list<string>  $excludedChatIds
+     * @return list<array<string, mixed>>
+     */
+    private function excludeChatIds(array $candidateChats, array $excludedChatIds): array
+    {
+        if ($excludedChatIds === []) {
+            return $candidateChats;
+        }
+
+        $excluded = array_fill_keys($excludedChatIds, true);
+
+        return array_values(array_filter(
+            $candidateChats,
+            fn (array $chat): bool => ! isset($excluded[$this->extractChatId($chat) ?? '']),
+        ));
     }
 
     private function resolveFallbackChat(
