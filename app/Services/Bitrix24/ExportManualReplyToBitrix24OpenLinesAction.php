@@ -142,14 +142,19 @@ class ExportManualReplyToBitrix24OpenLinesAction
         ]);
 
         try {
-            $response = $this->bitrix24ApiClient->call('imopenlines.session.open', [
-                'USER_CODE' => $userCode,
-            ]);
+            $response = $this->bitrix24ApiClient->call(
+                'imopenlines.session.open',
+                [
+                    'USER_CODE' => $userCode,
+                ],
+                connection: null,
+                transportRetry: false,
+            );
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24OpenLinesManualReplyExportException(
-                'Bitrix24 Open Lines session fallback failed.',
-                Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
-                false,
+                'Bitrix24 Open Lines session fallback transport outcome is uncertain.',
+                Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                true,
                 $exception,
             );
         }
@@ -160,7 +165,10 @@ class ExportManualReplyToBitrix24OpenLinesAction
                     'Bitrix24 Open Lines session fallback failed: %s',
                     $response->errorMessage ?? 'Unknown error.'
                 ),
-                Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
+                $this->isUncertainResponse($response)
+                    ? Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN
+                    : Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
+                $this->isUncertainResponse($response),
             );
         }
 

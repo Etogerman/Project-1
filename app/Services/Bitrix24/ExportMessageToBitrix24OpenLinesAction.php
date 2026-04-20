@@ -73,7 +73,7 @@ class ExportMessageToBitrix24OpenLinesAction
                 );
             }
 
-            if ($message->message_kind === Message::KIND_OUTBOUND_MANUAL_REPLY) {
+            if ($this->shouldUseServiceActorManualReplyPath($message)) {
                 $manualReplyExport = $this->exportManualReplyToBitrix24OpenLinesAction->handle(
                     $message,
                     $dialog,
@@ -310,6 +310,15 @@ class ExportMessageToBitrix24OpenLinesAction
     private function fakeLiveChatKey(Dialog $dialog): string
     {
         return sprintf('fake-live-dialog-%d', $dialog->id);
+    }
+
+    private function shouldUseServiceActorManualReplyPath(Message $message): bool
+    {
+        if ($message->message_kind !== Message::KIND_OUTBOUND_MANUAL_REPLY) {
+            return false;
+        }
+
+        return (int) config('bitrix24.openlines.service_user_id', 0) > 0;
     }
 
     private function markExported(
