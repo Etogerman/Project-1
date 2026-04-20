@@ -8,11 +8,14 @@ use App\Services\Bitrix24\LogBitrix24ApiCallAction;
 use App\Services\Bitrix24\ProcessBitrix24OpenLinesWebhookAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class ProcessBitrix24WebhookEventJob implements ShouldQueue
 {
     use Queueable;
+
+    private const LEGACY_RECHECK_DRAINED_OPERATION = 'openlines_legacy_recheck_dropped';
 
     public int $timeout = 60;
 
@@ -25,13 +28,17 @@ class ProcessBitrix24WebhookEventJob implements ShouldQueue
         LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
     ): void
     {
-        $event = $this->resolveProcessableEvent();
+        $event = Bitrix24WebhookEvent::query()->find($this->webhookEventId);
 
         if (! $event instanceof Bitrix24WebhookEvent || $event->processing_status !== Bitrix24WebhookEvent::STATUS_PENDING) {
             return;
         }
 
         if ($event->callback_type !== Bitrix24WebhookEvent::TYPE_OPENLINES) {
+            return;
+        }
+
+        if ($this->drainLegacyRecheckEvent($event, $logBitrix24ApiCallAction)) {
             return;
         }
 
@@ -63,40 +70,50 @@ class ProcessBitrix24WebhookEventJob implements ShouldQueue
         }
     }
 
-    private function resolveProcessableEvent(): ?Bitrix24WebhookEvent
-    {
-        $event = Bitrix24WebhookEvent::query()->find($this->webhookEventId);
-
-        if (! $event instanceof Bitrix24WebhookEvent) {
-            return null;
+    private function drainLegacyRecheckEvent(
+        Bitrix24WebhookEvent $event,
+        LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
+    ): bool {
+        if (
+            ! Schema::hasColumn('bitrix24_webhook_events', 'recheck_scheduled_at')
+            || ! Schema::hasColumn('bitrix24_webhook_events', 'recheck_attempted_at')
+        ) {
+            return false;
         }
 
-        if ($event->processing_status !== Bitrix24WebhookEvent::STATUS_PENDING) {
-            return null;
+        $scheduledAt = $event->getAttribute('recheck_scheduled_at');
+        $attemptedAt = $event->getAttribute('recheck_attempted_at');
+
+        if ($scheduledAt === null && $attemptedAt === null) {
+            return false;
         }
 
-        if ($event->recheck_scheduled_at === null) {
-            return $event;
-        }
+        $event->forceFill([
+            'processing_status' => Bitrix24WebhookEvent::STATUS_IGNORED,
+            'processed_at' => now(),
+            'failed_at' => null,
+            'failure_reason' => null,
+            'recheck_attempted_at' => $attemptedAt ?? now(),
+        ])->save();
 
-        if ($event->recheck_attempted_at !== null || $event->recheck_scheduled_at->isFuture()) {
-            return null;
-        }
+        $logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: self::LEGACY_RECHECK_DRAINED_OPERATION,
+            status: Bitrix24SyncLog::STATUS_SKIPPED,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'callback_type' => $event->callback_type,
+            ],
+            responsePayload: [
+                'recheck_scheduled_at' => $scheduledAt,
+                'recheck_attempted_at' => $attemptedAt,
+            ],
+            connection: $event->connection,
+            entityType: 'openlines_webhook_event',
+            entityId: (string) $event->id,
+        );
 
-        $claimed = Bitrix24WebhookEvent::query()
-            ->whereKey($event->id)
-            ->where('processing_status', Bitrix24WebhookEvent::STATUS_PENDING)
-            ->whereNotNull('recheck_scheduled_at')
-            ->whereNull('recheck_attempted_at')
-            ->update([
-                'recheck_attempted_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-        if ($claimed !== 1) {
-            return null;
-        }
-
-        return Bitrix24WebhookEvent::query()->find($event->id);
+        return true;
     }
 }
