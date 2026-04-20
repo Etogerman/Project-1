@@ -140,6 +140,12 @@ class ExportManualReplyToBitrix24OpenLinesAction
         );
 
         if (count($candidateChats) === 1) {
+            $connectorId = $this->extractConnectorId($candidateChats[0]);
+
+            if ($connectorId !== null && $connectorId !== $route->connectorCode) {
+                return $this->resolveFallbackChat($dialog, $route);
+            }
+
             return new Bitrix24OpenLinesManualReplyChatData(
                 chatId: $this->extractChatId($candidateChats[0]) ?? throw new Bitrix24OpenLinesManualReplyExportException(
                     'Bitrix24 Open Lines active chat lookup returned a chat without CHAT_ID.',
