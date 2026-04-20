@@ -74,47 +74,61 @@ class ExportMessageToBitrix24OpenLinesAction
             }
 
             if ($this->shouldUseServiceActorManualReplyPath($message)) {
-                $manualReplyExport = $this->exportManualReplyToBitrix24OpenLinesAction->handle(
-                    $message,
-                    $dialog,
-                    $rootContact,
-                );
+                try {
+                    $manualReplyExport = $this->exportManualReplyToBitrix24OpenLinesAction->handle(
+                        $message,
+                        $dialog,
+                        $rootContact,
+                    );
 
-                return $this->completeSuccessfulExport(
-                    message: $message,
-                    dialog: $dialog,
-                    rootContactId: $rootContact->id,
-                    bitrix24ContactId: (string) $rootContact->bitrix24_contact_id,
-                    connectorCode: $route->connectorCode,
-                    lineId: $route->lineId,
-                    retryAfterSync: $retryAfterSync,
-                    chatKey: filled($dialog->bitrix24_live_chat_id)
-                        ? (string) $dialog->bitrix24_live_chat_id
-                        : $this->resolveBitrix24LiveChatKeyAction->handle($dialog),
-                    operation: 'openlines_manual_reply_exported',
-                    transportMethod: Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
-                    resolvedBitrixChatId: $manualReplyExport->resolvedBitrixChatId,
-                    bitrixRemoteMessageId: $manualReplyExport->bitrixRemoteMessageId,
-                    responsePayload: [
-                        'result' => [
-                            'chat_id' => $manualReplyExport->resolvedBitrixChatId,
-                            'message_id' => $manualReplyExport->bitrixRemoteMessageId,
-                            'used_fallback' => $manualReplyExport->usedFallback,
-                            'used_chat_user_add_recovery' => $manualReplyExport->usedChatUserAddRecovery,
+                    return $this->completeSuccessfulExport(
+                        message: $message,
+                        dialog: $dialog,
+                        rootContactId: $rootContact->id,
+                        bitrix24ContactId: (string) $rootContact->bitrix24_contact_id,
+                        connectorCode: $route->connectorCode,
+                        lineId: $route->lineId,
+                        retryAfterSync: $retryAfterSync,
+                        chatKey: filled($dialog->bitrix24_live_chat_id)
+                            ? (string) $dialog->bitrix24_live_chat_id
+                            : $this->resolveBitrix24LiveChatKeyAction->handle($dialog),
+                        operation: 'openlines_manual_reply_exported',
+                        transportMethod: Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+                        resolvedBitrixChatId: $manualReplyExport->resolvedBitrixChatId,
+                        bitrixRemoteMessageId: $manualReplyExport->bitrixRemoteMessageId,
+                        responsePayload: [
+                            'result' => [
+                                'chat_id' => $manualReplyExport->resolvedBitrixChatId,
+                                'message_id' => $manualReplyExport->bitrixRemoteMessageId,
+                                'used_fallback' => $manualReplyExport->usedFallback,
+                                'used_chat_user_add_recovery' => $manualReplyExport->usedChatUserAddRecovery,
+                            ],
+                            'rest_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
                         ],
-                        'rest_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
-                    ],
-                );
+                    );
+                } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
+                    if ($this->shouldFallbackToLegacyManualReplyTransport($exception)) {
+                        return $this->exportViaLegacyTransport(
+                            message: $message,
+                            dialog: $dialog,
+                            rootContactId: $rootContact->id,
+                            bitrix24ContactId: (string) $rootContact->bitrix24_contact_id,
+                            connectorCode: $route->connectorCode,
+                            lineId: $route->lineId,
+                            retryAfterSync: $retryAfterSync,
+                            operation: 'openlines_manual_reply_exported_legacy_fallback',
+                            responsePayload: [
+                                'fallback_from_failure_code' => $exception->failureCode,
+                                'fallback_from_failure_reason' => $exception->getMessage(),
+                            ],
+                        );
+                    }
+
+                    throw $exception;
+                }
             }
 
-            $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle($message, $route, $retryAfterSync);
-            $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload);
-
-            if (! $response->successful) {
-                throw new Bitrix24ApiException($response->errorMessage ?? 'Bitrix24 Open Lines message export failed.');
-            }
-
-            return $this->completeSuccessfulExport(
+            return $this->exportViaLegacyTransport(
                 message: $message,
                 dialog: $dialog,
                 rootContactId: $rootContact->id,
@@ -122,13 +136,7 @@ class ExportMessageToBitrix24OpenLinesAction
                 connectorCode: $route->connectorCode,
                 lineId: $route->lineId,
                 retryAfterSync: $retryAfterSync,
-                chatKey: $this->resolveBitrix24LiveChatKeyAction->handle($dialog),
                 operation: 'openlines_live_exported',
-                transportMethod: Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-                responsePayload: [
-                    'result' => $response->result,
-                    'rest_method' => $response->restMethod,
-                ],
             );
         } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
             $this->markFailed(
@@ -319,6 +327,64 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         return (int) config('bitrix24.openlines.service_user_id', 0) > 0;
+    }
+
+    private function shouldFallbackToLegacyManualReplyTransport(
+        Bitrix24OpenLinesManualReplyExportException $exception,
+    ): bool {
+        if ($exception->failureUncertain) {
+            return false;
+        }
+
+        return in_array($exception->failureCode, [
+            Bitrix24MessageExport::FAILURE_SESSION_OPEN_UNAVAILABLE,
+            Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
+            Bitrix24MessageExport::FAILURE_CHAT_ACCESS_DENIED,
+            Bitrix24MessageExport::FAILURE_CHAT_USER_ADD_FAILED,
+        ], true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $responsePayload
+     */
+    private function exportViaLegacyTransport(
+        Message $message,
+        Dialog $dialog,
+        int $rootContactId,
+        string $bitrix24ContactId,
+        string $connectorCode,
+        string $lineId,
+        bool $retryAfterSync,
+        string $operation,
+        array $responsePayload = [],
+    ): Message {
+        $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle($message, new \App\Data\Bitrix24\Bitrix24OpenLinesRouteData(
+            platform: $dialog->channel()->firstOrFail()->platform,
+            connectorCode: $connectorCode,
+            lineId: $lineId,
+        ), $retryAfterSync);
+        $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload);
+
+        if (! $response->successful) {
+            throw new Bitrix24ApiException($response->errorMessage ?? 'Bitrix24 Open Lines message export failed.');
+        }
+
+        return $this->completeSuccessfulExport(
+            message: $message,
+            dialog: $dialog,
+            rootContactId: $rootContactId,
+            bitrix24ContactId: $bitrix24ContactId,
+            connectorCode: $connectorCode,
+            lineId: $lineId,
+            retryAfterSync: $retryAfterSync,
+            chatKey: $this->resolveBitrix24LiveChatKeyAction->handle($dialog),
+            operation: $operation,
+            transportMethod: Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            responsePayload: $responsePayload + [
+                'result' => $response->result,
+                'rest_method' => $response->restMethod,
+            ],
+        );
     }
 
     private function markExported(
