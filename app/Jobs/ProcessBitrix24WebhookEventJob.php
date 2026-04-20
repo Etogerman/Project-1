@@ -25,7 +25,7 @@ class ProcessBitrix24WebhookEventJob implements ShouldQueue
         LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
     ): void
     {
-        $event = $this->resolveProcessableEvent();
+        $event = Bitrix24WebhookEvent::query()->find($this->webhookEventId);
 
         if (! $event instanceof Bitrix24WebhookEvent || $event->processing_status !== Bitrix24WebhookEvent::STATUS_PENDING) {
             return;
@@ -61,42 +61,5 @@ class ProcessBitrix24WebhookEventJob implements ShouldQueue
                 entityId: (string) $event->id,
             );
         }
-    }
-
-    private function resolveProcessableEvent(): ?Bitrix24WebhookEvent
-    {
-        $event = Bitrix24WebhookEvent::query()->find($this->webhookEventId);
-
-        if (! $event instanceof Bitrix24WebhookEvent) {
-            return null;
-        }
-
-        if ($event->processing_status !== Bitrix24WebhookEvent::STATUS_PENDING) {
-            return null;
-        }
-
-        if ($event->recheck_scheduled_at === null) {
-            return $event;
-        }
-
-        if ($event->recheck_attempted_at !== null || $event->recheck_scheduled_at->isFuture()) {
-            return null;
-        }
-
-        $claimed = Bitrix24WebhookEvent::query()
-            ->whereKey($event->id)
-            ->where('processing_status', Bitrix24WebhookEvent::STATUS_PENDING)
-            ->whereNotNull('recheck_scheduled_at')
-            ->whereNull('recheck_attempted_at')
-            ->update([
-                'recheck_attempted_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-        if ($claimed !== 1) {
-            return null;
-        }
-
-        return Bitrix24WebhookEvent::query()->find($event->id);
     }
 }

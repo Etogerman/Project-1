@@ -54,7 +54,6 @@ return [
         'max_line_id' => env('BITRIX24_MAX_LINE_ID'),
         'telegram_connector_code' => env('BITRIX24_TELEGRAM_CONNECTOR_CODE'),
         'max_connector_code' => env('BITRIX24_MAX_CONNECTOR_CODE'),
-        'service_user_id' => (int) env('BITRIX24_OPENLINES_SERVICE_USER_ID', 0),
         'session_finish_event_names' => [
             'OnSessionFinish',
         ],
