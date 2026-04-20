@@ -39,16 +39,18 @@ class ExportManualReplyToBitrix24OpenLinesAction
         $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
         $excludedChatIds = [];
         $activeChatRows = null;
+        $reusablePrecheckFailed = false;
 
         if ($reusableChat = $this->resolveReusableChat($dialog)) {
             try {
                 $activeChatRows = $this->lookupActiveChatRows($rootContact);
             } catch (Bitrix24OpenLinesManualReplyExportException) {
                 $activeChatRows = [];
+                $reusablePrecheckFailed = true;
                 $excludedChatIds[] = $reusableChat->chatId;
             }
 
-            if ($activeChatRows !== [] && ! $this->shouldExcludeReusableChat($reusableChat->chatId, $route, $activeChatRows)) {
+            if (! $reusablePrecheckFailed && ! $this->shouldExcludeReusableChat($reusableChat->chatId, $route, $activeChatRows ?? [])) {
                 try {
                     return $this->sendMessage(
                         message: $message,
@@ -66,7 +68,14 @@ class ExportManualReplyToBitrix24OpenLinesAction
             }
         }
 
-        $resolvedChat = $this->resolveChat($dialog, $rootContact, $route, $excludedChatIds, $activeChatRows);
+        $resolvedChat = $this->resolveChat(
+            $dialog,
+            $rootContact,
+            $route,
+            $excludedChatIds,
+            $activeChatRows,
+            $reusablePrecheckFailed,
+        );
 
         return $this->sendMessage(
             message: $message,
@@ -117,9 +126,10 @@ class ExportManualReplyToBitrix24OpenLinesAction
         Bitrix24OpenLinesRouteData $route,
         array $excludedChatIds = [],
         ?array $activeChatRows = null,
+        bool $skipLookup = false,
     ): Bitrix24OpenLinesManualReplyChatData {
         $candidateChats = $this->excludeChatIds(
-            $activeChatRows ?? $this->lookupActiveChatRows($rootContact),
+            $skipLookup ? ($activeChatRows ?? []) : ($activeChatRows ?? $this->lookupActiveChatRows($rootContact)),
             $excludedChatIds,
         );
 
