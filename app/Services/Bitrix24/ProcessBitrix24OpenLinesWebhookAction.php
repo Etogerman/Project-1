@@ -12,6 +12,7 @@ use App\Models\Bitrix24WebhookEvent;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Dialogs\MessageChronology;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class ProcessBitrix24OpenLinesWebhookAction
@@ -473,10 +474,16 @@ class ProcessBitrix24OpenLinesWebhookAction
 
     private function findExactEchoExport(Dialog $dialog, string $bitrixMessageId): ?Bitrix24MessageExport
     {
+        $transportMethod = $this->resolveExactEchoTransportMethod();
+
+        if ($transportMethod === null) {
+            return null;
+        }
+
         return Bitrix24MessageExport::query()
             ->with('message')
             ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
-            ->where('transport_method', Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD)
+            ->where('transport_method', $transportMethod)
             ->where('bitrix_remote_message_id', $bitrixMessageId)
             ->whereHas('message', function (\Illuminate\Database\Eloquent\Builder $query) use ($dialog): void {
                 $query
@@ -485,6 +492,25 @@ class ProcessBitrix24OpenLinesWebhookAction
                     ->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY);
             })
             ->first();
+    }
+
+    private function resolveExactEchoTransportMethod(): ?string
+    {
+        if (! Schema::hasColumns('bitrix24_message_exports', [
+            'transport_method',
+            'bitrix_remote_message_id',
+        ])) {
+            return null;
+        }
+
+        $transportConstant = Bitrix24MessageExport::class.'::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD';
+
+        if (defined($transportConstant)) {
+            /** @var string */
+            return constant($transportConstant);
+        }
+
+        return null;
     }
 
     private function findSuspiciousEchoCandidate(Dialog $dialog, string $bitrixText): ?Message
