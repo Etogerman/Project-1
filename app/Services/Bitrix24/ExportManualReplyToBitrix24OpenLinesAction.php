@@ -42,6 +42,8 @@ class ExportManualReplyToBitrix24OpenLinesAction
         $reusablePrecheckFailed = false;
 
         if ($reusableChat = $this->resolveReusableChat($dialog)) {
+            $reusableChatValidated = false;
+
             try {
                 $activeChatRows = $this->lookupActiveChatRows($rootContact);
             } catch (Bitrix24OpenLinesManualReplyExportException) {
@@ -50,7 +52,19 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 $excludedChatIds[] = $reusableChat->chatId;
             }
 
-            if (! $reusablePrecheckFailed && ! $this->shouldExcludeReusableChat($reusableChat->chatId, $route, $activeChatRows ?? [])) {
+            if (! $reusablePrecheckFailed) {
+                $reusableChatValidated = $this->isReusableChatRouteValidated(
+                    $reusableChat->chatId,
+                    $route,
+                    $activeChatRows ?? [],
+                );
+
+                if (! $reusableChatValidated) {
+                    $excludedChatIds[] = $reusableChat->chatId;
+                }
+            }
+
+            if ($reusableChatValidated) {
                 try {
                     return $this->sendMessage(
                         message: $message,
@@ -233,7 +247,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
     /**
      * @param  list<array<string, mixed>>  $activeChatRows
      */
-    private function shouldExcludeReusableChat(
+    private function isReusableChatRouteValidated(
         string $chatId,
         Bitrix24OpenLinesRouteData $route,
         array $activeChatRows,
@@ -251,11 +265,11 @@ class ExportManualReplyToBitrix24OpenLinesAction
             $connectorId = $this->extractConnectorId($chat);
 
             if ($connectorId === null || $connectorId === $route->connectorCode) {
-                return false;
+                return true;
             }
         }
 
-        return true;
+        return false;
     }
 
     private function resolveFallbackChat(
