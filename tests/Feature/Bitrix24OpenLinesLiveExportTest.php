@@ -1047,7 +1047,17 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'error_description' => 'Вы не можете открыть этот разговор, т.к. у вас недостаточно прав.',
             ], 200),
             'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
-                'result' => true,
+                'result' => [
+                    'DATA' => [
+                        'RESULT' => [
+                            [
+                                'session' => [
+                                    'CHAT_ID' => 'legacy-chat-300',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
             ], 200),
         ]);
 
@@ -1058,7 +1068,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
+            'resolved_bitrix_chat_id' => 'legacy-chat-300',
             'bitrix_remote_message_id' => null,
             'failure_code' => null,
             'failure_uncertain' => false,
@@ -1067,6 +1077,54 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
+    }
+
+    public function test_manual_reply_reuses_legacy_session_chat_after_fallback_instead_of_poisoned_foreign_chat(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX);
+        $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, 'bitrix-max-chat-700');
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'MAX должен остаться на legacy session chat',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'telegram-chat-998',
+                        'CONNECTOR_ID' => 'abrikosoff_telegram',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
+                'result' => [
+                    'MESSAGE_ID' => 'remote-message-700',
+                ],
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            'resolved_bitrix_chat_id' => 'bitrix-max-chat-700',
+            'bitrix_remote_message_id' => 'remote-message-700',
+        ]);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json'
+            && $request['CHAT_ID'] === 'bitrix-max-chat-700');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json'
+            && $request['CHAT_ID'] === 'telegram-chat-998');
     }
 
     public function test_feature_flag_off_disables_live_export_queueing(): void
@@ -2031,6 +2089,30 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
             'resolved_bitrix_chat_id' => $resolvedChatId,
             'bitrix_remote_message_id' => 'seed-remote-message-'.$dialog->id,
+            'exported_at' => now()->subMinute(),
+        ]);
+
+        return $previousMessage;
+    }
+
+    private function seedSuccessfulLegacyManualReplyTransportExport(Dialog $dialog, string $resolvedChatId): Message
+    {
+        $previousMessage = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Предыдущий успешный legacy manual reply',
+        ]);
+
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $previousMessage->id,
+            'contact_id' => $dialog->contact_id,
+            'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => $resolvedChatId,
+            'bitrix_remote_message_id' => null,
             'exported_at' => now()->subMinute(),
         ]);
 
