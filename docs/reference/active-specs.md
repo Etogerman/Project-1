@@ -18,7 +18,7 @@
 
 - `Spec repo`: `Etogerman/Project-1-specs`
 - `Spec doc`: `streams/tz-bitrix24-openlines-manual-reply-service-actor.md`
-- `Spec revision`: `25c57d02af3539303b2ab4bd8eb9c1bbd00a661b`
+- `Spec revision`: `1555241883a5737dba4b8871af3bf7ab6ef6f0d0`
 - внешний статус документа: `active`
 - локальный статус stream-а в основном repo: `opened`
 - issue tracker: [#381](https://github.com/Etogerman/Project-1/issues/381)
@@ -27,7 +27,8 @@
 
 1. versioned ТЗ уже зафиксировано во внешнем `specs`-repo;
 2. этот stream открыт в основном repo как следующий существенный implementation stream;
-3. code stream по `Slice 1A` ещё не стартовал и требует отдельной явной команды пользователя.
+3. текущий активный implementation slice по spec — preparatory `Slice 0A`;
+4. code stream по `Slice 0A` ещё не стартовал и требует отдельной явной команды пользователя.
 
 ## Как использовать этот файл
 
