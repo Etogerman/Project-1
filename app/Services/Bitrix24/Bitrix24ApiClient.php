@@ -22,8 +22,12 @@ class Bitrix24ApiClient
     /**
      * @param  array<string, mixed>  $params
      */
-    public function call(string $method, array $params = [], ?Bitrix24Connection $connection = null): Bitrix24RestResponseData
-    {
+    public function call(
+        string $method,
+        array $params = [],
+        ?Bitrix24Connection $connection = null,
+        bool $transportRetry = true,
+    ): Bitrix24RestResponseData {
         $connection ??= $this->resolveActiveConnection->handle();
         $attemptedRefresh = false;
 
@@ -32,12 +36,25 @@ class Bitrix24ApiClient
             $attemptedRefresh = true;
         }
 
-        $response = $this->performRestCall($connection, $method, $params, $attemptedRefresh ? 'rest_call_after_refresh' : 'rest_call');
+        $response = $this->performRestCall(
+            $connection,
+            $method,
+            $params,
+            $attemptedRefresh ? 'rest_call_after_refresh' : 'rest_call',
+            $transportRetry,
+        );
 
         if (! $attemptedRefresh && $this->shouldRefreshToken->handle($connection, $response)) {
             $connection = $this->refreshAccessToken->handle($connection);
             $attemptedRefresh = true;
-            $response = $this->performRestCall($connection, $method, $params, 'rest_call_after_refresh', true);
+            $response = $this->performRestCall(
+                $connection,
+                $method,
+                $params,
+                'rest_call_after_refresh',
+                $transportRetry,
+                true,
+            );
         }
 
         return new Bitrix24RestResponseData(
@@ -61,6 +78,7 @@ class Bitrix24ApiClient
         string $method,
         array $params,
         string $operation,
+        bool $transportRetry = true,
         bool $attemptedRefresh = false,
     ): Bitrix24RestResponseData {
         $url = $this->buildRestUrl->handle($connection, $method);
@@ -68,7 +86,7 @@ class Bitrix24ApiClient
             'auth' => $connection->access_token_encrypted,
         ]);
 
-        $response = $this->sendWithRetry($url, $requestPayload);
+        $response = $this->sendWithRetry($url, $requestPayload, $transportRetry);
         /** @var array<string, mixed> $responseData */
         $responseData = $response->json() ?? [];
         $dto = new Bitrix24RestResponseData(
@@ -108,8 +126,20 @@ class Bitrix24ApiClient
     /**
      * @param  array<string, mixed>  $requestPayload
      */
-    private function sendWithRetry(string $url, array $requestPayload): Response
+    private function sendWithRetry(string $url, array $requestPayload, bool $transportRetry): Response
     {
+        if (! $transportRetry) {
+            try {
+                return Http::asForm()
+                    ->acceptJson()
+                    ->timeout((int) config('bitrix24.http.timeout_seconds', 15))
+                    ->connectTimeout((int) config('bitrix24.http.connect_timeout_seconds', 5))
+                    ->post($url, $requestPayload);
+            } catch (ConnectionException $exception) {
+                throw new Bitrix24ApiException('Bitrix24 REST call failed without transport retry.', previous: $exception);
+            }
+        }
+
         $retrySleepMilliseconds = (int) config('bitrix24.http.retry_sleep_milliseconds', 200);
         $lastConnectionException = null;
 
