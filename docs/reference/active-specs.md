@@ -18,7 +18,7 @@
 
 - `Spec repo`: `Etogerman/Project-1-specs`
 - `Spec doc`: `streams/tz-bitrix24-openlines-manual-reply-service-actor.md`
-- `Spec revision`: `1555241883a5737dba4b8871af3bf7ab6ef6f0d0`
+- `Spec revision`: `15552419ee0f92edbdbb11bc928d8f3899d6010e`
 - внешний статус документа: `active`
 - локальный статус stream-а в основном repo: `opened`
 - issue tracker: [#381](https://github.com/Etogerman/Project-1/issues/381)
