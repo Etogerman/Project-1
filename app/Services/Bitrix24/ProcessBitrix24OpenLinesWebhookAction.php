@@ -5,10 +5,13 @@ namespace App\Services\Bitrix24;
 use App\Data\Bitrix24\Bitrix24OpenLinesOperatorMessageData;
 use App\Data\Bots\BotDialogTextSendResult;
 use App\Data\Dialogs\DialogRouteStatusData;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Dialog;
 use App\Models\Message;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class ProcessBitrix24OpenLinesWebhookAction
@@ -19,6 +22,8 @@ class ProcessBitrix24OpenLinesWebhookAction
     private const BLOCKED_DIALOG_FEEDBACK_FAILED_OPERATION = 'openlines_blocked_feedback_failed';
     private const BLOCKED_DIALOG_ACK_SENT_OPERATION = 'openlines_blocked_feedback_ack_sent';
     private const BLOCKED_DIALOG_ACK_FAILED_OPERATION = 'openlines_blocked_feedback_ack_failed';
+    private const LEGACY_EXACT_ECHO_SKIPPED_OPERATION = 'openlines_legacy_exact_echo_skipped';
+    private const LEGACY_MANUAL_REPLY_TRANSPORT = 'imopenlines.crm.message.add';
 
     public function __construct(
         private readonly NormalizeBitrix24OpenLinesEventAction $normalizeBitrix24OpenLinesEventAction,
@@ -105,6 +110,12 @@ class ProcessBitrix24OpenLinesWebhookAction
                         $externalMessageId,
                     );
 
+                    $this->activateDialog($dialog, $event, $messageData->chatId);
+
+                    continue;
+                }
+
+                if ($this->handleLegacyExactEchoCallback($event, $dialog, $messageData)) {
                     $this->activateDialog($dialog, $event, $messageData->chatId);
 
                     continue;
@@ -198,6 +209,62 @@ class ProcessBitrix24OpenLinesWebhookAction
         return $event->fresh();
     }
 
+    private function handleLegacyExactEchoCallback(
+        Bitrix24WebhookEvent $event,
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+    ): bool {
+        if (! $this->hasLegacyManualReplyExportColumns()) {
+            return false;
+        }
+
+        $exactEchoExport = $this->findLegacyExactEchoExport($dialog, $messageData->bitrixMessageId);
+
+        if (! $exactEchoExport instanceof Bitrix24MessageExport) {
+            return false;
+        }
+
+        $localMessage = $exactEchoExport->message;
+
+        if (! $localMessage instanceof Message) {
+            throw new Bitrix24ApiException('Bitrix24 legacy exact echo export record does not have a local message.');
+        }
+
+        $externalMessageId = trim((string) $localMessage->external_message_id);
+
+        if ($externalMessageId === '') {
+            throw new Bitrix24ApiException('Bitrix24 legacy exact echo local message does not have a stored external delivery id.');
+        }
+
+        $this->acknowledgeBitrix24OpenLinesDeliveryAction->handle(
+            $dialog,
+            $messageData,
+            $externalMessageId,
+        );
+
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: self::LEGACY_EXACT_ECHO_SKIPPED_OPERATION,
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog->id,
+                'chat_id' => $messageData->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+            ],
+            responsePayload: [
+                'local_message_id' => $localMessage->id,
+                'external_message_id' => $externalMessageId,
+            ],
+            connection: $event->connection,
+            entityType: 'openlines_webhook_event',
+            entityId: (string) $event->id,
+        );
+
+        return true;
+    }
+
     private function isBlockedDialogSkip(BotDialogTextSendResult $deliveryResult): bool
     {
         return ! $deliveryResult->wasSent()
@@ -235,6 +302,28 @@ class ProcessBitrix24OpenLinesWebhookAction
             entityType: 'openlines_webhook_event',
             entityId: (string) $event->id,
         );
+    }
+
+    private function findLegacyExactEchoExport(Dialog $dialog, string $bitrixMessageId): ?Bitrix24MessageExport
+    {
+        return Bitrix24MessageExport::query()
+            ->with('message')
+            ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->where('transport_method', self::LEGACY_MANUAL_REPLY_TRANSPORT)
+            ->where('bitrix_remote_message_id', $bitrixMessageId)
+            ->whereHas('message', function (Builder $query) use ($dialog): void {
+                $query
+                    ->where('dialog_id', $dialog->id)
+                    ->where('direction', Message::DIRECTION_OUTBOUND)
+                    ->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY);
+            })
+            ->first();
+    }
+
+    private function hasLegacyManualReplyExportColumns(): bool
+    {
+        return Schema::hasColumn('bitrix24_message_exports', 'transport_method')
+            && Schema::hasColumn('bitrix24_message_exports', 'bitrix_remote_message_id');
     }
 
     /**

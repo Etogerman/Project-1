@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessBitrix24WebhookEventJob;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -11,9 +12,11 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class Bitrix24OpenLinesInboundBridgeTest extends TestCase
@@ -662,6 +665,122 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
+    public function test_legacy_phase_1a_exact_echo_callback_is_acked_and_not_delivered_to_messenger(): void
+    {
+        $this->addLegacyPhaseOneAMessageExportColumns();
+
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+        $manualReply = $this->createLegacyManualReplyWithLiveExport(
+            dialog: $dialog,
+            text: 'Legacy manual reply',
+            externalMessageId: 'telegram-legacy-echo-1',
+            remoteMessageId: 'bitrix-im-legacy-echo-1',
+        );
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-legacy-echo',
+                        'message_id' => 'bitrix-im-legacy-echo-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Legacy manual reply',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertSame(2, Message::query()->count());
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_legacy_exact_echo_skipped',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'success',
+        ]);
+
+        Http::assertNotSent(function (Request $request): bool {
+            return str_contains($request->url(), 'api.telegram.org');
+        });
+        Http::assertSent(function (Request $request) use ($manualReply): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === 'bitrix-im-legacy-echo-1'
+                && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === $manualReply->external_message_id;
+        });
+    }
+
+    public function test_legacy_delayed_recheck_event_is_drained_without_delivery(): void
+    {
+        $this->addLegacyPhaseOneAWebhookEventColumns();
+
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+
+        Http::fake();
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-legacy-recheck',
+                        'message_id' => 'bitrix-im-legacy-recheck-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Legacy delayed recheck',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $event->forceFill([
+            'recheck_scheduled_at' => now()->subSecond(),
+            'recheck_attempted_at' => null,
+        ])->save();
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_IGNORED, $event->processing_status);
+        $this->assertNotNull($event->processed_at);
+        $this->assertSame(1, Message::query()->count());
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_legacy_recheck_dropped',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'skipped',
+        ]);
+
+        Http::assertNothingSent();
+    }
+
     public function test_failed_delivery_ack_marks_event_failed_after_message_is_stored(): void
     {
         $connection = $this->makeActiveConnection();
@@ -1180,5 +1299,78 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'install_payload' => [],
             'installed_at' => now(),
         ]);
+    }
+
+    private function addLegacyPhaseOneAMessageExportColumns(): void
+    {
+        if (Schema::hasColumn('bitrix24_message_exports', 'transport_method')) {
+            return;
+        }
+
+        Schema::table('bitrix24_message_exports', function (Blueprint $table): void {
+            $table->string('transport_method')->nullable();
+            $table->string('resolved_bitrix_chat_id')->nullable();
+            $table->string('bitrix_remote_message_id')->nullable();
+            $table->string('failure_code')->nullable();
+            $table->boolean('failure_uncertain')->default(false);
+        });
+    }
+
+    private function addLegacyPhaseOneAWebhookEventColumns(): void
+    {
+        if (Schema::hasColumn('bitrix24_webhook_events', 'recheck_scheduled_at')) {
+            return;
+        }
+
+        Schema::table('bitrix24_webhook_events', function (Blueprint $table): void {
+            $table->timestamp('recheck_scheduled_at')->nullable();
+            $table->timestamp('recheck_attempted_at')->nullable();
+        });
+    }
+
+    private function createLegacyManualReplyWithLiveExport(
+        Dialog $dialog,
+        string $text,
+        string $externalMessageId,
+        string $remoteMessageId,
+    ): Message {
+        $dialog->loadMissing('contact');
+
+        $message = Message::query()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'provider_event_key' => null,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => $externalMessageId,
+            'text' => $text,
+            'received_at' => now(),
+        ]);
+
+        Bitrix24MessageExport::query()->insert([
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'bitrix24_contact_id' => (string) $dialog->contact->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => 'imopenlines.crm.message.add',
+            'resolved_bitrix_chat_id' => 'bitrix-chat-local',
+            'bitrix_remote_message_id' => $remoteMessageId,
+            'batch_uuid' => null,
+            'bitrix24_timeline_entry_id' => null,
+            'exported_at' => now(),
+            'failed_at' => null,
+            'failure_reason' => null,
+            'failure_code' => null,
+            'failure_uncertain' => false,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $message;
     }
 }
