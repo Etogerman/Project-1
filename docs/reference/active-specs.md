@@ -17,7 +17,7 @@
 
 - `Spec repo`: `Etogerman/Project-1-specs`
 - `Spec doc`: `streams/tz-bitrix24-manual-reply-phase-1a-rollback-staging.md`
-- `Spec revision`: `ac6e5fee9f9b49e757cc02ae9592727aad0dbc9a`
+- `Spec revision`: `f8bb34db81a157c231bdbce84b33052abbccc2e8`
 - внешний статус документа: `active`
 - текущий активный slice:
   `Rollback Slice A: revert #321 + revert #317 + transition quarantine`
