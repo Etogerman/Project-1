@@ -142,9 +142,14 @@ class ExportManualReplyToBitrix24OpenLinesAction
         ]);
 
         try {
-            $response = $this->bitrix24ApiClient->call('imopenlines.session.open', [
-                'USER_CODE' => $userCode,
-            ]);
+            $response = $this->bitrix24ApiClient->call(
+                'imopenlines.session.open',
+                [
+                    'USER_CODE' => $userCode,
+                ],
+                connection: null,
+                transportRetry: false,
+            );
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24OpenLinesManualReplyExportException(
                 'Bitrix24 Open Lines session fallback failed.',

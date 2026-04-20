@@ -241,12 +241,30 @@ class ProcessBitrix24OpenLinesWebhookAction
         $exactEchoExport = $this->findExactEchoExport($dialog, $messageData->bitrixMessageId);
 
         if ($exactEchoExport instanceof Bitrix24MessageExport) {
-            $this->acknowledgeExactEcho($event, $dialog, $messageData, $exactEchoExport);
+            $localMessage = $exactEchoExport->message;
+
+            if (! $localMessage instanceof Message) {
+                throw new Bitrix24ApiException('Bitrix24 exact echo export record does not have a local message.');
+            }
+
+            $this->acknowledgeEchoMessage($event, $dialog, $messageData, $localMessage);
 
             return self::ECHO_RESULT_SKIPPED;
         }
 
         if ($event->recheck_attempted_at !== null) {
+            $delayedUncertainEchoCandidate = $this->findSuspiciousEchoCandidate(
+                $dialog,
+                $messageData->text,
+                includePendingExports: false,
+            );
+
+            if ($delayedUncertainEchoCandidate instanceof Message) {
+                $this->acknowledgeEchoMessage($event, $dialog, $messageData, $delayedUncertainEchoCandidate);
+
+                return self::ECHO_RESULT_SKIPPED;
+            }
+
             return self::ECHO_RESULT_NONE;
         }
 
@@ -487,7 +505,11 @@ class ProcessBitrix24OpenLinesWebhookAction
             ->first();
     }
 
-    private function findSuspiciousEchoCandidate(Dialog $dialog, string $bitrixText): ?Message
+    private function findSuspiciousEchoCandidate(
+        Dialog $dialog,
+        string $bitrixText,
+        bool $includePendingExports = true,
+    ): ?Message
     {
         $normalizedBitrixText = $this->normalizeEchoText($bitrixText);
 
@@ -499,11 +521,27 @@ class ProcessBitrix24OpenLinesWebhookAction
 
         $candidateMessages = Message::query()
             ->select('messages.*')
-            ->join('bitrix24_message_exports as live_exports', function (\Illuminate\Database\Query\JoinClause $join): void {
+            ->join('bitrix24_message_exports as live_exports', function (\Illuminate\Database\Query\JoinClause $join) use ($includePendingExports): void {
                 $join
                     ->on('live_exports.message_id', '=', 'messages.id')
                     ->where('live_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
-                    ->where('live_exports.export_status', Bitrix24MessageExport::STATUS_PENDING);
+                    ->where(function (\Illuminate\Database\Query\Builder $query) use ($includePendingExports): void {
+                        if ($includePendingExports) {
+                            $query->where('live_exports.export_status', Bitrix24MessageExport::STATUS_PENDING);
+                        }
+
+                        $failedUncertainQuery = fn (\Illuminate\Database\Query\Builder $failedQuery): \Illuminate\Database\Query\Builder => $failedQuery
+                            ->where('live_exports.export_status', Bitrix24MessageExport::STATUS_FAILED)
+                            ->where('live_exports.failure_uncertain', true);
+
+                        if ($includePendingExports) {
+                            $query->orWhere($failedUncertainQuery);
+
+                            return;
+                        }
+
+                        $failedUncertainQuery($query);
+                    });
             })
             ->where('messages.dialog_id', $dialog->id)
             ->where('messages.direction', Message::DIRECTION_OUTBOUND)
@@ -557,18 +595,12 @@ class ProcessBitrix24OpenLinesWebhookAction
         return $scheduledAt;
     }
 
-    private function acknowledgeExactEcho(
+    private function acknowledgeEchoMessage(
         Bitrix24WebhookEvent $event,
         Dialog $dialog,
         Bitrix24OpenLinesOperatorMessageData $messageData,
-        Bitrix24MessageExport $exactEchoExport,
+        Message $localMessage,
     ): void {
-        $localMessage = $exactEchoExport->message;
-
-        if (! $localMessage instanceof Message) {
-            throw new Bitrix24ApiException('Bitrix24 exact echo export record does not have a local message.');
-        }
-
         $externalMessageId = trim((string) $localMessage->external_message_id);
 
         if ($externalMessageId === '') {

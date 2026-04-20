@@ -936,6 +936,85 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
+    public function test_delayed_recheck_failed_uncertain_echo_skips_delivery_and_acks_existing_manual_reply(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+        $manualReply = $this->createManualReplyWithLiveExport(
+            dialog: $dialog,
+            text: 'неуверенное эхо',
+            externalMessageId: 'telegram-manual-echo-uncertain-1',
+            exportStatus: Bitrix24MessageExport::STATUS_FAILED,
+            transportMethod: Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            remoteMessageId: null,
+            failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            failureUncertain: true,
+        );
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([], 500),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-recheck-uncertain',
+                        'message_id' => 'bitrix-im-recheck-uncertain-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'неуверенное эхо',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $event->forceFill([
+            'recheck_scheduled_at' => now()->subSecond(),
+            'recheck_attempted_at' => null,
+        ])->save();
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertNotNull($event->recheck_attempted_at);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertNotNull($dialog->bitrix24_live_last_imported_at);
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_delayed_recheck_confirmed_echo',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'success',
+        ]);
+
+        Http::assertNotSent(function (Request $request): bool {
+            return str_contains($request->url(), 'api.telegram.org');
+        });
+
+        Http::assertSent(function (Request $request) use ($manualReply): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === 'bitrix-im-recheck-uncertain-1'
+                && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === $manualReply->external_message_id;
+        });
+    }
+
     public function test_delayed_recheck_without_exact_match_falls_through_to_real_operator_reply(): void
     {
         $connection = $this->makeActiveConnection();
@@ -1477,6 +1556,8 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         string $exportStatus,
         ?string $transportMethod = null,
         ?string $remoteMessageId = null,
+        ?string $failureCode = null,
+        bool $failureUncertain = false,
     ): Message {
         $dialog->loadMissing('contact');
 
@@ -1505,10 +1586,10 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'resolved_bitrix_chat_id' => 'bitrix-chat-local',
             'bitrix_remote_message_id' => $remoteMessageId,
             'exported_at' => $exportStatus === Bitrix24MessageExport::STATUS_EXPORTED ? now() : null,
-            'failed_at' => null,
+            'failed_at' => $exportStatus === Bitrix24MessageExport::STATUS_FAILED ? now() : null,
             'failure_reason' => null,
-            'failure_code' => null,
-            'failure_uncertain' => false,
+            'failure_code' => $failureCode,
+            'failure_uncertain' => $failureUncertain,
         ]);
 
         return $message;
