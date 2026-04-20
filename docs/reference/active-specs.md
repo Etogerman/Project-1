@@ -11,8 +11,23 @@
 
 ## Текущее состояние
 
-Сейчас в основном репозитории нет открытых существенных stream-ов с
+Сейчас в основном репозитории открыт один существенный stream с
 зафиксированным внешним `Spec revision`.
+
+### 1. Bitrix24 Open Lines manual reply service actor
+
+- `Spec repo`: `Etogerman/Project-1-specs`
+- `Spec doc`: `streams/tz-bitrix24-openlines-manual-reply-service-actor.md`
+- `Spec revision`: `25c57d02af3539303b2ab4bd8eb9c1bbd00a661b`
+- внешний статус документа: `active`
+- локальный статус stream-а в основном repo: `opened`
+- issue tracker: [#381](https://github.com/Etogerman/Project-1/issues/381)
+
+Что это означает сейчас:
+
+1. versioned ТЗ уже зафиксировано во внешнем `specs`-repo;
+2. этот stream открыт в основном repo как следующий существенный implementation stream;
+3. code stream по `Slice 1A` ещё не стартовал и требует отдельной явной команды пользователя.
 
 ## Как использовать этот файл
 
