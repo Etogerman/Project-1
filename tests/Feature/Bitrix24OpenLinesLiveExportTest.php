@@ -348,7 +348,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
     }
 
-    public function test_manual_reply_reuses_last_successful_remote_chat_when_best_effort_lookup_fails(): void
+    public function test_manual_reply_falls_back_to_session_open_when_reusable_precheck_lookup_fails(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX);
@@ -366,6 +366,11 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'error' => 'TEMPORARY_ERROR',
                 'error_description' => 'Lookup temporarily unavailable.',
             ], 503),
+            'https://client-endpoint.example/rest/imopenlines.session.open.json' => Http::response([
+                'result' => [
+                    'CHAT_ID' => 'bitrix-fallback-chat-211',
+                ],
+            ], 200),
             'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
                 'result' => [
                     'MESSAGE_ID' => 'remote-message-211',
@@ -380,7 +385,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
-            'resolved_bitrix_chat_id' => 'bitrix-reuse-chat-211',
+            'resolved_bitrix_chat_id' => 'bitrix-fallback-chat-211',
             'bitrix_remote_message_id' => 'remote-message-211',
         ]);
 
@@ -391,12 +396,14 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 return false;
             }
 
-            return $request['CHAT_ID'] === 'bitrix-reuse-chat-211'
+            return $request['CHAT_ID'] === 'bitrix-fallback-chat-211'
                 && $request['USER_ID'] === 321
                 && $request['MESSAGE'] === 'Ручной ответ через reuse при падении lookup';
         });
 
-        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json'
+            && $request['CHAT_ID'] === 'bitrix-reuse-chat-211');
     }
 
     public function test_manual_reply_reusable_chat_access_denied_recovers_with_chat_user_add_and_single_retry(): void

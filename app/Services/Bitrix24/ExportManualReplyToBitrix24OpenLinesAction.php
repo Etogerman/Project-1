@@ -41,11 +41,14 @@ class ExportManualReplyToBitrix24OpenLinesAction
         $activeChatRows = null;
 
         if ($reusableChat = $this->resolveReusableChat($dialog)) {
-            $activeChatRows = $this->tryLookupActiveChatRows($rootContact);
-
-            if ($activeChatRows !== null && $this->shouldExcludeReusableChat($reusableChat->chatId, $route, $activeChatRows)) {
+            try {
+                $activeChatRows = $this->lookupActiveChatRows($rootContact);
+            } catch (Bitrix24OpenLinesManualReplyExportException) {
+                $activeChatRows = [];
                 $excludedChatIds[] = $reusableChat->chatId;
-            } else {
+            }
+
+            if ($activeChatRows !== [] && ! $this->shouldExcludeReusableChat($reusableChat->chatId, $route, $activeChatRows)) {
                 try {
                     return $this->sendMessage(
                         message: $message,
@@ -180,18 +183,6 @@ class ExportManualReplyToBitrix24OpenLinesAction
             $candidateChats,
             fn (array $chat): bool => ! isset($excluded[$this->extractChatId($chat) ?? '']),
         ));
-    }
-
-    /**
-     * @return list<array<string, mixed>>|null
-     */
-    private function tryLookupActiveChatRows(Contact $rootContact): ?array
-    {
-        try {
-            return $this->lookupActiveChatRows($rootContact);
-        } catch (Bitrix24OpenLinesManualReplyExportException) {
-            return null;
-        }
     }
 
     /**
