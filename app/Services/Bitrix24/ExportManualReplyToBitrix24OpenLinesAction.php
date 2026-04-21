@@ -510,7 +510,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         if (
             $allowDialogBindingRecovery
             && $this->isChatNotInCrmResponse($response)
-            && ($dialogResolvedChat = $this->resolveDialogChat($dialog, $route)) !== null
+            && ($dialogResolvedChat = $this->resolveDialogChat($dialog, $route, $resolvedChat->chatId)) !== null
             && (
                 $dialogResolvedChat->chatId !== $resolvedChat->chatId
                 || $dialogResolvedChat->crmEntityType !== $resolvedChat->crmEntityType
@@ -648,6 +648,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
     private function resolveDialogChat(
         Dialog $dialog,
         Bitrix24OpenLinesRouteData $route,
+        ?string $chatId = null,
     ): ?Bitrix24OpenLinesManualReplyChatData {
         $userCode = $this->buildUserCode($dialog, $route);
 
@@ -655,10 +656,65 @@ class ExportManualReplyToBitrix24OpenLinesAction
             return null;
         }
 
+        $shouldFallbackToImDialogGet = false;
+
         try {
             $response = $this->bitrix24ApiClient->call(
                 'imopenlines.dialog.get',
                 ['USER_CODE' => $userCode],
+                connection: null,
+                transportRetry: false,
+            );
+        } catch (Bitrix24ApiException) {
+            $response = null;
+            $shouldFallbackToImDialogGet = true;
+        }
+
+        if ($response instanceof Bitrix24RestResponseData) {
+            if ($response->successful && is_array($response->result)) {
+                $chatId = $response->result['id'] ?? null;
+
+                if (! is_scalar($chatId) || trim((string) $chatId) === '') {
+                    return null;
+                }
+
+                $crmBinding = $this->parseDialogCrmBinding($response->result['entity_data_2'] ?? null);
+
+                if ($crmBinding === null) {
+                    return null;
+                }
+
+                return $this->makeResolvedChat(
+                    dialog: $dialog,
+                    chatId: trim((string) $chatId),
+                    usedFallback: false,
+                    crmEntityType: $crmBinding['CRM_ENTITY_TYPE'],
+                    crmEntityId: $crmBinding['CRM_ENTITY'],
+                );
+            }
+
+            $shouldFallbackToImDialogGet = $this->isDialogLookupUnavailableResponse($response);
+        }
+
+        if (
+            ! $shouldFallbackToImDialogGet
+            || ! is_string($chatId)
+            || trim($chatId) === ''
+        ) {
+            return null;
+        }
+
+        return $this->resolveChatViaImDialogGet($dialog, trim($chatId));
+    }
+
+    private function resolveChatViaImDialogGet(
+        Dialog $dialog,
+        string $chatId,
+    ): ?Bitrix24OpenLinesManualReplyChatData {
+        try {
+            $response = $this->bitrix24ApiClient->call(
+                'im.dialog.get',
+                ['DIALOG_ID' => sprintf('chat%s', $chatId)],
                 connection: null,
                 transportRetry: false,
             );
@@ -670,9 +726,9 @@ class ExportManualReplyToBitrix24OpenLinesAction
             return null;
         }
 
-        $chatId = $response->result['id'] ?? null;
+        $resolvedChatId = $response->result['id'] ?? null;
 
-        if (! is_scalar($chatId) || trim((string) $chatId) === '') {
+        if (! is_scalar($resolvedChatId) || trim((string) $resolvedChatId) === '') {
             return null;
         }
 
@@ -684,7 +740,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
         return $this->makeResolvedChat(
             dialog: $dialog,
-            chatId: trim((string) $chatId),
+            chatId: trim((string) $resolvedChatId),
             usedFallback: false,
             crmEntityType: $crmBinding['CRM_ENTITY_TYPE'],
             crmEntityId: $crmBinding['CRM_ENTITY'],
@@ -939,6 +995,13 @@ class ExportManualReplyToBitrix24OpenLinesAction
     private function isChatNotInCrmResponse(Bitrix24RestResponseData $response): bool
     {
         return $response->errorCode === 'CHAT_NOT_IN_CRM';
+    }
+
+    private function isDialogLookupUnavailableResponse(Bitrix24RestResponseData $response): bool
+    {
+        return in_array($response->errorCode, ['ACCESS_ERROR', 'ACCESS_DENIED'], true)
+            || $this->isAccessDeniedResponse($response)
+            || $this->isUncertainResponse($response);
     }
 
     private function isUncertainResponse(Bitrix24RestResponseData $response): bool

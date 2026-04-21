@@ -1837,6 +1837,80 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
             && $request['USER_CODE'] === 'abrikosoff_telegram|2|telegram-chat-100|telegram-user-100');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/im.dialog.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+    }
+
+    public function test_manual_reply_uses_im_dialog_get_recovery_when_openlines_dialog_get_is_denied(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX);
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'MAX должен восстановить binding через im.dialog.get',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'current-max-chat-710x',
+                        'CONNECTOR_ID' => 'abrikosoff_max',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'error' => 'ACCESS_ERROR',
+                'error_description' => 'You do not have access to the specified dialog',
+            ], 400),
+            'https://client-endpoint.example/rest/im.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 'current-max-chat-710x',
+                    'entity_data_2' => 'LEAD|0|CONTACT|B24-CONTACT-210|DEAL|0',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::sequence()
+                ->push([
+                    'error' => 'CHAT_NOT_IN_CRM',
+                    'error_description' => 'Chat does not belong to the CRM entity being checked',
+                ], 400)
+                ->push([
+                    'result' => 'remote-message-710x',
+                ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $crmMessageAddRequests = collect(Http::recorded())
+            ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json')
+            ->map(fn (array $pair): Request => $pair[0])
+            ->values();
+
+        $this->assertCount(2, $crmMessageAddRequests);
+        $this->assertSame('current-max-chat-710x', $crmMessageAddRequests[0]['CHAT_ID']);
+        $this->assertSame('current-max-chat-710x', $crmMessageAddRequests[1]['CHAT_ID']);
+        $this->assertSame('B24-CONTACT-100', $crmMessageAddRequests[0]['CRM_ENTITY']);
+        $this->assertSame('B24-CONTACT-210', $crmMessageAddRequests[1]['CRM_ENTITY']);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            'resolved_bitrix_chat_id' => 'current-max-chat-710x',
+            'resolved_crm_entity_type' => 'CONTACT',
+            'resolved_crm_entity_id' => 'B24-CONTACT-210',
+            'bitrix_remote_message_id' => 'remote-message-710x',
+        ]);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
+            && $request['USER_CODE'] === 'abrikosoff_max|3|max-chat-100|max-user-100');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/im.dialog.get.json'
+            && $request['DIALOG_ID'] === 'chatcurrent-max-chat-710x');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
     }
