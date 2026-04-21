@@ -61,6 +61,30 @@
                             <p class="ac-meta__value">{{ $item['error_message'] }}</p>
                         </div>
                     </div>
+
+                    <div class="mt-4 grid gap-3 xl:grid-cols-2">
+                        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <div class="mb-2 flex items-center justify-between gap-3">
+                                <p class="text-sm font-semibold text-slate-900">Request payload</p>
+                                <span class="text-xs text-slate-500">
+                                    {{ $item['has_request_payload'] ? 'raw' : 'empty' }}
+                                </span>
+                            </div>
+
+                            <pre class="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ $item['request_payload_pretty'] }}</pre>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <div class="mb-2 flex items-center justify-between gap-3">
+                                <p class="text-sm font-semibold text-slate-900">Response payload</p>
+                                <span class="text-xs text-slate-500">
+                                    {{ $item['has_response_payload'] ? 'raw' : 'empty' }}
+                                </span>
+                            </div>
+
+                            <pre class="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ $item['response_payload_pretty'] }}</pre>
+                        </div>
+                    </div>
                 </div>
             @endforeach
         </div>

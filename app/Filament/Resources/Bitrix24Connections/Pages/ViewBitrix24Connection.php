@@ -66,7 +66,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @return list<array<string, string|int|null>>
+     * @return list<array<string, string|int|null|bool>>
      */
     public function getSyncLogCards(): array
     {
@@ -91,6 +91,10 @@ class ViewBitrix24Connection extends ViewRecord
                 'http_status' => $log->http_status,
                 'error_code' => filled($log->error_code) ? (string) $log->error_code : '—',
                 'error_message' => filled($log->error_message) ? (string) $log->error_message : '—',
+                'request_payload_pretty' => $this->formatPayload($log->request_payload),
+                'response_payload_pretty' => $this->formatPayload($log->response_payload),
+                'has_request_payload' => $log->request_payload !== null,
+                'has_response_payload' => $log->response_payload !== null,
             ])
             ->all();
     }
@@ -102,5 +106,23 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         return $value->format('d.m.Y H:i:s');
+    }
+
+    protected function formatPayload(mixed $payload): string
+    {
+        if ($payload === null) {
+            return '—';
+        }
+
+        if (is_string($payload)) {
+            return $payload;
+        }
+
+        $encoded = json_encode(
+            $payload,
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+
+        return $encoded !== false ? $encoded : '—';
     }
 }
