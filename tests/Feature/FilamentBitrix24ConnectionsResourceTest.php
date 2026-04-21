@@ -122,8 +122,44 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->assertSee('Последние sync-логи')
             ->assertSee('contact.update')
             ->assertSee('Bitrix API returned 500.')
+            ->assertSee('Request payload')
+            ->assertSee('Response payload')
+            ->assertSee('"request":"payload"', false)
+            ->assertSee('"response":"payload"', false)
             ->assertDontSee('secret-access-token')
             ->assertDontSee('secret-refresh-token');
+    }
+
+    public function test_employee_with_bitrix24_view_sees_summary_but_not_raw_sync_payloads(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $connection = $this->makeConnection([
+            'portal_domain' => 'crm.employee-payload.test',
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+
+        $this->makeSyncLog($connection, [
+            'operation' => 'contact.update',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_message' => 'Bitrix API returned 500.',
+            'request_payload' => ['request' => 'payload'],
+            'response_payload' => ['response' => 'payload'],
+        ]);
+
+        $this->actingAs($employee)
+            ->get(Bitrix24ConnectionResource::getUrl('view', ['record' => $connection]))
+            ->assertOk()
+            ->assertSee('crm.employee-payload.test')
+            ->assertSee('contact.update')
+            ->assertSee('Bitrix API returned 500.')
+            ->assertDontSee('Request payload')
+            ->assertDontSee('Response payload')
+            ->assertDontSee('"request":"payload"', false)
+            ->assertDontSee('"response":"payload"', false);
     }
 
     public function test_view_page_filters_webhook_events_and_sync_logs(): void
