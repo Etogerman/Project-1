@@ -6,7 +6,6 @@ services:
     volumes:
       - ../:/var/www/html
       - ./starship.toml:/root/.config/starship.toml:ro
-      - ~/.ssh:/root/.ssh:ro
     extra_hosts:
       - "172.17.0.1:host-gateway"
     depends_on:
