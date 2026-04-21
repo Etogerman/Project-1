@@ -907,7 +907,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             parse_str($request->body(), $payload);
 
-            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === '[Оператор Василий] Ручной ответ без service user';
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'ℹ️ [Оператор Василий] Ручной ответ без service user';
         });
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
@@ -942,7 +942,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             parse_str($request->body(), $payload);
 
-            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === '[Оператор] Ручной ответ без оператора';
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'ℹ️ [Оператор] Ручной ответ без оператора';
         });
     }
 
@@ -980,7 +980,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             parse_str($request->body(), $payload);
 
-            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === '[Автоответ] Автоответ по сценарию';
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'ℹ️ [Автоответ] Автоответ по сценарию';
         });
     }
 
