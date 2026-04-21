@@ -510,7 +510,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         if (
             $allowDialogBindingRecovery
             && $this->isChatNotInCrmResponse($response)
-            && ($dialogResolvedChat = $this->resolveDialogChat($dialog, $route)) !== null
+            && ($dialogResolvedChat = $this->resolveDialogChat($dialog, $route, $resolvedChat->chatId)) !== null
             && (
                 $dialogResolvedChat->chatId !== $resolvedChat->chatId
                 || $dialogResolvedChat->crmEntityType !== $resolvedChat->crmEntityType
@@ -648,7 +648,16 @@ class ExportManualReplyToBitrix24OpenLinesAction
     private function resolveDialogChat(
         Dialog $dialog,
         Bitrix24OpenLinesRouteData $route,
+        ?string $chatId = null,
     ): ?Bitrix24OpenLinesManualReplyChatData {
+        if (
+            is_string($chatId)
+            && trim($chatId) !== ''
+            && ($resolvedChat = $this->resolveChatViaImDialogGet($dialog, trim($chatId))) !== null
+        ) {
+            return $resolvedChat;
+        }
+
         $userCode = $this->buildUserCode($dialog, $route);
 
         if ($userCode === null) {
@@ -685,6 +694,46 @@ class ExportManualReplyToBitrix24OpenLinesAction
         return $this->makeResolvedChat(
             dialog: $dialog,
             chatId: trim((string) $chatId),
+            usedFallback: false,
+            crmEntityType: $crmBinding['CRM_ENTITY_TYPE'],
+            crmEntityId: $crmBinding['CRM_ENTITY'],
+        );
+    }
+
+    private function resolveChatViaImDialogGet(
+        Dialog $dialog,
+        string $chatId,
+    ): ?Bitrix24OpenLinesManualReplyChatData {
+        try {
+            $response = $this->bitrix24ApiClient->call(
+                'im.dialog.get',
+                ['DIALOG_ID' => sprintf('chat%s', $chatId)],
+                connection: null,
+                transportRetry: false,
+            );
+        } catch (Bitrix24ApiException) {
+            return null;
+        }
+
+        if (! $response->successful || ! is_array($response->result)) {
+            return null;
+        }
+
+        $resolvedChatId = $response->result['id'] ?? null;
+
+        if (! is_scalar($resolvedChatId) || trim((string) $resolvedChatId) === '') {
+            return null;
+        }
+
+        $crmBinding = $this->parseDialogCrmBinding($response->result['entity_data_2'] ?? null);
+
+        if ($crmBinding === null) {
+            return null;
+        }
+
+        return $this->makeResolvedChat(
+            dialog: $dialog,
+            chatId: trim((string) $resolvedChatId),
             usedFallback: false,
             crmEntityType: $crmBinding['CRM_ENTITY_TYPE'],
             crmEntityId: $crmBinding['CRM_ENTITY'],
