@@ -140,7 +140,8 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             ])
             ->whereNotNull('bitrix24_message_exports.resolved_bitrix_chat_id')
-            ->latest('bitrix24_message_exports.id')
+            ->orderByDesc('bitrix24_message_exports.exported_at')
+            ->orderByDesc('bitrix24_message_exports.id')
             ->first([
                 'bitrix24_message_exports.resolved_bitrix_chat_id',
                 'bitrix24_message_exports.transport_method',
@@ -163,10 +164,34 @@ class ExportManualReplyToBitrix24OpenLinesAction
             ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $normalizedChatId)
             ->exists();
 
+        $persistedCrmBinding = Bitrix24MessageExport::query()
+            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
+            ->where('messages.dialog_id', $dialog->id)
+            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
+            ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $normalizedChatId)
+            ->whereNotNull('bitrix24_message_exports.resolved_crm_entity_type')
+            ->whereNotNull('bitrix24_message_exports.resolved_crm_entity_id')
+            ->orderByDesc('bitrix24_message_exports.exported_at')
+            ->orderByDesc('bitrix24_message_exports.id')
+            ->first([
+                'bitrix24_message_exports.resolved_crm_entity_type',
+                'bitrix24_message_exports.resolved_crm_entity_id',
+            ]);
+
+        $crmEntityType = $persistedCrmBinding?->getAttribute('resolved_crm_entity_type');
+        $crmEntityId = $persistedCrmBinding?->getAttribute('resolved_crm_entity_id');
+
         return new Bitrix24OpenLinesManualReplyChatData(
             chatId: $normalizedChatId,
             usedFallback: false,
             trustedReusableSource: $trustedReusableSource,
+            crmEntityType: is_scalar($crmEntityType) && trim((string) $crmEntityType) !== ''
+                ? trim((string) $crmEntityType)
+                : null,
+            crmEntityId: is_scalar($crmEntityId) && trim((string) $crmEntityId) !== '' && trim((string) $crmEntityId) !== '0'
+                ? trim((string) $crmEntityId)
+                : null,
         );
     }
 
@@ -497,6 +522,8 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 bitrixRemoteMessageId: $remoteMessageId,
                 usedFallback: $resolvedChat->usedFallback,
                 usedChatUserAddRecovery: $usedChatUserAddRecovery,
+                resolvedCrmEntityType: $resolvedChat->crmEntityType,
+                resolvedCrmEntityId: $resolvedChat->crmEntityId,
             );
         }
 
@@ -695,22 +722,31 @@ class ExportManualReplyToBitrix24OpenLinesAction
         }
 
         $parts = array_map('trim', explode('|', (string) $crmBinding));
+        $contactIds = [];
 
         for ($index = 0; $index + 1 < count($parts); $index += 2) {
             $entityType = strtoupper($parts[$index]);
-            $entityId = $parts[$index + 1];
+            $entityId = trim($parts[$index + 1]);
 
-            if ($entityType === '' || $entityId === '' || $entityId === '0') {
+            if ($entityType !== 'CONTACT' || $entityId === '' || $entityId === '0') {
                 continue;
             }
 
-            return [
-                'CRM_ENTITY_TYPE' => $entityType,
-                'CRM_ENTITY' => $entityId,
-            ];
+            $contactIds[$entityId] = true;
         }
 
-        return null;
+        if ($contactIds === []) {
+            return null;
+        }
+
+        if (count($contactIds) > 1) {
+            return null;
+        }
+
+        return [
+            'CRM_ENTITY_TYPE' => 'CONTACT',
+            'CRM_ENTITY' => array_key_first($contactIds),
+        ];
     }
 
     /**
