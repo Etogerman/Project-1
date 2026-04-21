@@ -164,34 +164,11 @@ class ExportManualReplyToBitrix24OpenLinesAction
             ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $normalizedChatId)
             ->exists();
 
-        $persistedCrmBinding = Bitrix24MessageExport::query()
-            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
-            ->where('messages.dialog_id', $dialog->id)
-            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
-            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
-            ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $normalizedChatId)
-            ->whereNotNull('bitrix24_message_exports.resolved_crm_entity_type')
-            ->whereNotNull('bitrix24_message_exports.resolved_crm_entity_id')
-            ->orderByDesc('bitrix24_message_exports.exported_at')
-            ->orderByDesc('bitrix24_message_exports.id')
-            ->first([
-                'bitrix24_message_exports.resolved_crm_entity_type',
-                'bitrix24_message_exports.resolved_crm_entity_id',
-            ]);
-
-        $crmEntityType = $persistedCrmBinding?->getAttribute('resolved_crm_entity_type');
-        $crmEntityId = $persistedCrmBinding?->getAttribute('resolved_crm_entity_id');
-
-        return new Bitrix24OpenLinesManualReplyChatData(
+        return $this->makeResolvedChat(
+            dialog: $dialog,
             chatId: $normalizedChatId,
             usedFallback: false,
             trustedReusableSource: $trustedReusableSource,
-            crmEntityType: is_scalar($crmEntityType) && trim((string) $crmEntityType) !== ''
-                ? trim((string) $crmEntityType)
-                : null,
-            crmEntityId: is_scalar($crmEntityId) && trim((string) $crmEntityId) !== '' && trim((string) $crmEntityId) !== '0'
-                ? trim((string) $crmEntityId)
-                : null,
         );
     }
 
@@ -228,7 +205,8 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 return $this->resolveFallbackChat($dialog, $route);
             }
 
-            return new Bitrix24OpenLinesManualReplyChatData(
+            return $this->makeResolvedChat(
+                dialog: $dialog,
                 chatId: $this->extractChatId($candidateChats[0]) ?? throw new Bitrix24OpenLinesManualReplyExportException(
                     'Bitrix24 Open Lines active chat lookup returned a chat without CHAT_ID.',
                     Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
@@ -245,7 +223,8 @@ class ExportManualReplyToBitrix24OpenLinesAction
             ));
 
             if (count($connectorMatchedChats) === 1) {
-                return new Bitrix24OpenLinesManualReplyChatData(
+                return $this->makeResolvedChat(
+                    dialog: $dialog,
                     chatId: $this->extractChatId($connectorMatchedChats[0]) ?? throw new Bitrix24OpenLinesManualReplyExportException(
                         'Bitrix24 Open Lines filtered chat lookup returned a chat without CHAT_ID.',
                         Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
@@ -441,7 +420,8 @@ class ExportManualReplyToBitrix24OpenLinesAction
             );
         }
 
-        return new Bitrix24OpenLinesManualReplyChatData(
+        return $this->makeResolvedChat(
+            dialog: $dialog,
             chatId: $chatId,
             usedFallback: true,
         );
@@ -529,7 +509,6 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
         if (
             $allowDialogBindingRecovery
-            && $resolvedChat->trustedReusableSource
             && $this->isChatNotInCrmResponse($response)
             && ($dialogResolvedChat = $this->resolveDialogChat($dialog, $route)) !== null
             && (
@@ -703,10 +682,10 @@ class ExportManualReplyToBitrix24OpenLinesAction
             return null;
         }
 
-        return new Bitrix24OpenLinesManualReplyChatData(
+        return $this->makeResolvedChat(
+            dialog: $dialog,
             chatId: trim((string) $chatId),
             usedFallback: false,
-            trustedReusableSource: false,
             crmEntityType: $crmBinding['CRM_ENTITY_TYPE'],
             crmEntityId: $crmBinding['CRM_ENTITY'],
         );
@@ -746,6 +725,64 @@ class ExportManualReplyToBitrix24OpenLinesAction
         return [
             'CRM_ENTITY_TYPE' => 'CONTACT',
             'CRM_ENTITY' => array_key_first($contactIds),
+        ];
+    }
+
+    private function makeResolvedChat(
+        Dialog $dialog,
+        string $chatId,
+        bool $usedFallback,
+        bool $trustedReusableSource = false,
+        ?string $crmEntityType = null,
+        ?string $crmEntityId = null,
+    ): Bitrix24OpenLinesManualReplyChatData {
+        $persistedCrmBinding = $this->resolvePersistedCrmBinding($dialog, $chatId);
+
+        return new Bitrix24OpenLinesManualReplyChatData(
+            chatId: $chatId,
+            usedFallback: $usedFallback,
+            trustedReusableSource: $trustedReusableSource,
+            crmEntityType: $crmEntityType ?? $persistedCrmBinding['CRM_ENTITY_TYPE'] ?? null,
+            crmEntityId: $crmEntityId ?? $persistedCrmBinding['CRM_ENTITY'] ?? null,
+        );
+    }
+
+    /**
+     * @return array{CRM_ENTITY_TYPE: string, CRM_ENTITY: string}|null
+     */
+    private function resolvePersistedCrmBinding(Dialog $dialog, string $chatId): ?array
+    {
+        $persistedCrmBinding = Bitrix24MessageExport::query()
+            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
+            ->where('messages.dialog_id', $dialog->id)
+            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
+            ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $chatId)
+            ->whereNotNull('bitrix24_message_exports.resolved_crm_entity_type')
+            ->whereNotNull('bitrix24_message_exports.resolved_crm_entity_id')
+            ->orderByDesc('bitrix24_message_exports.exported_at')
+            ->orderByDesc('bitrix24_message_exports.id')
+            ->first([
+                'bitrix24_message_exports.resolved_crm_entity_type',
+                'bitrix24_message_exports.resolved_crm_entity_id',
+            ]);
+
+        $crmEntityType = $persistedCrmBinding?->getAttribute('resolved_crm_entity_type');
+        $crmEntityId = $persistedCrmBinding?->getAttribute('resolved_crm_entity_id');
+
+        if (
+            ! is_scalar($crmEntityType)
+            || trim((string) $crmEntityType) === ''
+            || ! is_scalar($crmEntityId)
+            || trim((string) $crmEntityId) === ''
+            || trim((string) $crmEntityId) === '0'
+        ) {
+            return null;
+        }
+
+        return [
+            'CRM_ENTITY_TYPE' => trim((string) $crmEntityType),
+            'CRM_ENTITY' => trim((string) $crmEntityId),
         ];
     }
 
