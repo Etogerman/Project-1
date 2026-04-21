@@ -650,19 +650,13 @@ class ExportManualReplyToBitrix24OpenLinesAction
         Bitrix24OpenLinesRouteData $route,
         ?string $chatId = null,
     ): ?Bitrix24OpenLinesManualReplyChatData {
-        if (
-            is_string($chatId)
-            && trim($chatId) !== ''
-            && ($resolvedChat = $this->resolveChatViaImDialogGet($dialog, trim($chatId))) !== null
-        ) {
-            return $resolvedChat;
-        }
-
         $userCode = $this->buildUserCode($dialog, $route);
 
         if ($userCode === null) {
             return null;
         }
+
+        $shouldFallbackToImDialogGet = false;
 
         try {
             $response = $this->bitrix24ApiClient->call(
@@ -672,32 +666,45 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 transportRetry: false,
             );
         } catch (Bitrix24ApiException) {
+            $response = null;
+            $shouldFallbackToImDialogGet = true;
+        }
+
+        if ($response instanceof Bitrix24RestResponseData) {
+            if ($response->successful && is_array($response->result)) {
+                $chatId = $response->result['id'] ?? null;
+
+                if (! is_scalar($chatId) || trim((string) $chatId) === '') {
+                    return null;
+                }
+
+                $crmBinding = $this->parseDialogCrmBinding($response->result['entity_data_2'] ?? null);
+
+                if ($crmBinding === null) {
+                    return null;
+                }
+
+                return $this->makeResolvedChat(
+                    dialog: $dialog,
+                    chatId: trim((string) $chatId),
+                    usedFallback: false,
+                    crmEntityType: $crmBinding['CRM_ENTITY_TYPE'],
+                    crmEntityId: $crmBinding['CRM_ENTITY'],
+                );
+            }
+
+            $shouldFallbackToImDialogGet = $this->isDialogLookupUnavailableResponse($response);
+        }
+
+        if (
+            ! $shouldFallbackToImDialogGet
+            || ! is_string($chatId)
+            || trim($chatId) === ''
+        ) {
             return null;
         }
 
-        if (! $response->successful || ! is_array($response->result)) {
-            return null;
-        }
-
-        $chatId = $response->result['id'] ?? null;
-
-        if (! is_scalar($chatId) || trim((string) $chatId) === '') {
-            return null;
-        }
-
-        $crmBinding = $this->parseDialogCrmBinding($response->result['entity_data_2'] ?? null);
-
-        if ($crmBinding === null) {
-            return null;
-        }
-
-        return $this->makeResolvedChat(
-            dialog: $dialog,
-            chatId: trim((string) $chatId),
-            usedFallback: false,
-            crmEntityType: $crmBinding['CRM_ENTITY_TYPE'],
-            crmEntityId: $crmBinding['CRM_ENTITY'],
-        );
+        return $this->resolveChatViaImDialogGet($dialog, trim($chatId));
     }
 
     private function resolveChatViaImDialogGet(
@@ -988,6 +995,13 @@ class ExportManualReplyToBitrix24OpenLinesAction
     private function isChatNotInCrmResponse(Bitrix24RestResponseData $response): bool
     {
         return $response->errorCode === 'CHAT_NOT_IN_CRM';
+    }
+
+    private function isDialogLookupUnavailableResponse(Bitrix24RestResponseData $response): bool
+    {
+        return in_array($response->errorCode, ['ACCESS_ERROR', 'ACCESS_DENIED'], true)
+            || $this->isAccessDeniedResponse($response)
+            || $this->isUncertainResponse($response);
     }
 
     private function isUncertainResponse(Bitrix24RestResponseData $response): bool
