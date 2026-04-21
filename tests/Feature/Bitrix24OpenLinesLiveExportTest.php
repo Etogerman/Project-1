@@ -863,17 +863,24 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             && $request['CHAT_ID'] === 'telegram-chat-998');
     }
 
-    public function test_manual_reply_live_export_falls_back_to_old_transport_when_service_user_id_is_missing(): void
+    public function test_manual_reply_live_export_falls_back_to_old_transport_with_operator_signature_when_service_user_id_is_missing(): void
     {
         $this->makeActiveConnection();
         config()->set('bitrix24.openlines.service_user_id', 0);
 
         $dialog = $this->createLiveReadyDialog();
+        $operator = User::factory()->create([
+            'name' => 'Василий',
+            'is_active' => true,
+        ]);
         $message = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_user_id' => $operator->id,
             'text' => 'Ручной ответ без service user',
+            'text_format' => Message::TEXT_FORMAT_HTML,
+            'source_text' => '<b>Ручной ответ без service user</b>',
         ]);
 
         Http::fake([
@@ -893,9 +900,55 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'bitrix_remote_message_id' => null,
         ]);
 
-        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === '[Оператор Василий] Ручной ответ без service user';
+        });
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
+    }
+
+    public function test_auto_reply_live_export_uses_legacy_transport_with_autoreply_signature(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_AUTO_REPLY,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
+            'text' => 'Автоответ по сценарию',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+        ]);
+
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === '[Автоответ] Автоответ по сценарию';
+        });
     }
 
     public function test_manual_reply_live_export_marks_ambiguous_chat_as_failed_without_sending_message(): void
@@ -2198,6 +2251,33 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         );
 
         $this->assertSame('Привет в Open Lines', $payload['MESSAGES'][0]['message']['text'] ?? null);
+    }
+
+    public function test_shared_live_payload_builder_does_not_add_signature_for_manual_reply_without_explicit_fallback_context(): void
+    {
+        $dialog = $this->createLiveReadyDialog();
+        $operator = User::factory()->create([
+            'name' => 'Василий',
+            'is_active' => true,
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_user_id' => $operator->id,
+            'text' => 'Текст без подписи',
+        ]);
+
+        $payload = app(BuildBitrix24OpenLinesMessagePayloadAction::class)->handle(
+            $message,
+            new Bitrix24OpenLinesRouteData(
+                platform: Channel::PLATFORM_TELEGRAM,
+                connectorCode: 'abrikosoff_telegram',
+                lineId: 'line-telegram',
+            ),
+        );
+
+        $this->assertSame('Текст без подписи', $payload['MESSAGES'][0]['message']['text'] ?? null);
     }
 
     public function test_retry_after_sync_live_payload_includes_explicit_contact_probe_carriers(): void

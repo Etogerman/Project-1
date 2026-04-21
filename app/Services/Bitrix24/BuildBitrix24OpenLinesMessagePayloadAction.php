@@ -22,13 +22,19 @@ class BuildBitrix24OpenLinesMessagePayloadAction
     /**
      * @return array<string, mixed>
      */
-    public function handle(Message $message, Bitrix24OpenLinesRouteData $route, bool $retryAfterSync = false): array
+    public function handle(
+        Message $message,
+        Bitrix24OpenLinesRouteData $route,
+        bool $retryAfterSync = false,
+        bool $applyLegacyFallbackSignature = false,
+    ): array
     {
         $message->loadMissing([
             'dialog.channel',
             'dialog.currentContactIdentity',
             'contact.primaryIdentity',
             'contactIdentity',
+            'sentByUser',
         ]);
 
         $dialog = $message->dialog()->firstOrFail();
@@ -36,7 +42,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $channel = $dialog->channel ?? $message->channel()->firstOrFail();
         $identity = $dialog->currentContactIdentity ?? $message->contactIdentity;
         $timestamp = $this->messageChronology->resolveSortAt($message);
-        $text = $this->resolveMessageText($message, $channel);
+        $text = $this->resolveMessageText($message, $channel, $applyLegacyFallbackSignature);
         $chatKey = $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
         $userId = $this->resolveUserId($channel, $identity?->external_user_id, $rootContact->id);
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
@@ -66,7 +72,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         ];
     }
 
-    private function resolveMessageText(Message $message, Channel $channel): string
+    private function resolveMessageText(Message $message, Channel $channel, bool $applyLegacyFallbackSignature): string
     {
         if ($this->isTelegramBotStartedMessage($message, $channel)) {
             return 'Клиент запустил Telegram-бота';
@@ -88,7 +94,34 @@ class BuildBitrix24OpenLinesMessagePayloadAction
             };
         }
 
-        return trim((string) $message->text);
+        $text = trim((string) $message->text);
+
+        if (! $applyLegacyFallbackSignature) {
+            return $text;
+        }
+
+        return match ($message->message_kind) {
+            Message::KIND_OUTBOUND_MANUAL_REPLY => $this->prefixLegacyFallbackText(
+                sprintf('[Оператор %s]', $this->resolveOperatorName($message)),
+                $text,
+            ),
+            Message::KIND_OUTBOUND_AUTO_REPLY => $this->prefixLegacyFallbackText('[Автоответ]', $text),
+            default => $text,
+        };
+    }
+
+    private function resolveOperatorName(Message $message): string
+    {
+        $name = trim((string) ($message->sentByUser?->name ?? ''));
+
+        return $name !== '' ? $name : 'Оператор';
+    }
+
+    private function prefixLegacyFallbackText(string $prefix, string $text): string
+    {
+        return $text === ''
+            ? $prefix
+            : $prefix.' '.$text;
     }
 
     private function isTelegramBotStartedMessage(Message $message, Channel $channel): bool

@@ -121,6 +121,7 @@ class ExportMessageToBitrix24OpenLinesAction
                             lineId: $route->lineId,
                             retryAfterSync: $retryAfterSync,
                             operation: 'openlines_manual_reply_exported_legacy_fallback',
+                            applyLegacyFallbackSignature: $this->shouldApplyLegacyFallbackSignature($message),
                             responsePayload: [
                                 'fallback_from_failure_code' => $exception->failureCode,
                                 'fallback_from_failure_reason' => $exception->getMessage(),
@@ -141,6 +142,7 @@ class ExportMessageToBitrix24OpenLinesAction
                 lineId: $route->lineId,
                 retryAfterSync: $retryAfterSync,
                 operation: 'openlines_live_exported',
+                applyLegacyFallbackSignature: $this->shouldApplyLegacyFallbackSignature($message),
             );
         } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
             $this->markFailed(
@@ -367,13 +369,14 @@ class ExportMessageToBitrix24OpenLinesAction
         string $lineId,
         bool $retryAfterSync,
         string $operation,
+        bool $applyLegacyFallbackSignature = false,
         array $responsePayload = [],
     ): Message {
         $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle($message, new \App\Data\Bitrix24\Bitrix24OpenLinesRouteData(
             platform: $dialog->channel()->firstOrFail()->platform,
             connectorCode: $connectorCode,
             lineId: $lineId,
-        ), $retryAfterSync);
+        ), $retryAfterSync, $applyLegacyFallbackSignature);
         $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload);
 
         if (! $response->successful) {
@@ -424,6 +427,14 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         return null;
+    }
+
+    private function shouldApplyLegacyFallbackSignature(Message $message): bool
+    {
+        return in_array($message->message_kind, [
+            Message::KIND_OUTBOUND_MANUAL_REPLY,
+            Message::KIND_OUTBOUND_AUTO_REPLY,
+        ], true);
     }
 
     private function markExported(
