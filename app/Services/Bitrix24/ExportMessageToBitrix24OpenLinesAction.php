@@ -380,11 +380,39 @@ class ExportMessageToBitrix24OpenLinesAction
             chatKey: $this->resolveBitrix24LiveChatKeyAction->handle($dialog),
             operation: $operation,
             transportMethod: Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            resolvedBitrixChatId: $this->extractLegacySessionChatId($response->result),
             responsePayload: $responsePayload + [
                 'result' => $response->result,
                 'rest_method' => $response->restMethod,
             ],
         );
+    }
+
+    private function extractLegacySessionChatId(mixed $result): ?string
+    {
+        if (! is_array($result)) {
+            return null;
+        }
+
+        $items = data_get($result, 'DATA.RESULT');
+
+        if (! is_array($items)) {
+            return null;
+        }
+
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $chatId = data_get($item, 'session.CHAT_ID');
+
+            if (is_scalar($chatId) && trim((string) $chatId) !== '') {
+                return trim((string) $chatId);
+            }
+        }
+
+        return null;
     }
 
     private function markExported(
