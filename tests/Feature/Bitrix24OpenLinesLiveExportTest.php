@@ -1316,6 +1316,142 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
     }
 
+    public function test_manual_reply_reuses_rebound_chat_on_next_message_after_dialog_binding_recovery(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM);
+        $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, 'trusted-telegram-chat-705');
+
+        $firstMessage = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Первое сообщение должно rebinding-нуться',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 'trusted-telegram-chat-705',
+                    'entity_data_2' => 'LEAD|0|CONTACT|B24-CONTACT-200|DEAL|0',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::sequence()
+                ->push([
+                    'error' => 'CHAT_NOT_IN_CRM',
+                    'error_description' => 'Chat does not belong to the CRM entity being checked',
+                ], 400)
+                ->push([
+                    'result' => 'remote-message-705a',
+                ], 200)
+                ->push([
+                    'result' => 'remote-message-705b',
+                ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($firstMessage);
+
+        $secondMessage = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Второе сообщение должно reuse-ить rebound chat',
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($secondMessage);
+
+        $crmMessageAddRequests = collect(Http::recorded())
+            ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json')
+            ->map(fn (array $pair): Request => $pair[0])
+            ->values();
+
+        $this->assertCount(3, $crmMessageAddRequests);
+        $this->assertSame('B24-CONTACT-100', $crmMessageAddRequests[0]['CRM_ENTITY']);
+        $this->assertSame('B24-CONTACT-200', $crmMessageAddRequests[1]['CRM_ENTITY']);
+        $this->assertSame('B24-CONTACT-200', $crmMessageAddRequests[2]['CRM_ENTITY']);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $secondMessage->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            'resolved_bitrix_chat_id' => 'trusted-telegram-chat-705',
+            'bitrix_remote_message_id' => 'remote-message-705b',
+        ]);
+
+        Http::assertSentCount(1 + 1 + 3); // chat.get + dialog.get + three crm.message.add
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+    }
+
+    public function test_manual_reply_uses_rebound_crm_binding_for_chat_user_add_recovery(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM);
+        $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, 'trusted-telegram-chat-706');
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Телеграм должен чинить доступ уже на rebound CRM binding',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 'trusted-telegram-chat-706',
+                    'entity_data_2' => 'LEAD|0|CONTACT|B24-CONTACT-200|DEAL|0',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::sequence()
+                ->push([
+                    'error' => 'CHAT_NOT_IN_CRM',
+                    'error_description' => 'Chat does not belong to the CRM entity being checked',
+                ], 400)
+                ->push([
+                    'error' => 'ACCESS_DENIED',
+                    'error_description' => 'Access denied.',
+                ], 400)
+                ->push([
+                    'result' => 'remote-message-706',
+                ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.user.add.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $chatUserAddRequest = collect(Http::recorded())
+            ->map(fn (array $pair): Request => $pair[0])
+            ->first(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.user.add.json');
+
+        $this->assertNotNull($chatUserAddRequest);
+        $this->assertSame('B24-CONTACT-200', $chatUserAddRequest['CRM_ENTITY']);
+        $this->assertSame('CONTACT', $chatUserAddRequest['CRM_ENTITY_TYPE']);
+        $this->assertSame('trusted-telegram-chat-706', $chatUserAddRequest['CHAT_ID']);
+
+        $crmMessageAddRequests = collect(Http::recorded())
+            ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json')
+            ->map(fn (array $pair): Request => $pair[0])
+            ->values();
+
+        $this->assertCount(3, $crmMessageAddRequests);
+        $this->assertSame('B24-CONTACT-100', $crmMessageAddRequests[0]['CRM_ENTITY']);
+        $this->assertSame('B24-CONTACT-200', $crmMessageAddRequests[1]['CRM_ENTITY']);
+        $this->assertSame('B24-CONTACT-200', $crmMessageAddRequests[2]['CRM_ENTITY']);
+
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+    }
+
     public function test_manual_reply_keeps_ambiguity_guardrail_when_lookup_returns_multiple_same_connector_chats_for_trusted_legacy_chat(): void
     {
         $this->makeActiveConnection();

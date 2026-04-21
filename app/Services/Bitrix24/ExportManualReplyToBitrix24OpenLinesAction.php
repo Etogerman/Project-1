@@ -152,10 +152,21 @@ class ExportManualReplyToBitrix24OpenLinesAction
             return null;
         }
 
+        $normalizedChatId = trim((string) $chatId);
+
+        $trustedReusableSource = Bitrix24MessageExport::query()
+            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
+            ->where('messages.dialog_id', $dialog->id)
+            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
+            ->where('bitrix24_message_exports.transport_method', Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES)
+            ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $normalizedChatId)
+            ->exists();
+
         return new Bitrix24OpenLinesManualReplyChatData(
-            chatId: trim((string) $chatId),
+            chatId: $normalizedChatId,
             usedFallback: false,
-            trustedReusableSource: $reusableExport?->getAttribute('transport_method') === Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            trustedReusableSource: $trustedReusableSource,
         );
     }
 
@@ -514,7 +525,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         }
 
         if ($allowRecovery && $this->isAccessDeniedResponse($response)) {
-            $this->recoverChatAccess($rootContact, $serviceUserId, $resolvedChat->chatId);
+            $this->recoverChatAccess($rootContact, $serviceUserId, $resolvedChat);
 
             return $this->sendMessage(
                 message: $message,
@@ -568,13 +579,17 @@ class ExportManualReplyToBitrix24OpenLinesAction
         return $this->crmEntityParams($rootContact);
     }
 
-    private function recoverChatAccess(Contact $rootContact, int $serviceUserId, string $chatId): void
+    private function recoverChatAccess(
+        Contact $rootContact,
+        int $serviceUserId,
+        Bitrix24OpenLinesManualReplyChatData $resolvedChat,
+    ): void
     {
         try {
             $response = $this->bitrix24ApiClient->call(
                 'imopenlines.crm.chat.user.add',
-                array_merge($this->crmEntityParams($rootContact), [
-                    'CHAT_ID' => $chatId,
+                array_merge($this->crmEntityParamsForResolvedChat($rootContact, $resolvedChat), [
+                    'CHAT_ID' => $resolvedChat->chatId,
                     'USER_ID' => $serviceUserId,
                 ]),
                 connection: null,
