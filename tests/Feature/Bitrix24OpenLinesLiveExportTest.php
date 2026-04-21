@@ -913,6 +913,39 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
     }
 
+    public function test_manual_reply_live_export_falls_back_to_old_transport_with_generic_operator_signature_when_sender_is_missing(): void
+    {
+        $this->makeActiveConnection();
+        config()->set('bitrix24.openlines.service_user_id', 0);
+
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'sent_by_user_id' => null,
+            'text' => 'Ручной ответ без оператора',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === '[Оператор] Ручной ответ без оператора';
+        });
+    }
+
     public function test_auto_reply_live_export_uses_legacy_transport_with_autoreply_signature(): void
     {
         $this->makeActiveConnection();

@@ -102,12 +102,21 @@ class BuildBitrix24OpenLinesMessagePayloadAction
 
         return match ($message->message_kind) {
             Message::KIND_OUTBOUND_MANUAL_REPLY => $this->prefixLegacyFallbackText(
-                sprintf('[Оператор %s]', $this->resolveOperatorName($message)),
+                $this->resolveManualReplySignaturePrefix($message),
                 $text,
             ),
             Message::KIND_OUTBOUND_AUTO_REPLY => $this->prefixLegacyFallbackText('[Автоответ]', $text),
             default => $text,
         };
+    }
+
+    private function resolveManualReplySignaturePrefix(Message $message): string
+    {
+        $operatorName = $this->resolveOperatorName($message);
+
+        return $operatorName === 'Оператор'
+            ? '[Оператор]'
+            : sprintf('[Оператор %s]', $operatorName);
     }
 
     private function resolveOperatorName(Message $message): string
