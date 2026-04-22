@@ -2691,8 +2691,11 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
     public function test_missing_openlines_route_config_marks_export_failed_without_sending_request(): void
     {
-        $this->makeActiveConnection();
-        config()->set('bitrix24.openlines.telegram_connector_code', '');
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            profileOverrides: [
+                'telegram_connector_code' => null,
+            ],
+        );
 
         $dialog = $this->createLiveReadyDialog();
         $message = $this->makeMessage($dialog, [

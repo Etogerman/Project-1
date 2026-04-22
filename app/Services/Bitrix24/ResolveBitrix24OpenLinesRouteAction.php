@@ -8,6 +8,10 @@ use App\Models\Dialog;
 
 class ResolveBitrix24OpenLinesRouteAction
 {
+    public function __construct(
+        private readonly ResolveCurrentBitrix24ProfileAction $resolveCurrentProfileAction,
+    ) {}
+
     public function handle(Dialog|int $dialog): Bitrix24OpenLinesRouteData
     {
         $dialog = $dialog instanceof Dialog
@@ -22,22 +26,15 @@ class ResolveBitrix24OpenLinesRouteAction
             throw new Bitrix24ApiException('Bitrix24 Open Lines export requires a dialog channel.');
         }
 
-        [$connectorCode, $lineId] = match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => [
-                (string) config('bitrix24.openlines.telegram_connector_code', ''),
-                (string) config('bitrix24.openlines.telegram_line_id', ''),
-            ],
-            Channel::PLATFORM_MAX => [
-                (string) config('bitrix24.openlines.max_connector_code', ''),
-                (string) config('bitrix24.openlines.max_line_id', ''),
-            ],
-            default => ['', ''],
-        };
+        $profile = $this->resolveCurrentProfileAction->handle();
+        $connectorCode = $profile->openLinesConnectorCodeForPlatform($channel->platform) ?? '';
+        $lineId = $profile->openLinesLineIdForPlatform($channel->platform) ?? '';
 
         if ($connectorCode === '' || $lineId === '') {
             throw new Bitrix24ApiException(sprintf(
-                'Bitrix24 Open Lines route is not configured for platform [%s].',
+                'Bitrix24 Open Lines route is not configured for platform [%s] on current runtime profile `%s`.',
                 $channel->platform,
+                $profile->profile_key,
             ));
         }
 

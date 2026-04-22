@@ -118,6 +118,56 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
+    public function test_openlines_operator_message_is_ignored_when_callback_route_does_not_match_current_profile(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+
+        Http::fake();
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'foreign_connector',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-1',
+                        'message_id' => 'bitrix-im-foreign-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Чужой маршрут',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_IGNORED, $event->processing_status);
+        $this->assertNotNull($event->processed_at);
+        $this->assertNull($event->failed_at);
+        $this->assertNull($event->failure_reason);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_route_mismatch_ignored',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'skipped',
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'channel_id' => $dialog->channel_id,
+            'provider_event_key' => 'bitrix24-openlines:bitrix-im-foreign-1',
+        ]);
+
+        Http::assertNothingSent();
+    }
+
     public function test_openlines_operator_message_is_delivered_to_max_and_acked(): void
     {
         $connection = $this->makeActiveConnection();

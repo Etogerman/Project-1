@@ -6,6 +6,7 @@ use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
+use App\Services\Bitrix24\BackfillBitrix24ProfileRoutingFieldsAction;
 use App\Services\Bitrix24\BackfillBitrix24ConnectionProfilesAction;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
 use App\Services\Bitrix24\NormalizeBitrix24ProfileCallbackBaseUrlsAction;
@@ -497,6 +498,40 @@ class Bitrix24FoundationStorageTest extends TestCase
 
         $this->assertSame('https://project.example.com/prefix', $profile->callback_base_url);
         $this->assertTrue(app(ResolveCurrentBitrix24ProfileAction::class)->handle()->is($profile));
+    }
+
+    public function test_backfill_profile_routing_fields_assigns_current_runtime_profile_from_legacy_config(): void
+    {
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://project.example.com/prefix',
+        ]);
+
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/prefix/callbacks/bitrix24/install');
+        config()->set('bitrix24.callbacks.events_url', 'https://project.example.com/prefix/callbacks/bitrix24/events');
+        config()->set('bitrix24.callbacks.openlines_url', 'https://project.example.com/prefix/callbacks/bitrix24/openlines');
+        config()->set('bitrix24.sources.telegram_id', 'ABRIKOSOFF_TELEGRAM');
+        config()->set('bitrix24.sources.max_id', 'ABRIKOSOFF_MAX');
+        config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
+        config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
+        config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
+        config()->set('bitrix24.openlines.max_line_id', 'line-max');
+
+        app(BackfillBitrix24ProfileRoutingFieldsAction::class)->handle();
+
+        $profile->refresh();
+
+        $this->assertSame('ABRIKOSOFF_TELEGRAM', $profile->telegram_source_id);
+        $this->assertSame('ABRIKOSOFF_MAX', $profile->max_source_id);
+        $this->assertSame('abrikosoff_telegram', $profile->telegram_connector_code);
+        $this->assertSame('abrikosoff_max', $profile->max_connector_code);
+        $this->assertSame('line-telegram', $profile->telegram_line_id);
+        $this->assertSame('line-max', $profile->max_line_id);
     }
 
     public function test_current_runtime_selector_fails_when_configured_callbacks_resolve_to_different_base_urls(): void

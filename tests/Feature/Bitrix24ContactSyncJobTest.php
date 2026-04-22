@@ -679,7 +679,11 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_job_marks_contact_failed_when_source_mapping_is_missing(): void
     {
-        config()->set('bitrix24.sources.telegram_id', null);
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            profileOverrides: [
+                'telegram_source_id' => null,
+            ],
+        );
 
         $contact = $this->createSyncReadyContact();
         $contact->forceFill([
