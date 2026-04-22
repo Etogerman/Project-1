@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\ProcessBitrix24InstallCallbackJob;
 use App\Jobs\ProcessBitrix24WebhookEventJob;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -16,6 +17,8 @@ class Bitrix24CallbackControllerTest extends TestCase
 {
     use RefreshDatabase;
 
+    private Bitrix24Profile $defaultProfile;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -23,6 +26,16 @@ class Bitrix24CallbackControllerTest extends TestCase
         config()->set('bitrix24.portal_domain', 'crm.alexlesley.biz');
         config()->set('bitrix24.application.code', 'local.app.code');
         config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+
+        $this->defaultProfile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'http://localhost',
+        ]);
 
         Http::preventStrayRequests();
         Http::fake([
@@ -172,12 +185,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $connection = Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'application_token' => 'app-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-        ]);
+        $connection = $this->createActiveConnection('member-1', 'app-token');
 
         $response = $this->postJson('/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
@@ -229,12 +237,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'application_token' => 'app-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-        ]);
+        $this->createActiveConnection('member-1', 'app-token');
 
         $payload = [
             'event' => 'OnImConnectorMessageAdd',
@@ -266,12 +269,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'application_token' => 'app-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-        ]);
+        $this->createActiveConnection('member-1', 'app-token');
 
         $payloadWithLowercaseData = [
             'event' => 'OnImConnectorMessageAdd',
@@ -317,12 +315,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'application_token' => 'app-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-        ]);
+        $this->createActiveConnection('member-1', 'app-token');
 
         $payloadWithConflictingCaseKeys = [
             'event' => 'OnImConnectorMessageAdd',
@@ -363,12 +356,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'application_token' => 'app-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-        ]);
+        $this->createActiveConnection('member-1', 'app-token');
 
         $response = $this->postJson('/callbacks/bitrix24/openlines', [
             'EVENT' => 'OnImConnectorMessageAdd',
@@ -580,10 +568,12 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertNotPushed(ProcessBitrix24InstallCallbackJob::class);
     }
 
-    public function test_install_callback_without_expected_app_code_configuration_is_saved_as_failed_and_not_dispatched(): void
+    public function test_install_callback_without_profile_application_code_is_saved_as_failed_and_not_dispatched(): void
     {
         Queue::fake();
-        config()->set('bitrix24.application.code', null);
+        $this->defaultProfile->forceFill([
+            'application_code' => null,
+        ])->save();
 
         $response = $this->postJson('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
@@ -639,16 +629,40 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertNotPushed(ProcessBitrix24InstallCallbackJob::class);
     }
 
+    public function test_install_callback_without_matching_callback_base_url_is_saved_as_failed_and_not_dispatched(): void
+    {
+        Queue::fake();
+
+        $response = $this->postJson('http://unknown-callback.example.test/callbacks/bitrix24/install', [
+            'event' => 'ONAPPINSTALL',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+                'client_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'server_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'scope' => ['crm', 'tasks'],
+                'access_token' => 'secret-access-token',
+                'refresh_token' => 'secret-refresh-token',
+                'expires' => (string) now()->addHour()->timestamp,
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'install');
+
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_FAILED, $event->processing_status);
+        $this->assertSame(0, Bitrix24Connection::query()->count());
+        Queue::assertNotPushed(ProcessBitrix24InstallCallbackJob::class);
+    }
+
     public function test_events_callback_with_invalid_application_token_is_saved_as_failed_and_not_dispatched(): void
     {
         Queue::fake();
 
-        Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'application_token' => 'expected-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-        ]);
+        $this->createActiveConnection('member-1', 'expected-token');
 
         $response = $this->postJson('/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
@@ -675,19 +689,8 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $foreignConnection = Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.foreign.biz',
-            'member_id' => 'member-foreign',
-            'application_token' => 'wrong-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-        ]);
-
-        $expectedConnection = Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'application_token' => 'expected-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-        ]);
+        $foreignConnection = $this->createActiveConnection('member-foreign', 'wrong-token', 'crm.foreign.biz');
+        $expectedConnection = $this->createActiveConnection('member-1', 'expected-token');
 
         $response = $this->postJson('/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
@@ -735,16 +738,54 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertNotPushed(ProcessBitrix24WebhookEventJob::class);
     }
 
-    public function test_events_callback_accepts_different_runtime_domain_when_member_and_application_token_match(): void
+    public function test_openlines_callback_for_crm_only_profile_is_saved_as_failed_and_not_dispatched(): void
     {
         Queue::fake();
 
-        $connection = Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
+        $crmOnlyProfile = $this->createProfile(
+            profileKey: 'dev-crm-only',
+            profileType: Bitrix24Profile::TYPE_CRM_ONLY,
+            callbackBaseUrl: 'http://crm-only.example.test',
+        );
+
+        Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $crmOnlyProfile->id,
+            'portal_domain' => $crmOnlyProfile->portal_domain,
             'member_id' => 'member-1',
             'application_token' => 'app-token',
             'status' => Bitrix24Connection::STATUS_ACTIVE,
         ]);
+
+        $response = $this->postJson('http://crm-only.example.test/callbacks/bitrix24/openlines', [
+            'event' => 'OnImConnectorMessageAdd',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+            ],
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'MESSAGES' => [
+                    ['id' => 'm-1'],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'openlines');
+
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_FAILED, $event->processing_status);
+
+        Queue::assertNotPushed(ProcessBitrix24WebhookEventJob::class);
+    }
+
+    public function test_events_callback_accepts_different_runtime_domain_when_member_and_application_token_match(): void
+    {
+        Queue::fake();
+
+        $connection = $this->createActiveConnection('member-1', 'app-token');
 
         $response = $this->postJson('/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
@@ -763,5 +804,35 @@ class Bitrix24CallbackControllerTest extends TestCase
         $this->assertSame($connection->id, $event->connection_id);
 
         Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
+    }
+
+    private function createActiveConnection(
+        string $memberId,
+        string $applicationToken,
+        string $portalDomain = 'crm.alexlesley.biz',
+    ): Bitrix24Connection {
+        return Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $this->defaultProfile->id,
+            'portal_domain' => $portalDomain,
+            'member_id' => $memberId,
+            'application_token' => $applicationToken,
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+    }
+
+    private function createProfile(
+        string $profileKey,
+        string $profileType,
+        string $callbackBaseUrl,
+    ): Bitrix24Profile {
+        return Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => $profileKey,
+            'profile_type' => $profileType,
+            'display_name' => $profileKey,
+            'client_id' => 'client-id-'.$profileKey,
+            'application_code' => 'local.app.code',
+            'callback_base_url' => $callbackBaseUrl,
+        ]);
     }
 }

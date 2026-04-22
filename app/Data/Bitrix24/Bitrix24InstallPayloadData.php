@@ -10,6 +10,7 @@ final readonly class Bitrix24InstallPayloadData
      */
     public function __construct(
         public ?string $portalDomain,
+        public ?string $callbackBaseUrl,
         public ?string $applicationToken,
         public ?string $memberId,
         public ?string $clientEndpoint,

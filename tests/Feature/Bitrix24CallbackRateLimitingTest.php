@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessBitrix24WebhookEventJob;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -12,6 +13,18 @@ use Tests\TestCase;
 class Bitrix24CallbackRateLimitingTest extends TestCase
 {
     use RefreshDatabase;
+
+    private Bitrix24Profile $defaultProfile;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->defaultProfile = $this->createProfile(
+            profileKey: Bitrix24Profile::PROFILE_KEY_STAGING,
+            callbackBaseUrl: 'http://localhost',
+        );
+    }
 
     public function test_events_callback_below_limit_still_stores_event_and_dispatches_job(): void
     {
@@ -120,7 +133,12 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
         config()->set('bitrix24.rate_limits.events.max_per_minute', 1);
 
         $this->createActiveConnection('member-1', 'app-token-1');
-        $this->createActiveConnection('member-2', 'app-token-2');
+
+        $secondProfile = $this->createProfile(
+            profileKey: 'dev-member-2',
+            callbackBaseUrl: 'http://member-2.example.test',
+        );
+        $this->createActiveConnection('member-2', 'app-token-2', $secondProfile);
 
         $this->postJson('/callbacks/bitrix24/events', $this->eventsPayload(
             memberId: 'member-1',
@@ -129,7 +147,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
             entityId: 101,
         ))->assertOk();
 
-        $this->postJson('/callbacks/bitrix24/events', $this->eventsPayload(
+        $this->postJson('http://member-2.example.test/callbacks/bitrix24/events', $this->eventsPayload(
             memberId: 'member-2',
             applicationToken: 'app-token-2',
             eventName: 'ONCRMCONTACTUPDATE',
@@ -153,7 +171,12 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
         config()->set('bitrix24.rate_limits.openlines.max_per_minute', 1);
 
         $this->createActiveConnection('member-1', 'app-token-1');
-        $this->createActiveConnection('member-2', 'app-token-2');
+
+        $secondProfile = $this->createProfile(
+            profileKey: 'dev-member-2',
+            callbackBaseUrl: 'http://member-2.example.test',
+        );
+        $this->createActiveConnection('member-2', 'app-token-2', $secondProfile);
 
         $this->postJson('/callbacks/bitrix24/openlines', $this->openlinesPayload(
             memberId: 'member-1',
@@ -161,7 +184,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
             messageId: 'openlines-101',
         ))->assertOk();
 
-        $this->postJson('/callbacks/bitrix24/openlines', $this->openlinesPayload(
+        $this->postJson('http://member-2.example.test/callbacks/bitrix24/openlines', $this->openlinesPayload(
             memberId: 'member-2',
             applicationToken: 'app-token-2',
             messageId: 'openlines-201',
@@ -198,13 +221,31 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
         Queue::assertNotPushed(ProcessBitrix24WebhookEventJob::class);
     }
 
-    private function createActiveConnection(string $memberId, string $applicationToken): Bitrix24Connection
+    private function createActiveConnection(
+        string $memberId,
+        string $applicationToken,
+        ?Bitrix24Profile $profile = null,
+    ): Bitrix24Connection
     {
         return Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => $memberId.'.example.test',
+            'profile_id' => ($profile ?? $this->defaultProfile)->id,
+            'portal_domain' => ($profile ?? $this->defaultProfile)->portal_domain,
             'member_id' => $memberId,
             'application_token' => $applicationToken,
             'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+    }
+
+    private function createProfile(string $profileKey, string $callbackBaseUrl): Bitrix24Profile
+    {
+        return Bitrix24Profile::query()->create([
+            'portal_domain' => 'runtime.example.test',
+            'profile_key' => $profileKey,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => $profileKey,
+            'client_id' => 'client-id-'.$profileKey,
+            'application_code' => 'app-code-'.$profileKey,
+            'callback_base_url' => $callbackBaseUrl,
         ]);
     }
 
