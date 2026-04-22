@@ -11,6 +11,7 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -116,6 +117,42 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                 && ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === 'bitrix-im-101'
                 && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === '7001';
         });
+    }
+
+    public function test_openlines_operator_message_is_rejected_when_callback_route_does_not_match_current_profile(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+
+        Http::fake();
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'foreign_connector',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-1',
+                        'message_id' => 'bitrix-im-foreign-1',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Чужой маршрут',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->expectException(Bitrix24ApiException::class);
+        $this->expectExceptionMessage('does not match current runtime route');
+
+        try {
+            $this->runWebhookEventJob($event);
+        } finally {
+            Http::assertNothingSent();
+        }
     }
 
     public function test_openlines_operator_message_is_delivered_to_max_and_acked(): void

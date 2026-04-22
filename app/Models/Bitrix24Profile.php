@@ -33,6 +33,12 @@ class Bitrix24Profile extends Model
         'client_id',
         'application_code',
         'callback_base_url',
+        'telegram_source_id',
+        'max_source_id',
+        'telegram_connector_code',
+        'max_connector_code',
+        'telegram_line_id',
+        'max_line_id',
     ];
 
     public function setCallbackBaseUrlAttribute(mixed $value): void
@@ -90,9 +96,47 @@ class Bitrix24Profile extends Model
         };
     }
 
+    public function sourceIdForPlatform(string $platform): ?string
+    {
+        return match ($platform) {
+            Channel::PLATFORM_TELEGRAM => $this->nullableRoutingValue($this->telegram_source_id),
+            Channel::PLATFORM_MAX => $this->nullableRoutingValue($this->max_source_id),
+            default => null,
+        };
+    }
+
+    public function openLinesConnectorCodeForPlatform(string $platform): ?string
+    {
+        return match ($platform) {
+            Channel::PLATFORM_TELEGRAM => $this->nullableRoutingValue($this->telegram_connector_code),
+            Channel::PLATFORM_MAX => $this->nullableRoutingValue($this->max_connector_code),
+            default => null,
+        };
+    }
+
+    public function openLinesLineIdForPlatform(string $platform): ?string
+    {
+        return match ($platform) {
+            Channel::PLATFORM_TELEGRAM => $this->nullableRoutingValue($this->telegram_line_id),
+            Channel::PLATFORM_MAX => $this->nullableRoutingValue($this->max_line_id),
+            default => null,
+        };
+    }
+
     private function buildCallbackUrl(string $path): string
     {
         return rtrim($this->callback_base_url, '/').$path;
+    }
+
+    private function nullableRoutingValue(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed === '' ? null : $trimmed;
     }
 
     public static function normalizeCallbackBaseUrl(?string $value): ?string

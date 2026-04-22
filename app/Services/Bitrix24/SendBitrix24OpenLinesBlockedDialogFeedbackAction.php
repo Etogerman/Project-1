@@ -39,16 +39,9 @@ class SendBitrix24OpenLinesBlockedDialogFeedbackAction
             ? $channel->platform.':'.$identity->external_user_id
             : 'contact:'.$rootContact->id;
 
-        $connectorCode = $bitrixMessage->connectorCode !== ''
-            ? $bitrixMessage->connectorCode
-            : $route->connectorCode;
-        $lineId = $bitrixMessage->lineId !== ''
-            ? $bitrixMessage->lineId
-            : $route->lineId;
-
         $response = $this->bitrix24ApiClient->call('imconnector.send.messages', [
-            'CONNECTOR' => $connectorCode,
-            'LINE' => $lineId,
+            'CONNECTOR' => $route->connectorCode,
+            'LINE' => $route->lineId,
             'MESSAGES' => [[
                 'chat' => [
                     'id' => $bitrixMessage->chatId,

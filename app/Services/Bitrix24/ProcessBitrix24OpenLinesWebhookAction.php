@@ -37,6 +37,7 @@ class ProcessBitrix24OpenLinesWebhookAction
         private readonly NormalizeBitrix24OpenLinesEventAction $normalizeBitrix24OpenLinesEventAction,
         private readonly HandleBitrix24OpenLinesSessionClosedAction $handleBitrix24OpenLinesSessionClosedAction,
         private readonly ResolveDialogByBitrix24LiveChatKeyAction $resolveDialogByBitrix24LiveChatKeyAction,
+        private readonly ResolveBitrix24OpenLinesRouteAction $resolveBitrix24OpenLinesRouteAction,
         private readonly IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
         private readonly DeliverBitrix24OpenLinesMessageToMessengerAction $deliverBitrix24OpenLinesMessageToMessengerAction,
         private readonly SendBitrix24OpenLinesBlockedDialogFeedbackAction $sendBitrix24OpenLinesBlockedDialogFeedbackAction,
@@ -98,6 +99,8 @@ class ProcessBitrix24OpenLinesWebhookAction
                 if (! $this->isDialogReadyForBitrix24LiveBridgeAction->handle($dialog)) {
                     throw new Bitrix24ApiException('Bitrix24 Open Lines dialog is not ready for live bridge processing.');
                 }
+
+                $this->assertMatchesCurrentRuntimeRoute($dialog, $messageData);
 
                 $providerEventKey = 'bitrix24-openlines:'.$messageData->bitrixMessageId;
                 $existingMessage = Message::query()
@@ -231,6 +234,31 @@ class ProcessBitrix24OpenLinesWebhookAction
         $this->markEventProcessed($event);
 
         return $event->fresh();
+    }
+
+    private function assertMatchesCurrentRuntimeRoute(
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+    ): void {
+        $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
+
+        if ($messageData->connectorCode !== '' && $messageData->connectorCode !== $route->connectorCode) {
+            throw new Bitrix24ApiException(sprintf(
+                'Bitrix24 Open Lines callback connector `%s` does not match current runtime route `%s` for dialog #%d.',
+                $messageData->connectorCode,
+                $route->connectorCode,
+                $dialog->id,
+            ));
+        }
+
+        if ($messageData->lineId !== '' && $messageData->lineId !== $route->lineId) {
+            throw new Bitrix24ApiException(sprintf(
+                'Bitrix24 Open Lines callback line `%s` does not match current runtime route `%s` for dialog #%d.',
+                $messageData->lineId,
+                $route->lineId,
+                $dialog->id,
+            ));
+        }
     }
 
     private function handleManualReplyEchoCallback(
