@@ -35,13 +35,13 @@ composer dev
 - [docs/reference/local-bootstrap.md](docs/reference/local-bootstrap.md) — локальный bootstrap и ежедневный dev-runtime
 - [docs/reference/specs-pointer.md](docs/reference/specs-pointer.md) — как устроен внешний `specs`-контур и как ссылаться на `Spec repo / Spec doc / Spec revision`
 - [docs/reference/active-specs.md](docs/reference/active-specs.md) — какие существенные внешние ТЗ реально открыты сейчас в основном repo
-- [docs/task-delivery-workflow.md](docs/task-delivery-workflow.md) — основной delivery-playbook
-- [docs/clean-stream-release-flow.md](docs/clean-stream-release-flow.md) — узкий release/runbook-контур
+- [docs/task-delivery-workflow.md](docs/task-delivery-workflow.md) — canonical delivery-playbook
+- [docs/clean-stream-release-flow.md](docs/clean-stream-release-flow.md) — дополнительный appendix по clean-stream extraction и mixed-state cleanup
 - [docs/staging-laravel-cloud.md](docs/staging-laravel-cloud.md) — staging, deploy baseline и real Bitrix integration flow
 - [docs/post-deploy-smoke.md](docs/post-deploy-smoke.md) — post-deploy smoke и rev-check контур
 - [docs/playwright.md](docs/playwright.md) — Playwright smoke, локальный и remote запуск
 - [docs/backup.md](docs/backup.md) — backup и verify runbook
-- [docs/bitrix24/setup-sheet.md](docs/bitrix24/setup-sheet.md) — Bitrix24 setup sheet и frozen integration values
+- [docs/bitrix24/setup-sheet.md](docs/bitrix24/setup-sheet.md) — frozen Bitrix24 ops/setup sheet с подтверждёнными integration values
 - [docs/dialog-workspace.md](docs/dialog-workspace.md) — текущая модель `Contact overview / Dialog workspace`
 
 ## Внешние ТЗ
@@ -55,7 +55,7 @@ composer dev
 
 1. активные существенные ТЗ живут во внешнем `Project-1-specs`
 2. для code stream фиксируются `Spec repo`, `Spec doc`, `Spec revision`
-3. локальный [docs/reference/active-specs.md](docs/reference/active-specs.md) показывает, какие из них реально открыты сейчас
+3. локальный [docs/reference/active-specs.md](docs/reference/active-specs.md) показывает, какие из них реально открыты сейчас, либо явно фиксирует их отсутствие
 4. локальный `docs/tz/` не хранит полные stream-ТЗ как source of truth
 
 ## Тесты и smoke
