@@ -10,6 +10,7 @@ class ResolveBitrix24ContactSourceAction
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly ResolveCurrentBitrix24ProfileAction $resolveCurrentProfileAction,
     ) {}
 
     public function handle(Contact|int $contact): ?string
@@ -18,21 +19,15 @@ class ResolveBitrix24ContactSourceAction
         $primaryIdentity = $rootContact->primaryIdentity()->with('channel')->first();
         $platform = $primaryIdentity?->channel?->platform;
 
-        return match ($platform) {
-            Channel::PLATFORM_TELEGRAM => $this->nullableString(config('bitrix24.sources.telegram_id')),
-            Channel::PLATFORM_MAX => $this->nullableString(config('bitrix24.sources.max_id')),
-            default => null,
-        };
-    }
-
-    private function nullableString(mixed $value): ?string
-    {
-        if (! is_scalar($value)) {
+        if (! in_array($platform, [
+            Channel::PLATFORM_TELEGRAM,
+            Channel::PLATFORM_MAX,
+        ], true)) {
             return null;
         }
 
-        $trimmed = trim((string) $value);
+        $profile = $this->resolveCurrentProfileAction->handle();
 
-        return $trimmed === '' ? null : $trimmed;
+        return $profile->sourceIdForPlatform($platform);
     }
 }

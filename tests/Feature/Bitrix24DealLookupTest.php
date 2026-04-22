@@ -360,9 +360,11 @@ class Bitrix24DealLookupTest extends TestCase
 
     public function test_missing_source_mapping_marks_deal_sync_failed_without_creating_deal(): void
     {
-        config()->set('bitrix24.sources.telegram_id', null);
-
-        $this->makeActiveConnection();
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            profileOverrides: [
+                'telegram_source_id' => null,
+            ],
+        );
         $contact = $this->createDealSyncReadyContact([
             'bitrix24_deal_sync_pending' => true,
             'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_PENDING,
