@@ -46,7 +46,11 @@ class BackfillDialogStagesCommand extends Command
 
         foreach (array_chunk($rootContactIds, $chunk) as $rootContactIdChunk) {
             foreach ($rootContactIdChunk as $rootContactId) {
-                $rootStats = $this->syncDialogsStageForRootContactAction->handle($rootContactId, $apply);
+                $rootStats = $this->syncDialogsStageForRootContactAction->handle(
+                    contact: $rootContactId,
+                    apply: $apply,
+                    writeHistory: false,
+                );
 
                 $stats['root_contacts_processed']++;
                 $stats['dialogs_processed'] += $rootStats['dialogs_processed'];

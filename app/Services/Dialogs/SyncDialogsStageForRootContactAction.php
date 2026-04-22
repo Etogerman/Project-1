@@ -23,7 +23,7 @@ class SyncDialogsStageForRootContactAction
      *   dialogs_already_correct: int,
      * }
      */
-    public function handle(Contact|int $contact, bool $apply = true): array
+    public function handle(Contact|int $contact, bool $apply = true, bool $writeHistory = true): array
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $memberContactIds = $this->resolveMemberContactIds($rootContact);
@@ -64,12 +64,14 @@ class SyncDialogsStageForRootContactAction
                 'stage' => $stage,
             ])->save();
 
-            $this->createDialogStageHistoryMessageAction->handle(
-                $dialog->fresh(['channel', 'currentContactIdentity']),
-                $fromStage,
-                $stage,
-                CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
-            );
+            if ($writeHistory) {
+                $this->createDialogStageHistoryMessageAction->handle(
+                    $dialog->fresh(['channel', 'currentContactIdentity']),
+                    $fromStage,
+                    $stage,
+                    CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
+                );
+            }
         }
 
         return $stats;

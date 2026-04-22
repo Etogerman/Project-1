@@ -17,6 +17,7 @@ class ConsolidateDialogsForRootContactAction
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly ResolveDialogRoutePayloadAction $resolveDialogRoutePayloadAction,
         private readonly ResolveConsolidatedDialogStageAction $resolveConsolidatedDialogStageAction,
+        private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
         private readonly MessageChronology $messageChronology,
     ) {}
 
@@ -135,13 +136,23 @@ class ConsolidateDialogsForRootContactAction
                 $stats['dialogs_reassigned']++;
             }
 
-            if (! $dialogWasCreated && $this->dialogNeedsUpdate($survivingDialog, $payload)) {
+            $fromStage = $survivingDialog->stage;
+            $dialogNeedsUpdate = $this->dialogNeedsUpdate($survivingDialog, $payload);
+
+            if (! $dialogWasCreated && $dialogNeedsUpdate) {
                 $stats['dialogs_updated']++;
             }
 
-            if ($apply && $this->dialogNeedsUpdate($survivingDialog, $payload)) {
+            if ($apply && $dialogNeedsUpdate) {
                 $survivingDialog->forceFill($payload)->save();
                 $survivingDialog->refresh()->loadMissing(['channel', 'currentContactIdentity']);
+
+                $this->createDialogStageHistoryMessageAction->handle(
+                    $survivingDialog,
+                    $fromStage,
+                    $payload['stage'] ?? null,
+                    CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
+                );
             }
 
             $messagesToRelink = $messagesInChannel
