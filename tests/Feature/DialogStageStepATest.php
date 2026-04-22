@@ -279,4 +279,55 @@ class DialogStageStepATest extends TestCase
         $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $dialog->fresh()->stage);
         $this->assertDatabaseCount('messages', 0);
     }
+
+    public function test_dialog_stage_backfill_command_preserves_manual_stage(): void
+    {
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $channel = Channel::factory()->create();
+
+        $dialog = Dialog::factory()->withoutCurrentIdentity()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+        ]);
+
+        Artisan::call('dialogs:backfill-stage', ['--apply' => true]);
+
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPL, $dialog->fresh()->stage);
+    }
+
+    public function test_dialog_stage_backfill_command_can_be_scoped_to_one_root_contact(): void
+    {
+        $scopedContact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $otherContact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $channel = Channel::factory()->create();
+
+        $scopedDialog = Dialog::factory()->withoutCurrentIdentity()->create([
+            'contact_id' => $scopedContact->id,
+            'channel_id' => $channel->id,
+            'stage' => null,
+        ]);
+        $otherDialog = Dialog::factory()->withoutCurrentIdentity()->create([
+            'contact_id' => $otherContact->id,
+            'channel_id' => Channel::factory()->create()->id,
+            'stage' => null,
+        ]);
+
+        Artisan::call('dialogs:backfill-stage', [
+            '--apply' => true,
+            '--contact-id' => (string) $scopedContact->id,
+        ]);
+
+        $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $scopedDialog->fresh()->stage);
+        $this->assertNull($otherDialog->fresh()->stage);
+    }
 }
