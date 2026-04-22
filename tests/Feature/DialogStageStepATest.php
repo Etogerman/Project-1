@@ -43,6 +43,24 @@ class DialogStageStepATest extends TestCase
         $this->assertDatabaseCount('messages', 0);
     }
 
+    public function test_resolve_or_create_dialog_action_uses_root_contact_when_merged_contact_is_passed(): void
+    {
+        $rootContact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $mergedContact = Contact::factory()->create([
+            'merged_into_contact_id' => $rootContact->id,
+            'merged_at' => now(),
+        ]);
+        $channel = Channel::factory()->create();
+
+        $dialog = app(ResolveOrCreateDialogAction::class)->handle($mergedContact, $channel);
+
+        $this->assertSame($rootContact->id, $dialog->contact_id);
+        $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $dialog->stage);
+    }
+
     public function test_sync_dialog_confirmed_phone_action_promotes_stage_without_history(): void
     {
         $channel = Channel::factory()->create();
@@ -71,6 +89,43 @@ class DialogStageStepATest extends TestCase
         $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $dialog->stage);
         $this->assertSame('+7 999 123 45 67', $dialog->confirmed_phone_raw);
         $this->assertSame('+79991234567', $dialog->confirmed_phone_normalized);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_sync_dialog_confirmed_phone_action_does_not_override_manual_stage(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPP,
+        ]);
+
+        $inboundMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'received_at' => now(),
+        ]);
+
+        $updatedDialog = app(SyncDialogConfirmedPhoneAction::class)->handle(
+            $inboundMessage,
+            '+7 999 123 45 67',
+            '+79991234567',
+        );
+
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPP, $updatedDialog->stage);
+        $this->assertSame('+79991234567', $updatedDialog->confirmed_phone_normalized);
         $this->assertDatabaseCount('messages', 1);
     }
 
