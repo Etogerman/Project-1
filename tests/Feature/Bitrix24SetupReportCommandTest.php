@@ -60,6 +60,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
         $this->artisan('bitrix24:setup-report')
             ->expectsOutput('Bitrix24 setup readiness check completed.')
             ->expectsOutputToContain('Bitrix24 profile registry')
+            ->expectsOutputToContain('Current runtime Bitrix24 profile')
             ->expectsOutputToContain('Profile `staging` callback_base_url')
             ->doesntExpectOutputToContain('client-secret')
             ->expectsOutputToContain('*** redacted ***')
@@ -67,6 +68,18 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->expectsOutputToContain('["OnSessionFinish"]')
             ->expectsOutputToContain('Bitrix24 setup is ready for the integration foundation stage.')
             ->assertSuccessful();
+    }
+
+    public function test_command_fails_when_current_runtime_callbacks_do_not_resolve_to_single_profile(): void
+    {
+        $this->seedReadyConfig();
+        $this->createProfile(callbackBaseUrl: 'https://project.example.com');
+        config()->set('bitrix24.callbacks.events_url', 'https://other.example.com/callbacks/bitrix24/events');
+
+        $this->artisan('bitrix24:setup-report')
+            ->expectsOutputToContain('Current runtime Bitrix24 profile')
+            ->expectsOutputToContain('Configured Bitrix24 callbacks resolve to different callback_base_url values')
+            ->assertFailed();
     }
 
     public function test_command_fails_when_frozen_required_value_drifts(): void
@@ -91,6 +104,11 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ],
             'oauth' => [
                 'server_url' => 'https://oauth.example',
+            ],
+            'callbacks' => [
+                'install_url' => 'https://project.example.com/callbacks/bitrix24/install',
+                'events_url' => 'https://project.example.com/callbacks/bitrix24/events',
+                'openlines_url' => 'https://project.example.com/callbacks/bitrix24/openlines',
             ],
             'sources' => [
                 'telegram_id' => 'ABRIKOSOFF_TG',

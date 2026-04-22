@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24HistoryExportChunkData;
+use App\Models\Bitrix24Connection;
 use App\Models\Contact;
 
 class ExportBitrix24HistoryChunkAction
@@ -16,12 +17,13 @@ class ExportBitrix24HistoryChunkAction
         private readonly BuildBitrix24TimelineCommentAction $buildTimelineCommentAction,
     ) {}
 
-    public function handle(Contact $contact, Bitrix24HistoryExportChunkData $chunk): ?string
+    public function handle(Contact $contact, Bitrix24HistoryExportChunkData $chunk, ?Bitrix24Connection $connection = null): ?string
     {
         return $this->exportTimelineComment(
             entityId: (string) $contact->bitrix24_contact_id,
             entityType: self::ENTITY_TYPE_CONTACT,
             chunk: $chunk,
+            connection: $connection,
             errorMessage: sprintf(
                 'Bitrix24 history export failed for contact #%d: %s',
                 $contact->id,
@@ -30,7 +32,7 @@ class ExportBitrix24HistoryChunkAction
         );
     }
 
-    public function copyToDeal(Contact $contact, Bitrix24HistoryExportChunkData $chunk): ?string
+    public function copyToDeal(Contact $contact, Bitrix24HistoryExportChunkData $chunk, ?Bitrix24Connection $connection = null): ?string
     {
         $dealId = $this->normalizeEntityId($contact->bitrix24_deal_id);
 
@@ -42,6 +44,7 @@ class ExportBitrix24HistoryChunkAction
             entityId: $dealId,
             entityType: self::ENTITY_TYPE_DEAL,
             chunk: $chunk,
+            connection: $connection,
             errorMessage: sprintf(
                 'Bitrix24 deal history export failed for contact #%d and deal `%s`: %s',
                 $contact->id,
@@ -84,6 +87,7 @@ class ExportBitrix24HistoryChunkAction
         string $entityId,
         string $entityType,
         Bitrix24HistoryExportChunkData $chunk,
+        ?Bitrix24Connection $connection,
         string $errorMessage,
     ): ?string {
         $response = $this->apiClient->call('crm.timeline.comment.add', [
@@ -92,7 +96,7 @@ class ExportBitrix24HistoryChunkAction
                 'ENTITY_TYPE' => $entityType,
                 'COMMENT' => $this->buildTimelineCommentAction->handle($chunk),
             ],
-        ]);
+        ], $connection);
 
         if (! $response->successful) {
             throw new Bitrix24ApiException(sprintf(

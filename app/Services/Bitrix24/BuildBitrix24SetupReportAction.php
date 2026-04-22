@@ -9,6 +9,7 @@ class BuildBitrix24SetupReportAction
 {
     public function __construct(
         private readonly NormalizeBitrix24CallbackBaseUrlAction $normalizeCallbackBaseUrl,
+        private readonly ResolveCurrentBitrix24ProfileAction $resolveCurrentProfile,
     ) {}
 
     public function handle(): Bitrix24SetupReportResult
@@ -24,6 +25,7 @@ class BuildBitrix24SetupReportAction
             $this->buildProfileRegistryPresenceCheck($profiles->count()),
             ...$this->buildProfileRegistryUniquenessChecks($profiles),
             ...$this->buildProfileChecks($profiles),
+            $this->buildCurrentRuntimeProfileCheck(),
             $this->buildRequiredValueCheck(
                 key: 'application.client_id',
                 label: 'Bitrix24 client_id',
@@ -117,6 +119,34 @@ class BuildBitrix24SetupReportAction
         return new Bitrix24SetupReportResult(
             checks: $checks,
             frozenValues: $this->buildFrozenValues($config, $profiles->all()),
+        );
+    }
+
+    /**
+     * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
+     */
+    private function buildCurrentRuntimeProfileCheck(): array
+    {
+        try {
+            $profile = $this->resolveCurrentProfile->handle();
+        } catch (Bitrix24ConnectionStateException $exception) {
+            return $this->check(
+                'runtime.current_profile',
+                'Current runtime Bitrix24 profile',
+                '—',
+                Bitrix24SetupReportResult::STATUS_MISSING,
+                true,
+                $exception->getMessage(),
+            );
+        }
+
+        return $this->check(
+            'runtime.current_profile',
+            'Current runtime Bitrix24 profile',
+            sprintf('%s (%s)', $profile->profile_key, $profile->callback_base_url),
+            Bitrix24SetupReportResult::STATUS_OK,
+            true,
+            'Configured callback URLs resolve to exactly one Bitrix24 profile for outbound/runtime selection.',
         );
     }
 

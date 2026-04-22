@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24Connection;
 use App\Models\Contact;
 use App\Services\Contacts\ResolveRootContactAction;
 
@@ -12,12 +13,12 @@ class CreateBitrix24ContactAction
         private readonly ResolveRootContactAction $resolveRootContactAction,
     ) {}
 
-    public function handle(Contact|int $contact, array $payload): string
+    public function handle(Contact|int $contact, array $payload, ?Bitrix24Connection $connection = null): string
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $response = $this->apiClient->call('crm.contact.add', [
             'fields' => $payload,
-        ]);
+        ], $connection);
 
         if (! $response->successful) {
             throw new Bitrix24ApiException(

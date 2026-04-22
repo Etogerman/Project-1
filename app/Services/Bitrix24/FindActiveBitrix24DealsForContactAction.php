@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24ActiveDealLookupResultData;
+use App\Models\Bitrix24Connection;
 use App\Models\Contact;
 use App\Services\Contacts\ResolveRootContactAction;
 
@@ -26,7 +27,7 @@ class FindActiveBitrix24DealsForContactAction
         private readonly Bitrix24ApiClient $apiClient,
     ) {}
 
-    public function handle(Contact|int $contact): Bitrix24ActiveDealLookupResultData
+    public function handle(Contact|int $contact, ?Bitrix24Connection $connection = null): Bitrix24ActiveDealLookupResultData
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $bitrix24ContactId = $this->requireBitrix24ContactId($rootContact);
@@ -36,7 +37,11 @@ class FindActiveBitrix24DealsForContactAction
         $deals = [];
 
         do {
-            $response = $this->apiClient->call('crm.deal.list', $this->buildLookupParams($bitrix24ContactId, $start));
+            $response = $this->apiClient->call(
+                'crm.deal.list',
+                $this->buildLookupParams($bitrix24ContactId, $start),
+                $connection,
+            );
 
             if (! $response->successful || ! is_array($response->result)) {
                 throw new Bitrix24ApiException(
