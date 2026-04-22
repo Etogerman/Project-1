@@ -80,12 +80,26 @@ class BackfillBitrix24ConnectionProfilesAction
             return null;
         }
 
-        $normalizedPath = match ($path) {
+        $normalizedPath = is_string($path)
+            ? rtrim('/'.ltrim($path, '/'), '/')
+            : '';
+
+        foreach ([
             Bitrix24Profile::INSTALL_CALLBACK_PATH,
             Bitrix24Profile::EVENTS_CALLBACK_PATH,
-            Bitrix24Profile::OPENLINES_CALLBACK_PATH => '',
-            default => is_string($path) ? rtrim('/'.ltrim($path, '/'), '/') : '',
-        };
+            Bitrix24Profile::OPENLINES_CALLBACK_PATH,
+        ] as $suffix) {
+            if (! str_ends_with($normalizedPath, $suffix)) {
+                continue;
+            }
+
+            $prefixPath = substr($normalizedPath, 0, -strlen($suffix));
+            $normalizedPath = $prefixPath === false
+                ? ''
+                : rtrim($prefixPath, '/');
+
+            break;
+        }
 
         $normalizedPort = is_int($port) ? ':'.$port : '';
 
