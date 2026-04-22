@@ -59,6 +59,7 @@ class HandleBitrix24InstallCallbackAction
                 callbackType: Bitrix24WebhookEvent::TYPE_INSTALL,
                 eventName: $normalized['event_name'],
                 authContext: $authContext,
+                callbackBaseUrl: $ingress->callbackBaseUrl,
                 payload: $normalized['payload'],
                 headers: $normalized['headers'],
                 query: $normalized['query'],

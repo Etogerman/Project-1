@@ -96,6 +96,7 @@ class Bitrix24FoundationStorageTest extends TestCase
 
         $event = Bitrix24WebhookEvent::query()->create([
             'connection_id' => $connection->id,
+            'callback_base_url' => 'https://project.example.com',
             'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
             'event_name' => 'ONCRMCONTACTUPDATE',
             'member_id' => 'member-1',
@@ -135,6 +136,7 @@ class Bitrix24FoundationStorageTest extends TestCase
 
         Bitrix24WebhookEvent::query()->create([
             'connection_id' => $connection->id,
+            'callback_base_url' => 'https://project.example.com',
             'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
             'event_name' => 'ONCRMCONTACTUPDATE',
             'member_id' => 'member-1',
@@ -308,5 +310,33 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertSame('crm.alexlesley.biz', $profile->portal_domain);
         $this->assertSame(Bitrix24Profile::PROFILE_KEY_STAGING, $profile->profile_key);
         $this->assertSame('https://project.example.com', $profile->callback_base_url);
+    }
+
+    public function test_webhook_event_dedupe_is_scoped_by_callback_base_url(): void
+    {
+        $firstEvent = Bitrix24WebhookEvent::query()->create([
+            'callback_base_url' => 'https://first.example.test',
+            'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
+            'event_name' => 'ONCRMCONTACTUPDATE',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token',
+            'payload_hash' => str_repeat('b', 64),
+            'payload' => ['event' => 'ONCRMCONTACTUPDATE'],
+            'processing_status' => Bitrix24WebhookEvent::STATUS_PENDING,
+        ]);
+
+        $secondEvent = Bitrix24WebhookEvent::query()->create([
+            'callback_base_url' => 'https://second.example.test',
+            'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
+            'event_name' => 'ONCRMCONTACTUPDATE',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token',
+            'payload_hash' => str_repeat('b', 64),
+            'payload' => ['event' => 'ONCRMCONTACTUPDATE'],
+            'processing_status' => Bitrix24WebhookEvent::STATUS_PENDING,
+        ]);
+
+        $this->assertNotSame($firstEvent->id, $secondEvent->id);
+        $this->assertSame(2, Bitrix24WebhookEvent::query()->count());
     }
 }

@@ -806,6 +806,54 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
     }
 
+    public function test_events_callback_same_payload_is_not_deduped_across_profiles(): void
+    {
+        Queue::fake();
+
+        $firstConnection = $this->createActiveConnection('member-1', 'app-token');
+        $secondProfile = $this->createProfile(
+            profileKey: 'dev-second',
+            profileType: Bitrix24Profile::TYPE_FULL_LIVE,
+            callbackBaseUrl: 'http://second.example.test',
+        );
+
+        $secondConnection = Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $secondProfile->id,
+            'portal_domain' => $secondProfile->portal_domain,
+            'member_id' => 'member-1',
+            'application_token' => 'app-token',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        $payload = [
+            'event' => 'ONCRMCONTACTUPDATE',
+            'data' => [
+                'FIELDS' => [
+                    'ID' => 123,
+                ],
+            ],
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+            ],
+        ];
+
+        $this->postJson('/callbacks/bitrix24/events', $payload)->assertOk();
+        $this->postJson('http://second.example.test/callbacks/bitrix24/events', $payload)->assertOk();
+
+        $events = Bitrix24WebhookEvent::query()->orderBy('id')->get();
+
+        $this->assertCount(2, $events);
+        $this->assertSame([$firstConnection->id, $secondConnection->id], $events->pluck('connection_id')->all());
+        $this->assertSame(
+            ['http://localhost', 'http://second.example.test'],
+            $events->pluck('callback_base_url')->all(),
+        );
+
+        Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 2);
+    }
+
     private function createActiveConnection(
         string $memberId,
         string $applicationToken,

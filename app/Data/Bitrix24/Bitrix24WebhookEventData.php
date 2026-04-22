@@ -13,6 +13,7 @@ final readonly class Bitrix24WebhookEventData
         public string $callbackType,
         public ?string $eventName,
         public Bitrix24AuthContextData $authContext,
+        public ?string $callbackBaseUrl,
         public array $payload,
         public array $headers,
         public array $query,

@@ -25,6 +25,12 @@ class BuildBitrix24SetupReportAction
             ...$this->buildProfileRegistryUniquenessChecks($profiles),
             ...$this->buildProfileChecks($profiles),
             $this->buildRequiredValueCheck(
+                key: 'application.client_id',
+                label: 'Bitrix24 client_id',
+                value: (string) data_get($config, 'application.client_id', ''),
+                notes: 'Required while token refresh still uses the global OAuth client.',
+            ),
+            $this->buildRequiredValueCheck(
                 key: 'application.client_secret',
                 label: 'Bitrix24 client_secret',
                 value: (string) data_get($config, 'application.client_secret', ''),
@@ -462,8 +468,12 @@ class BuildBitrix24SetupReportAction
             return $this->check($key, $label, '—', Bitrix24SetupReportResult::STATUS_MISSING, true, $notes);
         }
 
+        if (! ctype_digit(ltrim($trimmed, '-'))) {
+            return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_MISSING, true, 'Expected numeric value. '.$notes);
+        }
+
         if ($trimmed !== $expected) {
-            return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_WARNING, true, 'Expected '.$expected.'. '.$notes);
+            return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_MISSING, true, 'Expected '.$expected.'. '.$notes);
         }
 
         return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_OK, true, $notes);
@@ -486,7 +496,7 @@ class BuildBitrix24SetupReportAction
         }
 
         if ($expected !== null && $trimmed !== $expected) {
-            return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_WARNING, true, 'Expected '.$expected.'. '.$notes);
+            return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_MISSING, true, 'Expected '.$expected.'. '.$notes);
         }
 
         return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_OK, true, $notes);

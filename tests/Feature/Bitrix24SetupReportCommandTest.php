@@ -14,6 +14,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
     {
         config()->set('bitrix24', array_replace_recursive(config('bitrix24'), [
             'application' => [
+                'client_id' => null,
                 'client_secret' => null,
             ],
             'oauth' => [
@@ -35,6 +36,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->expectsOutput('Bitrix24 setup readiness check completed.')
             ->expectsOutputToContain('Bitrix24 profile registry')
             ->expectsOutputToContain('Bitrix24 OAuth server URL')
+            ->expectsOutputToContain('Bitrix24 client_id')
             ->expectsOutputToContain('Bitrix24 client_secret')
             ->expectsOutputToContain('Bitrix24 setup is not ready for implementation. Resolve all missing required items first.')
             ->assertFailed();
@@ -67,10 +69,24 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_command_fails_when_frozen_required_value_drifts(): void
+    {
+        $this->seedReadyConfig();
+        $this->createProfile();
+
+        config()->set('bitrix24.defaults.deal_category_id', '99');
+
+        $this->artisan('bitrix24:setup-report')
+            ->expectsOutputToContain('Default deal category ID')
+            ->expectsOutputToContain('Expected 22.')
+            ->assertFailed();
+    }
+
     private function seedReadyConfig(): void
     {
         config()->set('bitrix24', array_replace_recursive(config('bitrix24'), [
             'application' => [
+                'client_id' => 'client-id',
                 'client_secret' => 'client-secret',
             ],
             'oauth' => [

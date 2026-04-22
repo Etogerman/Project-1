@@ -52,6 +52,7 @@ class HandleBitrix24RuntimeCallbackAction
                 callbackType: $callbackType,
                 eventName: $normalized['event_name'],
                 authContext: $authContext,
+                callbackBaseUrl: $ingress->callbackBaseUrl,
                 payload: $normalized['payload'],
                 headers: $normalized['headers'],
                 query: $normalized['query'],
