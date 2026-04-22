@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\Contacts\ResolveContactDisplayNameAction;
+use App\Services\Dialogs\SyncDialogsStageForRootContactAction;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -536,6 +537,8 @@ class Contact extends Model
             'data_collection_completed_at' => now(),
             'data_collection_attempts_count' => 0,
         ])->save();
+
+        app(SyncDialogsStageForRootContactAction::class)->handle($this);
     }
 
     protected function displayName(): Attribute

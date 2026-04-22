@@ -16,6 +16,7 @@ class ConsolidateDialogsForRootContactAction
     public function __construct(
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly ResolveDialogRoutePayloadAction $resolveDialogRoutePayloadAction,
+        private readonly ResolveDialogStageAction $resolveDialogStageAction,
         private readonly MessageChronology $messageChronology,
     ) {}
 
@@ -324,6 +325,12 @@ class ConsolidateDialogsForRootContactAction
             $payload['phone_confirmed_at'] = $phoneSourceDialog->phone_confirmed_at;
             $payload['phone_confirmed_via'] = $phoneSourceDialog->phone_confirmed_via;
         }
+
+        $payload['stage'] = $this->resolveDialogStageAction->forAttributes(
+            currentStage: $survivingDialog->stage,
+            contact: $rootContact,
+            phoneConfirmedAt: $payload['phone_confirmed_at'] ?? $survivingDialog->phone_confirmed_at,
+        );
 
         return $payload;
     }

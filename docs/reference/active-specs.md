@@ -1,0 +1,33 @@
+# Активные внешние ТЗ
+
+Этот файл — локальный stream-level реестр существенных stream-ов, которые
+реально открыты в основном репозитории.
+
+Он не хранит slice-level state, не дублирует полный статус внешнего `Spec doc`
+и не заменяет PR audit trail с блоком `Spec repo / Spec doc / Spec revision`.
+
+## Схема записи
+
+Одна запись на один открытый substantial stream:
+
+- `[stream-name]` — Spec repo: `<repo-or-location>`; Spec doc: `<path-or-doc-name>`; Spec revision: `<commit-hash>`; status: `opened|blocked|closing`; opened-at: `YYYY-MM-DD`
+
+## Правила
+
+1. Здесь фиксируется только stream-level state.
+2. Slice-level state живёт только во внешнем spec-repo.
+3. Issue или task tracker хранит execution-state: blockers, next step, ссылки на PR и handoff notes.
+4. Запись добавляется, обновляется или удаляется в том же открывающем/закрывающем шаге, где stream реально появляется или закрывается в основном repo.
+5. Отдельный `docs-only` sync допустим как fallback, но не является default-требованием.
+6. Если внешний spec-repo, нужный `Spec doc` или согласованная `Spec revision` недоступны, substantial stream paused.
+7. Если активных substantial stream-ов нет, это указывается одной строкой: `- none`.
+
+## Текущее состояние
+
+- `[bitrix24-multi-dev-profile-isolation-shared-staging-portal]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-multi-dev-profile-isolation-shared-staging-portal.md`; Spec revision: `1987f6e385f38cc7158d1902e4258af71191e1fe`; status: `opened`; opened-at: `2026-04-22`
+- `[dialog-stage-phase-1-stage-and-history]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-dialog-stage-phase-1-stage-and-history.md`; Spec revision: `1b01d0d15a73bb25e69c481ed254a1b8bbafa3ca`; status: `opened`; opened-at: `2026-04-22`
+
+## Связанные документы
+
+1. [docs/task-delivery-workflow.md](/Users/abrikosov/.codex/worktrees/dialog-stage-step-a/docs/task-delivery-workflow.md)
+2. [AGENTS.md](/Users/abrikosov/.codex/worktrees/dialog-stage-step-a/AGENTS.md)
