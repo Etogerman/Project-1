@@ -1,108 +1,104 @@
 {
-  "name": "Abrikosoff Connector Dev Container",
-  "dockerComposeFile": "docker-compose.yml",
-  "service": "dev",
-  "workspaceFolder": "/var/www/html",
+    "name": "Abrikosoff Connector Dev Container",
+    "dockerComposeFile": "../docker-compose.yml",
+    "service": "dev",
+    "workspaceFolder": "/var/www/html",
 
-  // Configure tool-specific properties.
-  "customizations": {
-    "vscode": {
-      // Add the IDs of extensions you want installed when the container is created.
-      "extensions": [
-        "bmewburn.vscode-intelephense-client",
-        "MehediDracula.php-namespace-resolver",
-        "amiralizadeh9480.laravel-extra-intellisense",
-        "ryannaddy.laravel-artisan",
-        "onecentlin.laravel-blade",
-        "mikestead.dotenv",
-        "editorconfig.editorconfig",
-        "esbenp.prettier-vscode",
-        "dbaeumer.vscode-eslint",
-        "eamodio.gitlens",
-        "cweijan.vscode-redis-client",
-        "zhuangtongfa.material-theme",
-        "PKief.material-icon-theme"
-      ],
-      // Set default settings
-      "settings": {
-        "php.validate.executablePath": "/usr/local/bin/php",
-        "php.suggest.basic": false,
-        "intelephense.files.maxSize": 3000000,
-        "editor.formatOnSave": true,
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
-        "[php]": {
-          "editor.defaultFormatter": "bmewburn.vscode-intelephense-client"
+    // Configure tool-specific properties.
+    "customizations": {
+        "vscode": {
+            // Add the IDs of extensions you want installed when the container is created.
+            "extensions": [
+                "bmewburn.vscode-intelephense-client",
+                "MehediDracula.php-namespace-resolver",
+                "amiralizadeh9480.laravel-extra-intellisense",
+                "ryannaddy.laravel-artisan",
+                "onecentlin.laravel-blade",
+                "mikestead.dotenv",
+                "editorconfig.editorconfig",
+                "esbenp.prettier-vscode",
+                "dbaeumer.vscode-eslint",
+                "eamodio.gitlens",
+                "cweijan.vscode-redis-client",
+                "zhuangtongfa.material-theme",
+                "PKief.material-icon-theme"
+            ],
+            // Set default settings
+            "settings": {
+                "php.validate.executablePath": "/usr/local/bin/php",
+                "php.suggest.basic": false,
+                "intelephense.files.maxSize": 3000000,
+                "editor.formatOnSave": true,
+                "editor.defaultFormatter": "esbenp.prettier-vscode",
+                "[php]": {
+                    "editor.defaultFormatter": "bmewburn.vscode-intelephense-client"
+                },
+                "files.associations": {
+                    "*.blade.php": "blade"
+                },
+                "emmet.includeLanguages": {
+                    "blade": "html"
+                },
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "terminal.integrated.profiles.linux": {
+                    "bash": {
+                        "path": "/bin/bash",
+                        "icon": "terminal-bash"
+                    }
+                },
+                // Theme and appearance
+                "workbench.colorTheme": "Tomorrow Night",
+                "workbench.iconTheme": "material-icon-theme",
+                "editor.fontFamily": "'Fira Code', 'Droid Sans Mono', 'monospace'",
+                "editor.fontLigatures": true,
+                "editor.cursorBlinking": "smooth",
+                "editor.cursorSmoothCaretAnimation": "on",
+                "editor.smoothScrolling": true,
+                "terminal.integrated.fontFamily": "'Fira Code', monospace",
+                "editor.bracketPairColorization.enabled": true,
+                "editor.guides.bracketPairs": true,
+                "editor.renderWhitespace": "boundary",
+                "editor.minimap.enabled": true,
+                "editor.minimap.renderCharacters": false,
+                // Custom window title
+                "window.title": "${dirty}Abrikosoff Connector${separator}${activeRepositoryBranchName}"
+            }
+        }
+    },
+
+    // Use 'forwardPorts' to make a list of ports inside the container available locally.
+    "forwardPorts": [8000, 4040, 5173, 5432, 6379, 8025, 8080],
+    "portsAttributes": {
+        "8000": {
+            "label": "Laravel Dev Server",
+            "onAutoForward": "notify"
         },
-        "files.associations": {
-          "*.blade.php": "blade"
+        "5173": {
+            "label": "Vite Dev Server",
+            "onAutoForward": "notify"
         },
-        "emmet.includeLanguages": {
-          "blade": "html"
+        "5432": {
+            "label": "PostgreSQL",
+            "onAutoForward": "silent"
         },
-        "terminal.integrated.defaultProfile.linux": "bash",
-        "terminal.integrated.profiles.linux": {
-          "bash": {
-            "path": "/bin/bash",
-            "icon": "terminal-bash"
-          }
+        "6379": {
+            "label": "Redis",
+            "onAutoForward": "silent"
         },
-        // Theme and appearance
-        "workbench.colorTheme": "Tomorrow Night",
-        "workbench.iconTheme": "material-icon-theme",
-        "editor.fontFamily": "'Fira Code', 'Droid Sans Mono', 'monospace'",
-        "editor.fontLigatures": true,
-        "editor.cursorBlinking": "smooth",
-        "editor.cursorSmoothCaretAnimation": "on",
-        "editor.smoothScrolling": true,
-        "terminal.integrated.fontFamily": "'Fira Code', monospace",
-        "editor.bracketPairColorization.enabled": true,
-        "editor.guides.bracketPairs": true,
-        "editor.renderWhitespace": "boundary",
-        "editor.minimap.enabled": true,
-        "editor.minimap.renderCharacters": false,
-        // Custom window title
-        "window.title": "${dirty}Abrikosoff Connector${separator}${activeRepositoryBranchName}"
-      }
+        "8025": {
+            "label": "Mailpit UI",
+            "onAutoForward": "silent"
+        },
+        "8080": {
+            "label": "Adminer (DB Viewer)",
+            "onAutoForward": "notify"
+        }
+    },
+
+    // Stop containers when VS Code is closed to avoid port conflicts
+    "shutdownAction": "stopCompose",
+
+    "features": {
+        "ghcr.io/devcontainers/features/git:1": {}
     }
-  },
-
-  // Use 'forwardPorts' to make a list of ports inside the container available locally.
-  "forwardPorts": [8000, 4040, 5173, 5432, 6379, 8025, 8080],
-  "portsAttributes": {
-    "8000": {
-      "label": "Laravel Dev Server",
-      "onAutoForward": "notify"
-    },
-    "5173": {
-      "label": "Vite Dev Server",
-      "onAutoForward": "notify"
-    },
-    "5432": {
-      "label": "PostgreSQL",
-      "onAutoForward": "silent"
-    },
-    "6379": {
-      "label": "Redis",
-      "onAutoForward": "silent"
-    },
-    "8025": {
-      "label": "Mailpit UI",
-      "onAutoForward": "silent"
-    },
-    "8080": {
-      "label": "Adminer (DB Viewer)",
-      "onAutoForward": "notify"
-    }
-  },
-
-  // Run inside container after creation
-  // Copies .env.example on first run and overrides host/credential values for docker service names
-  "postCreateCommand": "if [ ! -f .env ]; then cp .env.example .env && sed -i 's/^DB_HOST=.*/DB_HOST=db/' .env && sed -i 's/^DB_DATABASE=.*/DB_DATABASE=abrikosoff_connector/' .env && sed -i 's/^DB_USERNAME=.*/DB_USERNAME=abrikosoff/' .env && sed -i 's/^DB_PASSWORD=.*/DB_PASSWORD=secret/' .env && sed -i 's/^REDIS_HOST=.*/REDIS_HOST=redis/' .env && sed -i 's/^REDIS_PASSWORD=.*/REDIS_PASSWORD=redispassword/' .env && sed -i 's/^MAIL_HOST=.*/MAIL_HOST=mailpit/' .env && sed -i 's/^MAIL_PORT=.*/MAIL_PORT=1025/' .env; fi && composer install && npm install && php artisan key:generate",
-
-  // Stop containers when VS Code is closed to avoid port conflicts
-  "shutdownAction": "stopCompose",
-
-  "features": {
-    "ghcr.io/devcontainers/features/git:1": {}
-  }
 }

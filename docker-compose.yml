@@ -1,13 +1,16 @@
 services:
   dev:
     build:
-      context: .
+      context: .devcontainer
       dockerfile: Dockerfile
+    env_file:
+      - .env
     volumes:
-      - ../:/var/www/html
-      - ./starship.toml:/root/.config/starship.toml:ro
+      - .:/var/www/html
     extra_hosts:
       - "172.17.0.1:host-gateway"
+    ports:
+      - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -29,7 +32,7 @@ services:
       - "5432:5432"
     volumes:
       - db:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - .devcontainer/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - db
     healthcheck:
@@ -84,7 +87,7 @@ services:
     image: ngrok/ngrok:latest
     command: http http://dev:8000 --url https://default.internal
     env_file:
-      - ../.env
+      - .env
     ports:
       - "4040:4040"
     networks:

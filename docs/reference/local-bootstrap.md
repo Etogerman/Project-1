@@ -3,7 +3,68 @@
 Этот документ — практический вход в локальный старт Abrikosoff Connector
 без чтения `composer.json`, исходников и тестов.
 
-## Что нужно заранее
+## Рекомендованный путь — VS Code Dev Container
+
+### Что нужно заранее
+
+1. [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+2. VS Code с расширением [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+
+### Запуск
+
+```
+Ctrl+Shift+P → Dev Containers: Reopen in Container
+```
+
+При першому старті `entrypoint.sh` автоматично виконує:
+
+1. копіює `.env.example` → `.env`
+2. `composer install`
+3. `npm install`
+4. генерує `APP_KEY`
+5. `php artisan migrate`
+6. `php artisan db:seed --class=AdminUserSeeder` (якщо заданий `ADMIN_USER_SEEDER_PASSWORD` у `.env`)
+
+Після того як контейнер піднявся, запусти dev-runtime:
+
+```bash
+composer dev
+```
+
+### Чистый Docker (без VS Code)
+
+Требует только Docker Desktop. `entrypoint.sh` выполняет тот же setup автоматически.
+
+```bash
+docker compose up -d
+```
+
+Затем войди в контейнер и запусти dev-runtime:
+
+```bash
+docker compose exec dev bash
+composer dev
+```
+
+### Сервисы в контейнере
+
+| Сервис             | Адрес                 | Примечание                 |
+| ------------------ | --------------------- | -------------------------- |
+| Laravel Dev Server | http://127.0.0.1:8000 | `php artisan serve`        |
+| Vite Dev Server    | http://127.0.0.1:5173 | `npm run dev`              |
+| PostgreSQL 16      | 127.0.0.1:5432        | DB: `abrikosoff_connector` |
+| Redis 7.4          | 127.0.0.1:6379        |                            |
+| Mailpit UI         | http://127.0.0.1:8025 | перехват email             |
+| Adminer            | http://127.0.0.1:8080 | веб-интерфейс для DB       |
+
+VS Code расширения (PHP Intelephense, Laravel, GitLens и др.) устанавливаются
+автоматически при первом запуске контейнера.
+
+---
+
+## Ручной старт (без Docker)
+
+### Что нужно заранее
 
 Нужны:
 

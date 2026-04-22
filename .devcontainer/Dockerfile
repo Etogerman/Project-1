@@ -93,6 +93,9 @@ ENV SHELL=/bin/bash
 # Enable Xdebug coverage mode
 ENV XDEBUG_MODE=coverage
 
+# Copy starship config
+COPY starship.toml /root/.config/starship.toml
+
 # Entrypoint: starts artisan serve if vendor/ is present, then keeps container alive
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
