@@ -11,7 +11,6 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
-use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -119,7 +118,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
-    public function test_openlines_operator_message_is_rejected_when_callback_route_does_not_match_current_profile(): void
+    public function test_openlines_operator_message_is_ignored_when_callback_route_does_not_match_current_profile(): void
     {
         $connection = $this->makeActiveConnection();
         $dialog = $this->createTelegramLiveDialog();
@@ -145,14 +144,28 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             ],
         ]);
 
-        $this->expectException(Bitrix24ApiException::class);
-        $this->expectExceptionMessage('does not match current runtime route');
+        $this->runWebhookEventJob($event);
 
-        try {
-            $this->runWebhookEventJob($event);
-        } finally {
-            Http::assertNothingSent();
-        }
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_IGNORED, $event->processing_status);
+        $this->assertNotNull($event->processed_at);
+        $this->assertNull($event->failed_at);
+        $this->assertNull($event->failure_reason);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_route_mismatch_ignored',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'skipped',
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'channel_id' => $dialog->channel_id,
+            'provider_event_key' => 'bitrix24-openlines:bitrix-im-foreign-1',
+        ]);
+
+        Http::assertNothingSent();
     }
 
     public function test_openlines_operator_message_is_delivered_to_max_and_acked(): void
