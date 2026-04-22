@@ -275,6 +275,27 @@ class Bitrix24FoundationStorageTest extends TestCase
         ]);
     }
 
+    public function test_bitrix24_profile_normalizes_callback_base_url_on_write(): void
+    {
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'HTTPS://Project.Example.com/prefix/',
+        ]);
+
+        $profile->refresh();
+
+        $this->assertSame('https://project.example.com/prefix', $profile->callback_base_url);
+        $this->assertSame(
+            'https://project.example.com/prefix/callbacks/bitrix24/install',
+            $profile->installCallbackUrl(),
+        );
+    }
+
     public function test_backfill_profiles_assigns_only_connections_for_configured_portal(): void
     {
         config()->set('bitrix24.portal_domain', 'crm.alexlesley.biz');
@@ -310,6 +331,34 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertSame('crm.alexlesley.biz', $profile->portal_domain);
         $this->assertSame(Bitrix24Profile::PROFILE_KEY_STAGING, $profile->profile_key);
         $this->assertSame('https://project.example.com', $profile->callback_base_url);
+    }
+
+    public function test_backfill_profiles_strips_callback_suffix_from_path_prefixed_urls(): void
+    {
+        config()->set('bitrix24.portal_domain', 'crm.alexlesley.biz');
+        config()->set('bitrix24.application.client_id', 'client-id');
+        config()->set('bitrix24.application.code', 'local.app.code');
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/prefix/callbacks/bitrix24/install');
+
+        $matchingConnection = Bitrix24Connection::query()->forceCreate([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token-1',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        app(BackfillBitrix24ConnectionProfilesAction::class)->handle();
+
+        $matchingConnection->refresh();
+
+        $profile = Bitrix24Profile::query()->firstOrFail();
+
+        $this->assertNotNull($matchingConnection->profile_id);
+        $this->assertSame('https://project.example.com/prefix', $profile->callback_base_url);
+        $this->assertSame(
+            'https://project.example.com/prefix/callbacks/bitrix24/install',
+            $profile->installCallbackUrl(),
+        );
     }
 
     public function test_webhook_event_dedupe_is_scoped_by_callback_base_url(): void
