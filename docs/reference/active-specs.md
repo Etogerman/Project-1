@@ -24,10 +24,10 @@
 
 ## Текущее состояние
 
-- none
+- `[bitrix24-multi-dev-profile-isolation-shared-staging-portal]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-multi-dev-profile-isolation-shared-staging-portal.md`; Spec revision: `1987f6e385f38cc7158d1902e4258af71191e1fe`; status: `opened`; opened-at: `2026-04-22`
+- `[dialog-stage-phase-1-stage-and-history]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-dialog-stage-phase-1-stage-and-history.md`; Spec revision: `1b01d0d15a73bb25e69c481ed254a1b8bbafa3ca`; status: `opened`; opened-at: `2026-04-22`
 
 ## Связанные документы
 
-1. [docs/reference/specs-pointer.md](/Users/abrikosov/Documents/Проект-1/docs/reference/specs-pointer.md)
-2. [docs/task-delivery-workflow.md](/Users/abrikosov/Documents/Проект-1/docs/task-delivery-workflow.md)
-3. [docs/tz/README.md](/Users/abrikosov/Documents/Проект-1/docs/tz/README.md)
+1. [docs/task-delivery-workflow.md](/Users/abrikosov/.codex/worktrees/dialog-stage-step-a/docs/task-delivery-workflow.md)
+2. [AGENTS.md](/Users/abrikosov/.codex/worktrees/dialog-stage-step-a/AGENTS.md)

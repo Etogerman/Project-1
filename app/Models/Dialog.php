@@ -13,6 +13,16 @@ class Dialog extends Model
 {
     use HasFactory;
 
+    public const STAGE_NEW_DIALOG = 'new_dialog';
+
+    public const STAGE_PHONE_RECEIVED = 'phone_received';
+
+    public const STAGE_QUESTIONNAIRE_COMPLETED = 'questionnaire_completed';
+
+    public const STAGE_TRANSFERRED_TO_MPL = 'transferred_to_mpl';
+
+    public const STAGE_TRANSFERRED_TO_MPP = 'transferred_to_mpp';
+
     public const PHONE_CONFIRMED_VIA_PHONE_CAPTURE = 'phone_capture';
 
     public const BITRIX24_LIVE_STATUS_NOT_LINKED = 'not_linked';
@@ -31,6 +41,7 @@ class Dialog extends Model
     protected $fillable = [
         'contact_id',
         'channel_id',
+        'stage',
         'current_contact_identity_id',
         'pending_auto_reply_source_message_id',
         'manual_reply_dismissed_source_message_id',
@@ -63,6 +74,29 @@ class Dialog extends Model
         'last_inbound_at' => 'datetime',
         'last_outbound_at' => 'datetime',
     ];
+
+    /**
+     * @return list<string>
+     */
+    public static function automaticStages(): array
+    {
+        return [
+            self::STAGE_NEW_DIALOG,
+            self::STAGE_PHONE_RECEIVED,
+            self::STAGE_QUESTIONNAIRE_COMPLETED,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function manualStages(): array
+    {
+        return [
+            self::STAGE_TRANSFERRED_TO_MPL,
+            self::STAGE_TRANSFERRED_TO_MPP,
+        ];
+    }
 
     public function isBotBlockedByUser(): bool
     {

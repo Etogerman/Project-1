@@ -12,6 +12,7 @@ class ResolveOrCreateDialogAction
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly ResolveDialogStageAction $resolveDialogStageAction,
     ) {}
 
     public function handle(Contact|int $contact, Channel|int $channel): Dialog
@@ -32,6 +33,11 @@ class ResolveOrCreateDialogAction
             return Dialog::query()->create([
                 'contact_id' => $rootContact->id,
                 'channel_id' => $channelId,
+                'stage' => $this->resolveDialogStageAction->forAttributes(
+                    currentStage: null,
+                    contact: $rootContact,
+                    phoneConfirmedAt: null,
+                ),
             ]);
         } catch (QueryException $exception) {
             if (! $this->wasUniqueConstraintViolation($exception)) {
