@@ -24,7 +24,7 @@
 
 ## Текущее состояние
 
-- `[bitrix24-multi-dev-profile-isolation-shared-staging-portal]` — Spec repo: `/Users/abrikosov/Documents/Project-1-specs`; Spec doc: `streams/tz-bitrix24-multi-dev-profile-isolation-shared-staging-portal.md`; Spec revision: `d9f219de5dc937e0550adbe49ab1efe234e8285b`; status: `opened`; opened-at: `2026-04-22`
+- `[bitrix24-multi-dev-profile-isolation-shared-staging-portal]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-multi-dev-profile-isolation-shared-staging-portal.md`; Spec revision: `d9f219de5dc937e0550adbe49ab1efe234e8285b`; status: `opened`; opened-at: `2026-04-22`
 
 ## Связанные документы
 
