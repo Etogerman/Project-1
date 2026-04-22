@@ -658,6 +658,41 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertNotPushed(ProcessBitrix24InstallCallbackJob::class);
     }
 
+    public function test_install_callback_without_matching_callback_base_url_does_not_attach_error_to_existing_profile_connection(): void
+    {
+        Queue::fake();
+
+        $connection = $this->createActiveConnection('member-1', 'app-token');
+
+        $response = $this->postJson('http://unknown-callback.example.test/callbacks/bitrix24/install', [
+            'event' => 'ONAPPINSTALL',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+                'client_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'server_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'scope' => ['crm', 'tasks'],
+                'access_token' => 'secret-access-token',
+                'refresh_token' => 'secret-refresh-token',
+                'expires' => (string) now()->addHour()->timestamp,
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'install');
+
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+
+        $connection->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_FAILED, $event->processing_status);
+        $this->assertNull($event->connection_id);
+        $this->assertNull($connection->last_error_message);
+
+        Queue::assertNotPushed(ProcessBitrix24InstallCallbackJob::class);
+    }
+
     public function test_events_callback_with_invalid_application_token_is_saved_as_failed_and_not_dispatched(): void
     {
         Queue::fake();

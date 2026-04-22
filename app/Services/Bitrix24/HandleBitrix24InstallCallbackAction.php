@@ -44,7 +44,9 @@ class HandleBitrix24InstallCallbackAction
         if ($status === Bitrix24WebhookEvent::STATUS_PENDING) {
             $connection = $this->upsertConnection->handle($ingress->profile, $installPayload);
         } else {
-            $connection = $this->findRelatedConnection($ingress->profile, $authContext);
+            $connection = $ingress->profile !== null
+                ? $this->findRelatedConnection($ingress->profile, $authContext)
+                : null;
 
             if ($connection) {
                 $connection->forceFill([
