@@ -18,6 +18,7 @@ RUN apk update && apk add --no-cache \
     starship \
     sudo \
     tree \
+    github-cli \
     unzip \
     vim \
     wget \
