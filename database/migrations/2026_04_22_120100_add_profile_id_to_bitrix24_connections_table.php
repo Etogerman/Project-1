@@ -20,11 +20,16 @@ return new class extends Migration
         });
 
         app(BackfillBitrix24ConnectionProfilesAction::class)->handle();
+
+        Schema::table('bitrix24_connections', function (Blueprint $table): void {
+            $table->unique('profile_id');
+        });
     }
 
     public function down(): void
     {
         Schema::table('bitrix24_connections', function (Blueprint $table): void {
+            $table->dropUnique('bitrix24_connections_profile_id_unique');
             $table->dropConstrainedForeignId('profile_id');
             $table->unique('portal_domain');
         });

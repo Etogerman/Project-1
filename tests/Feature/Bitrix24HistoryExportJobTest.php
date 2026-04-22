@@ -14,10 +14,12 @@ use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class Bitrix24HistoryExportJobTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -91,6 +93,53 @@ class Bitrix24HistoryExportJobTest extends TestCase
             'operation' => 'history_export_chunk_sent_deal',
             'entity_type' => 'deal',
         ]);
+    }
+
+    public function test_history_export_uses_current_runtime_profile_connection_when_multiple_active_connections_exist(): void
+    {
+        $this->makeActiveConnection([
+            'client_endpoint' => 'https://selected-client.example/rest/',
+            'server_endpoint' => 'https://selected-server.example/rest/',
+        ]);
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'member_id' => 'member-2',
+                'application_token' => 'application-token-2',
+                'client_endpoint' => 'https://ignored-client.example/rest/',
+                'server_endpoint' => 'https://ignored-server.example/rest/',
+            ],
+            profileOverrides: [
+                'profile_key' => 'dev-alex',
+                'display_name' => 'Dev Alex',
+                'application_code' => 'local.app.code.dev-alex',
+                'callback_base_url' => 'https://other.example.com',
+            ],
+            useForCurrentRuntime: false,
+        );
+
+        $contact = $this->createHistoryReadyRootContact([
+            'bitrix24_history_sync_pending' => true,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_PENDING,
+        ]);
+        $identity = $contact->primaryIdentity()->firstOrFail();
+        $message = $this->makeMessage($contact, $identity, 'Только current runtime');
+
+        Http::fake([
+            'https://selected-client.example/rest/crm.timeline.comment.add.json' => Http::response([
+                'result' => 901,
+            ], 200),
+        ]);
+
+        $this->runHistoryExportJob($contact);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_HISTORY,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'bitrix24_timeline_entry_id' => '901',
+        ]);
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://selected-client.example/rest/'));
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://ignored-client.example/rest/'));
     }
 
     public function test_history_export_with_deal_copies_chunk_to_contact_and_deal_timelines(): void
@@ -600,21 +649,6 @@ class Bitrix24HistoryExportJobTest extends TestCase
      */
     private function makeActiveConnection(array $overrides = []): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->forceCreate(array_merge([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'application_name' => 'Abrikosoff Connector',
-            'client_id' => 'local.app',
-            'member_id' => 'member-1',
-            'application_token' => 'application-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-            'access_token_encrypted' => 'access-token',
-            'refresh_token_encrypted' => 'refresh-token',
-            'access_token_expires_at' => now()->addHour(),
-            'scope' => ['crm'],
-            'client_endpoint' => 'https://client-endpoint.example/rest/',
-            'server_endpoint' => 'https://server-endpoint.example/rest/',
-            'installed_at' => now()->subHour(),
-            'last_install_callback_at' => now()->subHour(),
-        ], $overrides));
+        return $this->makeProfileLinkedActiveBitrix24Connection($overrides);
     }
 }
