@@ -225,6 +225,33 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertTrue($connection->profile->is($profile));
     }
 
+    public function test_bitrix24_connection_enforces_unique_profile_id(): void
+    {
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://project.example.com',
+        ]);
+
+        Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $profile->id,
+            'portal_domain' => 'crm.alexlesley.biz',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        $this->expectException(QueryException::class);
+
+        Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $profile->id,
+            'portal_domain' => 'crm.duplicate.biz',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+    }
+
     public function test_bitrix24_profile_registry_enforces_unique_portal_profile_key_and_callback_base_url(): void
     {
         Bitrix24Profile::query()->create([
