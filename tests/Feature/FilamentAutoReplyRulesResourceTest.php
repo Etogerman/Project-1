@@ -358,6 +358,34 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$otherRule]);
     }
 
+    public function test_category_filter_options_preserve_real_category_ids(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $trainingCategory = AutoReplyCategory::query()->create([
+            'name' => 'Тренинги',
+            'sort_order' => 10,
+        ]);
+        $huntingCategory = AutoReplyCategory::query()->create([
+            'name' => 'Охота',
+            'sort_order' => 20,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->tap(function ($component) use ($trainingCategory, $huntingCategory): void {
+                $filter = $component->instance()->getTable()->getFilter('auto_reply_category_id');
+
+                $this->assertSame([
+                    '__without_category__' => 'Без категории',
+                    $trainingCategory->id => 'Тренинги',
+                    $huntingCategory->id => 'Охота',
+                ], $filter?->getOptions());
+            });
+    }
+
     public function test_table_filter_can_filter_rules_without_category(): void
     {
         $admin = User::factory()->create([
