@@ -25,16 +25,6 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'oauth' => [
                 'server_url' => null,
             ],
-            'sources' => [
-                'telegram_id' => null,
-                'max_id' => null,
-            ],
-            'openlines' => [
-                'telegram_line_id' => null,
-                'max_line_id' => null,
-                'telegram_connector_code' => null,
-                'max_connector_code' => null,
-            ],
         ]));
 
         $this->artisan('bitrix24:setup-report')
@@ -49,8 +39,11 @@ class Bitrix24SetupReportCommandTest extends TestCase
 
     public function test_command_fails_when_staging_profile_uses_tunnel_callback_base_url(): void
     {
-        $this->seedReadyConfig();
-        $this->createProfile(callbackBaseUrl: 'https://ruby-feat-food-medication.trycloudflare.com');
+        $this->seedReadyConfig('https://ruby-feat-food-medication.trycloudflare.com');
+        $profile = $this->createProfile([
+            'callback_base_url' => 'https://ruby-feat-food-medication.trycloudflare.com',
+        ]);
+        $this->createActiveConnection($profile);
 
         $this->artisan('bitrix24:setup-report')
             ->expectsOutputToContain('Tunnel callback_base_url values are allowed only for dev-* profiles.')
@@ -68,6 +61,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->expectsOutputToContain('Bitrix24 profile registry')
             ->expectsOutputToContain('Current runtime Bitrix24 profile')
             ->expectsOutputToContain('Current runtime Bitrix24 connection')
+            ->expectsOutputToContain('Current runtime Telegram SOURCE_ID')
             ->expectsOutputToContain('Profile `staging` callback_base_url')
             ->doesntExpectOutputToContain('client-secret')
             ->expectsOutputToContain('*** redacted ***')
@@ -77,10 +71,25 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_command_succeeds_when_single_profile_reuses_line_id_across_connectors(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile([
+            'telegram_line_id' => 'shared-line',
+            'max_line_id' => 'shared-line',
+        ]);
+        $this->createActiveConnection($profile);
+
+        $this->artisan('bitrix24:setup-report')
+            ->expectsOutputToContain('Unique full_live LINE_ID values per portal')
+            ->doesntExpectOutputToContain('Two full_live profiles cannot share the same LINE_ID within one portal.')
+            ->assertSuccessful();
+    }
+
     public function test_command_fails_when_current_runtime_callbacks_do_not_resolve_to_single_profile(): void
     {
         $this->seedReadyConfig();
-        $this->createProfile(callbackBaseUrl: 'https://project.example.com');
+        $this->createProfile();
         config()->set('bitrix24.callbacks.events_url', 'https://other.example.com/callbacks/bitrix24/events');
 
         $this->artisan('bitrix24:setup-report')
@@ -92,7 +101,13 @@ class Bitrix24SetupReportCommandTest extends TestCase
     public function test_command_fails_when_current_runtime_profile_does_not_allow_openlines_runtime(): void
     {
         $this->seedReadyConfig();
-        $this->createProfile(profileType: Bitrix24Profile::TYPE_CRM_ONLY);
+        $this->createProfile([
+            'profile_type' => Bitrix24Profile::TYPE_CRM_ONLY,
+            'telegram_connector_code' => null,
+            'max_connector_code' => null,
+            'telegram_line_id' => null,
+            'max_line_id' => null,
+        ]);
 
         $this->artisan('bitrix24:setup-report')
             ->expectsOutputToContain('Current runtime Bitrix24 profile')
@@ -133,15 +148,26 @@ class Bitrix24SetupReportCommandTest extends TestCase
 
     public function test_command_fails_when_profile_callback_base_url_is_not_stored_in_canonical_form(): void
     {
-        $this->seedReadyConfig();
+        $this->seedReadyConfig('https://project.example.com/prefix');
         $this->insertRawProfile('HTTPS://Project.Example.com/prefix/');
-        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/prefix/callbacks/bitrix24/install');
-        config()->set('bitrix24.callbacks.events_url', 'https://project.example.com/prefix/callbacks/bitrix24/events');
-        config()->set('bitrix24.callbacks.openlines_url', 'https://project.example.com/prefix/callbacks/bitrix24/openlines');
 
         $this->artisan('bitrix24:setup-report')
             ->expectsOutputToContain('Profile `staging` callback_base_url')
             ->expectsOutputToContain('Stored callback_base_url must already be normalized')
+            ->assertFailed();
+    }
+
+    public function test_command_fails_when_current_runtime_profile_routing_is_missing(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile([
+            'telegram_connector_code' => null,
+        ]);
+        $this->createActiveConnection($profile);
+
+        $this->artisan('bitrix24:setup-report')
+            ->expectsOutputToContain('Current runtime Telegram connector_code')
+            ->expectsOutputToContain('must carry a Telegram connector_code')
             ->assertFailed();
     }
 
@@ -159,8 +185,10 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->assertFailed();
     }
 
-    private function seedReadyConfig(): void
+    private function seedReadyConfig(string $callbackBaseUrl = 'https://project.example.com'): void
     {
+        $callbackBaseUrl = rtrim($callbackBaseUrl, '/');
+
         config()->set('bitrix24', array_replace_recursive(config('bitrix24'), [
             'application' => [
                 'client_id' => 'client-id',
@@ -170,37 +198,44 @@ class Bitrix24SetupReportCommandTest extends TestCase
                 'server_url' => 'https://oauth.example',
             ],
             'callbacks' => [
-                'install_url' => 'https://project.example.com/callbacks/bitrix24/install',
-                'events_url' => 'https://project.example.com/callbacks/bitrix24/events',
-                'openlines_url' => 'https://project.example.com/callbacks/bitrix24/openlines',
+                'install_url' => $callbackBaseUrl.'/callbacks/bitrix24/install',
+                'events_url' => $callbackBaseUrl.'/callbacks/bitrix24/events',
+                'openlines_url' => $callbackBaseUrl.'/callbacks/bitrix24/openlines',
             ],
             'sources' => [
-                'telegram_id' => 'ABRIKOSOFF_TG',
+                'telegram_id' => 'ABRIKOSOFF_TELEGRAM',
                 'max_id' => 'ABRIKOSOFF_MAX',
             ],
             'openlines' => [
-                'telegram_line_id' => '101',
-                'max_line_id' => '102',
+                'telegram_line_id' => 'line-telegram',
+                'max_line_id' => 'line-max',
                 'telegram_connector_code' => 'abrikosoff_telegram',
                 'max_connector_code' => 'abrikosoff_max',
+                'session_finish_event_names' => ['OnSessionFinish'],
             ],
         ]));
     }
 
-    private function createProfile(
-        string $callbackBaseUrl = 'https://project.example.com',
-        string $profileType = Bitrix24Profile::TYPE_FULL_LIVE,
-    ): Bitrix24Profile
+    /**
+     * @param  array<string, mixed>  $overrides
+     */
+    private function createProfile(array $overrides = []): Bitrix24Profile
     {
-        return Bitrix24Profile::query()->create([
+        return Bitrix24Profile::query()->create(array_replace([
             'portal_domain' => 'crm.alexlesley.biz',
             'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
-            'profile_type' => $profileType,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
             'display_name' => 'Staging',
             'client_id' => 'client-id',
             'application_code' => 'local.app.code',
-            'callback_base_url' => $callbackBaseUrl,
-        ]);
+            'callback_base_url' => 'https://project.example.com',
+            'telegram_source_id' => 'ABRIKOSOFF_TELEGRAM',
+            'max_source_id' => 'ABRIKOSOFF_MAX',
+            'telegram_connector_code' => 'abrikosoff_telegram',
+            'max_connector_code' => 'abrikosoff_max',
+            'telegram_line_id' => 'line-telegram',
+            'max_line_id' => 'line-max',
+        ], $overrides));
     }
 
     private function createActiveConnection(Bitrix24Profile $profile): Bitrix24Connection
@@ -224,6 +259,12 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'client_id' => 'client-id',
             'application_code' => 'local.app.code',
             'callback_base_url' => $callbackBaseUrl,
+            'telegram_source_id' => 'ABRIKOSOFF_TELEGRAM',
+            'max_source_id' => 'ABRIKOSOFF_MAX',
+            'telegram_connector_code' => 'abrikosoff_telegram',
+            'max_connector_code' => 'abrikosoff_max',
+            'telegram_line_id' => 'line-telegram',
+            'max_line_id' => 'line-max',
             'created_at' => now(),
             'updated_at' => now(),
         ]);

@@ -18,16 +18,9 @@ class AcknowledgeBitrix24OpenLinesDeliveryAction
     ): void {
         $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
 
-        $connectorCode = $bitrixMessage->connectorCode !== ''
-            ? $bitrixMessage->connectorCode
-            : $route->connectorCode;
-        $lineId = $bitrixMessage->lineId !== ''
-            ? $bitrixMessage->lineId
-            : $route->lineId;
-
         $response = $this->bitrix24ApiClient->call('imconnector.send.status.delivery', [
-            'CONNECTOR' => $connectorCode,
-            'LINE' => $lineId,
+            'CONNECTOR' => $route->connectorCode,
+            'LINE' => $route->lineId,
             'MESSAGES' => [[
                 'im' => $bitrixMessage->im,
                 'chat' => [
