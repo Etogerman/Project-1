@@ -767,8 +767,7 @@ class AutoReplyRuleResource extends Resource
     {
         return [
             static::CATEGORY_FILTER_WITHOUT => 'Без категории',
-            ...static::getAutoReplyCategoryOptions(),
-        ];
+        ] + static::getAutoReplyCategoryOptions();
     }
 
     /**
