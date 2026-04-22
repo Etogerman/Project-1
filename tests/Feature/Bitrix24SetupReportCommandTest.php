@@ -2,9 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
+use App\Services\Bitrix24\Bitrix24ConnectionStateException;
+use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Mockery\MockInterface;
 use Tests\TestCase;
 
 class Bitrix24SetupReportCommandTest extends TestCase
@@ -56,12 +60,14 @@ class Bitrix24SetupReportCommandTest extends TestCase
     public function test_command_succeeds_when_setup_contract_is_fully_frozen(): void
     {
         $this->seedReadyConfig();
-        $this->createProfile();
+        $profile = $this->createProfile();
+        $this->createActiveConnection($profile);
 
         $this->artisan('bitrix24:setup-report')
             ->expectsOutput('Bitrix24 setup readiness check completed.')
             ->expectsOutputToContain('Bitrix24 profile registry')
             ->expectsOutputToContain('Current runtime Bitrix24 profile')
+            ->expectsOutputToContain('Current runtime Bitrix24 connection')
             ->expectsOutputToContain('Profile `staging` callback_base_url')
             ->doesntExpectOutputToContain('client-secret')
             ->expectsOutputToContain('*** redacted ***')
@@ -94,6 +100,37 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->assertFailed();
     }
 
+    public function test_command_fails_when_current_runtime_profile_has_no_active_connection(): void
+    {
+        $this->seedReadyConfig();
+        $this->createProfile();
+
+        $this->artisan('bitrix24:setup-report')
+            ->expectsOutputToContain('Current runtime Bitrix24 connection')
+            ->expectsOutputToContain('No active Bitrix24 connection is configured for current runtime profile')
+            ->assertFailed();
+    }
+
+    public function test_command_fails_when_current_runtime_profile_resolves_to_multiple_active_connections(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile();
+        $this->createActiveConnection($profile);
+
+        $this->mock(ResolveCurrentBitrix24ConnectionAction::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('handle')
+                ->once()
+                ->andThrow(new Bitrix24ConnectionStateException(
+                    'Multiple active Bitrix24 connections are configured for current runtime profile `staging`.',
+                ));
+        });
+
+        $this->artisan('bitrix24:setup-report')
+            ->expectsOutputToContain('Current runtime Bitrix24 connection')
+            ->expectsOutputToContain('Multiple active Bitrix24 connections are configured for current runtime profile `staging`.')
+            ->assertFailed();
+    }
+
     public function test_command_fails_when_profile_callback_base_url_is_not_stored_in_canonical_form(): void
     {
         $this->seedReadyConfig();
@@ -111,7 +148,8 @@ class Bitrix24SetupReportCommandTest extends TestCase
     public function test_command_fails_when_frozen_required_value_drifts(): void
     {
         $this->seedReadyConfig();
-        $this->createProfile();
+        $profile = $this->createProfile();
+        $this->createActiveConnection($profile);
 
         config()->set('bitrix24.defaults.deal_category_id', '99');
 
@@ -152,9 +190,9 @@ class Bitrix24SetupReportCommandTest extends TestCase
     private function createProfile(
         string $callbackBaseUrl = 'https://project.example.com',
         string $profileType = Bitrix24Profile::TYPE_FULL_LIVE,
-    ): void
+    ): Bitrix24Profile
     {
-        Bitrix24Profile::query()->create([
+        return Bitrix24Profile::query()->create([
             'portal_domain' => 'crm.alexlesley.biz',
             'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
             'profile_type' => $profileType,
@@ -162,6 +200,17 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'client_id' => 'client-id',
             'application_code' => 'local.app.code',
             'callback_base_url' => $callbackBaseUrl,
+        ]);
+    }
+
+    private function createActiveConnection(Bitrix24Profile $profile): Bitrix24Connection
+    {
+        return Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'member_id' => 'member-1',
+            'application_token' => 'application-token',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
         ]);
     }
 
