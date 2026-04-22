@@ -49,9 +49,22 @@ composer dev
 
 **Чистый Docker:**
 
+Удобнее сначала войти в контейнер и работать внутри него:
+
 ```bash
 docker compose exec dev bash
+```
+
+Затем в той же сессии:
+
+```bash
 composer dev
+```
+
+Или одной командой без входа в контейнер:
+
+```bash
+docker compose exec dev composer dev
 ```
 
 | Сервис   | Адрес                       |
