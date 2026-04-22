@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24DuplicateContactLookupResultData;
+use App\Models\Bitrix24Connection;
 
 class FindBitrix24DuplicateContactsByPhonesAction
 {
@@ -13,7 +14,7 @@ class FindBitrix24DuplicateContactsByPhonesAction
     /**
      * @param  list<string>  $phones
      */
-    public function handle(array $phones): Bitrix24DuplicateContactLookupResultData
+    public function handle(array $phones, ?Bitrix24Connection $connection = null): Bitrix24DuplicateContactLookupResultData
     {
         $checkedPhones = [];
         $matchesByPhone = [];
@@ -27,7 +28,7 @@ class FindBitrix24DuplicateContactsByPhonesAction
                 'entity_type' => 'CONTACT',
                 'type' => 'PHONE',
                 'values' => [$phone],
-            ]);
+            ], $connection);
 
             if (! $response->successful) {
                 throw new Bitrix24ApiException(

@@ -37,10 +37,12 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Mockery;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class Bitrix24OpenLinesLiveExportTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -292,6 +294,69 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         });
 
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+    }
+
+    public function test_manual_reply_live_export_uses_current_runtime_profile_connection_when_multiple_active_connections_exist(): void
+    {
+        $this->makeActiveConnection();
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'member_id' => 'member-2',
+                'application_token' => 'app-token-2',
+                'client_endpoint' => 'https://ignored-client.example/rest/',
+                'server_endpoint' => 'https://ignored-server.example/rest/',
+                'access_token_encrypted' => 'ignored-access-token',
+                'refresh_token_encrypted' => 'ignored-refresh-token',
+                'scope' => ['imconnector', 'imopenlines'],
+            ],
+            profileOverrides: [
+                'profile_key' => 'dev-alex',
+                'display_name' => 'Dev Alex',
+                'application_code' => 'local.app.code.dev-alex',
+                'callback_base_url' => 'https://other.example.com',
+            ],
+            useForCurrentRuntime: false,
+        );
+
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'first_name' => 'Герман',
+            'last_name' => 'Абрикосов',
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Ручной ответ через current runtime profile',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'bitrix-chat-200',
+                        'CONNECTOR_ID' => 'abrikosoff_telegram',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
+                'result' => [
+                    'MESSAGE_ID' => 'remote-message-200',
+                ],
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            'resolved_bitrix_chat_id' => 'bitrix-chat-200',
+            'bitrix_remote_message_id' => 'remote-message-200',
+        ]);
+        Http::assertSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://client-endpoint.example/rest/'));
+        Http::assertNotSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://ignored-client.example/rest/'));
     }
 
     public function test_manual_reply_reuses_last_successful_remote_chat_when_route_validation_passes(): void
@@ -3102,21 +3167,11 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
     private function makeActiveConnection(): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'application_name' => 'Abrikosoff Connector',
-            'client_id' => 'local.app',
-            'member_id' => 'member-1',
+        return $this->makeProfileLinkedActiveBitrix24Connection([
             'application_token' => 'app-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
             'access_token_encrypted' => 'secret-access-token',
             'refresh_token_encrypted' => 'secret-refresh-token',
-            'access_token_expires_at' => now()->addHour(),
             'scope' => ['imconnector', 'imopenlines'],
-            'client_endpoint' => 'https://client-endpoint.example/rest/',
-            'server_endpoint' => 'https://server-endpoint.example/rest/',
-            'install_payload' => [],
-            'installed_at' => now(),
         ]);
     }
 }

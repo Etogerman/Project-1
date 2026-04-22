@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24ActiveDealStateResultData;
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Contact;
 use App\Services\Contacts\ResolveRootContactAction;
@@ -18,12 +19,14 @@ class EnsureBitrix24DealAction
         private readonly CreateBitrix24DealAction $createBitrix24DealAction,
         private readonly LinkBitrix24DealAction $linkBitrix24DealAction,
         private readonly LogBitrix24ApiCallAction $logApiCallAction,
+        private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
     ) {}
 
     public function handle(Contact|int $contact): Contact
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
-        $lookupResult = $this->findActiveDealsForContactAction->handle($rootContact);
+        $connection = $this->resolveCurrentConnectionAction->handle();
+        $lookupResult = $this->findActiveDealsForContactAction->handle($rootContact, $connection);
         $state = $this->resolveActiveDealStateAction->handle($lookupResult);
 
         $this->logApiCallAction->handle(
@@ -46,7 +49,7 @@ class EnsureBitrix24DealAction
         );
 
         if ($state->type === Bitrix24ActiveDealStateResultData::TYPE_NO_ACTIVE_DEAL) {
-            return $this->createAndLinkDeal($rootContact, $state);
+            return $this->createAndLinkDeal($rootContact, $state, $connection);
         }
 
         $updatedContact = $this->applyDealLookupResultAction->handle($rootContact, $state);
@@ -56,7 +59,11 @@ class EnsureBitrix24DealAction
         return $updatedContact;
     }
 
-    private function createAndLinkDeal(Contact $contact, Bitrix24ActiveDealStateResultData $state): Contact
+    private function createAndLinkDeal(
+        Contact $contact,
+        Bitrix24ActiveDealStateResultData $state,
+        Bitrix24Connection $connection,
+    ): Contact
     {
         $this->logApiCallAction->handle(
             direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
@@ -96,7 +103,7 @@ class EnsureBitrix24DealAction
         }
 
         try {
-            $bitrix24DealId = $this->createBitrix24DealAction->handle($contact, $payload);
+            $bitrix24DealId = $this->createBitrix24DealAction->handle($contact, $payload, $connection);
         } catch (Bitrix24ApiException $exception) {
             $this->logApiCallAction->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,

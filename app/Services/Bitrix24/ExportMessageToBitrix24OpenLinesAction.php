@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Dialog;
@@ -25,6 +26,7 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly QueueDeferredParameterAutoReplyAction $queueDeferredParameterAutoReplyAction,
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
+        private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
     ) {}
 
     public function handle(Message|int $message, bool $retryAfterSync = false): Message
@@ -74,6 +76,8 @@ class ExportMessageToBitrix24OpenLinesAction
             }
 
             if ($this->shouldUseServiceActorManualReplyPath($message)) {
+                $manualReplyConnection = $this->resolveCurrentConnectionAction->handle();
+
                 try {
                     $manualReplyExport = $this->exportManualReplyToBitrix24OpenLinesAction->handle(
                         $message,
@@ -121,6 +125,7 @@ class ExportMessageToBitrix24OpenLinesAction
                             lineId: $route->lineId,
                             retryAfterSync: $retryAfterSync,
                             operation: 'openlines_manual_reply_exported_legacy_fallback',
+                            connection: $manualReplyConnection,
                             applyLegacyFallbackSignature: $this->shouldApplyLegacyFallbackSignature($message),
                             responsePayload: [
                                 'fallback_from_failure_code' => $exception->failureCode,
@@ -369,6 +374,7 @@ class ExportMessageToBitrix24OpenLinesAction
         string $lineId,
         bool $retryAfterSync,
         string $operation,
+        ?Bitrix24Connection $connection = null,
         bool $applyLegacyFallbackSignature = false,
         array $responsePayload = [],
     ): Message {
@@ -377,7 +383,7 @@ class ExportMessageToBitrix24OpenLinesAction
             connectorCode: $connectorCode,
             lineId: $lineId,
         ), $retryAfterSync, $applyLegacyFallbackSignature);
-        $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload);
+        $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload, $connection);
 
         if (! $response->successful) {
             throw new Bitrix24ApiException($response->errorMessage ?? 'Bitrix24 Open Lines message export failed.');
