@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24SetupReportResult;
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
 
 class BuildBitrix24SetupReportAction
@@ -10,6 +11,7 @@ class BuildBitrix24SetupReportAction
     public function __construct(
         private readonly NormalizeBitrix24CallbackBaseUrlAction $normalizeCallbackBaseUrl,
         private readonly ResolveCurrentBitrix24ProfileAction $resolveCurrentProfile,
+        private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnection,
     ) {}
 
     public function handle(): Bitrix24SetupReportResult
@@ -25,7 +27,7 @@ class BuildBitrix24SetupReportAction
             $this->buildProfileRegistryPresenceCheck($profiles->count()),
             ...$this->buildProfileRegistryUniquenessChecks($profiles),
             ...$this->buildProfileChecks($profiles),
-            $this->buildCurrentRuntimeProfileCheck(),
+            ...$this->buildCurrentRuntimeChecks(),
             $this->buildRequiredValueCheck(
                 key: 'application.client_id',
                 label: 'Bitrix24 client_id',
@@ -123,30 +125,64 @@ class BuildBitrix24SetupReportAction
     }
 
     /**
-     * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
+     * @return list<array{key: string, label: string, value: string, status: string, required: bool, notes: string}>
      */
-    private function buildCurrentRuntimeProfileCheck(): array
+    private function buildCurrentRuntimeChecks(): array
     {
         try {
             $profile = $this->resolveCurrentProfile->handle();
         } catch (Bitrix24ConnectionStateException $exception) {
-            return $this->check(
+            return [$this->check(
                 'runtime.current_profile',
                 'Current runtime Bitrix24 profile',
                 '—',
                 Bitrix24SetupReportResult::STATUS_MISSING,
                 true,
                 $exception->getMessage(),
-            );
+            )];
         }
 
-        return $this->check(
+        $checks = [$this->check(
             'runtime.current_profile',
             'Current runtime Bitrix24 profile',
             sprintf('%s (%s)', $profile->profile_key, $profile->callback_base_url),
             Bitrix24SetupReportResult::STATUS_OK,
             true,
             'Configured callback URLs resolve to exactly one full_live Bitrix24 profile for outbound/runtime selection.',
+        )];
+
+        try {
+            $connection = $this->resolveCurrentConnection->handle();
+        } catch (NoActiveBitrix24ConnectionException|Bitrix24ConnectionStateException $exception) {
+            $checks[] = $this->check(
+                'runtime.current_connection',
+                'Current runtime Bitrix24 connection',
+                '—',
+                Bitrix24SetupReportResult::STATUS_MISSING,
+                true,
+                $exception->getMessage(),
+            );
+
+            return $checks;
+        }
+
+        $checks[] = $this->buildCurrentRuntimeConnectionCheck($connection);
+
+        return $checks;
+    }
+
+    /**
+     * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
+     */
+    private function buildCurrentRuntimeConnectionCheck(Bitrix24Connection $connection): array
+    {
+        return $this->check(
+            'runtime.current_connection',
+            'Current runtime Bitrix24 connection',
+            sprintf('#%d (%s)', $connection->id, $connection->profile?->profile_key ?? '—'),
+            Bitrix24SetupReportResult::STATUS_OK,
+            true,
+            'Current runtime selector resolves to exactly one active Bitrix24 connection for covered Slice 2A runtime paths.',
         );
     }
 
