@@ -221,6 +221,8 @@ class ProcessBitrix24OpenLinesWebhookAction
                     entityType: 'openlines_webhook_event',
                     entityId: (string) $event->id,
                 );
+            } catch (Bitrix24OpenLinesRouteMismatchException $exception) {
+                return $this->ignoreRouteMismatchEvent($event, $dialog, $messageData, $exception);
             } catch (Throwable $throwable) {
                 if ($dialog instanceof Dialog && ! $preserveDialogLiveStatusOnFailure) {
                     $dialog->forceFill([
@@ -244,7 +246,7 @@ class ProcessBitrix24OpenLinesWebhookAction
         $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
 
         if ($messageData->connectorCode !== '' && $messageData->connectorCode !== $route->connectorCode) {
-            throw new Bitrix24ApiException(sprintf(
+            throw new Bitrix24OpenLinesRouteMismatchException(sprintf(
                 'Bitrix24 Open Lines callback connector `%s` does not match current runtime route `%s` for dialog #%d.',
                 $messageData->connectorCode,
                 $route->connectorCode,
@@ -253,13 +255,43 @@ class ProcessBitrix24OpenLinesWebhookAction
         }
 
         if ($messageData->lineId !== '' && $messageData->lineId !== $route->lineId) {
-            throw new Bitrix24ApiException(sprintf(
+            throw new Bitrix24OpenLinesRouteMismatchException(sprintf(
                 'Bitrix24 Open Lines callback line `%s` does not match current runtime route `%s` for dialog #%d.',
                 $messageData->lineId,
                 $route->lineId,
                 $dialog->id,
             ));
         }
+    }
+
+    private function ignoreRouteMismatchEvent(
+        Bitrix24WebhookEvent $event,
+        ?Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        Bitrix24OpenLinesRouteMismatchException $exception,
+    ): Bitrix24WebhookEvent {
+        $this->markEventIgnored($event);
+
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'openlines_route_mismatch_ignored',
+            status: Bitrix24SyncLog::STATUS_SKIPPED,
+            requestPayload: array_filter([
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog?->id,
+                'chat_id' => $messageData->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+                'connector_code' => $messageData->connectorCode,
+                'line_id' => $messageData->lineId,
+            ], static fn (mixed $value): bool => $value !== null),
+            connection: $event->connection,
+            errorMessage: $exception->getMessage(),
+            entityType: 'openlines_webhook_event',
+            entityId: (string) $event->id,
+        );
+
+        return $event->fresh();
     }
 
     private function handleManualReplyEchoCallback(
