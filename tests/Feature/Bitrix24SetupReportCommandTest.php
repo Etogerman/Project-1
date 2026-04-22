@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Bitrix24Profile;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class Bitrix24SetupReportCommandTest extends TestCase
@@ -82,6 +83,31 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->assertFailed();
     }
 
+    public function test_command_fails_when_current_runtime_profile_does_not_allow_openlines_runtime(): void
+    {
+        $this->seedReadyConfig();
+        $this->createProfile(profileType: Bitrix24Profile::TYPE_CRM_ONLY);
+
+        $this->artisan('bitrix24:setup-report')
+            ->expectsOutputToContain('Current runtime Bitrix24 profile')
+            ->expectsOutputToContain('does not allow openlines runtime')
+            ->assertFailed();
+    }
+
+    public function test_command_fails_when_profile_callback_base_url_is_not_stored_in_canonical_form(): void
+    {
+        $this->seedReadyConfig();
+        $this->insertRawProfile('HTTPS://Project.Example.com/prefix/');
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/prefix/callbacks/bitrix24/install');
+        config()->set('bitrix24.callbacks.events_url', 'https://project.example.com/prefix/callbacks/bitrix24/events');
+        config()->set('bitrix24.callbacks.openlines_url', 'https://project.example.com/prefix/callbacks/bitrix24/openlines');
+
+        $this->artisan('bitrix24:setup-report')
+            ->expectsOutputToContain('Profile `staging` callback_base_url')
+            ->expectsOutputToContain('Stored callback_base_url must already be normalized')
+            ->assertFailed();
+    }
+
     public function test_command_fails_when_frozen_required_value_drifts(): void
     {
         $this->seedReadyConfig();
@@ -123,9 +149,25 @@ class Bitrix24SetupReportCommandTest extends TestCase
         ]));
     }
 
-    private function createProfile(string $callbackBaseUrl = 'https://project.example.com'): void
+    private function createProfile(
+        string $callbackBaseUrl = 'https://project.example.com',
+        string $profileType = Bitrix24Profile::TYPE_FULL_LIVE,
+    ): void
     {
         Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => $profileType,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => $callbackBaseUrl,
+        ]);
+    }
+
+    private function insertRawProfile(string $callbackBaseUrl): void
+    {
+        DB::table('bitrix24_profiles')->insert([
             'portal_domain' => 'crm.alexlesley.biz',
             'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
             'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
@@ -133,6 +175,8 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'client_id' => 'client-id',
             'application_code' => 'local.app.code',
             'callback_base_url' => $callbackBaseUrl,
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
     }
 }
