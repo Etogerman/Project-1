@@ -9,5 +9,7 @@ final readonly class Bitrix24OpenLinesManualReplyExportData
         public string $bitrixRemoteMessageId,
         public bool $usedFallback,
         public bool $usedChatUserAddRecovery,
+        public ?string $resolvedCrmEntityType = null,
+        public ?string $resolvedCrmEntityId = null,
     ) {}
 }
