@@ -24,7 +24,7 @@
 
 ## Текущее состояние
 
-- `[bitrix24-multi-dev-profile-isolation-shared-staging-portal]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-multi-dev-profile-isolation-shared-staging-portal.md`; Spec revision: `d968fe1dcbd3a0ded4d0eedf6ca1cd8b5556674f`; status: `opened`; opened-at: `2026-04-22`
+- none
 
 ## Связанные документы
 
