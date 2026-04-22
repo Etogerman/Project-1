@@ -24,10 +24,12 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class Bitrix24ContactSyncJobTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -116,6 +118,55 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'message_id' => $outboundAutoReply->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
         ]);
+    }
+
+    public function test_contact_sync_uses_current_runtime_profile_connection_when_multiple_active_connections_exist(): void
+    {
+        $this->makeActiveConnection([
+            'client_endpoint' => 'https://selected-client.example/rest/',
+            'server_endpoint' => 'https://selected-server.example/rest/',
+        ]);
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'member_id' => 'member-2',
+                'application_token' => 'application-token-2',
+                'client_endpoint' => 'https://ignored-client.example/rest/',
+                'server_endpoint' => 'https://ignored-server.example/rest/',
+            ],
+            profileOverrides: [
+                'profile_key' => 'dev-alex',
+                'display_name' => 'Dev Alex',
+                'application_code' => 'local.app.code.dev-alex',
+                'callback_base_url' => 'https://other.example.com',
+            ],
+            useForCurrentRuntime: false,
+        );
+
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_linked_at' => null,
+            'bitrix24_sync_fingerprint' => null,
+        ], channel: $channel);
+
+        Http::fake([
+            'https://selected-client.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'result' => ['CONTACT' => []],
+            ], 200),
+            'https://selected-client.example/rest/crm.contact.add.json' => Http::response([
+                'result' => 777,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        $contact->refresh();
+
+        $this->assertSame('777', $contact->bitrix24_contact_id);
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://selected-client.example/rest/'));
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://ignored-client.example/rest/'));
     }
 
     public function test_first_successful_contact_sync_queues_retry_for_missed_unsubscribe_system_event(): void
@@ -1353,21 +1404,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
      */
     private function makeActiveConnection(array $overrides = []): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->forceCreate(array_merge([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'application_name' => 'Abrikosoff Connector',
-            'client_id' => 'local.app',
-            'member_id' => 'member-1',
-            'application_token' => 'application-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-            'access_token_encrypted' => 'access-token',
-            'refresh_token_encrypted' => 'refresh-token',
-            'access_token_expires_at' => now()->addHour(),
-            'scope' => ['crm'],
-            'client_endpoint' => 'https://client-endpoint.example/rest/',
-            'server_endpoint' => 'https://server-endpoint.example/rest/',
-            'installed_at' => now(),
-        ], $overrides));
+        return $this->makeProfileLinkedActiveBitrix24Connection($overrides);
     }
 
     /**

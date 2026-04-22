@@ -7,6 +7,10 @@ use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Services\Bitrix24\BackfillBitrix24ConnectionProfilesAction;
+use App\Services\Bitrix24\Bitrix24ConnectionStateException;
+use App\Services\Bitrix24\ResolveCurrentBitrix24CallbackBaseUrlAction;
+use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
+use App\Services\Bitrix24\ResolveCurrentBitrix24ProfileAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -414,5 +418,45 @@ class Bitrix24FoundationStorageTest extends TestCase
 
         $this->assertNotSame($firstEvent->id, $secondEvent->id);
         $this->assertSame(2, Bitrix24WebhookEvent::query()->count());
+    }
+
+    public function test_current_runtime_selector_resolves_single_profile_and_connection_from_configured_callbacks(): void
+    {
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://project.example.com/prefix',
+        ]);
+
+        $connection = Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $profile->id,
+            'portal_domain' => 'crm.alexlesley.biz',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/prefix/callbacks/bitrix24/install');
+        config()->set('bitrix24.callbacks.events_url', 'https://project.example.com/prefix/callbacks/bitrix24/events');
+        config()->set('bitrix24.callbacks.openlines_url', 'https://project.example.com/prefix/callbacks/bitrix24/openlines');
+
+        $this->assertSame(
+            'https://project.example.com/prefix',
+            app(ResolveCurrentBitrix24CallbackBaseUrlAction::class)->handle(),
+        );
+        $this->assertTrue(app(ResolveCurrentBitrix24ProfileAction::class)->handle()->is($profile));
+        $this->assertTrue(app(ResolveCurrentBitrix24ConnectionAction::class)->handle()->is($connection));
+    }
+
+    public function test_current_runtime_selector_fails_when_configured_callbacks_resolve_to_different_base_urls(): void
+    {
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/callbacks/bitrix24/install');
+        config()->set('bitrix24.callbacks.events_url', 'https://other.example.com/callbacks/bitrix24/events');
+
+        $this->expectException(Bitrix24ConnectionStateException::class);
+
+        app(ResolveCurrentBitrix24CallbackBaseUrlAction::class)->handle();
     }
 }

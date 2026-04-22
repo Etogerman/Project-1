@@ -4,19 +4,22 @@ namespace Tests\Feature;
 
 use App\Jobs\RefreshBitrix24TokenJob;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
 use App\Services\Bitrix24\NoActiveBitrix24ConnectionException;
 use App\Services\Bitrix24\RefreshBitrix24AccessTokenAction;
-use App\Services\Bitrix24\ResolveActiveBitrix24ConnectionAction;
+use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class Bitrix24ApiClientTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -28,6 +31,9 @@ class Bitrix24ApiClientTest extends TestCase
         config()->set('bitrix24.http.timeout_seconds', 15);
         config()->set('bitrix24.http.connect_timeout_seconds', 5);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/callbacks/bitrix24/install');
+        config()->set('bitrix24.callbacks.events_url', 'https://project.example.com/callbacks/bitrix24/events');
+        config()->set('bitrix24.callbacks.openlines_url', 'https://project.example.com/callbacks/bitrix24/openlines');
     }
 
     public function test_api_client_performs_successful_low_level_rest_call_and_logs_sanitized_payload(): void
@@ -337,7 +343,7 @@ class Bitrix24ApiClientTest extends TestCase
 
         $job = new RefreshBitrix24TokenJob($connection->id);
         $job->handle(
-            app(ResolveActiveBitrix24ConnectionAction::class),
+            app(ResolveCurrentBitrix24ConnectionAction::class),
             app(RefreshBitrix24AccessTokenAction::class),
         );
 
@@ -347,24 +353,92 @@ class Bitrix24ApiClientTest extends TestCase
         $this->assertSame('job-refresh-token', $connection->refresh_token_encrypted);
     }
 
+    public function test_refresh_job_without_connection_id_uses_current_runtime_profile_connection(): void
+    {
+        config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+
+        $selectedConnection = $this->makeActiveConnection([
+            'client_endpoint' => 'https://selected-client.example/rest/',
+            'server_endpoint' => 'https://selected-server.example/rest/',
+            'refresh_token_encrypted' => 'selected-refresh-token',
+            'access_token_expires_at' => now()->subMinute(),
+        ]);
+        $otherProfile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => 'dev-alex',
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Dev Alex',
+            'client_id' => 'local.app',
+            'application_code' => 'local.app.code.dev',
+            'callback_base_url' => 'https://other.example.com',
+        ]);
+        $ignoredConnection = Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $otherProfile->id,
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-2',
+            'application_token' => 'app-token-2',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+            'client_endpoint' => 'https://ignored-client.example/rest/',
+            'server_endpoint' => 'https://ignored-server.example/rest/',
+            'access_token_encrypted' => 'ignored-access-token',
+            'refresh_token_encrypted' => 'ignored-refresh-token',
+            'access_token_expires_at' => now()->subMinute(),
+        ]);
+
+        Http::fake([
+            'https://oauth.example/oauth/token/' => function ($request) {
+                $this->assertSame('selected-refresh-token', $request['refresh_token']);
+
+                return Http::response([
+                    'access_token' => 'selected-job-access-token',
+                    'refresh_token' => 'selected-job-refresh-token',
+                    'expires_in' => 3600,
+                ], 200);
+            },
+        ]);
+
+        $job = new RefreshBitrix24TokenJob();
+        $job->handle(
+            app(ResolveCurrentBitrix24ConnectionAction::class),
+            app(RefreshBitrix24AccessTokenAction::class),
+        );
+
+        $selectedConnection->refresh();
+        $ignoredConnection->refresh();
+
+        $this->assertSame('selected-job-access-token', $selectedConnection->access_token_encrypted);
+        $this->assertSame('selected-job-refresh-token', $selectedConnection->refresh_token_encrypted);
+        $this->assertSame('ignored-access-token', $ignoredConnection->access_token_encrypted);
+        $this->assertSame('ignored-refresh-token', $ignoredConnection->refresh_token_encrypted);
+    }
+
     /**
      * @param  array<string, mixed>  $overrides
      */
     private function makeActiveConnection(array $overrides = []): Bitrix24Connection
     {
-        /** @var array<string, mixed> $attributes */
-        $attributes = array_merge([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'application_token' => 'app-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-            'client_endpoint' => 'https://client-endpoint.example/rest/',
-            'server_endpoint' => 'https://server-endpoint.example/rest/',
-            'access_token_encrypted' => 'access-token',
-            'refresh_token_encrypted' => 'refresh-token',
-            'access_token_expires_at' => now()->addHour(),
-        ], $overrides);
+        $portalDomain = (string) ($overrides['portal_domain'] ?? 'crm.alexlesley.biz');
+        $profileKey = (string) ($overrides['profile_key'] ?? (
+            $portalDomain === 'crm.alexlesley.biz'
+                ? Bitrix24Profile::PROFILE_KEY_STAGING
+                : 'profile-'.preg_replace('/[^a-z0-9]+/i', '-', $portalDomain)
+        ));
+        $callbackBaseUrl = (string) ($overrides['callback_base_url'] ?? (
+            $profileKey === Bitrix24Profile::PROFILE_KEY_STAGING
+                ? 'https://project.example.com'
+                : 'https://'.$profileKey.'.example.com'
+        ));
 
-        return Bitrix24Connection::query()->forceCreate($attributes);
+        return $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: $overrides,
+            profileOverrides: [
+                'portal_domain' => $portalDomain,
+                'profile_key' => $profileKey,
+                'display_name' => ucfirst(str_replace('-', ' ', $profileKey)),
+                'application_code' => 'local.app.code'.($profileKey === Bitrix24Profile::PROFILE_KEY_STAGING ? '' : '.'.$profileKey),
+                'callback_base_url' => $callbackBaseUrl,
+            ],
+            useForCurrentRuntime: $callbackBaseUrl === 'https://project.example.com',
+        );
     }
 }

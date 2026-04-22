@@ -4,7 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Bitrix24Connection;
 use App\Services\Bitrix24\RefreshBitrix24AccessTokenAction;
-use App\Services\Bitrix24\ResolveActiveBitrix24ConnectionAction;
+use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -19,11 +19,11 @@ class RefreshBitrix24TokenJob implements ShouldQueue
     ) {}
 
     public function handle(
-        ResolveActiveBitrix24ConnectionAction $resolveActiveConnection,
+        ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnection,
         RefreshBitrix24AccessTokenAction $refreshAccessToken,
     ): void {
         $connection = $this->connectionId === null
-            ? $resolveActiveConnection->handle()
+            ? $resolveCurrentConnection->handle()
             : Bitrix24Connection::query()->find($this->connectionId);
 
         if (! $connection) {

@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Contact;
 use Illuminate\Support\Str;
@@ -10,7 +11,7 @@ use Throwable;
 class SyncChatHistoryToBitrix24Action
 {
     public function __construct(
-        private readonly ResolveActiveBitrix24ConnectionAction $resolveActiveConnectionAction,
+        private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
         private readonly CollectBitrix24HistoryContactIdsAction $collectHistoryContactIdsAction,
         private readonly CollectBitrix24HistoryMessagesAction $collectHistoryMessagesAction,
         private readonly BuildBitrix24HistoryExportChunksAction $buildHistoryExportChunksAction,
@@ -23,7 +24,7 @@ class SyncChatHistoryToBitrix24Action
 
     public function handle(Contact $contact): Contact
     {
-        $connection = $this->resolveActiveConnectionAction->handle();
+        $connection = $this->resolveCurrentConnectionAction->handle();
         $clusterContactIds = $this->collectHistoryContactIdsAction->handle($contact);
         $messages = $this->collectHistoryMessagesAction->handle($contact);
 
@@ -80,7 +81,7 @@ class SyncChatHistoryToBitrix24Action
             $this->markMessageExportsPendingAction->handle($contact, $chunk, $batchUuid);
 
             try {
-                $timelineEntryId = $this->exportHistoryChunkAction->handle($contact, $chunk);
+                $timelineEntryId = $this->exportHistoryChunkAction->handle($contact, $chunk, $connection);
             } catch (Throwable $throwable) {
                 $this->markMessageExportsFailedAction->handle(
                     $contact,
@@ -171,7 +172,7 @@ class SyncChatHistoryToBitrix24Action
     }
 
     private function copyChunkToDealTimeline(
-        mixed $connection,
+        Bitrix24Connection $connection,
         Contact $contact,
         mixed $chunk,
         string $batchUuid,
@@ -183,7 +184,7 @@ class SyncChatHistoryToBitrix24Action
         }
 
         try {
-            $timelineEntryId = $this->exportHistoryChunkAction->copyToDeal($contact, $chunk);
+            $timelineEntryId = $this->exportHistoryChunkAction->copyToDeal($contact, $chunk, $connection);
         } catch (Throwable $throwable) {
             $this->logApiCallAction->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
