@@ -92,7 +92,7 @@
 1. ссылка на конкретный документ
 2. ссылка на конкретный commit/hash (`Spec revision`)
 3. явная фиксация, что именно эта revision является source of truth для текущего implementation stream
-4. обновление локального реестра [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md), если существенный stream реально открыт в основном repo
+4. актуальный stream-level registry в [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md), если существенный stream реально открыт в основном repo; по умолчанию он обновляется в том же открывающем или закрывающем шаге, а не отдельным PR ради синхронизации
 
 ### Жизненный цикл внешнего spec-doc
 
@@ -107,7 +107,8 @@
 
 1. закрытый runtime-acceptance не может оставаться в статусе `planned`
 2. если acceptance уже материализован, но архивирование ещё не выполнено, допустимо состояние `implemented` + явный `archive pending`, но не `planned`
-3. если существенный stream реально открыт в основном repo, локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md) должен отражать тот же `Spec doc`, актуальную `Spec revision` и фактический внешний статус
+3. если существенный stream реально открыт в основном repo, локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md) должен отражать stream-level запись на тот же `Spec doc` и актуальную `Spec revision`, но не обязан дублировать slice-level state
+4. если внешний spec-repo, нужный `Spec doc` или согласованная `Spec revision` недоступны, substantial stream paused до восстановления доступа
 
 ### Чего недостаточно
 
@@ -318,6 +319,10 @@ Helper-review не заменяет `author self-check` и не заменяет
 
 Варианты нумеруются.
 Формат рекомендации: `Рекомендация: 1. ...`
+
+Меню обязательно именно здесь, на точке handoff к пользователю.
+Вне точки handoff обычные progress updates и commentary идут без меню.
+Если нужен один точный ответ без реальных вариантов выбора, агент задаёт один прямой вопрос без меню.
 
 ## Этап 12A. Выбор workflow
 
@@ -567,6 +572,11 @@ Stream считается полностью закрытым только ко�
 
 Для существенного stream-а полное закрытие включает `spec closure`.
 
+Нужно различать два типа хвоста:
+
+1. runtime/release tail: открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy и smoke; это жёсткие blockers
+2. spec/admin tail: `Spec doc` status, `streams/README.md`, stream-level запись в `active-specs.md`, `archive pending`; это обязательные follow-up, но не отдельный rollout gate сами по себе
+
 ### Spec Closure Checklist
 
 Перед тем как считать существенный stream закрытым, нужно:
@@ -574,10 +584,11 @@ Stream считается полностью закрытым только ко�
 1. сверить фактический runtime / validated diff / acceptance с внешним `Spec doc`
 2. обновить статус в самом `Spec doc`, если документ всё ещё содержит собственный статусный блок
 3. обновить каноническую запись во внешнем `streams/README.md`
-4. синхронизировать локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md): оставить там только реально открытые существенные stream-ы, а закрытую запись удалить или заменить актуальной
+4. синхронизировать локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md): оставить там только реально открытые существенные stream-ы, а закрытую запись удалить или заменить актуальной; по умолчанию это делается в том же открывающем/закрывающем шаге, а отдельный `docs-only` sync нужен только как fallback
 5. если перенос документа в `archive/` не делается в том же шаге, явно оставить документ в состоянии `implemented` с отдельным follow-up `archive pending`
 
 Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
+Незакрытый `spec/admin tail` нужно явно перечислять перед стартом нового substantial code stream-а, но он сам по себе не запрещает unrelated `docs-only` шаг или малый локальный maintenance step.
 
 Для Abrikosoff Connector `merge` в `main` остаётся только handoff-точкой для code/release stream.
 Для code/release stream хвост остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
