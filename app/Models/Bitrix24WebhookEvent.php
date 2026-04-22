@@ -30,6 +30,7 @@ class Bitrix24WebhookEvent extends Model
      */
     protected $fillable = [
         'connection_id',
+        'callback_base_url',
         'callback_type',
         'event_name',
         'member_id',

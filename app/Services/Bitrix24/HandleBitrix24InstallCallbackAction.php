@@ -7,6 +7,7 @@ use App\Data\Bitrix24\Bitrix24InstallPayloadData;
 use App\Data\Bitrix24\Bitrix24WebhookEventData;
 use App\Jobs\ProcessBitrix24InstallCallbackJob;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Http\Request;
@@ -15,6 +16,7 @@ class HandleBitrix24InstallCallbackAction
 {
     public function __construct(
         private readonly NormalizeBitrix24WebhookPayloadAction $normalizeWebhookPayload,
+        private readonly ResolveBitrix24CallbackIngressAction $resolveCallbackIngress,
         private readonly BuildBitrix24AuthContextAction $buildAuthContext,
         private readonly BuildBitrix24WebhookFingerprintAction $buildFingerprint,
         private readonly ValidateBitrix24InstallCallbackAction $validateInstallCallback,
@@ -26,18 +28,23 @@ class HandleBitrix24InstallCallbackAction
     public function handle(Request $request): Bitrix24CallbackHandlingResultData
     {
         $normalized = $this->normalizeWebhookPayload->handle($request);
+        $ingress = $this->resolveCallbackIngress->handle($request);
         $authContext = $this->buildAuthContext->handle($request->all());
         $fingerprint = $this->buildFingerprint->handle($normalized['payload']);
-        $installPayload = $this->buildInstallPayloadData($request->all(), $normalized['payload'], $authContext);
+        $installPayload = $this->buildInstallPayloadData($request->all(), $normalized['payload'], $authContext, $ingress->callbackBaseUrl);
 
-        [$status, $reason] = $this->validateInstallCallback->handle($normalized['looks_like_bitrix'], $installPayload);
+        [$status, $reason] = $this->validateInstallCallback->handle(
+            looksLikeBitrix: $normalized['looks_like_bitrix'],
+            payload: $installPayload,
+            profile: $ingress->profile,
+        );
 
         $connection = null;
 
         if ($status === Bitrix24WebhookEvent::STATUS_PENDING) {
-            $connection = $this->upsertConnection->handle($installPayload);
+            $connection = $this->upsertConnection->handle($ingress->profile, $installPayload);
         } else {
-            $connection = $this->findRelatedConnection($authContext);
+            $connection = $this->findRelatedConnection($ingress->profile, $authContext);
 
             if ($connection) {
                 $connection->forceFill([
@@ -52,6 +59,7 @@ class HandleBitrix24InstallCallbackAction
                 callbackType: Bitrix24WebhookEvent::TYPE_INSTALL,
                 eventName: $normalized['event_name'],
                 authContext: $authContext,
+                callbackBaseUrl: $ingress->callbackBaseUrl,
                 payload: $normalized['payload'],
                 headers: $normalized['headers'],
                 query: $normalized['query'],
@@ -115,6 +123,7 @@ class HandleBitrix24InstallCallbackAction
         array $rawPayload,
         array $sanitizedPayload,
         \App\Data\Bitrix24\Bitrix24AuthContextData $authContext,
+        ?string $callbackBaseUrl,
     ): Bitrix24InstallPayloadData {
         $auth = $this->caseInsensitiveValue($rawPayload, 'auth');
 
@@ -136,6 +145,7 @@ class HandleBitrix24InstallCallbackAction
 
         return new Bitrix24InstallPayloadData(
             portalDomain: $authContext->portalDomain,
+            callbackBaseUrl: $callbackBaseUrl,
             applicationToken: $authContext->applicationToken,
             memberId: $authContext->memberId,
             clientEndpoint: $authContext->clientEndpoint,
@@ -164,11 +174,17 @@ class HandleBitrix24InstallCallbackAction
         return null;
     }
 
-    private function findRelatedConnection(\App\Data\Bitrix24\Bitrix24AuthContextData $authContext): ?Bitrix24Connection
+    private function findRelatedConnection(?Bitrix24Profile $profile, \App\Data\Bitrix24\Bitrix24AuthContextData $authContext): ?Bitrix24Connection
     {
         $query = Bitrix24Connection::query();
 
-        if (filled($authContext->memberId)) {
+        if ($profile) {
+            $query->where('profile_id', $profile->id);
+
+            if (filled($authContext->memberId)) {
+                $query->where('member_id', $authContext->memberId);
+            }
+        } elseif (filled($authContext->memberId)) {
             $query->where('member_id', $authContext->memberId);
         } elseif (filled($authContext->portalDomain)) {
             $query->where('portal_domain', $authContext->portalDomain);

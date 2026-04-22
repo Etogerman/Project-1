@@ -4,6 +4,7 @@ namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24InstallPayloadData;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24Profile;
 use Carbon\CarbonImmutable;
 
 class UpsertBitrix24ConnectionFromInstallAction
@@ -13,15 +14,17 @@ class UpsertBitrix24ConnectionFromInstallAction
         private readonly SanitizeBitrix24ApplicationTokenPayloadAction $sanitizePayload,
     ) {}
 
-    public function handle(Bitrix24InstallPayloadData $payload): Bitrix24Connection
+    public function handle(Bitrix24Profile $profile, Bitrix24InstallPayloadData $payload): Bitrix24Connection
     {
         $connection = Bitrix24Connection::query()->firstOrNew([
-            'portal_domain' => $payload->portalDomain ?? config('bitrix24.portal_domain'),
+            'profile_id' => $profile->id,
         ]);
 
         $connection->fill([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
             'application_name' => (string) config('bitrix24.application.name'),
-            'client_id' => (string) config('bitrix24.application.client_id'),
+            'client_id' => $profile->client_id,
             'member_id' => $payload->memberId,
             'status' => Bitrix24Connection::STATUS_ACTIVE,
             'access_token_expires_at' => $this->resolveExpiresAt($payload->expiresAt),

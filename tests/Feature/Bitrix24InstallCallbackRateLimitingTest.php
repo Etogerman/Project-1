@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessBitrix24InstallCallbackJob;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -14,6 +15,8 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
 {
     use RefreshDatabase;
 
+    private Bitrix24Profile $defaultProfile;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -21,6 +24,11 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         config()->set('bitrix24.portal_domain', 'install.example.test');
         config()->set('bitrix24.application.code', 'local.app.code');
         config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+
+        $this->defaultProfile = $this->createProfile(
+            profileKey: Bitrix24Profile::PROFILE_KEY_STAGING,
+            callbackBaseUrl: 'http://localhost',
+        );
 
         Http::preventStrayRequests();
         Http::fake([
@@ -153,7 +161,12 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             scope: ['crm', 'tasks'],
         ))->assertOk();
 
-        $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
+        $this->createProfile(
+            profileKey: 'dev-member-2',
+            callbackBaseUrl: 'http://member-2.example.test',
+        );
+
+        $this->postJson('http://member-2.example.test/callbacks/bitrix24/install', $this->installPayload(
             memberId: 'member-2',
             applicationToken: 'app-token-2',
             accessToken: 'access-token-2',
@@ -196,6 +209,19 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         $this->assertSame(1, Bitrix24WebhookEvent::query()->count());
         $this->assertSame(0, Bitrix24Connection::query()->count());
         Queue::assertNotPushed(ProcessBitrix24InstallCallbackJob::class);
+    }
+
+    private function createProfile(string $profileKey, string $callbackBaseUrl): Bitrix24Profile
+    {
+        return Bitrix24Profile::query()->create([
+            'portal_domain' => 'install.example.test',
+            'profile_key' => $profileKey,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => $profileKey,
+            'client_id' => 'client-id-'.$profileKey,
+            'application_code' => 'local.app.code',
+            'callback_base_url' => $callbackBaseUrl,
+        ]);
     }
 
     /**
