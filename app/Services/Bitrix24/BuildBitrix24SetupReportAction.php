@@ -146,7 +146,7 @@ class BuildBitrix24SetupReportAction
             sprintf('%s (%s)', $profile->profile_key, $profile->callback_base_url),
             Bitrix24SetupReportResult::STATUS_OK,
             true,
-            'Configured callback URLs resolve to exactly one Bitrix24 profile for outbound/runtime selection.',
+            'Configured callback URLs resolve to exactly one full_live Bitrix24 profile for outbound/runtime selection.',
         );
     }
 
@@ -161,8 +161,9 @@ class BuildBitrix24SetupReportAction
 
         foreach ($profiles as $profile) {
             $profileIdentity = $profile->portal_domain.'|'.$profile->profile_key;
+            $normalizedCallbackBaseUrl = $this->normalizeCallbackBaseUrl->handle($profile->callback_base_url) ?? $profile->callback_base_url;
             $profileKeys[$profileIdentity] = ($profileKeys[$profileIdentity] ?? 0) + 1;
-            $callbackBaseUrls[$profile->callback_base_url] = ($callbackBaseUrls[$profile->callback_base_url] ?? 0) + 1;
+            $callbackBaseUrls[$normalizedCallbackBaseUrl] = ($callbackBaseUrls[$normalizedCallbackBaseUrl] ?? 0) + 1;
         }
 
         return [
@@ -341,6 +342,20 @@ class BuildBitrix24SetupReportAction
                 Bitrix24SetupReportResult::STATUS_MISSING,
                 true,
                 'callback_base_url must be a valid absolute base URL.',
+            );
+        }
+
+        if ($normalized !== $profile->callback_base_url) {
+            return $this->check(
+                'profiles.'.$profile->profile_key.'.callback_base_url',
+                $label,
+                $profile->callback_base_url,
+                Bitrix24SetupReportResult::STATUS_MISSING,
+                true,
+                sprintf(
+                    'Stored callback_base_url must already be normalized to the canonical ingress form `%s`.',
+                    $normalized,
+                ),
             );
         }
 

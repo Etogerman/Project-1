@@ -8,6 +8,7 @@ use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Services\Bitrix24\BackfillBitrix24ConnectionProfilesAction;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
+use App\Services\Bitrix24\NormalizeBitrix24ProfileCallbackBaseUrlsAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24CallbackBaseUrlAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ProfileAction;
@@ -448,6 +449,54 @@ class Bitrix24FoundationStorageTest extends TestCase
         );
         $this->assertTrue(app(ResolveCurrentBitrix24ProfileAction::class)->handle()->is($profile));
         $this->assertTrue(app(ResolveCurrentBitrix24ConnectionAction::class)->handle()->is($connection));
+    }
+
+    public function test_current_runtime_selector_rejects_profile_that_does_not_allow_openlines_runtime(): void
+    {
+        Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_CRM_ONLY,
+            'display_name' => 'Staging CRM',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://project.example.com/prefix',
+        ]);
+
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/prefix/callbacks/bitrix24/install');
+        config()->set('bitrix24.callbacks.events_url', 'https://project.example.com/prefix/callbacks/bitrix24/events');
+        config()->set('bitrix24.callbacks.openlines_url', 'https://project.example.com/prefix/callbacks/bitrix24/openlines');
+
+        $this->expectException(Bitrix24ConnectionStateException::class);
+        $this->expectExceptionMessage('does not allow openlines runtime');
+
+        app(ResolveCurrentBitrix24ProfileAction::class)->handle();
+    }
+
+    public function test_existing_profile_rows_are_normalized_for_runtime_selection_rollout(): void
+    {
+        DB::table('bitrix24_profiles')->insert([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'HTTPS://Project.Example.com/prefix/',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/prefix/callbacks/bitrix24/install');
+        config()->set('bitrix24.callbacks.events_url', 'https://project.example.com/prefix/callbacks/bitrix24/events');
+        config()->set('bitrix24.callbacks.openlines_url', 'https://project.example.com/prefix/callbacks/bitrix24/openlines');
+
+        app(NormalizeBitrix24ProfileCallbackBaseUrlsAction::class)->handle();
+
+        $profile = Bitrix24Profile::query()->firstOrFail();
+
+        $this->assertSame('https://project.example.com/prefix', $profile->callback_base_url);
+        $this->assertTrue(app(ResolveCurrentBitrix24ProfileAction::class)->handle()->is($profile));
     }
 
     public function test_current_runtime_selector_fails_when_configured_callbacks_resolve_to_different_base_urls(): void
