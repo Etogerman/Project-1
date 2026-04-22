@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Services\Bitrix24\HashBitrix24ApplicationTokenAction;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Bitrix24Connection extends Model
@@ -21,6 +22,7 @@ class Bitrix24Connection extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'profile_id',
         'portal_domain',
         'application_name',
         'client_id',
@@ -76,6 +78,11 @@ class Bitrix24Connection extends Model
     public function webhookEvents(): HasMany
     {
         return $this->hasMany(Bitrix24WebhookEvent::class, 'connection_id');
+    }
+
+    public function profile(): BelongsTo
+    {
+        return $this->belongsTo(Bitrix24Profile::class, 'profile_id');
     }
 
     public function syncLogs(): HasMany

@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24InstallPayloadData;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Support\Facades\Http;
 use Throwable;
@@ -12,10 +13,18 @@ class ValidateBitrix24InstallCallbackAction
     /**
      * @return array{0: string, 1: ?string}
      */
-    public function handle(bool $looksLikeBitrix, Bitrix24InstallPayloadData $payload): array
+    public function handle(bool $looksLikeBitrix, Bitrix24InstallPayloadData $payload, ?Bitrix24Profile $profile): array
     {
         if (! $looksLikeBitrix) {
             return [Bitrix24WebhookEvent::STATUS_IGNORED, 'Payload does not look like a Bitrix24 install callback.'];
+        }
+
+        if (! filled($payload->callbackBaseUrl)) {
+            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Install callback did not resolve a valid callback_base_url.'];
+        }
+
+        if (! $profile) {
+            return [Bitrix24WebhookEvent::STATUS_FAILED, 'No Bitrix24 profile matched the resolved callback_base_url.'];
         }
 
         foreach ([
@@ -32,22 +41,19 @@ class ValidateBitrix24InstallCallbackAction
             }
         }
 
-        $trustedPortal = $this->normalizePortalDomain((string) config('bitrix24.portal_domain'));
-
-        if ($trustedPortal === null) {
-            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install validation is missing trusted portal configuration.'];
+        if (! filled($profile->client_id)) {
+            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 profile is missing client_id.'];
         }
 
+        if (! filled($profile->application_code)) {
+            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 profile is missing application_code.'];
+        }
+
+        $trustedPortal = $this->normalizePortalDomain($profile->portal_domain);
         $payloadPortal = $this->normalizePortalDomain($payload->portalDomain);
 
         if ($payloadPortal === null || $payloadPortal !== $trustedPortal) {
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Install callback portal domain did not match trusted portal.'];
-        }
-
-        $expectedAppCode = $this->nullableString(config('bitrix24.application.code'));
-
-        if ($expectedAppCode === null) {
-            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install validation is missing expected app code configuration.'];
         }
 
         if (! $this->isHttpsUrl(config('bitrix24.oauth.server_url'))) {
@@ -101,7 +107,7 @@ class ValidateBitrix24InstallCallbackAction
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe did not return application code.'];
         }
 
-        if ($returnedAppCode !== $expectedAppCode) {
+        if ($returnedAppCode !== $profile->application_code) {
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe returned unexpected application code.'];
         }
 

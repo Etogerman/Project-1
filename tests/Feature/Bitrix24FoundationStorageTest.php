@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
+use App\Services\Bitrix24\BackfillBitrix24ConnectionProfilesAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -17,7 +19,18 @@ class Bitrix24FoundationStorageTest extends TestCase
 
     public function test_bitrix24_connection_encrypts_tokens_and_casts_json_and_datetimes(): void
     {
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://project.example.com',
+        ]);
+
         $connection = Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $profile->id,
             'portal_domain' => 'crm.alexlesley.biz',
             'application_name' => 'Abrikosoff Connector',
             'client_id' => 'local.test',
@@ -71,6 +84,7 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertIsArray($connection->install_payload);
         $this->assertNotNull($connection->access_token_expires_at);
         $this->assertNotNull($connection->installed_at);
+        $this->assertTrue($connection->profile->is($profile));
     }
 
     public function test_bitrix24_webhook_event_uses_dedupe_constraint_and_array_casts(): void
@@ -82,6 +96,7 @@ class Bitrix24FoundationStorageTest extends TestCase
 
         $event = Bitrix24WebhookEvent::query()->create([
             'connection_id' => $connection->id,
+            'callback_base_url' => 'https://project.example.com',
             'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
             'event_name' => 'ONCRMCONTACTUPDATE',
             'member_id' => 'member-1',
@@ -121,6 +136,7 @@ class Bitrix24FoundationStorageTest extends TestCase
 
         Bitrix24WebhookEvent::query()->create([
             'connection_id' => $connection->id,
+            'callback_base_url' => 'https://project.example.com',
             'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
             'event_name' => 'ONCRMCONTACTUPDATE',
             'member_id' => 'member-1',
@@ -168,7 +184,18 @@ class Bitrix24FoundationStorageTest extends TestCase
 
     public function test_bitrix24_connection_relations_load_events_and_sync_logs(): void
     {
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://project.example.com',
+        ]);
+
         $connection = Bitrix24Connection::query()->forceCreate([
+            'profile_id' => $profile->id,
             'portal_domain' => 'crm.alexlesley.biz',
             'status' => Bitrix24Connection::STATUS_ACTIVE,
         ]);
@@ -195,5 +222,121 @@ class Bitrix24FoundationStorageTest extends TestCase
 
         $this->assertCount(1, $connection->webhookEvents);
         $this->assertCount(1, $connection->syncLogs);
+        $this->assertTrue($connection->profile->is($profile));
+    }
+
+    public function test_bitrix24_profile_registry_enforces_unique_portal_profile_key_and_callback_base_url(): void
+    {
+        Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://project.example.com',
+        ]);
+
+        $this->expectException(QueryException::class);
+
+        Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_CRM_ONLY,
+            'display_name' => 'Duplicate',
+            'client_id' => 'client-id-2',
+            'application_code' => 'local.app.code.2',
+            'callback_base_url' => 'https://second.example.com',
+        ]);
+    }
+
+    public function test_bitrix24_profile_registry_enforces_global_unique_callback_base_url(): void
+    {
+        Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'client_id' => 'client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://project.example.com',
+        ]);
+
+        $this->expectException(QueryException::class);
+
+        Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.second.biz',
+            'profile_key' => 'dev-alex',
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Dev Alex',
+            'client_id' => 'client-id-2',
+            'application_code' => 'local.app.code.2',
+            'callback_base_url' => 'https://project.example.com',
+        ]);
+    }
+
+    public function test_backfill_profiles_assigns_only_connections_for_configured_portal(): void
+    {
+        config()->set('bitrix24.portal_domain', 'crm.alexlesley.biz');
+        config()->set('bitrix24.application.client_id', 'client-id');
+        config()->set('bitrix24.application.code', 'local.app.code');
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/callbacks/bitrix24/install');
+
+        $matchingConnection = Bitrix24Connection::query()->forceCreate([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token-1',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        $foreignConnection = Bitrix24Connection::query()->forceCreate([
+            'portal_domain' => 'crm.foreign.biz',
+            'member_id' => 'member-2',
+            'application_token' => 'application-token-2',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        app(BackfillBitrix24ConnectionProfilesAction::class)->handle();
+
+        $matchingConnection->refresh();
+        $foreignConnection->refresh();
+
+        $this->assertNotNull($matchingConnection->profile_id);
+        $this->assertNull($foreignConnection->profile_id);
+        $this->assertSame(1, Bitrix24Profile::query()->count());
+
+        $profile = Bitrix24Profile::query()->firstOrFail();
+
+        $this->assertSame('crm.alexlesley.biz', $profile->portal_domain);
+        $this->assertSame(Bitrix24Profile::PROFILE_KEY_STAGING, $profile->profile_key);
+        $this->assertSame('https://project.example.com', $profile->callback_base_url);
+    }
+
+    public function test_webhook_event_dedupe_is_scoped_by_callback_base_url(): void
+    {
+        $firstEvent = Bitrix24WebhookEvent::query()->create([
+            'callback_base_url' => 'https://first.example.test',
+            'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
+            'event_name' => 'ONCRMCONTACTUPDATE',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token',
+            'payload_hash' => str_repeat('b', 64),
+            'payload' => ['event' => 'ONCRMCONTACTUPDATE'],
+            'processing_status' => Bitrix24WebhookEvent::STATUS_PENDING,
+        ]);
+
+        $secondEvent = Bitrix24WebhookEvent::query()->create([
+            'callback_base_url' => 'https://second.example.test',
+            'callback_type' => Bitrix24WebhookEvent::TYPE_EVENTS,
+            'event_name' => 'ONCRMCONTACTUPDATE',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token',
+            'payload_hash' => str_repeat('b', 64),
+            'payload' => ['event' => 'ONCRMCONTACTUPDATE'],
+            'processing_status' => Bitrix24WebhookEvent::STATUS_PENDING,
+        ]);
+
+        $this->assertNotSame($firstEvent->id, $secondEvent->id);
+        $this->assertSame(2, Bitrix24WebhookEvent::query()->count());
     }
 }

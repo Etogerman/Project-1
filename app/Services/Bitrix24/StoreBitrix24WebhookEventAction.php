@@ -26,6 +26,7 @@ class StoreBitrix24WebhookEventAction
 
         $event = Bitrix24WebhookEvent::query()->firstOrCreate(
             [
+                'callback_base_url' => $eventData->callbackBaseUrl,
                 'callback_type' => $eventData->callbackType,
                 'event_name' => $eventData->eventName ?? '',
                 'member_id' => $eventData->authContext->memberId ?? '',
