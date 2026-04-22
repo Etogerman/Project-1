@@ -108,6 +108,12 @@ class DialogResource extends Resource
                     ->badge()
                     ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
                     ->toggleable(),
+                TextColumn::make('stage')
+                    ->label('Этап')
+                    ->state(fn (Dialog $record): string => static::formatStageLabel($record))
+                    ->badge()
+                    ->color(fn (Dialog $record): string => static::getStageColor($record))
+                    ->toggleable(),
                 TextColumn::make('assigned_user')
                     ->label('Ответственный')
                     ->state(fn (Dialog $record): string => filled($record->contact?->assignedUser?->name)
@@ -193,6 +199,9 @@ class DialogResource extends Resource
                         ->get()
                         ->mapWithKeys(fn (Channel $channel): array => [$channel->id => $channel->display_title])
                         ->all()),
+                SelectFilter::make('stage')
+                    ->label('Этап')
+                    ->options(fn (): array => Dialog::stageLabels()),
                 Filter::make('route_ready')
                     ->label('Маршрут готов')
                     ->query(fn (Builder $query): Builder => $query->whereRouteReady()),
@@ -422,6 +431,18 @@ class DialogResource extends Resource
             DialogInboxStatusData::CODE_NOT_REQUIRED => 'gray',
             default => 'success',
         };
+    }
+
+    protected static function formatStageLabel(Dialog $record): string
+    {
+        return $record->stage !== null
+            ? Dialog::stageLabel($record->stage)
+            : 'Этап не задан';
+    }
+
+    protected static function getStageColor(Dialog $record): string
+    {
+        return Dialog::stageTone($record->stage);
     }
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder

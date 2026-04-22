@@ -36,6 +36,37 @@ class Dialog extends Model
     public const BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER = 'blocked_by_user';
 
     /**
+     * @return array<string, string>
+     */
+    public static function stageLabels(): array
+    {
+        return [
+            self::STAGE_NEW_DIALOG => 'Новый диалог',
+            self::STAGE_PHONE_RECEIVED => 'Телефон получен',
+            self::STAGE_QUESTIONNAIRE_COMPLETED => 'Анкета заполнена',
+            self::STAGE_TRANSFERRED_TO_MPL => 'Передан в МПЛ',
+            self::STAGE_TRANSFERRED_TO_MPP => 'Передан в МПП',
+        ];
+    }
+
+    public static function stageLabel(?string $stage): string
+    {
+        return self::stageLabels()[$stage] ?? 'Неизвестный этап';
+    }
+
+    public static function stageTone(?string $stage): string
+    {
+        return match ($stage) {
+            self::STAGE_NEW_DIALOG => 'gray',
+            self::STAGE_PHONE_RECEIVED => 'info',
+            self::STAGE_QUESTIONNAIRE_COMPLETED => 'success',
+            self::STAGE_TRANSFERRED_TO_MPL => 'warning',
+            self::STAGE_TRANSFERRED_TO_MPP => 'primary',
+            default => 'gray',
+        };
+    }
+
+    /**
      * @var list<string>
      */
     protected $fillable = [
@@ -98,6 +129,68 @@ class Dialog extends Model
         ];
     }
 
+    public static function isAutomaticStage(?string $stage): bool
+    {
+        return in_array($stage, self::automaticStages(), true);
+    }
+
+    public static function isManualStage(?string $stage): bool
+    {
+        return in_array($stage, self::manualStages(), true);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function manualTransitionOptions(?string $currentStage): array
+    {
+        $options = [];
+
+        if (filled($currentStage)) {
+            $options[$currentStage] = self::stageLabel($currentStage);
+        } else {
+            $options[''] = 'Этап не задан';
+        }
+
+        foreach (self::allowedManualTransitionTargets($currentStage) as $stage) {
+            $options[$stage] = self::stageLabel($stage);
+        }
+
+        return $options;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function allowedManualTransitionTargets(?string $currentStage): array
+    {
+        if (self::isAutomaticStage($currentStage) || $currentStage === null) {
+            return [
+                self::STAGE_TRANSFERRED_TO_MPL,
+                self::STAGE_TRANSFERRED_TO_MPP,
+            ];
+        }
+
+        return match ($currentStage) {
+            self::STAGE_TRANSFERRED_TO_MPL => [self::STAGE_TRANSFERRED_TO_MPP],
+            self::STAGE_TRANSFERRED_TO_MPP => [self::STAGE_TRANSFERRED_TO_MPL],
+            default => [],
+        };
+    }
+
+    public static function canManuallyTransition(?string $currentStage, string $targetStage): bool
+    {
+        if (! self::isManualStage($targetStage)) {
+            return false;
+        }
+
+        if ($currentStage === $targetStage) {
+            return true;
+        }
+
+        return in_array($targetStage, self::allowedManualTransitionTargets($currentStage), true);
+    }
+
     public function isBotBlockedByUser(): bool
     {
         return $this->bot_subscription_status === self::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER;
@@ -146,6 +239,12 @@ class Dialog extends Model
     public function previewMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'preview_message_id');
+    }
+
+    public function hasCompleteStageHistoryRouteContext(): bool
+    {
+        return $this->current_contact_identity_id !== null
+            && filled($this->external_chat_id);
     }
 
     public function scopeWhereRouteReady(Builder $query): Builder
