@@ -5,6 +5,7 @@ namespace App\Services\Bitrix24;
 use App\Data\Bitrix24\Bitrix24AuthContextData;
 use App\Data\Bitrix24\Bitrix24CallbackValidationResultData;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24WebhookEvent;
 
 class ValidateBitrix24CallbackAction
@@ -17,6 +18,8 @@ class ValidateBitrix24CallbackAction
         string $callbackType,
         Bitrix24AuthContextData $authContext,
         bool $looksLikeBitrix,
+        ?string $callbackBaseUrl,
+        ?Bitrix24Profile $profile,
     ): Bitrix24CallbackValidationResultData {
         if (! $looksLikeBitrix) {
             return new Bitrix24CallbackValidationResultData(
@@ -27,12 +30,46 @@ class ValidateBitrix24CallbackAction
             );
         }
 
+        if (! filled($callbackBaseUrl)) {
+            return new Bitrix24CallbackValidationResultData(
+                accepted: false,
+                processingStatus: Bitrix24WebhookEvent::STATUS_FAILED,
+                reason: 'Callback did not resolve a valid callback_base_url.',
+                connection: null,
+            );
+        }
+
+        if (! $profile) {
+            return new Bitrix24CallbackValidationResultData(
+                accepted: false,
+                processingStatus: Bitrix24WebhookEvent::STATUS_FAILED,
+                reason: sprintf(
+                    'No Bitrix24 profile matched %s callback callback_base_url.',
+                    $callbackType,
+                ),
+                connection: null,
+            );
+        }
+
+        if (! $profile->allowsCallbackType($callbackType)) {
+            return new Bitrix24CallbackValidationResultData(
+                accepted: false,
+                processingStatus: Bitrix24WebhookEvent::STATUS_FAILED,
+                reason: sprintf(
+                    'Bitrix24 profile `%s` does not allow %s callbacks.',
+                    $profile->profile_key,
+                    $callbackType,
+                ),
+                connection: $this->findRelatedConnection($profile, $authContext),
+            );
+        }
+
         if (! filled($authContext->memberId) || ! filled($authContext->applicationToken)) {
             return new Bitrix24CallbackValidationResultData(
                 accepted: false,
                 processingStatus: Bitrix24WebhookEvent::STATUS_FAILED,
                 reason: 'Missing member_id or application_token in callback auth context.',
-                connection: $this->findRelatedConnection($authContext),
+                connection: $this->findRelatedConnection($profile, $authContext),
             );
         }
 
@@ -43,11 +80,12 @@ class ValidateBitrix24CallbackAction
                 accepted: false,
                 processingStatus: Bitrix24WebhookEvent::STATUS_FAILED,
                 reason: 'Missing member_id or application_token in callback auth context.',
-                connection: $this->findRelatedConnection($authContext),
+                connection: $this->findRelatedConnection($profile, $authContext),
             );
         }
 
         $connection = Bitrix24Connection::query()
+            ->where('profile_id', $profile->id)
             ->where('status', Bitrix24Connection::STATUS_ACTIVE)
             ->where('member_id', $authContext->memberId)
             ->where('application_token_hash', $applicationTokenHash)
@@ -61,7 +99,7 @@ class ValidateBitrix24CallbackAction
                     'No active Bitrix24 connection matched %s callback auth context.',
                     $callbackType,
                 ),
-                connection: $this->findRelatedConnection($authContext),
+                connection: $this->findRelatedConnection($profile, $authContext),
             );
         }
 
@@ -73,11 +111,17 @@ class ValidateBitrix24CallbackAction
         );
     }
 
-    private function findRelatedConnection(Bitrix24AuthContextData $authContext): ?Bitrix24Connection
+    private function findRelatedConnection(?Bitrix24Profile $profile, Bitrix24AuthContextData $authContext): ?Bitrix24Connection
     {
         $query = Bitrix24Connection::query();
 
-        if (filled($authContext->memberId)) {
+        if ($profile) {
+            $query->where('profile_id', $profile->id);
+
+            if (filled($authContext->memberId)) {
+                $query->where('member_id', $authContext->memberId);
+            }
+        } elseif (filled($authContext->memberId)) {
             $query->where('member_id', $authContext->memberId);
         } elseif (filled($authContext->portalDomain)) {
             $query->where('portal_domain', $authContext->portalDomain);
