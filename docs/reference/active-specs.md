@@ -24,7 +24,7 @@
 
 ## Текущее состояние
 
-- none
+- `[bitrix24-openlines-manual-reply-service-actor]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-openlines-manual-reply-service-actor.md`; Spec revision: `476e0fa37449a96615c9636f77910fa557e232b7`; status: `opened`; opened-at: `2026-04-23`
 
 ## Связанные документы
 
