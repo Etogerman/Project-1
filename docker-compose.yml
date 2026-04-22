@@ -1,3 +1,5 @@
+name: abrikosoff-connector
+
 services:
   dev:
     build:
