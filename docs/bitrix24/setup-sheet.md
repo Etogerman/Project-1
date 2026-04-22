@@ -1,6 +1,14 @@
 # Bitrix24 Setup Sheet
 
-Этот файл фиксирует внешний setup-контракт для ТЗ-1. Он не заменяет `config/bitrix24.php`, а служит короткой операционной шпаргалкой перед Этапом 2.
+Этот документ — frozen ops/setup шпаргалка по подтверждённым значениям и
+проверкам Bitrix24 integration-контура.
+
+Он:
+
+1. не заменяет `config/bitrix24.php` и runtime-код;
+2. не является полным ТЗ или status-doc по stream-ам;
+3. используется как короткий reference перед staging/integration проверками и
+   ручными setup-операциями.
 
 ## Frozen constants
 
@@ -34,9 +42,10 @@
 | Alternate last name | `UF_CRM_ABRIKOSOFF_ALT_LAST_NAME` |
 | Name conflict flag | `UF_CRM_ABRIKOSOFF_NAME_CONFLICT` |
 
-## Обязательные интеграционные значения
+## Подтверждённые интеграционные значения
 
-Заполните их в `.env` или deployment environment до начала integration foundation stage:
+Заполните их в `.env` или deployment environment перед использованием этого
+setup-runbook на staging или другом real integration target:
 
 | Key | Value |
 | --- | --- |
@@ -76,4 +85,5 @@ Run:
 php artisan bitrix24:setup-report
 ```
 
-The command must finish without missing required items before Этап 2 starts.
+The command must finish without missing required items before runtime acceptance
+на выбранном integration environment.

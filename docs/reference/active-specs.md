@@ -11,37 +11,19 @@
 
 ## Текущее состояние
 
-Сейчас в основном репозитории открыт один существенный stream с
+Сейчас в основном репозитории нет активных существенных stream-ов с
 зафиксированным внешним `Spec revision`.
-
-### 1. Bitrix24 Open Lines manual reply service actor
-
-- `Spec repo`: `Etogerman/Project-1-specs`
-- `Spec doc`: `streams/tz-bitrix24-openlines-manual-reply-service-actor.md`
-- `Spec revision`: `8d2858fa1cf119bc49a660826658f438c3eda3d8`
-- внешний статус документа: `active`
-- локальный статус stream-а в основном repo: `opened`
-- issue tracker: [#381](https://github.com/Etogerman/Project-1/issues/381)
 
 Что это означает сейчас:
 
-1. versioned ТЗ продолжает уже открытый active spec stream;
-2. frozen baseline follow-up stream-а:
-   - `origin/main`
-   - merge commit `1b2c39770894e9b42375d32ce1a89edcfb4b3e91`
-   - merge PR `#392`
-   - это frozen analytical/spec baseline, а не branch-base по умолчанию для нового code slice
-3. preparatory `Slice 0A` уже закрыт;
-4. `Slice 1A` уже материализован и прошёл delivery path;
-5. текущий активный implementation slice по spec — `Slice 1B`;
-6. `Slice 1B` покрывает:
-   - remote-chat reuse runtime change
-   - targeted tests
-   - author self-check
-7. execution ceiling текущего active slice:
-   - `draft PR` в `staging`
-8. фактический старт нового code slice остаётся `staging-first`; если к моменту старта `main` свежее `staging`, агент обязан остановиться и запросить отдельное решение пользователя.
-9. code stream по `Slice 1B` ещё не стартовал и требует отдельной явной команды пользователя.
+1. новый существенный stream нельзя считать открытым по памяти, по старому PR
+   или по исторической записи в локальной документации;
+2. перед стартом нового существенного stream-а нужно отдельно зафиксировать:
+   - `Spec repo`
+   - `Spec doc`
+   - `Spec revision`
+3. после этого запись в этом файле добавляется или обновляется отдельным
+   коротким `docs-only` шагом.
 
 ## Как использовать этот файл
 
