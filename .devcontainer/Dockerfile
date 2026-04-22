@@ -91,3 +91,10 @@ ENV SHELL=/bin/bash
 
 # Enable Xdebug coverage mode
 ENV XDEBUG_MODE=coverage
+
+# Entrypoint: starts artisan serve if vendor/ is present, then keeps container alive
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["tail", "-f", "/dev/null"]
