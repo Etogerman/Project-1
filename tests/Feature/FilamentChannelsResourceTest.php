@@ -938,6 +938,64 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('Статус: Ответ еще не отправлен', $recentMessagesHtml);
     }
 
+    public function test_channel_diagnostics_use_media_summary_for_media_only_account_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'name' => 'Telegram Account Media Diagnostics',
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ext-account-media',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-account-media-901',
+            'external_chat_id' => 'chat-account-media-901',
+            'external_message_id' => 'msg-account-media-901',
+            'text' => null,
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'document', 'file_name' => 'offer.pdf'],
+                ],
+            ],
+            'received_at' => Carbon::create(2026, 4, 23, 12, 30, 0),
+            'auto_reply_sent_at' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('view', $channel)
+            ->assertMountedActionModalSee('Документ: offer.pdf')
+            ->assertMountedActionModalSee('Ожидает загрузки');
+
+        $latestMessageTextResolver = new ReflectionMethod(ChannelResource::class, 'resolveLatestSavedMessageDisplayText');
+        $latestMessageTextResolver->setAccessible(true);
+
+        $this->assertSame('Документ: offer.pdf', $latestMessageTextResolver->invoke(null, $channel));
+
+        $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
+        $recentMessagesRenderer->setAccessible(true);
+
+        $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Документ: offer.pdf', $recentMessagesHtml);
+        $this->assertStringContainsString('Ожидает загрузки', $recentMessagesHtml);
+        $this->assertStringNotContainsString('>—<', $recentMessagesHtml);
+    }
+
     public function test_recent_activity_renderer_shows_and_highlights_dedupe_events(): void
     {
         $channel = Channel::factory()->create([

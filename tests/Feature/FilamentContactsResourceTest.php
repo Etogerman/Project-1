@@ -2844,6 +2844,56 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableColumnStateSet('phone_count', 0, $contactWithoutPhone);
     }
 
+    public function test_contacts_table_uses_media_summary_for_latest_media_only_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'name' => 'Telegram Account Media Table',
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Media only contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-contact-media-table',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'tg-contact-media-chat',
+            'external_message_id' => 'tg-contact-media-message',
+            'text' => null,
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'photo'],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertCanSeeTableRecords([$contact]);
+
+        $component->assertTableColumnStateSet('latest_message_text', 'Фото', $contact);
+
+        $this->actingAs($admin)
+            ->get('/admin/contacts')
+            ->assertOk()
+            ->assertSee('Фото')
+            ->assertSee('Ожидает загрузки');
+    }
+
     public function test_contacts_table_phone_column_is_copyable_when_phone_exists(): void
     {
         $admin = User::factory()->create([
@@ -3175,6 +3225,55 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertStringContainsString('Открыл бота по диплинку', $dialogsHtml);
         $this->assertStringNotContainsString('Системное сообщение', $dialogsHtml);
+    }
+
+    public function test_contact_dialogs_renderer_shows_media_download_placeholder_for_telegram_account_message(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Media',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-account-dialog-media',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-media-dialog',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+
+        Message::query()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'tg-account-media-dialog',
+            'text' => 'Смотри вложение',
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'document', 'file_name' => 'offer.pdf'],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
+        $dialogsBuilder->setAccessible(true);
+
+        $dialogsHtml = view('filament.contacts.partials.contact-dialogs', $dialogsBuilder->invoke(null, $contact))->render();
+
+        $this->assertStringContainsString('Смотри вложение', $dialogsHtml);
+        $this->assertStringContainsString('data-role="dialog-preview-media-state"', $dialogsHtml);
+        $this->assertStringContainsString('Ожидает загрузки', $dialogsHtml);
     }
 
     public function test_contact_dialogs_renderer_shows_telegram_start_payload_as_human_readable_preview(): void

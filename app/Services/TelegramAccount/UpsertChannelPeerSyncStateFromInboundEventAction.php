@@ -22,11 +22,14 @@ class UpsertChannelPeerSyncStateFromInboundEventAction
         );
 
         if ($event->historySource === NormalizedInboundMessageEvent::HISTORY_SOURCE_BACKFILL) {
-            $peerSyncState->backfill_status = ChannelPeerSyncState::BACKFILL_STATUS_IN_PROGRESS;
             $peerSyncState->oldest_imported_message_id = $this->resolveCanonicalMinId(
                 $peerSyncState->oldest_imported_message_id,
                 $event->externalMessageId,
             );
+
+            if (! $this->isTerminalBackfillStatus($peerSyncState->backfill_status)) {
+                $peerSyncState->backfill_status = ChannelPeerSyncState::BACKFILL_STATUS_IN_PROGRESS;
+            }
         } elseif (! filled($peerSyncState->backfill_status)) {
             $peerSyncState->backfill_status = ChannelPeerSyncState::BACKFILL_STATUS_NOT_STARTED;
         }
@@ -75,5 +78,13 @@ class UpsertChannelPeerSyncStateFromInboundEventAction
         }
 
         return strcmp($left, $right);
+    }
+
+    private function isTerminalBackfillStatus(?string $status): bool
+    {
+        return in_array($status, [
+            ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE,
+            ChannelPeerSyncState::BACKFILL_STATUS_FAILED,
+        ], true);
     }
 }

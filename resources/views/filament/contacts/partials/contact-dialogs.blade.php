@@ -75,6 +75,20 @@
                             <p class="ac-preview-card__body">
                                 {{ $dialog['preview_text'] }}
                             </p>
+
+                            @if (! empty($dialog['preview_media_state_badges'] ?? []))
+                                <div data-role="dialog-preview-media-state" class="ac-message__meta-main">
+                                    @foreach ($dialog['preview_media_state_badges'] as $mediaStateBadge)
+                                        <span
+                                            data-role="dialog-preview-media-state-badge"
+                                            class="ac-pill"
+                                            data-tone="{{ $mediaStateBadge['tone'] ?? 'gray' }}"
+                                        >
+                                            {{ $mediaStateBadge['label'] ?? 'Статус не определён' }}
+                                        </span>
+                                    @endforeach
+                                </div>
+                            @endif
                         </div>
 
                         <div class="ac-note-box ac-contact-modal-dialogs__meta-panel">

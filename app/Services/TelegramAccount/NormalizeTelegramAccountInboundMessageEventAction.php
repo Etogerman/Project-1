@@ -4,6 +4,7 @@ namespace App\Services\TelegramAccount;
 
 use App\Data\TelegramAccount\NormalizedInboundMessageEvent;
 use App\Models\Channel;
+use App\Models\Message;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -34,6 +35,16 @@ class NormalizeTelegramAccountInboundMessageEventAction
             'message_kind' => ['required', 'string'],
             'text' => ['nullable', 'string'],
             'media' => ['nullable', 'array'],
+            'media.*' => ['array'],
+            'media.*.download_status' => ['sometimes', 'nullable', 'string', 'in:'.implode(',', [
+                Message::MEDIA_DOWNLOAD_STATUS_PENDING,
+                Message::MEDIA_DOWNLOAD_STATUS_DOWNLOADING,
+                Message::MEDIA_DOWNLOAD_STATUS_DOWNLOADED,
+                Message::MEDIA_DOWNLOAD_STATUS_FAILED,
+            ])],
+            'media.*.download_error_code' => ['sometimes', 'nullable', 'string'],
+            'media.*.download_error_message' => ['sometimes', 'nullable', 'string'],
+            'is_archived' => ['sometimes', 'boolean'],
             'raw_payload' => ['nullable', 'array'],
             'occurred_at' => ['required', 'date'],
             'history_source' => ['required', 'string', 'in:'.implode(',', [
@@ -71,7 +82,7 @@ class NormalizeTelegramAccountInboundMessageEventAction
         }
 
         $media = is_array($validated['media'] ?? null)
-            ? array_values($validated['media'])
+            ? $this->normalizeMediaItems(array_values($validated['media']))
             : [];
         $text = isset($validated['text']) && is_string($validated['text'])
             ? trim($validated['text'])
@@ -101,6 +112,7 @@ class NormalizeTelegramAccountInboundMessageEventAction
             messageKind: (string) $validated['message_kind'],
             text: $text,
             media: $media,
+            isArchived: (bool) ($validated['is_archived'] ?? false),
             rawPayload: is_array($validated['raw_payload'] ?? null) ? $validated['raw_payload'] : [],
             occurredAt: Carbon::parse((string) $validated['occurred_at']),
             historySource: (string) $validated['history_source'],
@@ -116,5 +128,44 @@ class NormalizeTelegramAccountInboundMessageEventAction
         $trimmed = trim($value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $media
+     * @return list<array<string, mixed>>
+     */
+    private function normalizeMediaItems(array $media): array
+    {
+        $normalized = [];
+
+        foreach ($media as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $payload = $item;
+            $payload['download_status'] = Message::normalizeMediaDownloadStatus(
+                data_get($item, 'download_status')
+            ) ?? Message::MEDIA_DOWNLOAD_STATUS_PENDING;
+
+            $downloadErrorCode = $this->normalizeNullableString(data_get($item, 'download_error_code'));
+            $downloadErrorMessage = $this->normalizeNullableString(data_get($item, 'download_error_message'));
+
+            if ($downloadErrorCode !== null) {
+                $payload['download_error_code'] = $downloadErrorCode;
+            } else {
+                unset($payload['download_error_code']);
+            }
+
+            if ($downloadErrorMessage !== null) {
+                $payload['download_error_message'] = $downloadErrorMessage;
+            } else {
+                unset($payload['download_error_message']);
+            }
+
+            $normalized[] = $payload;
+        }
+
+        return $normalized;
     }
 }

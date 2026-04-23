@@ -21,6 +21,7 @@ use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
+use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
 use App\Services\Dialogs\MessageChronology;
 use BackedEnum;
@@ -372,10 +373,10 @@ class ContactResource extends Resource
                     ->label('Последнее сообщение')
                     ->toggleable()
                     ->placeholder('—')
-                    ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->text)
+                    ->state(fn (Contact $record): ?string => static::resolveLatestConversationMessageDisplayText($record))
                     ->description(fn (Contact $record): ?string => static::formatLatestConversationMetaSummary($record))
                     ->limit(60)
-                    ->tooltip(fn (Contact $record): ?string => static::resolveLatestConversationMessage($record)?->text),
+                    ->tooltip(fn (Contact $record): ?string => static::resolveLatestConversationMessageTooltip($record)),
                 TextColumn::make('latest_message_received_at')
                     ->label('Активность')
                     ->toggleable()
@@ -613,6 +614,64 @@ class ContactResource extends Resource
         }
 
         return $record->getAttribute('latest_message_sort_at');
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected static function resolveLatestConversationMessageFeed(Contact $record): ?array
+    {
+        $message = static::resolveLatestConversationMessage($record);
+
+        if (! $message instanceof Message) {
+            return null;
+        }
+
+        /** @var array<int, array<string, mixed>|null> $cache */
+        static $cache = [];
+
+        if (array_key_exists($message->id, $cache)) {
+            return $cache[$message->id];
+        }
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(new Collection([$message]));
+
+        return $cache[$message->id] = $feed[0] ?? null;
+    }
+
+    protected static function resolveLatestConversationMessageDisplayText(Contact $record): ?string
+    {
+        $feed = static::resolveLatestConversationMessageFeed($record);
+
+        if (is_array($feed) && filled($feed['display_text'] ?? null)) {
+            return (string) $feed['display_text'];
+        }
+
+        return static::resolveLatestConversationMessage($record)?->text;
+    }
+
+    protected static function resolveLatestConversationMessageTooltip(Contact $record): ?string
+    {
+        $displayText = static::resolveLatestConversationMessageDisplayText($record);
+        $feed = static::resolveLatestConversationMessageFeed($record);
+
+        $parts = [];
+
+        if (filled($displayText)) {
+            $parts[] = $displayText;
+        }
+
+        foreach ($feed['media_state_badges'] ?? [] as $badge) {
+            if (is_array($badge) && filled($badge['label'] ?? null)) {
+                $parts[] = (string) $badge['label'];
+            }
+        }
+
+        if ($parts === []) {
+            return null;
+        }
+
+        return implode(' · ', array_values(array_unique($parts)));
     }
 
     protected static function contactRequiresManualReply(Contact $record): bool
@@ -1300,6 +1359,7 @@ class ContactResource extends Resource
     protected static function formatLatestConversationMetaSummary(Contact $record): ?string
     {
         $message = static::resolveLatestConversationMessage($record);
+        $feed = static::resolveLatestConversationMessageFeed($record);
 
         if (! $message instanceof Message) {
             return null;
@@ -1310,6 +1370,12 @@ class ContactResource extends Resource
 
         if (filled($channelLabel)) {
             $parts[] = $channelLabel;
+        }
+
+        foreach ($feed['media_state_badges'] ?? [] as $badge) {
+            if (is_array($badge) && filled($badge['label'] ?? null)) {
+                $parts[] = (string) $badge['label'];
+            }
         }
 
         return implode(' · ', $parts);
@@ -1564,7 +1630,8 @@ class ContactResource extends Resource
      *         last_outbound_label:string,
      *         preview_text:string,
      *         preview_sender_label:?string,
-     *         preview_sender_tone:?string
+     *         preview_sender_tone:?string,
+     *         preview_media_state_badges:list<array{label:string,tone:string}>
      *     }>
      * }
      */

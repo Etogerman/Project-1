@@ -25,6 +25,8 @@ class BuildConversationFeedViewDataAction
         return $messages
             ->map(function (Message $message): array {
                 $messageAt = $this->resolveMessageSortAt($message);
+                $mediaBadges = $this->resolveConversationMediaBadges($message);
+                $mediaStateBadges = $this->resolveConversationMediaStateBadges($message);
 
                 return [
                     'id' => $message->id,
@@ -46,6 +48,9 @@ class BuildConversationFeedViewDataAction
                     'display_text' => $this->resolveConversationDisplayText($message),
                     'formatted_html' => $this->resolveConversationFormattedHtml($message),
                     'html_source_text' => $this->resolveConversationHtmlSourceText($message),
+                    'has_media' => $mediaBadges !== [],
+                    'media_badges' => $mediaBadges,
+                    'media_state_badges' => $mediaStateBadges,
                     'time_label' => $messageAt?->format('H:i') ?? '—',
                     'timestamp_label' => $messageAt?->format('H:i d.m.Y') ?? '—',
                     'date_key' => $messageAt?->format('Y-m-d') ?? 'unknown-date',
@@ -194,8 +199,10 @@ class BuildConversationFeedViewDataAction
             return $systemEventDisplayText;
         }
 
-        if ($this->messageContainsMediaMetadata($message)) {
-            return 'Медиа';
+        $mediaOnlyDisplayText = $this->resolveMediaOnlyConversationDisplayText($message);
+
+        if ($mediaOnlyDisplayText !== null) {
+            return $mediaOnlyDisplayText;
         }
 
         return match ($message->message_kind) {
@@ -211,9 +218,225 @@ class BuildConversationFeedViewDataAction
 
     protected function messageContainsMediaMetadata(Message $message): bool
     {
+        return $this->resolveConversationMediaItems($message) !== [];
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function resolveConversationMediaBadges(Message $message): array
+    {
+        $media = $this->resolveConversationMediaItems($message);
+
+        if ($media === []) {
+            return [];
+        }
+
+        $badges = [];
+
+        foreach ($media as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $type = $this->formatMediaTypeLabel((string) data_get($item, 'type', ''));
+            $fileName = $this->normalizeMediaBadgeText(data_get($item, 'file_name'));
+
+            if ($fileName !== null) {
+                $badges[] = sprintf('%s: %s', $type, Str::limit($fileName, 40, '...'));
+
+                continue;
+            }
+
+            $badges[] = $type;
+        }
+
+        if ($badges === []) {
+            return ['Медиа'];
+        }
+
+        if (count($badges) <= 3) {
+            return $badges;
+        }
+
+        return [
+            ...array_slice($badges, 0, 3),
+            sprintf('+ ещё %d', count($badges) - 3),
+        ];
+    }
+
+    protected function resolveMediaOnlyConversationDisplayText(Message $message): ?string
+    {
+        if (filled($message->text) || ! $this->messageContainsMediaMetadata($message)) {
+            return null;
+        }
+
         $media = data_get($message->raw_payload, 'media');
 
-        return is_array($media) && $media !== [];
+        if (! is_array($media) || $media === []) {
+            return null;
+        }
+
+        $types = collect($media)
+            ->filter(fn (mixed $item): bool => is_array($item))
+            ->map(fn (array $item): string => $this->formatMediaTypeLabel((string) data_get($item, 'type', '')))
+            ->values();
+
+        if ($types->isEmpty()) {
+            return 'Медиа';
+        }
+
+        $counts = $types->countBy();
+
+        if ($counts->count() === 1) {
+            $label = (string) $counts->keys()->first();
+            $count = (int) $counts->first();
+
+            return $count > 1 ? sprintf('%s x%d', $label, $count) : $label;
+        }
+
+        return 'Медиа';
+    }
+
+    /**
+     * @return list<array{label:string,tone:string}>
+     */
+    protected function resolveConversationMediaStateBadges(Message $message): array
+    {
+        $media = $this->resolveConversationMediaItems($message);
+
+        if ($media === []) {
+            return [];
+        }
+
+        $statusCounts = [];
+
+        foreach ($media as $item) {
+            $status = $this->resolveConversationMediaDownloadStatus($message, $item);
+
+            if ($status === null || $status === Message::MEDIA_DOWNLOAD_STATUS_DOWNLOADED) {
+                continue;
+            }
+
+            $statusCounts[$status] = ($statusCounts[$status] ?? 0) + 1;
+        }
+
+        if ($statusCounts === []) {
+            return [];
+        }
+
+        $badges = [];
+
+        foreach ([
+            Message::MEDIA_DOWNLOAD_STATUS_FAILED,
+            Message::MEDIA_DOWNLOAD_STATUS_DOWNLOADING,
+            Message::MEDIA_DOWNLOAD_STATUS_PENDING,
+        ] as $status) {
+            $count = $statusCounts[$status] ?? 0;
+
+            if ($count < 1) {
+                continue;
+            }
+
+            $label = $this->formatConversationMediaStateLabel($status);
+
+            if ($count > 1) {
+                $label .= ' x'.$count;
+            }
+
+            $badges[] = [
+                'label' => $label,
+                'tone' => $this->formatConversationMediaStateTone($status),
+            ];
+        }
+
+        return $badges;
+    }
+
+    protected function formatMediaTypeLabel(string $type): string
+    {
+        return match (trim($type)) {
+            'photo' => 'Фото',
+            'video' => 'Видео',
+            'audio' => 'Аудио',
+            'voice' => 'Голосовое',
+            'document' => 'Документ',
+            'animation' => 'Анимация',
+            'sticker' => 'Стикер',
+            default => 'Медиа',
+        };
+    }
+
+    protected function normalizeMediaBadgeText(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $text = trim((string) $value);
+
+        return $text !== '' ? $text : null;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    protected function resolveConversationMediaItems(Message $message): array
+    {
+        $media = data_get($message->raw_payload, 'media');
+
+        if (! is_array($media) || $media === []) {
+            return [];
+        }
+
+        return collect($media)
+            ->filter(fn (mixed $item): bool => is_array($item))
+            ->values()
+            ->all();
+    }
+
+    protected function resolveConversationMediaDownloadStatus(Message $message, array $item): ?string
+    {
+        $status = Message::normalizeMediaDownloadStatus(
+            $this->normalizeMediaBadgeText(data_get($item, 'download_status'))
+        );
+
+        if ($status !== null) {
+            return $status;
+        }
+
+        return $this->usesTelegramAccountMediaPlaceholderContract($message)
+            ? Message::MEDIA_DOWNLOAD_STATUS_PENDING
+            : null;
+    }
+
+    protected function usesTelegramAccountMediaPlaceholderContract(Message $message): bool
+    {
+        $channel = $message->channel ?? $message->dialog?->channel;
+
+        return $channel instanceof Channel
+            && $channel->platform === Channel::PLATFORM_TELEGRAM
+            && $channel->isAccountConnection();
+    }
+
+    protected function formatConversationMediaStateLabel(string $status): string
+    {
+        return match ($status) {
+            Message::MEDIA_DOWNLOAD_STATUS_PENDING => 'Ожидает загрузки',
+            Message::MEDIA_DOWNLOAD_STATUS_DOWNLOADING => 'Загружается',
+            Message::MEDIA_DOWNLOAD_STATUS_FAILED => 'Ошибка загрузки',
+            default => 'Статус не определён',
+        };
+    }
+
+    protected function formatConversationMediaStateTone(string $status): string
+    {
+        return match ($status) {
+            Message::MEDIA_DOWNLOAD_STATUS_FAILED => 'danger',
+            Message::MEDIA_DOWNLOAD_STATUS_DOWNLOADING => 'warning',
+            Message::MEDIA_DOWNLOAD_STATUS_PENDING => 'gray',
+            default => 'gray',
+        };
     }
 
     protected function resolveSystemEventDisplayText(Message $message): ?string

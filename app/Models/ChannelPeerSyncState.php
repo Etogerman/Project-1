@@ -51,6 +51,34 @@ class ChannelPeerSyncState extends Model
         );
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function backfillStatusLabels(): array
+    {
+        return [
+            self::BACKFILL_STATUS_NOT_STARTED => 'Не начато',
+            self::BACKFILL_STATUS_IN_PROGRESS => 'Загрузка истории',
+            self::BACKFILL_STATUS_COMPLETE => 'Завершена',
+            self::BACKFILL_STATUS_FAILED => 'Ошибка',
+        ];
+    }
+
+    public function getBackfillStatusLabel(): string
+    {
+        return self::backfillStatusLabels()[$this->backfill_status] ?? (string) $this->backfill_status;
+    }
+
+    public function getBackfillStatusColor(): string
+    {
+        return match ($this->backfill_status) {
+            self::BACKFILL_STATUS_COMPLETE => 'success',
+            self::BACKFILL_STATUS_IN_PROGRESS => 'info',
+            self::BACKFILL_STATUS_FAILED => 'danger',
+            default => 'gray',
+        };
+    }
+
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);

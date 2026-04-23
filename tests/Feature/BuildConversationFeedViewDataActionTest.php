@@ -74,7 +74,7 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         $this->assertStringNotContainsString('javascript:', $feed[0]['formatted_html']);
     }
 
-    public function test_media_only_message_uses_media_fallback_display_text(): void
+    public function test_media_only_message_uses_media_type_display_text_and_badges(): void
     {
         $contact = Contact::factory()->create();
         $channel = Channel::factory()->account()->create([
@@ -118,6 +118,119 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         );
 
         $this->assertCount(1, $feed);
-        $this->assertSame('Медиа', $feed[0]['display_text']);
+        $this->assertSame('Фото', $feed[0]['display_text']);
+        $this->assertTrue($feed[0]['has_media']);
+        $this->assertSame(['Фото'], $feed[0]['media_badges']);
+        $this->assertSame([
+            ['label' => 'Ожидает загрузки', 'tone' => 'gray'],
+        ], $feed[0]['media_state_badges']);
+    }
+
+    public function test_text_message_with_media_exposes_media_badges_without_overwriting_text(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'render-mixed-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'render-mixed-chat',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'render-mixed-chat',
+            'external_message_id' => 'render-mixed-message',
+            'text' => 'Смотри вложения',
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'photo'],
+                    ['type' => 'document', 'file_name' => 'offer.pdf'],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($message->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertCount(1, $feed);
+        $this->assertSame('Смотри вложения', $feed[0]['display_text']);
+        $this->assertTrue($feed[0]['has_media']);
+        $this->assertSame(['Фото', 'Документ: offer.pdf'], $feed[0]['media_badges']);
+        $this->assertSame([
+            ['label' => 'Ожидает загрузки x2', 'tone' => 'gray'],
+        ], $feed[0]['media_state_badges']);
+    }
+
+    public function test_media_message_uses_explicit_failed_download_state_badge(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'render-failed-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'render-failed-chat',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'render-failed-chat',
+            'external_message_id' => 'render-failed-message',
+            'text' => null,
+            'raw_payload' => [
+                'media' => [
+                    [
+                        'type' => 'document',
+                        'file_name' => 'contract.pdf',
+                        'download_status' => Message::MEDIA_DOWNLOAD_STATUS_FAILED,
+                        'download_error_message' => 'Network timeout',
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($message->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertCount(1, $feed);
+        $this->assertSame('Документ: contract.pdf', $feed[0]['media_badges']);
+        $this->assertSame([
+            ['label' => 'Ошибка загрузки', 'tone' => 'danger'],
+        ], $feed[0]['media_state_badges']);
     }
 }

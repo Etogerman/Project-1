@@ -257,4 +257,49 @@ class LoadContactDialogsOverviewActionTest extends TestCase
         $this->assertCount(1, $overview);
         $this->assertSame('Последнее legacy overview сообщение', $overview[0]['preview_text']);
     }
+
+    public function test_overview_exposes_media_download_placeholder_badges_for_telegram_account_message(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'overview-media-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'overview-media-chat',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'overview-media-chat',
+            'text' => 'Смотри вложение',
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'document', 'file_name' => 'offer.pdf'],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
+
+        $this->assertCount(1, $overview);
+        $this->assertSame('Смотри вложение', $overview[0]['preview_text']);
+        $this->assertSame([
+            ['label' => 'Ожидает загрузки', 'tone' => 'gray'],
+        ], $overview[0]['preview_media_state_badges']);
+    }
 }
