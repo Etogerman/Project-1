@@ -69,30 +69,6 @@
                         </div>
                     </div>
                     <div class="ac-meta">
-                        <label for="dialog-stage" class="ac-meta__label">
-                            Этап диалога
-                        </label>
-                        <select
-                            id="dialog-stage"
-                            data-role="dialog-stage-select"
-                            wire:model="dialogStageSelection"
-                            wire:change="updateDialogStage"
-                            @disabled(! $dialogStage['is_editable'])
-                            class="ac-select"
-                        >
-                            @foreach ($dialogStage['options'] as $stageValue => $stageLabel)
-                                <option value="{{ $stageValue }}">
-                                    {{ $stageLabel }}
-                                </option>
-                            @endforeach
-                        </select>
-                        @if (filled($dialogStage['blocked_reason']))
-                            <p class="ac-meta__hint">
-                                {{ $dialogStage['blocked_reason'] }}
-                            </p>
-                        @endif
-                    </div>
-                    <div class="ac-meta">
                         <p class="ac-meta__label">
                             Ответственный
                         </p>

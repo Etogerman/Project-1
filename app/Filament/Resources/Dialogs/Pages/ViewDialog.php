@@ -19,7 +19,6 @@ use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
-use App\Services\Dialogs\UpdateDialogStageAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
@@ -58,8 +57,6 @@ class ViewDialog extends ViewRecord
     public string $dialogReplyFormat = Message::TEXT_FORMAT_PLAIN_TEXT;
 
     public string $dialogInboxStatusSelection = DialogInboxStatusData::CODE_NO_NEW;
-
-    public string $dialogStageSelection = '';
 
     public string $conversationDisplayMode = self::CONVERSATION_DISPLAY_MODE_FORMATTED;
 
@@ -149,7 +146,6 @@ class ViewDialog extends ViewRecord
     {
         $this->refreshDialogRecord();
         $this->syncDialogInboxStatusSelection();
-        $this->syncDialogStageSelection();
 
         $appendedCount = $this->appendLatestConversationMessages();
 
@@ -194,49 +190,6 @@ class ViewDialog extends ViewRecord
             Notification::make()
                 ->danger()
                 ->title('Не удалось изменить статус')
-                ->body($throwable->getMessage())
-                ->send();
-        }
-    }
-
-    public function updateDialogStage(): void
-    {
-        try {
-            $employee = $this->resolveCurrentEmployee();
-
-            $result = app(UpdateDialogStageAction::class)->handle(
-                $this->getRecord(),
-                $employee,
-                $this->dialogStageSelection,
-            );
-
-            if ($result->historyMessage instanceof Message) {
-                $result->historyMessage->loadMissing(['channel', 'dialog.channel', 'sentByUser']);
-                $this->appendOutboundMessageToConversation($result->historyMessage);
-            }
-
-            $this->refreshDialogRecord();
-            $this->syncDialogStageSelection();
-
-            Notification::make()
-                ->success()
-                ->title('Этап обновлён')
-                ->body('Этап диалога сохранён и добавлен в историю.')
-                ->send();
-        } catch (ValidationException $exception) {
-            $this->syncDialogStageSelection();
-
-            Notification::make()
-                ->danger()
-                ->title('Не удалось изменить этап')
-                ->body((string) collect($exception->errors())->flatten()->first())
-                ->send();
-        } catch (Throwable $throwable) {
-            $this->syncDialogStageSelection();
-
-            Notification::make()
-                ->danger()
-                ->title('Не удалось изменить этап')
                 ->body($throwable->getMessage())
                 ->send();
         }
@@ -298,7 +251,6 @@ class ViewDialog extends ViewRecord
             'contactSummary' => $this->getContactSummaryViewData(),
             'contactUrl' => $this->getContactViewUrl(),
             'dialogInboxStatus' => $this->getDialogInboxStatusViewData(),
-            'dialogStage' => $this->getDialogStageViewData(),
             'conversationDisplayModeOptions' => $this->getConversationDisplayModeOptions(),
             'liveRefreshPollIntervalMs' => static::LIVE_REFRESH_INTERVAL_MS,
             'replyComposer' => $this->getReplyComposerViewData(),
@@ -314,7 +266,6 @@ class ViewDialog extends ViewRecord
         $this->nextOlderCursor = $page->nextOlderCursor;
         $this->latestKnownMessageId = $this->resolveLatestKnownMessageId($page->messages);
         $this->syncDialogInboxStatusSelection();
-        $this->syncDialogStageSelection();
     }
 
     /**
@@ -380,36 +331,6 @@ class ViewDialog extends ViewRecord
             'status_model' => 'dialogInboxStatusSelection',
             'update_method' => 'updateDialogInboxStatus',
             'options' => $this->getDialogInboxStatusOptions($status),
-        ];
-    }
-
-    /**
-     * @return array{
-     *     current_label:string,
-     *     current_tone:string,
-     *     is_editable:bool,
-     *     blocked_reason:?string,
-     *     stage_model:string,
-     *     update_method:string,
-     *     options:array<string, string>
-     * }
-     */
-    protected function getDialogStageViewData(): array
-    {
-        $dialog = $this->getRecord();
-        $currentStage = $dialog->stage;
-
-        return [
-            'current_label' => $currentStage !== null
-                ? Dialog::stageLabel($currentStage)
-                : 'Этап не задан',
-            'current_tone' => Dialog::stageTone($currentStage),
-            'is_editable' => $this->canCurrentUserManageDialogStages()
-                && $this->getDialogStageBlockedReason() === null,
-            'blocked_reason' => $this->getDialogStageBlockedReason(),
-            'stage_model' => 'dialogStageSelection',
-            'update_method' => 'updateDialogStage',
-            'options' => Dialog::manualTransitionOptions($currentStage),
         ];
     }
 
@@ -489,11 +410,6 @@ class ViewDialog extends ViewRecord
     protected function syncDialogInboxStatusSelection(): void
     {
         $this->dialogInboxStatusSelection = $this->resolveDialogInboxStatus($this->getRecord())->code;
-    }
-
-    protected function syncDialogStageSelection(): void
-    {
-        $this->dialogStageSelection = (string) ($this->getRecord()->stage ?? '');
     }
 
     protected function appendLatestConversationMessages(): int
@@ -699,11 +615,6 @@ class ViewDialog extends ViewRecord
             && $employee->canReplyInDialogs();
     }
 
-    protected function canCurrentUserManageDialogStages(): bool
-    {
-        return $this->canCurrentUserManageDialogReplies();
-    }
-
     protected function getDialogReplyBlockedReason(): ?string
     {
         return $this->getDialogRouteBlockedReason();
@@ -712,13 +623,6 @@ class ViewDialog extends ViewRecord
     protected function getDialogRouteBlockedReason(): ?string
     {
         return $this->resolveDialogRouteStatus($this->getRecord())->blockedReason;
-    }
-
-    protected function getDialogStageBlockedReason(): ?string
-    {
-        return $this->getRecord()->hasCompleteStageHistoryRouteContext()
-            ? null
-            : 'Ручная смена этапа недоступна, пока не заполнен полный route context канала.';
     }
 
     /**
