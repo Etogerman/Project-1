@@ -7,12 +7,14 @@ use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
+use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use BackedEnum;
 use Closure;
@@ -108,6 +110,12 @@ class DialogResource extends Resource
                     ->badge()
                     ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
                     ->toggleable(),
+                TextColumn::make('stage')
+                    ->label('Этап')
+                    ->state(fn (Dialog $record): string => static::formatStageLabel($record))
+                    ->badge()
+                    ->color(fn (Dialog $record): string => static::getStageColor($record))
+                    ->toggleable(),
                 TextColumn::make('assigned_user')
                     ->label('Ответственный')
                     ->state(fn (Dialog $record): string => filled($record->contact?->assignedUser?->name)
@@ -193,6 +201,18 @@ class DialogResource extends Resource
                         ->get()
                         ->mapWithKeys(fn (Channel $channel): array => [$channel->id => $channel->display_title])
                         ->all()),
+                SelectFilter::make('stage')
+                    ->label('Этап')
+                    ->options(fn (): array => Dialog::stageLabels())
+                    ->query(function (Builder $query, array $data): void {
+                        $stage = $data['value'] ?? null;
+
+                        if (! is_string($stage) || $stage === '') {
+                            return;
+                        }
+
+                        static::applyStageFilter($query, $stage);
+                    }),
                 Filter::make('route_ready')
                     ->label('Маршрут готов')
                     ->query(fn (Builder $query): Builder => $query->whereRouteReady()),
@@ -422,6 +442,63 @@ class DialogResource extends Resource
             DialogInboxStatusData::CODE_NOT_REQUIRED => 'gray',
             default => 'success',
         };
+    }
+
+    protected static function formatStageLabel(Dialog $record): string
+    {
+        return Dialog::stageLabel(static::resolveEffectiveStage($record));
+    }
+
+    protected static function getStageColor(Dialog $record): string
+    {
+        return Dialog::stageTone(static::resolveEffectiveStage($record));
+    }
+
+    protected static function resolveEffectiveStage(Dialog $record): string
+    {
+        return $record->stage ?? app(ResolveDialogStageAction::class)->handle($record);
+    }
+
+    protected static function applyStageFilter(Builder $query, string $stage): void
+    {
+        if (Dialog::isManualStage($stage)) {
+            $query->where('dialogs.stage', $stage);
+
+            return;
+        }
+
+        $query->where(function (Builder $query) use ($stage): void {
+            $query->where('dialogs.stage', $stage)
+                ->orWhere(function (Builder $query) use ($stage): void {
+                    $query->whereNull('dialogs.stage');
+
+                    match ($stage) {
+                        Dialog::STAGE_QUESTIONNAIRE_COMPLETED => static::applyCompletedContactScope($query),
+                        Dialog::STAGE_PHONE_RECEIVED => $query
+                            ->whereNotNull('dialogs.phone_confirmed_at')
+                            ->whereHas('contact', fn (Builder $query): Builder => static::applyNotCompletedContactScope($query)),
+                        default => $query
+                            ->whereNull('dialogs.phone_confirmed_at')
+                            ->whereHas('contact', fn (Builder $query): Builder => static::applyNotCompletedContactScope($query)),
+                    };
+                });
+        });
+    }
+
+    protected static function applyCompletedContactScope(Builder $query): Builder
+    {
+        return $query->where(function (Builder $query): void {
+            $query->where('data_collection_status', Contact::DATA_COLLECTION_STATUS_COMPLETED)
+                ->orWhereNotNull('data_collection_completed_at');
+        });
+    }
+
+    protected static function applyNotCompletedContactScope(Builder $query): Builder
+    {
+        return $query->where(function (Builder $query): void {
+            $query->where('data_collection_status', '!=', Contact::DATA_COLLECTION_STATUS_COMPLETED)
+                ->orWhereNull('data_collection_status');
+        })->whereNull('data_collection_completed_at');
     }
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder

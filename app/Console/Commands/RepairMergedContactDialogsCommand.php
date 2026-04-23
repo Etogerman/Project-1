@@ -60,12 +60,14 @@ class RepairMergedContactDialogsCommand extends Command
                         memberContactIds: $rootGroups[$rootContactId],
                         apply: true,
                         normalizeMessageContacts: true,
+                        writeHistory: false,
                     ))
                     : $this->consolidateDialogsForRootContactAction->handle(
                         rootContact: $rootContact,
                         memberContactIds: $rootGroups[$rootContactId],
                         apply: false,
                         normalizeMessageContacts: true,
+                        writeHistory: false,
                     );
 
                 $this->accumulateStats($stats, $rootStats);
