@@ -11,6 +11,8 @@ use Illuminate\Support\Str;
 
 class QueueBitrix24LiveMessageExportAction
 {
+    public const UNCLAIMED_PENDING_RECOVERY_SECONDS = 120;
+
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly IsMessageReadyForBitrix24LiveExportAction $isMessageReadyForBitrix24LiveExportAction,
@@ -123,6 +125,18 @@ class QueueBitrix24LiveMessageExportAction
             return true;
         }
 
+        if ($this->hasStaleUnclaimedLiveExport($export)) {
+            return true;
+        }
+
         return $this->hasExpiredLiveClaim($export);
+    }
+
+    private function hasStaleUnclaimedLiveExport(Bitrix24MessageExport $export): bool
+    {
+        return filled($export->live_batch_uuid)
+            && blank($export->live_claim_uuid)
+            && $export->updated_at !== null
+            && $export->updated_at->lte(now()->subSeconds(self::UNCLAIMED_PENDING_RECOVERY_SECONDS));
     }
 }

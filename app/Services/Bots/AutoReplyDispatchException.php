@@ -12,6 +12,7 @@ class AutoReplyDispatchException extends RuntimeException
         public readonly AutoReplyRule $rule,
         public readonly ?string $buttonType,
         Throwable $previous,
+        public readonly array $remainingRuleIds = [],
     ) {
         parent::__construct($previous->getMessage(), (int) $previous->getCode(), $previous);
     }

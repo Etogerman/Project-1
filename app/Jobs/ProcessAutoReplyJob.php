@@ -3,11 +3,13 @@
 namespace App\Jobs;
 
 use App\Models\AutoReplyRule;
+use App\Models\ChannelActivityLog;
 use App\Models\Message;
 use App\Services\Bots\AutoReplyDispatchException;
 use App\Services\Bots\BotAutoReplyService;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\ResolveAutoReplyRuleAction;
+use Illuminate\Support\Collection;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -68,6 +70,37 @@ class ProcessAutoReplyJob implements ShouldQueue
             return;
         }
 
+        $remainingResolvedRules = $this->resolveRemainingResolvedRulesAfterPartialFailure(
+            $message,
+        );
+
+        if ($remainingResolvedRules->isNotEmpty()) {
+            $channel = $message->channel;
+            $contact = $message->contact;
+
+            if ($channel === null || $contact === null) {
+                return;
+            }
+
+            $botAutoReplyService->handleResolvedRules(
+                $message,
+                $remainingResolvedRules,
+                $channel,
+                $contact,
+                [
+                    'platform' => $channel->platform,
+                    'message_id' => $message->id,
+                    'provider_event_key' => $message->provider_event_key,
+                    'external_message_id' => $message->external_message_id,
+                    'auto_reply_mode' => $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                    'contact_has_phone' => $contact->phoneNumbers()->exists(),
+                    'button_type' => null,
+                ],
+            );
+
+            return;
+        }
+
         if ($message->hasSuccessfulAutoReply()) {
             return;
         }
@@ -109,6 +142,9 @@ class ProcessAutoReplyJob implements ShouldQueue
                         'rule_name' => $failedRule?->display_name,
                         'match_scope' => $failedRule?->match_scope,
                         'contact_phone_condition' => $failedRule?->contact_phone_condition,
+                        'remaining_rule_ids' => $throwable instanceof AutoReplyDispatchException
+                            ? $throwable->remainingRuleIds
+                            : [],
                         'error' => $throwable->getMessage(),
                     ],
                 );
@@ -122,6 +158,9 @@ class ProcessAutoReplyJob implements ShouldQueue
                 'rule_id' => $failedRule?->id,
                 'rule_name' => $failedRule?->display_name,
                 'match_scope' => $failedRule?->match_scope,
+                'remaining_rule_ids' => $throwable instanceof AutoReplyDispatchException
+                    ? $throwable->remainingRuleIds
+                    : [],
                 'error' => $throwable->getMessage(),
             ]);
 
@@ -192,5 +231,49 @@ class ProcessAutoReplyJob implements ShouldQueue
         return $message->channel?->platform === \App\Models\Channel::PLATFORM_MAX
             && data_get($message->raw_payload, 'update_type') === 'bot_started'
             && filled($message->message_parameter);
+    }
+
+    /**
+     * @return Collection<int, AutoReplyRule>
+     */
+    protected function resolveRemainingResolvedRulesAfterPartialFailure(
+        Message $message,
+    ): Collection {
+        if (! $message->hasSuccessfulAutoReply() || $message->channel === null || $message->contact === null) {
+            return collect();
+        }
+
+        $failureLog = ChannelActivityLog::query()
+            ->where('channel_id', $message->channel_id)
+            ->where('event', 'bot.reply_failed')
+            ->where('created_at', '>=', $message->auto_reply_sent_at)
+            ->orderByDesc('id')
+            ->get()
+            ->first(function (ChannelActivityLog $log) use ($message): bool {
+                return (int) data_get($log->context, 'message_id') === $message->id;
+            });
+
+        if (! $failureLog instanceof ChannelActivityLog) {
+            return collect();
+        }
+
+        $remainingRuleIds = collect(data_get($failureLog->context, 'remaining_rule_ids', []))
+            ->map(fn (mixed $ruleId): int => (int) $ruleId)
+            ->filter()
+            ->values();
+
+        if ($remainingRuleIds->isEmpty()) {
+            return collect();
+        }
+
+        $resolvedRules = AutoReplyRule::query()
+            ->whereIn('id', $remainingRuleIds->all())
+            ->get()
+            ->keyBy('id');
+
+        return $remainingRuleIds
+            ->map(fn (int $ruleId): ?AutoReplyRule => $resolvedRules->get($ruleId))
+            ->filter(fn (?AutoReplyRule $rule): bool => $rule instanceof AutoReplyRule)
+            ->values();
     }
 }

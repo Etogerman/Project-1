@@ -6,6 +6,7 @@ use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\ProcessDeferredParameterAutoReplyJob;
 use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -425,6 +426,70 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
         $this->assertNotNull($export->live_batch_uuid);
         $this->assertNull($export->live_claim_uuid);
         $this->assertNull($export->live_claim_expires_at);
+    }
+
+    public function test_resync_of_already_linked_contact_requeues_stale_unclaimed_pending_live_export_before_deferred_parameter_job(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_linked_at' => now()->subDay(),
+            'bitrix24_last_synced_at' => now()->subDay(),
+            'bitrix24_sync_fingerprint' => 'existing-sync',
+        ], channel: $channel);
+
+        $dialog = $this->makeDialog($contact, $channel, [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_FAILED,
+        ]);
+        $pendingSource = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Already linked pending dialog with stale unclaimed pending export',
+        ]);
+
+        $dialog->forceFill([
+            'pending_auto_reply_source_message_id' => $pendingSource->id,
+        ])->save();
+
+        $export = Bitrix24MessageExport::query()->create([
+            'message_id' => $pendingSource->id,
+            'contact_id' => $contact->id,
+            'bitrix24_contact_id' => $contact->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'live_batch_uuid' => 'stale-unclaimed-batch-42',
+            'live_claim_uuid' => null,
+            'live_claimed_at' => null,
+            'live_claim_expires_at' => null,
+        ]);
+
+        $export->forceFill([
+            'updated_at' => now()->subSeconds(\App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction::UNCLAIMED_PENDING_RECOVERY_SECONDS + 5),
+        ])->save();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                ]),
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($pendingSource): bool {
+            return $job->messageId === $pendingSource->id
+                && $job->retryAfterSync === true
+                && $job->liveBatchUuid !== null
+                && $job->liveBatchUuid !== 'stale-unclaimed-batch-42';
+        });
+        Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
     }
 
     public function test_successful_retry_after_sync_live_export_queues_deferred_parameter_job_for_same_dialog(): void
