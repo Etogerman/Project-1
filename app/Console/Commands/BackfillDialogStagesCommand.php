@@ -2,10 +2,11 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Dialog;
+use App\Models\Contact;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\SyncDialogsStageForRootContactAction;
 use Illuminate\Console\Command;
+use Generator;
 
 class BackfillDialogStagesCommand extends Command
 {
@@ -35,7 +36,6 @@ class BackfillDialogStagesCommand extends Command
         $apply = (bool) $this->option('apply');
         $chunk = max(1, (int) $this->option('chunk'));
         $requestedContactId = $this->option('contact-id');
-        $rootContactIds = $this->resolveRootContactIds($requestedContactId);
 
         $stats = [
             'root_contacts_processed' => 0,
@@ -44,7 +44,7 @@ class BackfillDialogStagesCommand extends Command
             'dialogs_already_correct' => 0,
         ];
 
-        foreach (array_chunk($rootContactIds, $chunk) as $rootContactIdChunk) {
+        foreach ($this->resolveRootContactIdChunks($requestedContactId, $chunk) as $rootContactIdChunk) {
             foreach ($rootContactIdChunk as $rootContactId) {
                 $rootStats = $this->syncDialogsStageForRootContactAction->handle(
                     contact: $rootContactId,
@@ -77,20 +77,58 @@ class BackfillDialogStagesCommand extends Command
     }
 
     /**
-     * @return list<int>
+     * @return Generator<int, list<int>>
      */
-    private function resolveRootContactIds(?string $requestedContactId): array
+    private function resolveRootContactIdChunks(?string $requestedContactId, int $chunk): Generator
     {
         if (filled($requestedContactId)) {
-            return [$this->resolveRootContactAction->handle((int) $requestedContactId)->id];
+            yield [$this->resolveRootContactAction->handle((int) $requestedContactId)->id];
+
+            return;
         }
 
-        return Dialog::query()
-            ->orderBy('contact_id')
-            ->pluck('contact_id')
-            ->map(fn (mixed $contactId): int => $this->resolveRootContactAction->handle((int) $contactId)->id)
-            ->unique()
-            ->values()
-            ->all();
+        $processedRootContactIds = [];
+        $rootContactIdChunk = [];
+
+        foreach ($this->streamDialogContactIds($chunk) as $contactId) {
+            $rootContactId = $this->resolveRootContactAction->handle($contactId)->id;
+
+            if (array_key_exists($rootContactId, $processedRootContactIds)) {
+                continue;
+            }
+
+            $processedRootContactIds[$rootContactId] = true;
+            $rootContactIdChunk[] = $rootContactId;
+
+            if (count($rootContactIdChunk) < $chunk) {
+                continue;
+            }
+
+            yield $rootContactIdChunk;
+
+            $rootContactIdChunk = [];
+        }
+
+        if ($rootContactIdChunk !== []) {
+            yield $rootContactIdChunk;
+        }
+    }
+
+    /**
+     * @return Generator<int, int>
+     */
+    private function streamDialogContactIds(int $chunk): Generator
+    {
+        $queryChunk = max($chunk * 5, 500);
+
+        foreach (
+            Contact::query()
+                ->select('id')
+                ->whereHas('dialogs')
+                ->orderBy('id')
+                ->lazyById($queryChunk, 'id') as $contact
+        ) {
+            yield $contact->id;
+        }
     }
 }
