@@ -259,6 +259,21 @@ class DialogKanbanLocalContourTest extends TestCase
         $this->assertStringContainsString('sort=id%3Aasc', DialogResource::getNavigationUrl());
     }
 
+    public function test_dialog_resource_navigation_url_updates_after_table_page_changes(): void
+    {
+        $admin = $this->createAdmin();
+
+        $component = Livewire::actingAs($admin)->test(ListDialogs::class);
+
+        $component->call('setPage', 2);
+
+        $this->assertStringContainsString('page=2', DialogResource::getNavigationUrl());
+
+        $component->call('resetPage');
+
+        $this->assertStringNotContainsString('page=2', DialogResource::getNavigationUrl());
+    }
+
     public function test_kanban_page_can_move_review_card_to_working_stage_and_write_history(): void
     {
         $admin = $this->createAdmin();
