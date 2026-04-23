@@ -86,16 +86,20 @@ npm run dev
 
 ## Быстрый локальный smoke
 
-После старта runtime:
+После старта runtime локальный контур должен позволять доводить задачу до первого локально тестируемого MVP.
+
+Минимальный локальный verification kit:
 
 1. открой `http://127.0.0.1:8000/admin/login`
 2. войди под `admin@abrikosoff.local`
-3. проверь, что открывается админка
+3. проверь, что открывается админка и основной UI-сценарий текущей задачи реально воспроизводим
 4. при необходимости отдельно запусти:
 
 ```bash
 php artisan test
 ```
+
+5. если задача затрагивает живой UI-flow, при необходимости добавь локальный Playwright smoke
 
 Playwright smoke и remote smoke описаны в
 [docs/playwright.md](/Users/abrikosov/Documents/Проект-1/docs/playwright.md).

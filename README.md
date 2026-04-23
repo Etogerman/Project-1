@@ -35,7 +35,7 @@ composer dev
 - [docs/reference/local-bootstrap.md](docs/reference/local-bootstrap.md) — локальный bootstrap и ежедневный dev-runtime
 - [docs/reference/specs-pointer.md](docs/reference/specs-pointer.md) — как устроен внешний `specs`-контур и как ссылаться на `Spec repo / Spec doc / Spec revision`
 - [docs/reference/active-specs.md](docs/reference/active-specs.md) — какие существенные внешние ТЗ реально открыты сейчас в основном repo
-- [docs/task-delivery-workflow.md](docs/task-delivery-workflow.md) — canonical delivery-playbook
+- [docs/task-delivery-workflow.md](docs/task-delivery-workflow.md) — canonical delivery-playbook; default trigger выхода из локалки в `staging` — согласованный локальный MVP
 - [docs/clean-stream-release-flow.md](docs/clean-stream-release-flow.md) — дополнительный appendix по clean-stream extraction и mixed-state cleanup
 - [docs/staging-laravel-cloud.md](docs/staging-laravel-cloud.md) — staging, deploy baseline и real Bitrix integration flow
 - [docs/post-deploy-smoke.md](docs/post-deploy-smoke.md) — post-deploy smoke и rev-check контур
