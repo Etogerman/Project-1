@@ -161,12 +161,21 @@ class DialogKanbanLocalContourTest extends TestCase
         $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
     }
 
-    public function test_dialog_resource_navigation_url_returns_to_table_after_opening_index(): void
+    public function test_dialog_resource_navigation_url_returns_to_current_table_slice_after_opening_index(): void
     {
         $admin = $this->createAdmin();
         $dialog = $this->createKanbanDialog([
-            'contactName' => 'Сброс на таблицу',
+            'contactName' => 'Срез таблицы',
             'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+        ]);
+        $expectedUrl = DialogResource::getUrl('index').'?'.http_build_query([
+            'search' => 'Срез',
+            'sort' => 'last_message_at:desc',
+            'filters' => [
+                'requires_manual_reply' => [
+                    'isActive' => true,
+                ],
+            ],
         ]);
 
         $this->actingAs($admin)
@@ -176,10 +185,10 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk();
 
         $this->actingAs($admin)
-            ->get(DialogResource::getUrl('index'))
+            ->get($expectedUrl)
             ->assertOk();
 
-        $this->assertSame(DialogResource::getUrl('index'), DialogResource::getNavigationUrl());
+        $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
     }
 
     public function test_kanban_page_can_move_review_card_to_working_stage_and_write_history(): void
