@@ -1,36 +1,7 @@
 <x-filament-panels::page>
     <div data-role="dialog-kanban-page" class="ac-panel-stack ac-panel-stack--relaxed">
-        <section
-            x-data="{ filtersOpen: @js($filter_state['has_active_filters']) }"
-            x-on:keydown.escape.window="filtersOpen = false"
-            class="ac-surface ac-surface--hero ac-kanban-filters-shell"
-        >
-            <div class="ac-surface__header ac-surface__header--centered ac-kanban-filters-shell__header">
-                <div class="ac-button-group ac-button-group--end">
-                    <button
-                        type="button"
-                        x-on:click="filtersOpen = ! filtersOpen"
-                        x-bind:aria-expanded="filtersOpen.toString()"
-                        class="ac-button ac-button--secondary"
-                    >
-                        <x-filament::icon icon="heroicon-m-funnel" class="h-4 w-4" />
-                        Фильтры
-
-                        @if ($filter_state['active_count'] > 0)
-                            <span class="ac-pill" data-tone="warning">
-                                {{ $filter_state['active_count'] }}
-                            </span>
-                        @endif
-                    </button>
-                </div>
-            </div>
-
-            <div
-                x-cloak
-                x-show="filtersOpen"
-                x-transition.opacity.duration.150ms
-                class="ac-surface__divider ac-kanban-filters-panel"
-            >
+        @if ($filtersPanelOpen)
+            <section class="ac-surface ac-surface--hero ac-kanban-filters-panel">
                 <div class="ac-card-grid ac-card-grid--kanban-filters">
                     <div class="ac-meta">
                         <label for="kanban-filter-channel" class="ac-meta__label">Канал</label>
@@ -77,14 +48,13 @@
                     <button
                         type="button"
                         wire:click="resetKanbanFilters"
-                        x-on:click="filtersOpen = false"
                         class="ac-button ac-button--secondary ac-button--compact"
                     >
                         Сбросить
                     </button>
                 </div>
-            </div>
-        </section>
+            </section>
+        @endif
 
         <div
             data-role="dialog-kanban-board"

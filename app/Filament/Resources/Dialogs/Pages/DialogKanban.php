@@ -43,6 +43,8 @@ class DialogKanban extends Page
 
     public string $selectedInboxStatus = '';
 
+    public bool $filtersPanelOpen = false;
+
     /**
      * @var array<string, int>
      */
@@ -76,6 +78,8 @@ class DialogKanban extends Page
             $this->visibleCardsPerStage[$stage] = self::INITIAL_VISIBLE_CARDS;
         }
 
+        $this->filtersPanelOpen = $this->hasActiveFilters();
+
         $this->rememberCurrentNavigationUrl();
     }
 
@@ -102,6 +106,11 @@ class DialogKanban extends Page
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('filters')
+                ->label('Фильтры')
+                ->icon('heroicon-m-funnel')
+                ->color('gray')
+                ->action(fn (): null => $this->toggleFiltersPanel()),
             Action::make('table')
                 ->label('Таблица')
                 ->icon('heroicon-m-table-cells')
@@ -140,8 +149,14 @@ class DialogKanban extends Page
         $this->selectedAssignedUserId = '';
         $this->selectedRouteStatus = '';
         $this->selectedInboxStatus = '';
+        $this->filtersPanelOpen = false;
 
         $this->rememberCurrentNavigationUrl();
+    }
+
+    public function toggleFiltersPanel(): void
+    {
+        $this->filtersPanelOpen = ! $this->filtersPanelOpen;
     }
 
     public function moveDialogCard(int $dialogId, string $targetStage): void
