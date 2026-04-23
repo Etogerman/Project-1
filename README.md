@@ -6,6 +6,25 @@ collector flow и Bitrix24 integration.
 
 ## Быстрый локальный старт
 
+## Composer команды
+
+Основные shortcuts из `composer.json`, которые заменяют типовые ручные вызовы:
+
+```bash
+composer dev                     # локальный dev-runtime вне Docker
+composer docker:build           # собрать docker-образы
+composer docker:up              # поднять контейнеры в фоне
+composer docker:dev             # запустить composer dev внутри контейнера dev
+composer docker:down            # остановить контейнеры
+composer docker:remove          # остановить контейнеры и удалить volumes
+composer test:feature:ui        # UI feature shard
+composer test:feature:bots      # bots/webhook shard
+composer test:feature:bitrix    # Bitrix24 shard
+composer test:feature:collector # collector shard
+composer test:feature:domain    # domain shard
+composer test:ci                # агрегированный CI-friendly прогон
+```
+
 ## Старт
 
 ### 1. Скопируй `.env.example`
@@ -38,8 +57,10 @@ Ctrl+Shift+P → Dev Containers: Reopen in Container
 **Чистый Docker:**
 
 ```bash
-docker compose up -d
+composer docker:up
 ```
+
+Прямой эквивалент: `docker compose up -d`.
 
 Контейнер автоматически копирует `.env`, ставит зависимости и применяет миграции.
 
@@ -68,7 +89,7 @@ composer dev
 Или одной командой без входа в контейнер:
 
 ```bash
-docker compose exec dev composer dev
+composer docker:dev
 ```
 
 | Сервис   | Адрес                       |
@@ -84,6 +105,11 @@ docker compose exec dev composer dev
 
 ```bash
 php artisan test          # полный suite
+composer test:feature:ui  # UI shard
+composer test:feature:bots
+composer test:feature:bitrix
+composer test:feature:collector
+composer test:feature:domain
 composer test:ci          # CI-агрегированный прогон
 ```
 
