@@ -69,6 +69,8 @@ class Message extends Model
 
     public const SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE = 'dialog_inbox_status_change';
 
+    public const SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE = 'dialog_stage_change';
+
     public const SYSTEM_EVENT_CODE_BOT_BLOCKED_BY_USER = 'bot_blocked_by_user';
 
     public const SYSTEM_EVENT_CODE_BOT_UNBLOCKED_BY_USER = 'bot_unblocked_by_user';

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\Contacts\ResolveContactDisplayNameAction;
+use App\Services\Dialogs\SyncDialogsStageForRootContactAction;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -528,6 +529,8 @@ class Contact extends Model
 
     public function completeDataCollection(): void
     {
+        $historySourceContact = clone $this;
+
         $this->forceFill([
             'data_collection_status' => self::DATA_COLLECTION_STATUS_COMPLETED,
             'data_collection_current_field' => null,
@@ -536,6 +539,12 @@ class Contact extends Model
             'data_collection_completed_at' => now(),
             'data_collection_attempts_count' => 0,
         ])->save();
+
+        app(SyncDialogsStageForRootContactAction::class)->handle(
+            $this,
+            allowReviewEscape: true,
+            historySourceContact: $historySourceContact,
+        );
     }
 
     protected function displayName(): Attribute
