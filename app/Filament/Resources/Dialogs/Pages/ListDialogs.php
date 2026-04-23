@@ -15,7 +15,7 @@ class ListDialogs extends ListRecords
     {
         parent::mount();
 
-        $this->rememberCurrentNavigationUrl();
+        $this->rememberNavigationUrlFromRequest();
     }
 
     public function updated(string $name, mixed $value): void
@@ -178,6 +178,17 @@ class ListDialogs extends ListRecords
     private function rememberCurrentNavigationUrl(): void
     {
         DialogResource::rememberNavigationUrl($this->currentTableUrl());
+    }
+
+    private function rememberNavigationUrlFromRequest(): void
+    {
+        $url = request()->fullUrl();
+
+        if (! is_string($url) || $url === '') {
+            return;
+        }
+
+        DialogResource::rememberNavigationUrl($url);
     }
 
     private function currentTableUrl(): string
