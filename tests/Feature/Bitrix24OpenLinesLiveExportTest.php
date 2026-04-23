@@ -172,7 +172,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             $dialog,
         );
 
-        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, 3);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, 6);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $autoReply->id);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $phoneCapture->id);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $collector->id);
@@ -2986,6 +2986,60 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertTrue($result->alreadyPending);
         $this->assertTrue($result->ready);
         Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+    }
+
+    public function test_initial_live_export_queue_schedules_delayed_recovery_job_with_same_batch_uuid(): void
+    {
+        Queue::fake();
+
+        $now = Carbon::parse('2026-04-23 12:00:00', 'Europe/Moscow');
+        Carbon::setTestNow($now);
+        try {
+            $dialog = $this->createLiveReadyDialog();
+            $message = $this->makeMessage($dialog, [
+                'direction' => Message::DIRECTION_INBOUND,
+                'message_kind' => Message::KIND_INBOUND_USER,
+                'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+                'text' => 'Initial live export should schedule autonomous recovery',
+            ]);
+
+            $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
+
+            $this->assertTrue($result->queued);
+            $this->assertFalse($result->alreadyPending);
+            $this->assertTrue($result->ready);
+            Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, 2);
+
+            $immediateBatchUuid = null;
+
+            Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message, &$immediateBatchUuid): bool {
+                if (
+                    $job->messageId !== $message->id
+                    || $job->delay !== null
+                    || $job->afterCommit !== true
+                    || blank($job->liveBatchUuid)
+                ) {
+                    return false;
+                }
+
+                $immediateBatchUuid = $job->liveBatchUuid;
+
+                return true;
+            });
+
+            Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message, $now, $immediateBatchUuid): bool {
+                return $job->messageId === $message->id
+                    && $job->delay instanceof Carbon
+                    && $job->afterCommit === false
+                    && $job->delay->equalTo($now->copy()->addSeconds(
+                        QueueBitrix24LiveMessageExportAction::UNCLAIMED_PENDING_RECOVERY_SECONDS + 5
+                    ))
+                    && filled($job->liveBatchUuid)
+                    && $job->liveBatchUuid === $immediateBatchUuid;
+            });
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_pending_live_claim_blocks_duplicate_direct_export_send(): void
