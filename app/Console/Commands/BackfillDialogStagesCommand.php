@@ -49,6 +49,7 @@ class BackfillDialogStagesCommand extends Command
                 $rootStats = $this->syncDialogsStageForRootContactAction->handle(
                     contact: $rootContactId,
                     apply: $apply,
+                    writeHistory: false,
                 );
 
                 $stats['root_contacts_processed']++;

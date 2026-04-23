@@ -160,6 +160,29 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('+7 901 555 44 33');
     }
 
+    public function test_dialogs_inbox_shows_derived_stage_label_for_null_persisted_stage(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $dialog->forceFill([
+            'stage' => null,
+            'phone_confirmed_at' => now(),
+        ])->save();
+        $dialog = $dialog->fresh([
+            'channel',
+            'currentContactIdentity',
+            'contact.assignedUser',
+            'contact.primaryIdentity',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertTableColumnStateSet('stage', 'Телефон получен', $dialog);
+    }
+
     public function test_dialogs_inbox_uses_current_dialog_identity_label_for_each_row(): void
     {
         $admin = User::factory()->create([
