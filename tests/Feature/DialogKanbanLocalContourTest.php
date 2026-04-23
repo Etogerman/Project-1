@@ -38,7 +38,9 @@ class DialogKanbanLocalContourTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('kanban'))
             ->assertOk()
-            ->assertSee('Канбан диалогов')
+            ->assertSee('Диалоги')
+            ->assertSee('Канбан')
+            ->assertSee('Таблица')
             ->assertSee('Требует проверки')
             ->assertSee($dialog->contact->display_name)
             ->assertSee('Открыть диалог');
@@ -63,6 +65,121 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk()
             ->assertSee($requiresReplyDialog->contact->display_name)
             ->assertSee($noNewDialog->contact->display_name);
+    }
+
+    public function test_kanban_page_restores_filters_from_query_string(): void
+    {
+        $admin = $this->createAdmin();
+        $channel = Channel::factory()->create();
+        $assignee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+        $assignee->givePermissionTo('contacts.assign');
+
+        Livewire::withQueryParams([
+            'channel' => (string) $channel->id,
+            'assignee' => (string) $assignee->id,
+            'route' => 'ready',
+            'inbox' => DialogInboxStatusData::CODE_NO_NEW,
+        ])
+            ->actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSet('selectedChannelId', (string) $channel->id)
+            ->assertSet('selectedAssignedUserId', (string) $assignee->id)
+            ->assertSet('selectedRouteStatus', 'ready')
+            ->assertSet('selectedInboxStatus', DialogInboxStatusData::CODE_NO_NEW);
+    }
+
+    public function test_kanban_card_view_link_contains_back_to_filtered_slice(): void
+    {
+        $admin = $this->createAdmin();
+        $channel = Channel::factory()->create();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Срез канбана',
+            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+        ]);
+
+        $response = $this->actingAs($admin)->get(
+            DialogResource::getUrl('kanban').'?'.http_build_query([
+                'channel' => (string) $channel->id,
+                'route' => 'ready',
+            ]),
+        );
+
+        $expectedBackTo = DialogResource::getUrl('kanban').'?'.http_build_query([
+            'channel' => (string) $channel->id,
+            'route' => 'ready',
+        ]);
+        $expectedViewUrl = DialogResource::getUrl('view', ['record' => $dialog]).'?'.http_build_query([
+            'back_to' => $expectedBackTo,
+        ]);
+
+        $response
+            ->assertOk()
+            ->assertSee($expectedViewUrl, false);
+    }
+
+    public function test_dialog_view_renders_back_to_kanban_link_when_opened_from_board(): void
+    {
+        $admin = $this->createAdmin();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Возврат в канбан',
+            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+        ]);
+        $backTo = DialogResource::getUrl('kanban').'?'.http_build_query([
+            'route' => 'ready',
+            'inbox' => DialogInboxStatusData::CODE_NO_NEW,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]).'?'.http_build_query([
+                'back_to' => $backTo,
+            ]))
+            ->assertOk()
+            ->assertSee('Вернуться в канбан')
+            ->assertSee($backTo, false);
+    }
+
+    public function test_dialog_resource_navigation_url_remembers_last_kanban_slice(): void
+    {
+        $admin = $this->createAdmin();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Запомненный канбан',
+            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+        ]);
+
+        $expectedUrl = DialogResource::getUrl('kanban').'?'.http_build_query([
+            'channel' => (string) $dialog->channel_id,
+            'route' => 'ready',
+        ]);
+
+        $this->actingAs($admin)
+            ->get($expectedUrl)
+            ->assertOk();
+
+        $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
+    }
+
+    public function test_dialog_resource_navigation_url_returns_to_table_after_opening_index(): void
+    {
+        $admin = $this->createAdmin();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Сброс на таблицу',
+            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('kanban').'?'.http_build_query([
+                'channel' => (string) $dialog->channel_id,
+            ]))
+            ->assertOk();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk();
+
+        $this->assertSame(DialogResource::getUrl('index'), DialogResource::getNavigationUrl());
     }
 
     public function test_kanban_page_can_move_review_card_to_working_stage_and_write_history(): void

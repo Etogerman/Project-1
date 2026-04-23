@@ -12,12 +12,23 @@
                         </p>
                     </div>
 
-                    <a
-                        href="{{ $contactUrl }}"
-                        class="ac-button ac-button--warning"
-                    >
-                        Открыть контакт
-                    </a>
+                    <div class="ac-button-group ac-button-group--end">
+                        @if (filled($kanbanBackUrl))
+                            <a
+                                href="{{ $kanbanBackUrl }}"
+                                class="ac-button ac-button--secondary"
+                            >
+                                Вернуться в канбан
+                            </a>
+                        @endif
+
+                        <a
+                            href="{{ $contactUrl }}"
+                            class="ac-button ac-button--warning"
+                        >
+                            Открыть контакт
+                        </a>
+                    </div>
                 </div>
 
                 <div class="ac-meta-grid ac-surface__divider">

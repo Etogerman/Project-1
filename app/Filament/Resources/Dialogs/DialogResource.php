@@ -33,6 +33,8 @@ use UnitEnum;
 
 class DialogResource extends Resource
 {
+    public const NAVIGATION_URL_SESSION_KEY = 'filament.dialogs.navigation_url';
+
     protected static ?string $model = Dialog::class;
 
     protected static bool $shouldRegisterNavigation = true;
@@ -59,6 +61,29 @@ class DialogResource extends Resource
                 'contact.phoneNumbers',
                 'contact.primaryIdentity',
             ]);
+    }
+
+    public static function getNavigationUrl(): string
+    {
+        $defaultUrl = static::getUrl('index');
+        $rememberedUrl = session(static::NAVIGATION_URL_SESSION_KEY);
+
+        if (! is_string($rememberedUrl) || $rememberedUrl === '') {
+            return $defaultUrl;
+        }
+
+        return static::isDialogsBrowsingUrl($rememberedUrl)
+            ? $rememberedUrl
+            : $defaultUrl;
+    }
+
+    public static function rememberNavigationUrl(string $url): void
+    {
+        if (! static::isDialogsBrowsingUrl($url)) {
+            return;
+        }
+
+        session()->put(static::NAVIGATION_URL_SESSION_KEY, $url);
     }
 
     public static function getTableRecordQuery(bool $excludeMerged = true): Builder
@@ -248,6 +273,12 @@ class DialogResource extends Resource
             'kanban' => DialogKanban::route('/kanban'),
             'view' => ViewDialog::route('/{record}'),
         ];
+    }
+
+    protected static function isDialogsBrowsingUrl(string $url): bool
+    {
+        return str_starts_with($url, static::getUrl('index'))
+            || str_starts_with($url, static::getUrl('kanban'));
     }
 
     protected static function buildPreviewMessageSubquery(): Builder
