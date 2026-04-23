@@ -8,6 +8,7 @@ use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\CreateDialogStageHistoryMessageAction;
 use App\Services\Dialogs\ResolveDialogStageAction;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 
 class AssignDialogsReviewStageCommand extends Command
 {
@@ -37,6 +38,38 @@ class AssignDialogsReviewStageCommand extends Command
 
         $apply = (bool) $this->option('apply');
         $requestedContactId = $this->option('contact-id');
+
+        $stats = $apply
+            ? DB::transaction(fn (): array => $this->runAssignment($requestedContactId, true))
+            : $this->runAssignment($requestedContactId, false);
+
+        $this->line($apply
+            ? 'Dialog review stage assignment completed.'
+            : 'Dialog review stage assignment dry-run completed.');
+
+        $this->table(
+            ['Metric', 'Count'],
+            [
+                ['dialogs_processed', $stats['dialogs_processed']],
+                ['dialogs_updated', $stats['dialogs_updated']],
+                ['dialogs_already_in_review', $stats['dialogs_already_in_review']],
+                ['history_rows_written', $stats['history_rows_written']],
+            ],
+        );
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * @return array{
+     *   dialogs_processed:int,
+     *   dialogs_updated:int,
+     *   dialogs_already_in_review:int,
+     *   history_rows_written:int,
+     * }
+     */
+    private function runAssignment(?string $requestedContactId, bool $apply): array
+    {
 
         $dialogsQuery = Dialog::query()
             ->with(['contact', 'channel', 'currentContactIdentity'])
@@ -90,21 +123,7 @@ class AssignDialogsReviewStageCommand extends Command
             }
         }
 
-        $this->line($apply
-            ? 'Dialog review stage assignment completed.'
-            : 'Dialog review stage assignment dry-run completed.');
-
-        $this->table(
-            ['Metric', 'Count'],
-            [
-                ['dialogs_processed', $stats['dialogs_processed']],
-                ['dialogs_updated', $stats['dialogs_updated']],
-                ['dialogs_already_in_review', $stats['dialogs_already_in_review']],
-                ['history_rows_written', $stats['history_rows_written']],
-            ],
-        );
-
-        return self::SUCCESS;
+        return $stats;
     }
 
     /**

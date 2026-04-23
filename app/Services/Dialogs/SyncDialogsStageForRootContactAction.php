@@ -6,6 +6,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Services\Contacts\ResolveContactAggregateAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use Illuminate\Support\Facades\DB;
 
 class SyncDialogsStageForRootContactAction
 {
@@ -29,6 +30,40 @@ class SyncDialogsStageForRootContactAction
         bool $writeHistory = true,
         bool $allowReviewEscape = false,
         ?Contact $historySourceContact = null,
+    ): array
+    {
+        if ($apply) {
+            return DB::transaction(fn (): array => $this->syncStages(
+                contact: $contact,
+                apply: true,
+                writeHistory: $writeHistory,
+                allowReviewEscape: $allowReviewEscape,
+                historySourceContact: $historySourceContact,
+            ));
+        }
+
+        return $this->syncStages(
+            contact: $contact,
+            apply: false,
+            writeHistory: $writeHistory,
+            allowReviewEscape: $allowReviewEscape,
+            historySourceContact: $historySourceContact,
+        );
+    }
+
+    /**
+     * @return array{
+     *   dialogs_processed: int,
+     *   dialogs_updated: int,
+     *   dialogs_already_correct: int,
+     * }
+     */
+    private function syncStages(
+        Contact|int $contact,
+        bool $apply,
+        bool $writeHistory,
+        bool $allowReviewEscape,
+        ?Contact $historySourceContact,
     ): array
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);

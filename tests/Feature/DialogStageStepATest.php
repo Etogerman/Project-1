@@ -871,6 +871,48 @@ class DialogStageStepATest extends TestCase
         $this->assertNull($otherDialog->fresh()->stage);
     }
 
+    public function test_dialog_stage_backfill_command_processes_each_root_contact_only_once_across_chunks(): void
+    {
+        $rootContact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $mergedContact = Contact::factory()->create([
+            'merged_into_contact_id' => $rootContact->id,
+            'merged_at' => now(),
+        ]);
+        $channel = Channel::factory()->create();
+
+        $rootDialog = Dialog::factory()->withoutCurrentIdentity()->create([
+            'contact_id' => $rootContact->id,
+            'channel_id' => $channel->id,
+            'stage' => null,
+        ]);
+        $mergedDialog = Dialog::factory()->withoutCurrentIdentity()->create([
+            'contact_id' => $mergedContact->id,
+            'channel_id' => Channel::factory()->create()->id,
+            'stage' => null,
+        ]);
+
+        $this->artisan('dialogs:backfill-stage', [
+            '--dry-run' => true,
+            '--chunk' => 1,
+        ])
+            ->expectsTable(
+                ['Metric', 'Count'],
+                [
+                    ['root_contacts_processed', 1],
+                    ['dialogs_processed', 2],
+                    ['dialogs_updated', 2],
+                    ['dialogs_already_correct', 0],
+                ],
+            )
+            ->assertExitCode(0);
+
+        $this->assertNull($rootDialog->fresh()->stage);
+        $this->assertNull($mergedDialog->fresh()->stage);
+    }
+
     private function createStageHistoryMessage(
         Dialog $dialog,
         ContactIdentity $identity,
