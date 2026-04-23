@@ -131,6 +131,53 @@ class DialogStageStepATest extends TestCase
         );
     }
 
+    public function test_sync_dialog_confirmed_phone_action_writes_history_for_legacy_null_stage_dialog(): void
+    {
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'legacy-null-phone-stage-chat',
+            'stage' => null,
+        ]);
+
+        $inboundMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'legacy-null-phone-stage-chat',
+            'received_at' => now(),
+        ]);
+
+        $updatedDialog = app(SyncDialogConfirmedPhoneAction::class)->handle(
+            $inboundMessage,
+            '+7 999 123 45 67',
+            '+79991234567',
+        );
+
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $updatedDialog->stage);
+
+        $historyMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
+            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $historyMessage->raw_payload['from_stage']);
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $historyMessage->raw_payload['to_stage']);
+    }
+
     public function test_sync_dialog_confirmed_phone_action_does_not_override_manual_stage(): void
     {
         $channel = Channel::factory()->create();
@@ -263,6 +310,41 @@ class DialogStageStepATest extends TestCase
         $this->assertDatabaseCount('messages', 0);
     }
 
+    public function test_contact_completion_writes_history_for_legacy_route_complete_null_stage_dialog(): void
+    {
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+        ]);
+        $channel = Channel::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'legacy-null-completion-chat',
+            'stage' => null,
+        ]);
+
+        $contact->completeDataCollection();
+
+        $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $dialog->fresh()->stage);
+
+        $historyMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
+            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $historyMessage->raw_payload['from_stage']);
+        $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $historyMessage->raw_payload['to_stage']);
+    }
+
     public function test_consolidation_recomputes_stage_from_confirmed_phone_and_writes_system_history(): void
     {
         $rootContact = Contact::factory()->create();
@@ -335,6 +417,64 @@ class DialogStageStepATest extends TestCase
         $this->assertNull($historyMessage->raw_payload['changed_by_user_id']);
         $this->assertSame(Dialog::STAGE_NEW_DIALOG, $historyMessage->raw_payload['from_stage']);
         $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $historyMessage->raw_payload['to_stage']);
+    }
+
+    public function test_consolidation_writes_history_for_legacy_null_stage_surviving_dialog(): void
+    {
+        $rootContact = Contact::factory()->create();
+        $mergedContact = Contact::factory()->create();
+        $channel = Channel::factory()->create();
+        $rootIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $rootContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $mergedIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $mergedContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+
+        $survivingDialog = Dialog::factory()->create([
+            'contact_id' => $rootContact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $rootIdentity->id,
+            'external_chat_id' => 'legacy-null-root-chat',
+            'stage' => null,
+        ]);
+        $redundantDialog = Dialog::factory()->create([
+            'contact_id' => $mergedContact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $mergedIdentity->id,
+            'external_chat_id' => 'legacy-null-merged-chat',
+            'stage' => null,
+            'confirmed_phone_raw' => '+7 999 555 44 33',
+            'confirmed_phone_normalized' => '+79995554433',
+            'phone_confirmed_at' => now(),
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+        ]);
+
+        app(ConsolidateDialogsForRootContactAction::class)->handle(
+            $rootContact,
+            [$rootContact->id, $mergedContact->id],
+            true,
+            false,
+        );
+
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $survivingDialog->fresh()->stage);
+
+        $historyMessage = Message::query()
+            ->where('dialog_id', $survivingDialog->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
+            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $historyMessage->raw_payload['from_stage']);
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $historyMessage->raw_payload['to_stage']);
+        $this->assertDatabaseMissing('dialogs', [
+            'id' => $redundantDialog->id,
+        ]);
     }
 
     public function test_consolidation_preserves_redundant_manual_stage_on_surviving_automatic_dialog(): void

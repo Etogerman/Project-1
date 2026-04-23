@@ -19,6 +19,7 @@ class ConsolidateDialogsForRootContactAction
         private readonly ResolveConsolidatedDialogStageAction $resolveConsolidatedDialogStageAction,
         private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
         private readonly MessageChronology $messageChronology,
+        private readonly ResolveDialogStageAction $resolveDialogStageAction,
     ) {}
 
     /**
@@ -137,7 +138,7 @@ class ConsolidateDialogsForRootContactAction
                 $stats['dialogs_reassigned']++;
             }
 
-            $fromStage = $survivingDialog->stage;
+            $fromStage = $this->resolveHistoryFromStage($survivingDialog, $rootContact);
             $dialogNeedsUpdate = $this->dialogNeedsUpdate($survivingDialog, $payload);
 
             if (! $dialogWasCreated && $dialogNeedsUpdate) {
@@ -451,6 +452,11 @@ class ConsolidateDialogsForRootContactAction
             ->first();
 
         return $fallbackDialog;
+    }
+
+    private function resolveHistoryFromStage(Dialog $dialog, Contact $rootContact): string
+    {
+        return $dialog->stage ?? $this->resolveDialogStageAction->handle($dialog, $rootContact);
     }
 
     /**

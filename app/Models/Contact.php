@@ -529,6 +529,8 @@ class Contact extends Model
 
     public function completeDataCollection(): void
     {
+        $historySourceContact = clone $this;
+
         $this->forceFill([
             'data_collection_status' => self::DATA_COLLECTION_STATUS_COMPLETED,
             'data_collection_current_field' => null,
@@ -541,6 +543,7 @@ class Contact extends Model
         app(SyncDialogsStageForRootContactAction::class)->handle(
             $this,
             allowReviewEscape: true,
+            historySourceContact: $historySourceContact,
         );
     }
 
