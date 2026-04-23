@@ -126,9 +126,9 @@ The application needs the following tables in staging:
 Если staging реально поднят и участвует в приёмке, solo workflow может быть
 таким:
 
-1. Write code locally.
-2. Run PHPUnit locally before pushing.
-3. Push or merge the validated change-set into `staging`.
+1. Реализовать change-set локально до согласованного локального MVP.
+2. Прогнать локальные тесты и нужный локальный smoke перед публикацией.
+3. Открыть или обновить `draft PR` в `staging` для уже локально проверенного diff.
 4. Дождаться staging auto-deploy от `staging`.
 5. Verify all webhook and bot behavior on staging.
 6. Отдельно продвинуть тот же validated diff в `main`.
@@ -180,8 +180,8 @@ Use local development mainly for:
 
 Recommended rule of thumb:
 
-- local for implementation
-- staging for anything external
+- local for implementation and first testable MVP
+- staging for confirmatory external and environment-specific checks
 
 If the staging environment is reused continuously, avoid creating extra bots unless the platform or product boundary really requires it.
 

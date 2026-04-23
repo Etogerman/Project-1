@@ -95,6 +95,8 @@ scope с drift относительно `origin/main`.
 
 ## Publish flow
 
+Публикация clean stream в `staging` по умолчанию выполняется после достижения локально тестируемого feature increment-а текущего stream-а. Завершение отдельного micro-step или внутреннего slice само по себе не считается достаточным основанием для выхода в `staging`.
+
 Для каждого clean stream:
 
 1. push отдельной ветки
@@ -192,7 +194,7 @@ scope с drift относительно `origin/main`.
 - read-only audit
 - findings
 - ТЗ
-- small clean stream
+- локально тестируемый feature increment
 - отдельный commit
 - отдельный push
 - отдельный draft PR
