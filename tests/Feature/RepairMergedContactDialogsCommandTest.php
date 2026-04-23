@@ -173,6 +173,66 @@ class RepairMergedContactDialogsCommandTest extends TestCase
         $this->assertSame('+79992222222', $rootDialog->confirmed_phone_normalized);
     }
 
+    public function test_apply_does_not_write_stage_history_when_repair_changes_stage(): void
+    {
+        $channel = Channel::factory()->create();
+        $root = Contact::factory()->create();
+        $secondary = Contact::factory()->create([
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ]);
+
+        $rootIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $root->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'repair-history-root-user',
+        ]);
+        $secondaryIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'repair-history-secondary-user',
+        ]);
+
+        $rootDialog = Dialog::factory()->create([
+            'contact_id' => $root->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $rootIdentity->id,
+            'external_chat_id' => 'repair-history-root-chat',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+        ]);
+        $secondaryDialog = Dialog::factory()->create([
+            'contact_id' => $secondary->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $secondaryIdentity->id,
+            'external_chat_id' => 'repair-history-secondary-chat',
+            'stage' => null,
+            'confirmed_phone_raw' => '+7 999 333 33 33',
+            'confirmed_phone_normalized' => '+79993333333',
+            'phone_confirmed_at' => now()->subHour(),
+            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $secondaryDialog->id,
+            'contact_id' => $secondary->id,
+            'contact_identity_id' => $secondaryIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'external_chat_id' => 'repair-history-secondary-chat',
+            'received_at' => now()->subHour(),
+        ]);
+
+        Artisan::call('dialogs:repair-merged-contacts', ['--apply' => true]);
+
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $rootDialog->fresh()->stage);
+        $this->assertDatabaseMissing('messages', [
+            'dialog_id' => $rootDialog->id,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+        ]);
+    }
+
     public function test_apply_relinks_completed_scenario_runs_before_deleting_redundant_dialog(): void
     {
         $channel = Channel::factory()->create();

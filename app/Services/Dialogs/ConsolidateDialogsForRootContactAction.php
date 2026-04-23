@@ -39,6 +39,7 @@ class ConsolidateDialogsForRootContactAction
         array $memberContactIds,
         bool $apply = true,
         bool $normalizeMessageContacts = false,
+        bool $writeHistory = true,
     ): array {
         $memberContactIds = collect($memberContactIds)
             ->map(fn (mixed $contactId): int => (int) $contactId)
@@ -147,12 +148,14 @@ class ConsolidateDialogsForRootContactAction
                 $survivingDialog->forceFill($payload)->save();
                 $survivingDialog->refresh()->loadMissing(['channel', 'currentContactIdentity']);
 
-                $this->createDialogStageHistoryMessageAction->handle(
-                    $survivingDialog,
-                    $fromStage,
-                    $payload['stage'] ?? null,
-                    CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
-                );
+                if ($writeHistory) {
+                    $this->createDialogStageHistoryMessageAction->handle(
+                        $survivingDialog,
+                        $fromStage,
+                        $payload['stage'] ?? null,
+                        CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
+                    );
+                }
             }
 
             $messagesToRelink = $messagesInChannel
