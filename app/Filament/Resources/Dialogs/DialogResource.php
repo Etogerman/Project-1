@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Dialogs;
 
 use App\Data\Dialogs\DialogInboxStatusData;
 use App\Data\Dialogs\DialogRouteStatusData;
+use App\Filament\Resources\Dialogs\Pages\DialogKanban;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
@@ -244,6 +245,7 @@ class DialogResource extends Resource
     {
         return [
             'index' => ListDialogs::route('/'),
+            'kanban' => DialogKanban::route('/kanban'),
             'view' => ViewDialog::route('/{record}'),
         ];
     }
@@ -461,6 +463,12 @@ class DialogResource extends Resource
 
     protected static function applyStageFilter(Builder $query, string $stage): void
     {
+        if (Dialog::isServiceStage($stage)) {
+            $query->where('dialogs.stage', $stage);
+
+            return;
+        }
+
         if (Dialog::isManualStage($stage)) {
             $query->where('dialogs.stage', $stage);
 
