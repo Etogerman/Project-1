@@ -84,10 +84,16 @@ class IsDialogBitrix24OpenLinesRetryRequiredAction
             ])
             ->where(function ($query): void {
                 $query->whereNull('live_export.id')
-                    ->orWhereIn('live_export.export_status', [
-                        Bitrix24MessageExport::STATUS_PENDING,
-                        Bitrix24MessageExport::STATUS_FAILED,
-                    ]);
+                    ->orWhere('live_export.export_status', Bitrix24MessageExport::STATUS_PENDING)
+                    ->orWhere(function ($failedQuery): void {
+                        $failedQuery
+                            ->where('live_export.export_status', Bitrix24MessageExport::STATUS_FAILED)
+                            ->where(function ($certaintyQuery): void {
+                                $certaintyQuery
+                                    ->whereNull('live_export.failure_uncertain')
+                                    ->orWhere('live_export.failure_uncertain', false);
+                            });
+                    });
             })
             ->with(['dialog.channel', 'contact'])
             ->orderByDesc('messages.received_at')

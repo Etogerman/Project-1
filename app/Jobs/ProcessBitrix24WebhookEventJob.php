@@ -8,13 +8,17 @@ use App\Services\Bitrix24\LogBitrix24ApiCallAction;
 use App\Services\Bitrix24\ProcessBitrix24OpenLinesWebhookAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\InteractsWithQueue;
 use Throwable;
 
 class ProcessBitrix24WebhookEventJob implements ShouldQueue
 {
+    use InteractsWithQueue;
     use Queueable;
 
     public int $timeout = 60;
+    public int $tries = 3;
+    public int $backoff = 10;
 
     public function __construct(
         public readonly int $webhookEventId,
@@ -38,12 +42,18 @@ class ProcessBitrix24WebhookEventJob implements ShouldQueue
         try {
             $processBitrix24OpenLinesWebhookAction->handle($event);
         } catch (Throwable $throwable) {
+            if (! $this->isFinalAttempt()) {
+                $this->releaseDelayedRecheckClaimIfPending($event);
+
+                throw $throwable;
+            }
+
             $event->refresh();
             $event->forceFill([
                 'processing_status' => Bitrix24WebhookEvent::STATUS_FAILED,
                 'failed_at' => now(),
                 'failure_reason' => $throwable->getMessage(),
-                'attempts' => $event->attempts + 1,
+                'attempts' => $this->attempts(),
             ])->save();
 
             $logBitrix24ApiCallAction->handle(
@@ -60,7 +70,30 @@ class ProcessBitrix24WebhookEventJob implements ShouldQueue
                 entityType: 'openlines_webhook_event',
                 entityId: (string) $event->id,
             );
+
+            $this->fail($throwable);
         }
+    }
+
+    private function isFinalAttempt(): bool
+    {
+        return $this->attempts() >= $this->tries;
+    }
+
+    private function releaseDelayedRecheckClaimIfPending(Bitrix24WebhookEvent $event): void
+    {
+        if ($event->recheck_scheduled_at === null || $event->recheck_attempted_at === null) {
+            return;
+        }
+
+        Bitrix24WebhookEvent::query()
+            ->whereKey($event->id)
+            ->where('processing_status', Bitrix24WebhookEvent::STATUS_PENDING)
+            ->whereNotNull('recheck_scheduled_at')
+            ->update([
+                'recheck_attempted_at' => null,
+                'updated_at' => now(),
+            ]);
     }
 
     private function resolveProcessableEvent(): ?Bitrix24WebhookEvent
