@@ -16,7 +16,10 @@ class ConsolidateDialogsForRootContactAction
     public function __construct(
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly ResolveDialogRoutePayloadAction $resolveDialogRoutePayloadAction,
+        private readonly ResolveConsolidatedDialogStageAction $resolveConsolidatedDialogStageAction,
+        private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
         private readonly MessageChronology $messageChronology,
+        private readonly ResolveDialogStageAction $resolveDialogStageAction,
     ) {}
 
     /**
@@ -37,6 +40,7 @@ class ConsolidateDialogsForRootContactAction
         array $memberContactIds,
         bool $apply = true,
         bool $normalizeMessageContacts = false,
+        bool $writeHistory = true,
     ): array {
         $memberContactIds = collect($memberContactIds)
             ->map(fn (mixed $contactId): int => (int) $contactId)
@@ -134,13 +138,25 @@ class ConsolidateDialogsForRootContactAction
                 $stats['dialogs_reassigned']++;
             }
 
-            if (! $dialogWasCreated && $this->dialogNeedsUpdate($survivingDialog, $payload)) {
+            $fromStage = $this->resolveHistoryFromStage($survivingDialog, $rootContact);
+            $dialogNeedsUpdate = $this->dialogNeedsUpdate($survivingDialog, $payload);
+
+            if (! $dialogWasCreated && $dialogNeedsUpdate) {
                 $stats['dialogs_updated']++;
             }
 
-            if ($apply && $this->dialogNeedsUpdate($survivingDialog, $payload)) {
+            if ($apply && $dialogNeedsUpdate) {
                 $survivingDialog->forceFill($payload)->save();
                 $survivingDialog->refresh()->loadMissing(['channel', 'currentContactIdentity']);
+
+                if ($writeHistory) {
+                    $this->createDialogStageHistoryMessageAction->handle(
+                        $survivingDialog,
+                        $fromStage,
+                        $payload['stage'] ?? null,
+                        CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
+                    );
+                }
             }
 
             $messagesToRelink = $messagesInChannel
@@ -325,6 +341,14 @@ class ConsolidateDialogsForRootContactAction
             $payload['phone_confirmed_via'] = $phoneSourceDialog->phone_confirmed_via;
         }
 
+        $payload['stage'] = $this->resolveConsolidatedDialogStageAction->handle(
+            rootContact: $rootContact,
+            survivingDialog: $survivingDialog,
+            dialogs: $dialogs,
+            messages: $messages,
+            phoneConfirmedAt: $payload['phone_confirmed_at'] ?? $survivingDialog->phone_confirmed_at,
+        );
+
         return $payload;
     }
 
@@ -428,6 +452,11 @@ class ConsolidateDialogsForRootContactAction
             ->first();
 
         return $fallbackDialog;
+    }
+
+    private function resolveHistoryFromStage(Dialog $dialog, Contact $rootContact): string
+    {
+        return $dialog->stage ?? $this->resolveDialogStageAction->handle($dialog, $rootContact);
     }
 
     /**

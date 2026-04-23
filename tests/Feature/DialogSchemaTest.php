@@ -20,6 +20,7 @@ class DialogSchemaTest extends TestCase
         $this->assertTrue(Schema::hasColumns('dialogs', [
             'contact_id',
             'channel_id',
+            'stage',
             'current_contact_identity_id',
             'manual_reply_dismissed_source_message_id',
             'external_chat_id',

@@ -24,10 +24,10 @@
 
 ## Текущее состояние
 
-- `[bitrix24-dev-profile-bootstrap-self-service]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-dev-profile-bootstrap-self-service.md`; Spec revision: `2f86930f316477c359a2c73d845477eca63317c6`; status: `opened`; opened-at: `2026-04-23`
+- `[dialog-stage-ui-history-and-kanban]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-dialog-stage-ui-history-and-kanban.md`; Spec revision: `f10dee1813f8d6fbe0a7522c77dbe58244e40077`; status: `opened`; opened-at: `2026-04-23`
 
 ## Связанные документы
 
-1. [docs/reference/specs-pointer.md](/Users/abrikosov/Documents/Проект-1/docs/reference/specs-pointer.md)
-2. [docs/task-delivery-workflow.md](/Users/abrikosov/Documents/Проект-1/docs/task-delivery-workflow.md)
-3. [docs/tz/README.md](/Users/abrikosov/Documents/Проект-1/docs/tz/README.md)
+1. [docs/reference/specs-pointer.md](./specs-pointer.md)
+2. [docs/task-delivery-workflow.md](../task-delivery-workflow.md)
+3. [docs/tz/README.md](../tz/README.md)

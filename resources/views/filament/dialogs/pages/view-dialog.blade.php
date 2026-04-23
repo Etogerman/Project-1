@@ -12,12 +12,23 @@
                         </p>
                     </div>
 
-                    <a
-                        href="{{ $contactUrl }}"
-                        class="ac-button ac-button--warning"
-                    >
-                        Открыть контакт
-                    </a>
+                    <div class="ac-button-group ac-button-group--end">
+                        @if (filled($kanbanBackUrl))
+                            <a
+                                href="{{ $kanbanBackUrl }}"
+                                class="ac-button ac-button--secondary"
+                            >
+                                Вернуться в канбан
+                            </a>
+                        @endif
+
+                        <a
+                            href="{{ $contactUrl }}"
+                            class="ac-button ac-button--warning"
+                        >
+                            Открыть контакт
+                        </a>
+                    </div>
                 </div>
 
                 <div class="ac-meta-grid ac-surface__divider">
@@ -67,6 +78,30 @@
                         >
                             Новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».
                         </div>
+                    </div>
+                    <div class="ac-meta">
+                        <label for="dialog-stage" class="ac-meta__label">
+                            Этап диалога
+                        </label>
+                        <select
+                            id="dialog-stage"
+                            data-role="dialog-stage-select"
+                            wire:model="dialogStageSelection"
+                            wire:change="updateDialogStage"
+                            @disabled(! $dialogStage['is_editable'])
+                            class="ac-select"
+                        >
+                            @foreach ($dialogStage['options'] as $stageValue => $stageLabel)
+                                <option value="{{ $stageValue }}">
+                                    {{ $stageLabel }}
+                                </option>
+                            @endforeach
+                        </select>
+                        @if (filled($dialogStage['blocked_reason']))
+                            <p class="ac-meta__hint">
+                                {{ $dialogStage['blocked_reason'] }}
+                            </p>
+                        @endif
                     </div>
                     <div class="ac-meta">
                         <p class="ac-meta__label">
