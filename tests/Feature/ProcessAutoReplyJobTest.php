@@ -763,15 +763,19 @@ class ProcessAutoReplyJobTest extends TestCase
         ]);
     }
 
-    public function test_job_still_sends_when_auto_reply_was_already_sent(): void
+    public function test_job_keeps_completion_marker_after_partial_success_failure_to_block_duplicate_rerun(): void
     {
         Http::fake([
-            'https://api.telegram.org/*' => Http::response([
-                'ok' => true,
-                'result' => [
-                    'message_id' => 9205,
-                ],
-            ]),
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9205,
+                    ],
+                ])
+                ->push([
+                    'ok' => false,
+                ], 500),
         ]);
 
         $channel = Channel::factory()->create([
@@ -782,9 +786,14 @@ class ProcessAutoReplyJobTest extends TestCase
             ],
         ]);
 
-        $message = $this->createInboundMessage($channel, [
-            'provider_event_key' => 'telegram-sent',
-            'auto_reply_sent_at' => now(),
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Первый успешный ответ.',
+            'sort_order' => 10,
+            'is_active' => true,
         ]);
 
         AutoReplyRule::factory()->create([
@@ -792,17 +801,31 @@ class ProcessAutoReplyJobTest extends TestCase
             'keyword' => null,
             'normalized_keyword' => null,
             'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-            'reply_text' => 'Повторный ответ после retry.',
+            'reply_text' => 'Второй ответ падает.',
+            'sort_order' => 20,
             'is_active' => true,
         ]);
 
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-partial-success',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected auto reply job to throw after partial success.');
+        } catch (\Throwable) {
+        }
+
+        $message->refresh();
         ProcessAutoReplyJob::dispatchSync($message->id);
 
-        Http::assertSentCount(1);
+        Http::assertSentCount(2);
+        $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertDatabaseCount('messages', 2);
         $this->assertDatabaseHas('messages', [
             'direction' => Message::DIRECTION_OUTBOUND,
             'reply_to_message_id' => $message->id,
-            'text' => 'Повторный ответ после retry.',
+            'text' => 'Первый успешный ответ.',
         ]);
     }
 
@@ -1463,7 +1486,7 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertSame('skipped_contact_disabled', $skipLog->context['auto_reply_source']);
     }
 
-    public function test_repeated_job_execution_for_same_inbound_message_can_create_duplicate_outbound_messages(): void
+    public function test_repeated_job_execution_for_same_inbound_message_does_not_duplicate_outbound_messages_after_successful_pass(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -1497,9 +1520,9 @@ class ProcessAutoReplyJobTest extends TestCase
         ProcessAutoReplyJob::dispatchSync($message->id);
         ProcessAutoReplyJob::dispatchSync($message->id);
 
-        Http::assertSentCount(2);
-        $this->assertDatabaseCount('messages', 3);
-        $this->assertSame(2, Message::query()->where('direction', Message::DIRECTION_OUTBOUND)->count());
+        Http::assertSentCount(1);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertSame(1, Message::query()->where('direction', Message::DIRECTION_OUTBOUND)->count());
     }
 
     public function test_job_marks_channel_error_and_keeps_inbound_pending_when_transport_fails(): void

@@ -68,6 +68,10 @@ class ProcessAutoReplyJob implements ShouldQueue
             return;
         }
 
+        if ($message->hasSuccessfulAutoReply()) {
+            return;
+        }
+
         if ($message->contact?->isInDataCollection() && ! $this->isAutoReplyOnlyMaxBotStartedEvent($message)) {
             return;
         }

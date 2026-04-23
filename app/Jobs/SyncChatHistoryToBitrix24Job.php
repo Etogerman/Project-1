@@ -9,13 +9,17 @@ use App\Services\Bitrix24\SyncChatHistoryToBitrix24Action;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\InteractsWithQueue;
 use Throwable;
 
 class SyncChatHistoryToBitrix24Job implements ShouldQueue
 {
+    use InteractsWithQueue;
     use Queueable;
 
     public int $timeout = 75;
+    public int $tries = 3;
+    public int $backoff = 60;
 
     public function __construct(
         public readonly int $contactId,
@@ -44,9 +48,18 @@ class SyncChatHistoryToBitrix24Job implements ShouldQueue
             return;
         }
 
+        $syncSucceeded = false;
+        $finalFailure = false;
+
         try {
             $syncChatHistoryToBitrix24Action->handle($rootContact);
+            $syncSucceeded = true;
         } catch (Throwable $throwable) {
+            if (! $this->isFinalAttempt()) {
+                throw $throwable;
+            }
+
+            $finalFailure = true;
             $rootContact->refresh();
             $rootContact->forceFill([
                 'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED,
@@ -65,14 +78,21 @@ class SyncChatHistoryToBitrix24Job implements ShouldQueue
                 entityType: 'contact',
                 entityId: (string) $rootContact->id,
             );
+
+            $this->fail($throwable);
         } finally {
             $rootContact->refresh();
 
-            if ($rootContact->bitrix24_history_sync_pending) {
+            if ($rootContact->bitrix24_history_sync_pending && ($syncSucceeded || $finalFailure)) {
                 $rootContact->forceFill([
                     'bitrix24_history_sync_pending' => false,
                 ])->save();
             }
         }
+    }
+
+    private function isFinalAttempt(): bool
+    {
+        return $this->attempts() >= $this->tries;
     }
 }
