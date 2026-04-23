@@ -51,6 +51,10 @@ class Bitrix24MessageExport extends Model
         'bitrix24_contact_id',
         'export_mode',
         'export_status',
+        'live_batch_uuid',
+        'live_claim_uuid',
+        'live_claimed_at',
+        'live_claim_expires_at',
         'transport_method',
         'resolved_bitrix_chat_id',
         'resolved_crm_entity_type',
@@ -71,6 +75,8 @@ class Bitrix24MessageExport extends Model
     protected $casts = [
         'exported_at' => 'datetime',
         'failed_at' => 'datetime',
+        'live_claimed_at' => 'datetime',
+        'live_claim_expires_at' => 'datetime',
         'failure_uncertain' => 'boolean',
     ];
 

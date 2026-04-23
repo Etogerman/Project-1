@@ -34,17 +34,19 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
         Log::shouldNotHaveReceived('critical');
     }
 
-    public function test_job_calls_live_export_action_with_message_and_retry_flag(): void
+    public function test_job_calls_live_export_action_with_message_retry_flag_and_live_batch_uuid(): void
     {
         $message = $this->makeMessage();
+        $liveBatchUuid = (string) fake()->uuid();
 
         $action = Mockery::mock(ExportMessageToBitrix24OpenLinesAction::class);
         $action->shouldReceive('handle')
             ->once()
-            ->withArgs(fn (Message $exportedMessage, bool $retryAfterSync): bool => $exportedMessage->is($message)
-                && $retryAfterSync === true);
+            ->withArgs(fn (Message $exportedMessage, bool $retryAfterSync, ?string $passedLiveBatchUuid): bool => $exportedMessage->is($message)
+                && $retryAfterSync === true
+                && $passedLiveBatchUuid === $liveBatchUuid);
 
-        $job = new ExportMessageToBitrix24OpenLinesJob(messageId: $message->id, retryAfterSync: true);
+        $job = new ExportMessageToBitrix24OpenLinesJob(messageId: $message->id, retryAfterSync: true, liveBatchUuid: $liveBatchUuid);
         $job->handle($action, app(LogBitrix24ApiCallAction::class));
 
         $this->assertDatabaseCount('bitrix24_sync_logs', 0);
@@ -55,14 +57,16 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
         Log::spy();
 
         $message = $this->makeMessage();
+        $liveBatchUuid = (string) fake()->uuid();
         $action = Mockery::mock(ExportMessageToBitrix24OpenLinesAction::class);
         $action->shouldReceive('handle')
             ->once()
-            ->withArgs(fn (Message $exportedMessage, bool $retryAfterSync): bool => $exportedMessage->is($message)
-                && $retryAfterSync === true)
+            ->withArgs(fn (Message $exportedMessage, bool $retryAfterSync, ?string $passedLiveBatchUuid): bool => $exportedMessage->is($message)
+                && $retryAfterSync === true
+                && $passedLiveBatchUuid === $liveBatchUuid)
             ->andThrow(new \RuntimeException('Bitrix export failed.'));
 
-        $job = new ExportMessageToBitrix24OpenLinesJob(messageId: $message->id, retryAfterSync: true);
+        $job = new ExportMessageToBitrix24OpenLinesJob(messageId: $message->id, retryAfterSync: true, liveBatchUuid: $liveBatchUuid);
         $job->handle($action, app(LogBitrix24ApiCallAction::class));
 
         Log::shouldHaveReceived('critical')
@@ -74,6 +78,7 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
                     && $context['dialog_id'] === $message->dialog_id
                     && $context['contact_id'] === $message->contact_id
                     && $context['retry_after_sync'] === true
+                    && $context['live_batch_uuid'] === $liveBatchUuid
                     && $context['exception_class'] === \RuntimeException::class
                     && $context['exception_message'] === 'Bitrix export failed.';
             });
@@ -94,6 +99,7 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
             'dialog_id' => $message->dialog_id,
             'contact_id' => $message->contact_id,
             'retry_after_sync' => true,
+            'live_batch_uuid' => $liveBatchUuid,
         ], $syncLog->request_payload);
     }
 

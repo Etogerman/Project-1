@@ -610,6 +610,368 @@ class ProcessAutoReplyJobTest extends TestCase
         ]);
     }
 
+    public function test_retry_after_partial_multi_rule_success_resumes_remaining_rules_without_duplicating_first_reply(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9501,
+                    ],
+                ])
+                ->push([
+                    'ok' => false,
+                ], 500)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9502,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Первый ответ',
+            'priority' => 5,
+            'is_active' => true,
+        ]);
+
+        $secondRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'Мульти',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Мульти'),
+            'reply_text' => 'Второй ответ',
+            'priority' => 20,
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-partial-multi-resume',
+            'text' => 'мульти',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected first attempt to fail on the second matched rule.');
+        } catch (\Throwable) {
+        }
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSentCount(3);
+
+        $outboundTexts = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('reply_to_message_id', $message->id)
+            ->orderBy('id')
+            ->pluck('text')
+            ->all();
+
+        $this->assertSame(['Первый ответ', 'Второй ответ'], $outboundTexts);
+
+        $failedLog = $channel->activityLogs()
+            ->where('event', 'bot.reply_failed')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame([$secondRule->id], $failedLog->context['remaining_rule_ids']);
+
+        $resumeCompletedLog = $channel->activityLogs()
+            ->where('event', 'bot.reply_resume_completed')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame($failedLog->id, $resumeCompletedLog->context['resume_failure_log_id']);
+        $this->assertSame([$secondRule->id], $resumeCompletedLog->context['remaining_rule_ids']);
+    }
+
+    public function test_retry_after_partial_multi_rule_success_does_not_resume_when_contact_auto_reply_was_disabled(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9601,
+                    ],
+                ])
+                ->push([
+                    'ok' => false,
+                ], 500),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Первый ответ',
+            'priority' => 5,
+            'is_active' => true,
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'Мульти',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Мульти'),
+            'reply_text' => 'Второй ответ',
+            'priority' => 20,
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-partial-multi-disabled-before-retry',
+            'text' => 'мульти',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected first attempt to fail on the second matched rule.');
+        } catch (\Throwable) {
+        }
+
+        $message->contact->update([
+            'is_auto_reply_enabled' => false,
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+
+        $outboundTexts = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('reply_to_message_id', $message->id)
+            ->orderBy('id')
+            ->pluck('text')
+            ->all();
+
+        $this->assertSame(['Первый ответ'], $outboundTexts);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_resume_completed',
+        ]);
+    }
+
+    public function test_retry_after_partial_multi_rule_success_does_not_resume_when_contact_enters_data_collection(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9701,
+                    ],
+                ])
+                ->push([
+                    'ok' => false,
+                ], 500),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Первый ответ',
+            'priority' => 5,
+            'is_active' => true,
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'Мульти',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Мульти'),
+            'reply_text' => 'Второй ответ',
+            'priority' => 20,
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-partial-multi-collector-before-retry',
+            'text' => 'мульти',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected first attempt to fail on the second matched rule.');
+        } catch (\Throwable) {
+        }
+
+        $message->contact->update([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_started_at' => now(),
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSentCount(2);
+
+        $outboundTexts = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('reply_to_message_id', $message->id)
+            ->orderBy('id')
+            ->pluck('text')
+            ->all();
+
+        $this->assertSame(['Первый ответ'], $outboundTexts);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_resume_completed',
+        ]);
+    }
+
+    public function test_retry_after_repeated_partial_failures_resumes_only_latest_remaining_rules_once(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9801,
+                    ],
+                ])
+                ->push([
+                    'ok' => false,
+                ], 500)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9802,
+                    ],
+                ])
+                ->push([
+                    'ok' => false,
+                ], 500)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9803,
+                    ],
+                ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Первый ответ',
+            'priority' => 5,
+            'is_active' => true,
+        ]);
+
+        $secondRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'Мульти',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Мульти'),
+            'reply_text' => 'Второй ответ',
+            'priority' => 20,
+            'is_active' => true,
+        ]);
+
+        $thirdRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'Мульти',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Мульти'),
+            'reply_text' => 'Третий ответ',
+            'priority' => 30,
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-partial-multi-repeat-failure-chain',
+            'text' => 'мульти',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected first attempt to fail on the second matched rule.');
+        } catch (\Throwable) {
+        }
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected second attempt to fail on the third matched rule.');
+        } catch (\Throwable) {
+        }
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSentCount(5);
+
+        $outboundTexts = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('reply_to_message_id', $message->id)
+            ->orderBy('id')
+            ->pluck('text')
+            ->all();
+
+        $this->assertSame(['Первый ответ', 'Второй ответ', 'Третий ответ'], $outboundTexts);
+
+        $failedLogs = $channel->activityLogs()
+            ->where('event', 'bot.reply_failed')
+            ->orderBy('id')
+            ->get()
+            ->values();
+
+        $this->assertCount(2, $failedLogs);
+        $this->assertSame([$secondRule->id, $thirdRule->id], $failedLogs[0]->context['remaining_rule_ids']);
+        $this->assertSame([$thirdRule->id], $failedLogs[1]->context['remaining_rule_ids']);
+
+        $resumeCompletedLog = $channel->activityLogs()
+            ->where('event', 'bot.reply_resume_completed')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame($failedLogs[1]->id, $resumeCompletedLog->context['resume_failure_log_id']);
+        $this->assertSame([$thirdRule->id], $resumeCompletedLog->context['remaining_rule_ids']);
+    }
+
     public function test_job_does_not_change_tags_when_delivery_fails(): void
     {
         Http::fake([
@@ -763,15 +1125,19 @@ class ProcessAutoReplyJobTest extends TestCase
         ]);
     }
 
-    public function test_job_still_sends_when_auto_reply_was_already_sent(): void
+    public function test_job_keeps_completion_marker_after_partial_success_failure_to_block_duplicate_rerun(): void
     {
         Http::fake([
-            'https://api.telegram.org/*' => Http::response([
-                'ok' => true,
-                'result' => [
-                    'message_id' => 9205,
-                ],
-            ]),
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9205,
+                    ],
+                ])
+                ->push([
+                    'ok' => false,
+                ], 500),
         ]);
 
         $channel = Channel::factory()->create([
@@ -782,9 +1148,14 @@ class ProcessAutoReplyJobTest extends TestCase
             ],
         ]);
 
-        $message = $this->createInboundMessage($channel, [
-            'provider_event_key' => 'telegram-sent',
-            'auto_reply_sent_at' => now(),
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Первый успешный ответ.',
+            'sort_order' => 10,
+            'is_active' => true,
         ]);
 
         AutoReplyRule::factory()->create([
@@ -792,17 +1163,31 @@ class ProcessAutoReplyJobTest extends TestCase
             'keyword' => null,
             'normalized_keyword' => null,
             'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-            'reply_text' => 'Повторный ответ после retry.',
+            'reply_text' => 'Второй ответ падает.',
+            'sort_order' => 20,
             'is_active' => true,
         ]);
 
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'telegram-partial-success',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected auto reply job to throw after partial success.');
+        } catch (\Throwable) {
+        }
+
+        $message->refresh();
         ProcessAutoReplyJob::dispatchSync($message->id);
 
-        Http::assertSentCount(1);
+        Http::assertSentCount(2);
+        $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertDatabaseCount('messages', 2);
         $this->assertDatabaseHas('messages', [
             'direction' => Message::DIRECTION_OUTBOUND,
             'reply_to_message_id' => $message->id,
-            'text' => 'Повторный ответ после retry.',
+            'text' => 'Первый успешный ответ.',
         ]);
     }
 
@@ -1463,7 +1848,7 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertSame('skipped_contact_disabled', $skipLog->context['auto_reply_source']);
     }
 
-    public function test_repeated_job_execution_for_same_inbound_message_can_create_duplicate_outbound_messages(): void
+    public function test_repeated_job_execution_for_same_inbound_message_does_not_duplicate_outbound_messages_after_successful_pass(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -1497,9 +1882,9 @@ class ProcessAutoReplyJobTest extends TestCase
         ProcessAutoReplyJob::dispatchSync($message->id);
         ProcessAutoReplyJob::dispatchSync($message->id);
 
-        Http::assertSentCount(2);
-        $this->assertDatabaseCount('messages', 3);
-        $this->assertSame(2, Message::query()->where('direction', Message::DIRECTION_OUTBOUND)->count());
+        Http::assertSentCount(1);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertSame(1, Message::query()->where('direction', Message::DIRECTION_OUTBOUND)->count());
     }
 
     public function test_job_marks_channel_error_and_keeps_inbound_pending_when_transport_fails(): void

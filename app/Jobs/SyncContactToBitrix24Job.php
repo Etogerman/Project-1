@@ -17,15 +17,19 @@ use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class SyncContactToBitrix24Job implements ShouldQueue
 {
+    use InteractsWithQueue;
     use Queueable;
 
     public int $timeout = 60;
+    public int $tries = 3;
+    public int $backoff = 60;
 
     public function __construct(
         public readonly int $contactId,
@@ -75,11 +79,17 @@ class SyncContactToBitrix24Job implements ShouldQueue
         }
 
         $syncSucceeded = false;
+        $finalFailure = false;
 
         try {
             $syncContactToBitrix24Action->handle($rootContact);
             $syncSucceeded = true;
         } catch (Throwable $throwable) {
+            if (! $this->isFinalAttempt()) {
+                throw $throwable;
+            }
+
+            $finalFailure = true;
             $rootContact->refresh();
             $rootContact->forceFill([
                 'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_FAILED,
@@ -106,10 +116,12 @@ class SyncContactToBitrix24Job implements ShouldQueue
                 entityType: 'contact',
                 entityId: (string) $rootContact->id,
             );
+
+            $this->fail($throwable);
         } finally {
             $rootContact->refresh();
 
-            if ($rootContact->bitrix24_sync_pending) {
+            if ($rootContact->bitrix24_sync_pending && ($syncSucceeded || $finalFailure)) {
                 $rootContact->forceFill([
                     'bitrix24_sync_pending' => false,
                 ])->save();
@@ -152,5 +164,10 @@ class SyncContactToBitrix24Job implements ShouldQueue
 
         $queueBitrix24DealSyncAction->handle($rootContact);
         $queueBitrix24HistoryExportAction->handle($rootContact);
+    }
+
+    private function isFinalAttempt(): bool
+    {
+        return $this->attempts() >= $this->tries;
     }
 }

@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Message;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
@@ -21,6 +20,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
     public function __construct(
         public readonly int $messageId,
         public readonly bool $retryAfterSync = false,
+        public readonly ?string $liveBatchUuid = null,
     ) {}
 
     public function handle(
@@ -34,7 +34,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
         }
 
         try {
-            $exportMessageToBitrix24OpenLinesAction->handle($message, $this->retryAfterSync);
+            $exportMessageToBitrix24OpenLinesAction->handle($message, $this->retryAfterSync, $this->liveBatchUuid);
         } catch (Throwable $throwable) {
             Log::critical('Bitrix24 Open Lines live export job failed.', [
                 'job' => self::class,
@@ -42,6 +42,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
                 'dialog_id' => $message->dialog_id,
                 'contact_id' => $message->contact_id,
                 'retry_after_sync' => $this->retryAfterSync,
+                'live_batch_uuid' => $this->liveBatchUuid,
                 'exception_class' => $throwable::class,
                 'exception_message' => $throwable->getMessage(),
             ]);
@@ -55,6 +56,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
                     'dialog_id' => $message->dialog_id,
                     'contact_id' => $message->contact_id,
                     'retry_after_sync' => $this->retryAfterSync,
+                    'live_batch_uuid' => $this->liveBatchUuid,
                 ],
                 connection: null,
                 errorMessage: $throwable->getMessage(),
