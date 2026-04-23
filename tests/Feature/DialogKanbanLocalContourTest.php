@@ -185,6 +185,19 @@ class DialogKanbanLocalContourTest extends TestCase
         $this->assertSame(DialogResource::getUrl('kanban'), DialogResource::getNavigationUrl());
     }
 
+    public function test_kanban_filters_panel_can_be_toggled_from_header_action(): void
+    {
+        $admin = $this->createAdmin();
+
+        Livewire::actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSet('filtersPanelOpen', false)
+            ->call('toggleFiltersPanel')
+            ->assertSet('filtersPanelOpen', true)
+            ->call('toggleFiltersPanel')
+            ->assertSet('filtersPanelOpen', false);
+    }
+
     public function test_dialog_resource_navigation_url_returns_to_current_table_slice_after_opening_index(): void
     {
         $admin = $this->createAdmin();
