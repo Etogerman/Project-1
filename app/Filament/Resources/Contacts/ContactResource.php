@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\BuildContactHistoryTimelineAction;
 use App\Services\Contacts\DeleteContactAction;
+use App\Services\Contacts\FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
@@ -43,6 +44,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
 use JsonException;
 use UnitEnum;
@@ -115,7 +117,9 @@ class ContactResource extends Resource
                         'contact_id',
                         'review_type',
                         'phone_normalized',
+                        'identity_key',
                         'candidate_root_contact_ids',
+                        'context_payload',
                         'created_at',
                     ]),
                 'recentMergedChildren' => fn ($query) => $query
@@ -1011,10 +1015,15 @@ class ContactResource extends Resource
      *     dedupStatusTone: string,
      *     openReviewsCount: int,
      *     openReviews: array<int, array{
+     *         id: int,
      *         typeLabel: string,
-     *         phoneLabel: string,
+     *         phoneLabel: string|null,
+     *         identityLabel: string|null,
      *         candidateRootsLabel: string,
-     *         createdAtLabel: string
+     *         channelContextLabel: string|null,
+     *         createdAtLabel: string,
+     *         isCrossChannelIdentityReview: bool,
+     *         canManageLifecycle: bool
      *     }>,
      *     mergedChildrenCount: int,
      *     mergedChildren: array<int, array{
@@ -1036,10 +1045,9 @@ class ContactResource extends Resource
             'openDuplicateReviews',
             'recentMergedChildren',
         ]);
-        $openReviewsCount = static::resolveOpenDuplicateReviewsCount($record);
+        $visibleOpenReviews = static::resolveVisibleOpenDuplicateReviews($record);
+        $openReviewsCount = $visibleOpenReviews->count();
         $mergedChildrenCount = static::resolveMergedChildrenCount($record);
-
-        $openReviews = $record->openDuplicateReviews;
 
         $mergedChildren = $record->recentMergedChildren->take(5);
 
@@ -1058,12 +1066,17 @@ class ContactResource extends Resource
             'dedupStatusLabel' => $dedupStatusLabel,
             'dedupStatusTone' => $dedupStatusTone,
             'openReviewsCount' => $openReviewsCount,
-            'openReviews' => $openReviews
+            'openReviews' => $visibleOpenReviews
                 ->map(fn (ContactDuplicateReview $review): array => [
+                    'id' => $review->id,
                     'typeLabel' => static::formatDuplicateReviewType($review->review_type),
-                    'phoneLabel' => $review->phone_normalized ?: '—',
+                    'phoneLabel' => static::formatDuplicateReviewPhoneLabel($review),
+                    'identityLabel' => static::formatDuplicateReviewIdentityLabel($review),
                     'candidateRootsLabel' => static::formatCandidateRootIds($review->candidate_root_contact_ids),
+                    'channelContextLabel' => static::formatDuplicateReviewChannelContext($review),
                     'createdAtLabel' => $review->created_at?->format('d.m.Y H:i') ?? '—',
+                    'isCrossChannelIdentityReview' => $review->review_type === ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+                    'canManageLifecycle' => static::canCurrentUserManageContactMutations(),
                 ])
                 ->all(),
             'mergedChildrenCount' => $mergedChildrenCount,
@@ -1345,16 +1358,50 @@ class ContactResource extends Resource
         return match ($reviewType) {
             ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE => 'Телефон найден у другого root-контакта',
             ContactDuplicateReview::TYPE_PHONE_MULTIPLE_ROOTS => 'Телефон найден у нескольких root-контактов',
+            ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY => 'Один platform user ID привязан к нескольким root-контактам',
             ContactDuplicateReview::TYPE_MERGE_CONFLICT => 'Не удалось безопасно склеить контакт',
             ContactDuplicateReview::TYPE_BROKEN_MERGE_CHAIN => 'Повреждена цепочка склейки',
             default => 'Требуется проверка дубля',
         };
     }
 
+    protected static function formatDuplicateReviewPhoneLabel(ContactDuplicateReview $review): ?string
+    {
+        return filled($review->phone_normalized)
+            ? (string) $review->phone_normalized
+            : null;
+    }
+
+    protected static function formatDuplicateReviewIdentityLabel(ContactDuplicateReview $review): ?string
+    {
+        return filled($review->identity_key)
+            ? (string) $review->identity_key
+            : null;
+    }
+
+    protected static function formatDuplicateReviewChannelContext(ContactDuplicateReview $review): ?string
+    {
+        $channelId = data_get($review->context_payload, 'last_seen_channel_id');
+
+        if (! is_numeric($channelId)) {
+            return null;
+        }
+
+        $channelId = (int) $channelId;
+        $channel = Channel::query()->find($channelId);
+
+        if ($channel instanceof Channel) {
+            return static::formatChannelLabel($channel, '#'.$channelId);
+        }
+
+        return 'Канал #'.$channelId;
+    }
+
     protected static function formatMergeReason(?string $mergeReason): string
     {
         return match ($mergeReason) {
             'phone_exact_match' => 'Совпадение телефона',
+            'cross_channel_identity_resolution' => 'Разрешение cross-channel identity ambiguity',
             null, '' => '—',
             default => $mergeReason,
         };
@@ -1655,9 +1702,21 @@ class ContactResource extends Resource
 
     protected static function getDeleteBlockedReason(Contact $record): ?string
     {
-        return static::canCurrentUserDeleteContact()
-            ? null
-            : 'Удаление контакта недоступно по текущим правам.';
+        if (! static::canCurrentUserDeleteContact()) {
+            return 'Удаление контакта недоступно по текущим правам.';
+        }
+
+        $blockingReview = app(FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction::class)
+            ->handle($record);
+
+        if (! $blockingReview instanceof ContactDuplicateReview) {
+            return null;
+        }
+
+        return sprintf(
+            'Удаление заблокировано: контакт участвует в открытой cross-channel identity проверке (%s).',
+            $blockingReview->identity_key ?: 'без identity_key',
+        );
     }
 
     protected static function canCurrentUserDeleteContact(): bool
@@ -1784,15 +1843,41 @@ class ContactResource extends Resource
 
     protected static function resolveOpenDuplicateReviewsCount(Contact $record): int
     {
-        $count = $record->getAttribute('open_duplicate_reviews_count');
+        return static::resolveVisibleOpenDuplicateReviews($record)->count();
+    }
 
-        if ($count !== null) {
-            return (int) $count;
-        }
+    /**
+     * @return Collection<int, ContactDuplicateReview>
+     */
+    protected static function resolveVisibleOpenDuplicateReviews(Contact $record): Collection
+    {
+        $ownedReviews = $record->relationLoaded('openDuplicateReviews')
+            ? $record->openDuplicateReviews
+            : $record->openDuplicateReviews()->get();
 
-        return $record->duplicateReviews()
+        $externalCrossChannelReviews = ContactDuplicateReview::query()
+            ->where('review_type', ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY)
             ->where('status', ContactDuplicateReview::STATUS_OPEN)
-            ->count();
+            ->where('contact_id', '!=', $record->id)
+            ->whereJsonContains('candidate_root_contact_ids', $record->id)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get();
+
+        return $ownedReviews
+            ->concat($externalCrossChannelReviews)
+            ->unique('id')
+            ->sort(function (ContactDuplicateReview $left, ContactDuplicateReview $right): int {
+                $leftTimestamp = $left->created_at?->getTimestamp() ?? 0;
+                $rightTimestamp = $right->created_at?->getTimestamp() ?? 0;
+
+                if ($leftTimestamp !== $rightTimestamp) {
+                    return $rightTimestamp <=> $leftTimestamp;
+                }
+
+                return $right->id <=> $left->id;
+            })
+            ->values();
     }
 
     protected static function resolveMergedChildrenCount(Contact $record): int

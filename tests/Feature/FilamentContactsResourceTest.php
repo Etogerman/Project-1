@@ -19,6 +19,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Filament\Schemas\Components\Section;
@@ -1005,7 +1006,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalDontSee('Recent messages');
     }
 
-    public function test_admin_can_assign_contact_tag_from_contact_modal(): void
+    public function test_admin_can_assign_contact_tag_from_contact_modal_and_close_dialog_state(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1047,7 +1048,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
-    public function test_admin_can_remove_contact_tag_from_contact_modal(): void
+    public function test_admin_can_remove_contact_tag_from_contact_modal_after_remount(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1084,7 +1085,7 @@ class FilamentContactsResourceTest extends TestCase
         ]);
     }
 
-    public function test_contacts_table_can_filter_by_tags(): void
+    public function test_contacts_table_can_filter_by_tags_with_active_filter_state(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1445,6 +1446,159 @@ class FilamentContactsResourceTest extends TestCase
             ->assertMountedActionModalSee('Телефон найден у другого root-контакта')
             ->assertMountedActionModalSee('+79991234567')
             ->assertMountedActionModalSee('#12, #18');
+    }
+
+    public function test_contact_modal_shows_cross_channel_identity_review_summary_with_identity_and_channel_context(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Контакт с ambiguity review',
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-600',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [24, 42],
+            'context_payload' => ['last_seen_channel_id' => $channel->id],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $contact)
+            ->assertMountedActionModalSee('Открытые проверки: 1')
+            ->assertMountedActionModalSee('Один platform user ID привязан к нескольким root-контактам')
+            ->assertMountedActionModalSee('telegram:cross-user-600')
+            ->assertMountedActionModalSee('#24, #42')
+            ->assertMountedActionModalSee('Telegram Account (Telegram)');
+    }
+
+    public function test_contact_modal_allows_resolving_cross_channel_identity_review_from_dedup_section(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $anchorContact = Contact::factory()->create([
+            'name' => 'Anchor review contact',
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+        ]);
+        $candidateRoot = Contact::factory()->create([
+            'name' => 'Candidate review root',
+        ]);
+        $review = ContactDuplicateReview::factory()->create([
+            'contact_id' => $anchorContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-601',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [$candidateRoot->id],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $anchorContact)
+            ->assertMountedActionModalSee('Разобрать')
+            ->assertMountedActionModalSee('Оставить отдельным root')
+            ->call('openResolveCrossChannelIdentityReviewDialog', $review->id)
+            ->assertSet('showResolveCrossChannelIdentityReviewDialog', true)
+            ->assertMountedActionModalSee('Разобрать identity ambiguity')
+            ->assertMountedActionModalSee('telegram:cross-user-601')
+            ->set('selectedResolvedRoutedContactId', (string) $candidateRoot->id)
+            ->call('saveResolvedCrossChannelIdentityReview');
+
+        $review->refresh();
+        $anchorContact->refresh();
+
+        $this->assertSame(ContactDuplicateReview::STATUS_RESOLVED, $review->status);
+        $this->assertSame($candidateRoot->id, $review->routed_contact_id);
+        $this->assertSame($candidateRoot->id, $anchorContact->merged_into_contact_id);
+    }
+
+    public function test_contact_modal_allows_dismissing_cross_channel_identity_review_from_dedup_section(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $anchorContact = Contact::factory()->create([
+            'name' => 'Dismiss anchor review contact',
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+        ]);
+        $candidateRoot = Contact::factory()->create();
+        $review = ContactDuplicateReview::factory()->create([
+            'contact_id' => $anchorContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-602',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [$candidateRoot->id],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $anchorContact)
+            ->call('dismissMountedCrossChannelIdentityReview', $review->id);
+
+        $review->refresh();
+        $anchorContact->refresh();
+
+        $this->assertSame(ContactDuplicateReview::STATUS_DISMISSED, $review->status);
+        $this->assertSame($anchorContact->id, $review->routed_contact_id);
+        $this->assertNull($anchorContact->merged_into_contact_id);
+    }
+
+    public function test_candidate_root_contact_modal_shows_external_cross_channel_identity_review_and_allows_resolution_entry_point(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $anchorContact = Contact::factory()->create([
+            'name' => 'Anchor candidate owner',
+        ]);
+        $candidateRoot = Contact::factory()->create([
+            'name' => 'Candidate visible root',
+        ]);
+
+        $review = app(CreateContactDuplicateReviewAction::class)->handle(
+            contact: $anchorContact,
+            phoneNormalized: null,
+            reviewType: ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            candidateRootContactIds: [$candidateRoot->id],
+            identityKey: 'telegram:cross-user-603',
+        );
+
+        $this->assertSame(Contact::DUPLICATE_REVIEW_STATUS_PENDING, $candidateRoot->fresh()->duplicate_review_status);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->mountTableAction('view', $candidateRoot)
+            ->assertMountedActionModalSee('Открытые проверки: 1')
+            ->assertMountedActionModalSee('telegram:cross-user-603')
+            ->assertMountedActionModalSee('Разобрать')
+            ->call('openResolveCrossChannelIdentityReviewDialog', $review->id)
+            ->assertSet('showResolveCrossChannelIdentityReviewDialog', true)
+            ->assertMountedActionModalSee('Разобрать identity ambiguity')
+            ->set('selectedResolvedRoutedContactId', (string) $candidateRoot->id)
+            ->call('saveResolvedCrossChannelIdentityReview');
+
+        $review->refresh();
+        $anchorContact->refresh();
+
+        $this->assertSame(ContactDuplicateReview::STATUS_RESOLVED, $review->status);
+        $this->assertSame($candidateRoot->id, $review->routed_contact_id);
+        $this->assertSame($candidateRoot->id, $anchorContact->merged_into_contact_id);
     }
 
     public function test_contact_infolist_uses_compact_section_order_and_collapsed_technical_sections(): void

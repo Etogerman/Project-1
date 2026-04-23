@@ -194,6 +194,10 @@ class BuildConversationFeedViewDataAction
             return $systemEventDisplayText;
         }
 
+        if ($this->messageContainsMediaMetadata($message)) {
+            return 'Медиа';
+        }
+
         return match ($message->message_kind) {
             Message::KIND_INBOUND_CONTACT_SHARE => 'Поделился номером телефона',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Спасибо, номер получили.',
@@ -203,6 +207,13 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
             default => 'Системное сообщение',
         };
+    }
+
+    protected function messageContainsMediaMetadata(Message $message): bool
+    {
+        $media = data_get($message->raw_payload, 'media');
+
+        return is_array($media) && $media !== [];
     }
 
     protected function resolveSystemEventDisplayText(Message $message): ?string

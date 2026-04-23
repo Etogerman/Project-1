@@ -3,6 +3,7 @@
 use App\Http\Controllers\Bitrix24CallbackController;
 use App\Http\Controllers\Bitrix24ProbeController;
 use App\Http\Controllers\BotWebhookController;
+use App\Http\Controllers\TelegramAccountGatewayController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -14,6 +15,9 @@ Route::post('/webhooks/telegram/{channel}', [BotWebhookController::class, 'teleg
 
 Route::post('/webhooks/max/{channel}', [BotWebhookController::class, 'max'])
     ->name('webhooks.max.handle');
+
+Route::post('/internal/gateway/telegram-account/{channel}/messages', [TelegramAccountGatewayController::class, 'inboundMessage'])
+    ->name('internal.telegram-account.messages.handle');
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])
     ->middleware('throttle:bitrix24-install')
