@@ -11,7 +11,6 @@ class SyncDialogConfirmedPhoneAction
     public function __construct(
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly ResolveDialogStageAction $resolveDialogStageAction,
-        private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
     ) {}
 
     public function handle(Message $inboundMessage, string $phoneRaw, string $phoneNormalized): Dialog
@@ -29,7 +28,6 @@ class SyncDialogConfirmedPhoneAction
         }
 
         $dialog->loadMissing('contact');
-        $fromStage = $dialog->stage;
 
         $payload = [];
 
@@ -54,16 +52,7 @@ class SyncDialogConfirmedPhoneAction
 
         $dialog->forceFill($payload)->save();
 
-        $dialog = $dialog->fresh(['channel', 'currentContactIdentity']);
-
-        $this->createDialogStageHistoryMessageAction->handle(
-            $dialog,
-            $fromStage,
-            $payload['stage'],
-            CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
-        );
-
-        return $dialog;
+        return $dialog->fresh();
     }
 
     private function lockDialog(Dialog $dialog): Dialog

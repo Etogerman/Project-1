@@ -13,7 +13,6 @@ class SyncDialogsStageForRootContactAction
         private readonly ResolveContactAggregateAction $resolveContactAggregateAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ResolveDialogStageAction $resolveDialogStageAction,
-        private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
     ) {}
 
     /**
@@ -23,7 +22,7 @@ class SyncDialogsStageForRootContactAction
      *   dialogs_already_correct: int,
      * }
      */
-    public function handle(Contact|int $contact, bool $apply = true, bool $writeHistory = true): array
+    public function handle(Contact|int $contact, bool $apply = true): array
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $memberContactIds = $this->resolveMemberContactIds($rootContact);
@@ -45,10 +44,9 @@ class SyncDialogsStageForRootContactAction
         ];
 
         foreach ($dialogs as $dialog) {
-            $fromStage = $dialog->stage;
             $stage = $this->resolveDialogStageAction->handle($dialog, $rootContact);
 
-            if ($fromStage === $stage) {
+            if ($dialog->stage === $stage) {
                 $stats['dialogs_already_correct']++;
 
                 continue;
@@ -63,15 +61,6 @@ class SyncDialogsStageForRootContactAction
             $dialog->forceFill([
                 'stage' => $stage,
             ])->save();
-
-            if ($writeHistory) {
-                $this->createDialogStageHistoryMessageAction->handle(
-                    $dialog->fresh(['channel', 'currentContactIdentity']),
-                    $fromStage,
-                    $stage,
-                    CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
-                );
-            }
         }
 
         return $stats;
