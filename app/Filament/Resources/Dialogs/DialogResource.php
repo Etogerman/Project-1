@@ -522,7 +522,8 @@ class DialogResource extends Resource
                     $query->whereNull('dialogs.stage');
 
                     match ($stage) {
-                        Dialog::STAGE_QUESTIONNAIRE_COMPLETED => static::applyCompletedContactScope($query),
+                        Dialog::STAGE_QUESTIONNAIRE_COMPLETED => $query
+                            ->whereHas('contact', fn (Builder $query): Builder => static::applyCompletedContactScope($query)),
                         Dialog::STAGE_PHONE_RECEIVED => $query
                             ->whereNotNull('dialogs.phone_confirmed_at')
                             ->whereHas('contact', fn (Builder $query): Builder => static::applyNotCompletedContactScope($query)),

@@ -5,6 +5,7 @@ namespace App\Services\Dialogs;
 use App\Data\Dialogs\DialogStageUpdateResultData;
 use App\Models\Dialog;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -18,6 +19,10 @@ class UpdateDialogStageAction
     public function handle(Dialog $dialog, User $employee, string $targetStage): DialogStageUpdateResultData
     {
         return DB::transaction(function () use ($dialog, $employee, $targetStage): DialogStageUpdateResultData {
+            if (! $employee->canReplyInDialogs()) {
+                throw new AuthorizationException('Недостаточно прав для смены этапа диалога.');
+            }
+
             $dialog = Dialog::query()
                 ->with(['contact', 'channel', 'currentContactIdentity'])
                 ->whereKey($dialog->id)
