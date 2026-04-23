@@ -11,9 +11,14 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Message;
+use App\Services\Bitrix24\IsContactReadyForBitrix24HistoryExportAction;
+use App\Services\Bitrix24\LogBitrix24ApiCallAction;
+use App\Services\Bitrix24\SyncChatHistoryToBitrix24Action;
+use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Mockery;
 use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
@@ -571,6 +576,94 @@ class Bitrix24HistoryExportJobTest extends TestCase
         $this->assertTrue(str_contains($sentComments[0], $first->text));
         $this->assertFalse(str_contains($sentComments[0], $second->text));
         $this->assertTrue(str_contains($sentComments[1], $second->text));
+    }
+
+    public function test_history_job_rethrows_retryable_exception_and_keeps_pending_gate_closed(): void
+    {
+        $contact = $this->createHistoryReadyRootContact([
+            'bitrix24_history_sync_pending' => true,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_PENDING,
+        ]);
+
+        $readyAction = Mockery::mock(IsContactReadyForBitrix24HistoryExportAction::class);
+        $readyAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->is($contact))
+            ->andReturn(true);
+
+        $historyAction = Mockery::mock(SyncChatHistoryToBitrix24Action::class);
+        $historyAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->is($contact))
+            ->andThrow(new \RuntimeException('History export exploded.'));
+
+        $job = new SyncChatHistoryToBitrix24Job($contact->id);
+
+        try {
+            $job->handle(
+                app(ResolveRootContactAction::class),
+                $readyAction,
+                $historyAction,
+                app(LogBitrix24ApiCallAction::class),
+            );
+
+            $this->fail('Expected history export job to bubble the retryable exception.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('History export exploded.', $exception->getMessage());
+        }
+
+        $contact->refresh();
+
+        $this->assertTrue($contact->bitrix24_history_sync_pending);
+        $this->assertSame(Contact::BITRIX24_HISTORY_SYNC_STATUS_PENDING, $contact->bitrix24_history_sync_status);
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'history_export_failed',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+    }
+
+    public function test_history_job_marks_contact_as_failed_on_final_attempt(): void
+    {
+        $contact = $this->createHistoryReadyRootContact([
+            'bitrix24_history_sync_pending' => true,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_PENDING,
+        ]);
+
+        $readyAction = Mockery::mock(IsContactReadyForBitrix24HistoryExportAction::class);
+        $readyAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->is($contact))
+            ->andReturn(true);
+
+        $historyAction = Mockery::mock(SyncChatHistoryToBitrix24Action::class);
+        $historyAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->is($contact))
+            ->andThrow(new \RuntimeException('History export exploded.'));
+
+        $job = (new SyncChatHistoryToBitrix24Job($contact->id))->withFakeQueueInteractions();
+        $job->job->attempts = $job->tries;
+
+        $job->handle(
+            app(ResolveRootContactAction::class),
+            $readyAction,
+            $historyAction,
+            app(LogBitrix24ApiCallAction::class),
+        );
+
+        $contact->refresh();
+
+        $this->assertFalse($contact->bitrix24_history_sync_pending);
+        $this->assertSame(Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED, $contact->bitrix24_history_sync_status);
+        $job->assertFailedWith(\RuntimeException::class);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'history_export_failed',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'error_message' => 'History export exploded.',
+        ]);
     }
 
     private function runHistoryExportJob(Contact $contact): void

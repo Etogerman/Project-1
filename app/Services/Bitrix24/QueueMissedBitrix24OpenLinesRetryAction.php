@@ -74,7 +74,29 @@ class QueueMissedBitrix24OpenLinesRetryAction
             ])
             ->where(function ($query): void {
                 $query->whereNull('live_export.id')
-                    ->orWhere('live_export.export_status', Bitrix24MessageExport::STATUS_FAILED);
+                    ->orWhere(function ($pendingQuery): void {
+                        $pendingQuery
+                            ->where('live_export.export_status', Bitrix24MessageExport::STATUS_PENDING)
+                            ->where(function ($recoverablePendingQuery): void {
+                                $recoverablePendingQuery
+                                    ->whereNull('live_export.live_batch_uuid')
+                                    ->orWhere(function ($expiredClaimQuery): void {
+                                        $expiredClaimQuery
+                                            ->whereNotNull('live_export.live_claim_uuid')
+                                            ->whereNotNull('live_export.live_claim_expires_at')
+                                            ->where('live_export.live_claim_expires_at', '<=', now());
+                                    });
+                            });
+                    })
+                    ->orWhere(function ($failedQuery): void {
+                        $failedQuery
+                            ->where('live_export.export_status', Bitrix24MessageExport::STATUS_FAILED)
+                            ->where(function ($certaintyQuery): void {
+                                $certaintyQuery
+                                    ->whereNull('live_export.failure_uncertain')
+                                    ->orWhere('live_export.failure_uncertain', false);
+                            });
+                    });
             })
             ->with(['dialog.channel', 'contact'])
             ->orderByDesc('messages.received_at')
