@@ -28,6 +28,6 @@
 
 ## Связанные документы
 
-1. [docs/reference/specs-pointer.md](./specs-pointer.md)
-2. [docs/task-delivery-workflow.md](../task-delivery-workflow.md)
-3. [docs/tz/README.md](../tz/README.md)
+1. [docs/reference/specs-pointer.md](/Users/abrikosov/Documents/Проект-1/docs/reference/specs-pointer.md)
+2. [docs/task-delivery-workflow.md](/Users/abrikosov/Documents/Проект-1/docs/task-delivery-workflow.md)
+3. [docs/tz/README.md](/Users/abrikosov/Documents/Проект-1/docs/tz/README.md)
