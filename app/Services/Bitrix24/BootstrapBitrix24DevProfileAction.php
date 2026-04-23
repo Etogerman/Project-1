@@ -519,6 +519,10 @@ class BootstrapBitrix24DevProfileAction
         ?Bitrix24Connection $connection,
         bool $callbackBaseUrlRotated,
     ): array {
+        $successfulStatuses = [
+            Bitrix24WebhookEvent::STATUS_PENDING,
+            Bitrix24WebhookEvent::STATUS_PROCESSED,
+        ];
         $required = $connection instanceof Bitrix24Connection
             && filled($profile->client_id)
             && filled($profile->application_code);
@@ -533,28 +537,43 @@ class BootstrapBitrix24DevProfileAction
             );
         }
 
-        $latestInstallEvent = Bitrix24WebhookEvent::query()
+        $installEvents = Bitrix24WebhookEvent::query()
             ->where('connection_id', $connection->getKey())
             ->where('callback_type', Bitrix24WebhookEvent::TYPE_INSTALL)
-            ->where('callback_base_url', $profile->callback_base_url)
+            ->where('callback_base_url', $profile->callback_base_url);
+
+        $latestInstallEvent = (clone $installEvents)
+            ->latest('id')
+            ->first();
+        $latestSuccessfulInstallEvent = (clone $installEvents)
+            ->whereIn('processing_status', $successfulStatuses)
             ->latest('id')
             ->first();
 
-        if (! $latestInstallEvent instanceof Bitrix24WebhookEvent) {
+        if (! $latestSuccessfulInstallEvent instanceof Bitrix24WebhookEvent) {
+            $failedStatus = $latestInstallEvent instanceof Bitrix24WebhookEvent
+                ? $latestInstallEvent->processing_status
+                : null;
+
             return $this->check(
                 'Install callback reached current callback_base_url',
                 $profile->callback_base_url,
                 Bitrix24DevProfileBootstrapResultData::STATUS_MISSING,
                 true,
-                'No install callback has been recorded for the current callback_base_url yet. Re-save the Bitrix app install callback so it reaches this ingress, then rerun the command.',
+                $failedStatus !== null
+                    ? sprintf(
+                        'Only install callbacks with status `%s` have been recorded for the current callback_base_url. Complete a valid Bitrix reinstall so the callback is stored as pending/processed on this ingress, then rerun the command.',
+                        $failedStatus,
+                    )
+                    : 'No install callback has been recorded for the current callback_base_url yet. Re-save the Bitrix app install callback so it reaches this ingress, then rerun the command.',
             );
         }
 
         if (
             $callbackBaseUrlRotated
             && $profile->updated_at !== null
-            && $latestInstallEvent->created_at !== null
-            && $latestInstallEvent->created_at->lt($profile->updated_at)
+            && $latestSuccessfulInstallEvent->created_at !== null
+            && $latestSuccessfulInstallEvent->created_at->lt($profile->updated_at)
         ) {
             return $this->check(
                 'Install callback reached current callback_base_url',

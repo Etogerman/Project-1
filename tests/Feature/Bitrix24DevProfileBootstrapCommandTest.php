@@ -162,6 +162,42 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_command_fails_when_only_failed_install_callback_exists_on_current_ingress(): void
+    {
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => 'dev-ivan-main',
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Dev Ivan Main',
+            'client_id' => 'client-id-ivan',
+            'application_code' => 'local.app.dev.ivan',
+            'callback_base_url' => 'https://new-tunnel.trycloudflare.com',
+            'telegram_source_id' => 'ABC_TELEGRAM_DEV_IVAN_MAIN',
+            'max_source_id' => 'ABC_MAX_DEV_IVAN_MAIN',
+            'telegram_connector_code' => 'abc_telegram_dev_ivan_main',
+            'max_connector_code' => 'abc_max_dev_ivan_main',
+            'telegram_line_id' => 'telegram-line-ivan',
+            'max_line_id' => 'max-line-ivan',
+        ]);
+
+        $this->createActiveConnection($profile);
+        $this->recordInstallCallbackEvent(
+            $profile,
+            'https://new-tunnel.trycloudflare.com',
+            Bitrix24WebhookEvent::STATUS_FAILED,
+        );
+        $this->fakeBitrixVerifySuccess($profile);
+
+        $this->artisan('bitrix24:dev-profile-bootstrap', [
+            'profile_key' => 'dev-ivan-main',
+            'callback_base_url' => 'https://new-tunnel.trycloudflare.com',
+        ])
+            ->expectsOutputToContain('Install callback reached current callback_base_url')
+            ->expectsOutputToContain('Only install callbacks with status `failed` have been recorded')
+            ->expectsOutputToContain('Dev-profile сохранён, но full_live setup ещё не готов.')
+            ->assertFailed();
+    }
+
     public function test_command_saves_profile_but_fails_when_bitrix_side_values_are_missing(): void
     {
         $this->artisan('bitrix24:dev-profile-bootstrap', [
@@ -352,8 +388,11 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
         ]);
     }
 
-    private function recordInstallCallbackEvent(Bitrix24Profile $profile, string $callbackBaseUrl): Bitrix24WebhookEvent
-    {
+    private function recordInstallCallbackEvent(
+        Bitrix24Profile $profile,
+        string $callbackBaseUrl,
+        string $processingStatus = Bitrix24WebhookEvent::STATUS_PENDING,
+    ): Bitrix24WebhookEvent {
         $connection = $profile->connections()->firstOrFail();
         $recordedAt = now();
 
@@ -368,7 +407,7 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'payload' => ['event' => 'ONAPPINSTALL'],
             'headers' => [],
             'query' => [],
-            'processing_status' => Bitrix24WebhookEvent::STATUS_PENDING,
+            'processing_status' => $processingStatus,
         ]);
 
         $event->forceFill([
