@@ -1,45 +1,87 @@
 <x-filament-panels::page>
     <div data-role="dialog-kanban-page" class="ac-panel-stack ac-panel-stack--relaxed">
-        <section class="ac-surface ac-surface--hero">
-            <div class="ac-card-grid">
-                <div class="ac-meta">
-                    <label for="kanban-filter-channel" class="ac-meta__label">Канал</label>
-                    <select id="kanban-filter-channel" wire:model.live="selectedChannelId" class="ac-select">
-                        <option value="">Все каналы</option>
-                        @foreach ($filters['channel_options'] as $channelId => $channelLabel)
-                            <option value="{{ $channelId }}">{{ $channelLabel }}</option>
-                        @endforeach
-                    </select>
+        <section
+            x-data="{ filtersOpen: @js($filter_state['has_active_filters']) }"
+            x-on:keydown.escape.window="filtersOpen = false"
+            class="ac-surface ac-surface--hero ac-kanban-filters-shell"
+        >
+            <div class="ac-surface__header ac-surface__header--centered ac-kanban-filters-shell__header">
+                <div class="ac-button-group ac-button-group--end">
+                    <button
+                        type="button"
+                        x-on:click="filtersOpen = ! filtersOpen"
+                        x-bind:aria-expanded="filtersOpen.toString()"
+                        class="ac-button ac-button--secondary"
+                    >
+                        <x-filament::icon icon="heroicon-m-funnel" class="h-4 w-4" />
+                        Фильтры
+
+                        @if ($filter_state['active_count'] > 0)
+                            <span class="ac-pill" data-tone="warning">
+                                {{ $filter_state['active_count'] }}
+                            </span>
+                        @endif
+                    </button>
+                </div>
+            </div>
+
+            <div
+                x-cloak
+                x-show="filtersOpen"
+                x-transition.opacity.duration.150ms
+                class="ac-surface__divider ac-kanban-filters-panel"
+            >
+                <div class="ac-card-grid ac-card-grid--kanban-filters">
+                    <div class="ac-meta">
+                        <label for="kanban-filter-channel" class="ac-meta__label">Канал</label>
+                        <select id="kanban-filter-channel" wire:model.live="selectedChannelId" class="ac-select">
+                            <option value="">Все каналы</option>
+                            @foreach ($filters['channel_options'] as $channelId => $channelLabel)
+                                <option value="{{ $channelId }}">{{ $channelLabel }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+
+                    <div class="ac-meta">
+                        <label for="kanban-filter-assignee" class="ac-meta__label">Ответственный</label>
+                        <select id="kanban-filter-assignee" wire:model.live="selectedAssignedUserId" class="ac-select">
+                            <option value="">Все сотрудники</option>
+                            @foreach ($filters['assigned_user_options'] as $userId => $userLabel)
+                                <option value="{{ $userId }}">{{ $userLabel }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+
+                    <div class="ac-meta">
+                        <label for="kanban-filter-route" class="ac-meta__label">Маршрут</label>
+                        <select id="kanban-filter-route" wire:model.live="selectedRouteStatus" class="ac-select">
+                            <option value="">Любой маршрут</option>
+                            @foreach ($filters['route_status_options'] as $routeCode => $routeLabel)
+                                <option value="{{ $routeCode }}">{{ $routeLabel }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+
+                    <div class="ac-meta">
+                        <label for="kanban-filter-inbox" class="ac-meta__label">Статус диалога</label>
+                        <select id="kanban-filter-inbox" wire:model.live="selectedInboxStatus" class="ac-select">
+                            <option value="">Любой статус</option>
+                            @foreach ($filters['inbox_status_options'] as $inboxCode => $inboxLabel)
+                                <option value="{{ $inboxCode }}">{{ $inboxLabel }}</option>
+                            @endforeach
+                        </select>
+                    </div>
                 </div>
 
-                <div class="ac-meta">
-                    <label for="kanban-filter-assignee" class="ac-meta__label">Ответственный</label>
-                    <select id="kanban-filter-assignee" wire:model.live="selectedAssignedUserId" class="ac-select">
-                        <option value="">Все сотрудники</option>
-                        @foreach ($filters['assigned_user_options'] as $userId => $userLabel)
-                            <option value="{{ $userId }}">{{ $userLabel }}</option>
-                        @endforeach
-                    </select>
-                </div>
-
-                <div class="ac-meta">
-                    <label for="kanban-filter-route" class="ac-meta__label">Маршрут</label>
-                    <select id="kanban-filter-route" wire:model.live="selectedRouteStatus" class="ac-select">
-                        <option value="">Любой маршрут</option>
-                        @foreach ($filters['route_status_options'] as $routeCode => $routeLabel)
-                            <option value="{{ $routeCode }}">{{ $routeLabel }}</option>
-                        @endforeach
-                    </select>
-                </div>
-
-                <div class="ac-meta">
-                    <label for="kanban-filter-inbox" class="ac-meta__label">Статус диалога</label>
-                    <select id="kanban-filter-inbox" wire:model.live="selectedInboxStatus" class="ac-select">
-                        <option value="">Любой статус</option>
-                        @foreach ($filters['inbox_status_options'] as $inboxCode => $inboxLabel)
-                            <option value="{{ $inboxCode }}">{{ $inboxLabel }}</option>
-                        @endforeach
-                    </select>
+                <div class="ac-button-group ac-button-group--end">
+                    <button
+                        type="button"
+                        wire:click="resetKanbanFilters"
+                        x-on:click="filtersOpen = false"
+                        class="ac-button ac-button--secondary ac-button--compact"
+                    >
+                        Сбросить
+                    </button>
                 </div>
             </div>
         </section>

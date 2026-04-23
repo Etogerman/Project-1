@@ -42,6 +42,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk()
             ->assertSee('Диалоги')
             ->assertSee('Канбан')
+            ->assertSee('Фильтры')
             ->assertSee('Таблица')
             ->assertSee('Требует проверки')
             ->assertSee($dialog->contact->display_name)
@@ -161,6 +162,27 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk();
 
         $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
+    }
+
+    public function test_kanban_filters_can_be_reset_to_base_slice(): void
+    {
+        $admin = $this->createAdmin();
+
+        Livewire::withQueryParams([
+            'channel' => '12',
+            'assignee' => '7',
+            'route' => 'ready',
+            'inbox' => DialogInboxStatusData::CODE_REQUIRES_REPLY,
+        ])
+            ->actingAs($admin)
+            ->test(DialogKanban::class)
+            ->call('resetKanbanFilters')
+            ->assertSet('selectedChannelId', '')
+            ->assertSet('selectedAssignedUserId', '')
+            ->assertSet('selectedRouteStatus', '')
+            ->assertSet('selectedInboxStatus', '');
+
+        $this->assertSame(DialogResource::getUrl('kanban'), DialogResource::getNavigationUrl());
     }
 
     public function test_dialog_resource_navigation_url_returns_to_current_table_slice_after_opening_index(): void
