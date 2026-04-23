@@ -43,9 +43,9 @@ class ExportManualReplyToBitrix24OpenLinesAction
         $excludedChatIds = [];
 
         if ($reusableChat = $this->resolveReusableChat($dialog)) {
-            $currentRouteChatId = $this->resolveCurrentRouteChatId($dialog, $route, $connection);
+            $currentRouteChat = $this->resolveCurrentRouteChat($dialog, $route, $connection);
 
-            if ($currentRouteChatId !== null && $currentRouteChatId === $reusableChat->chatId) {
+            if ($currentRouteChat['resolved'] && $currentRouteChat['chatId'] === $reusableChat->chatId) {
                 try {
                     return $this->sendMessage(
                         message: $message,
@@ -63,7 +63,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
                     $excludedChatIds[] = $reusableChat->chatId;
                 }
-            } else {
+            } elseif ($currentRouteChat['resolved']) {
                 $excludedChatIds[] = $reusableChat->chatId;
             }
         }
@@ -311,15 +311,21 @@ class ExportManualReplyToBitrix24OpenLinesAction
         );
     }
 
-    private function resolveCurrentRouteChatId(
+    /**
+     * @return array{resolved: bool, chatId: ?string}
+     */
+    private function resolveCurrentRouteChat(
         Dialog $dialog,
         Bitrix24OpenLinesRouteData $route,
         Bitrix24Connection $connection,
-    ): ?string {
+    ): array {
         $userCode = $this->buildUserCode($dialog, $route);
 
         if ($userCode === null) {
-            return null;
+            return [
+                'resolved' => false,
+                'chatId' => null,
+            ];
         }
 
         try {
@@ -330,20 +336,32 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 transportRetry: false,
             );
         } catch (Bitrix24ApiException) {
-            return null;
+            return [
+                'resolved' => false,
+                'chatId' => null,
+            ];
         }
 
         if (! $response->successful || ! is_array($response->result)) {
-            return null;
+            return [
+                'resolved' => false,
+                'chatId' => null,
+            ];
         }
 
         $chatId = $response->result['id'] ?? null;
 
         if (! is_scalar($chatId) || trim((string) $chatId) === '') {
-            return null;
+            return [
+                'resolved' => false,
+                'chatId' => null,
+            ];
         }
 
-        return trim((string) $chatId);
+        return [
+            'resolved' => true,
+            'chatId' => trim((string) $chatId),
+        ];
     }
 
     private function buildUserCode(Dialog $dialog, Bitrix24OpenLinesRouteData $route): ?string
