@@ -4,26 +4,13 @@
 
 ## Старт
 
-### 1. Скопируй `.env.example`
+### 1. Подготовь Laravel `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-### 2. Настрой ngrok (до запуска контейнеров)
-
-Без ngrok Telegram/MAX не смогут доставлять webhook-сообщения на локальный сервер.
-
-1. Зарегистрируйся на [ngrok.com](https://ngrok.com)
-2. Получи [Authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) и [Static Domain](https://dashboard.ngrok.com/endpoints)
-3. Заполни в `.env`:
-
-```
-NGROK_AUTHTOKEN=your_token
-APP_URL=https://your-name.ngrok-free.app
-```
-
-### 3. Запусти контейнер
+### 2. Запусти контейнер
 
 **VS Code Dev Container** — нужны [Docker Desktop](https://www.docker.com/products/docker-desktop/) и расширение [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers):
 
@@ -37,7 +24,27 @@ Ctrl+Shift+P → Dev Containers: Reopen in Container
 docker compose up -d
 ```
 
-Контейнер автоматически копирует `.env`, ставит зависимости и применяет миграции.
+### 3. Настрой ngrok отдельно от Laravel `.env`
+
+Без ngrok Telegram/MAX не смогут доставлять webhook-сообщения на локальный сервер.
+
+1. Зарегистрируйся на [ngrok.com](https://ngrok.com)
+2. Получи [Authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) и [Static Domain](https://dashboard.ngrok.com/endpoints)
+3. Скопируй `.env.ngrok.example` в `.env.ngrok` и заполни токен:
+
+```bash
+cp .env.ngrok.example .env.ngrok
+```
+
+```
+NGROK_AUTHTOKEN=your_token
+```
+
+4. Укажи public URL приложения в Laravel `.env`:
+
+```
+APP_URL=https://your-name.ngrok-free.app
+```
 
 ### 4. Запусти dev-сервер
 

@@ -12,18 +12,23 @@
 
 ### Запуск
 
+Перед стартом контейнера подготовь Laravel `.env` вручную:
+
+```bash
+cp .env.example .env
+```
+
 ```
 Ctrl+Shift+P → Dev Containers: Reopen in Container
 ```
 
-При першому старті `entrypoint.sh` автоматично виконує:
+После старта `entrypoint.sh` выполняет:
 
-1. копіює `.env.example` → `.env`
-2. `composer install`
-3. `npm install`
-4. генерує `APP_KEY`
-5. `php artisan migrate`
-6. `php artisan db:seed --class=AdminUserSeeder` (якщо заданий `ADMIN_USER_SEEDER_PASSWORD` у `.env`)
+1. `composer install`
+2. `npm install`
+3. генерирует `APP_KEY`
+4. `php artisan migrate`
+5. `php artisan db:seed --class=AdminUserSeeder` (если задан `ADMIN_USER_SEEDER_PASSWORD` в `.env`)
 
 Після того як контейнер піднявся, запусти dev-runtime:
 
@@ -33,10 +38,26 @@ composer dev
 
 ### Чистый Docker (без VS Code)
 
-Требует только Docker Desktop. `entrypoint.sh` выполняет тот же setup автоматически.
+Требует только Docker Desktop. Перед запуском так же подготовь Laravel `.env` вручную:
+
+```bash
+cp .env.example .env
+```
 
 ```bash
 docker compose up -d
+```
+
+Если нужен `ngrok`, создай отдельный compose-only файл `.env.ngrok` рядом с `docker-compose.yml`:
+
+```bash
+cp .env.ngrok.example .env.ngrok
+```
+
+И заполни в нём:
+
+```bash
+NGROK_AUTHTOKEN=your_token
 ```
 
 Затем войди в контейнер и запусти dev-runtime:

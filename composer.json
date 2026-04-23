@@ -71,7 +71,15 @@
         "dev": [
             "Composer\\Config::disableProcessTimeout",
             "npx concurrently -c \"#93c5fd,#c4b5fd,#fb7185,#fdba74\" \"php artisan serve --host=0.0.0.0\" \"php artisan queue:listen --tries=1\" \"php artisan pail --timeout=0\" \"npm run build -- --watch\" --names=server,queue,logs,vite"
-        ]
+        ],
+        "docker:build": "docker compose build",
+        "docker:up": "docker compose up -d",
+        "docker:down": "docker compose down",
+        "docker:dev": [
+            "Composer\\Config::disableProcessTimeout",
+            "docker compose exec -it dev composer dev"
+        ],
+        "docker:remove": "docker compose down -v"
     },
     "extra": {
         "laravel": {

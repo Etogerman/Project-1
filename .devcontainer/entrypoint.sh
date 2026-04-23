@@ -6,9 +6,10 @@ git config --global --add safe.directory /var/www/html
 
 cd /var/www/html
 
-# Copy .env from example if not present
+# Laravel env must be created manually before container startup
 if [ ! -f .env ]; then
-    cp .env.example .env
+    echo "Missing .env. Copy .env.example to .env before starting the container."
+    exit 1
 fi
 
 # Install PHP dependencies if vendor/ is missing
@@ -29,8 +30,8 @@ fi
 # Run migrations
 php artisan migrate --force
 
-# Seed admin user if password is provided (idempotent — safe to run on every start)
-if [ -n "$ADMIN_USER_SEEDER_PASSWORD" ]; then
+# Seed admin user if password is configured in Laravel env (idempotent — safe to run on every start)
+if grep -Eq '^ADMIN_USER_SEEDER_PASSWORD=.+$' .env; then
     php artisan db:seed --class=AdminUserSeeder --no-interaction
 fi
 
