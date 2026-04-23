@@ -1,55 +1,30 @@
 # Активные внешние ТЗ
 
-Этот файл — локальный реестр существенных stream-ов реализации, которые
-реально открыты в основном репозитории и уже имеют зафиксированные:
+Этот файл — локальный stream-level реестр существенных stream-ов, которые
+реально открыты в основном репозитории.
 
-1. `Spec repo`
-2. `Spec doc`
-3. `Spec revision`
+Он не хранит slice-level state, не дублирует полный статус внешнего `Spec doc`
+и не заменяет PR audit trail с блоком `Spec repo / Spec doc / Spec revision`.
 
-Если активных существенных stream-ов сейчас нет, это должно быть написано явно.
+## Схема записи
+
+Одна запись на один открытый substantial stream:
+
+- `[stream-name]` — Spec repo: `<repo-or-location>`; Spec doc: `<path-or-doc-name>`; Spec revision: `<commit-hash>`; status: `opened|blocked|closing`; opened-at: `YYYY-MM-DD`
+
+## Правила
+
+1. Здесь фиксируется только stream-level state.
+2. Slice-level state живёт только во внешнем spec-repo.
+3. Issue или task tracker хранит execution-state: blockers, next step, ссылки на PR и handoff notes.
+4. Запись добавляется, обновляется или удаляется в том же открывающем/закрывающем шаге, где stream реально появляется или закрывается в основном repo.
+5. Отдельный `docs-only` sync допустим как fallback, но не является default-требованием.
+6. Если внешний spec-repo, нужный `Spec doc` или согласованная `Spec revision` недоступны, substantial stream paused.
+7. Если активных substantial stream-ов нет, это указывается одной строкой: `- none`.
 
 ## Текущее состояние
 
-Сейчас в основном репозитории открыт один существенный stream с
-зафиксированным внешним `Spec revision`.
-
-### 1. Bitrix24 Open Lines manual reply service actor
-
-- `Spec repo`: `Etogerman/Project-1-specs`
-- `Spec doc`: `streams/tz-bitrix24-openlines-manual-reply-service-actor.md`
-- `Spec revision`: `8d2858fa1cf119bc49a660826658f438c3eda3d8`
-- внешний статус документа: `active`
-- локальный статус stream-а в основном repo: `opened`
-- issue tracker: [#381](https://github.com/Etogerman/Project-1/issues/381)
-
-Что это означает сейчас:
-
-1. versioned ТЗ продолжает уже открытый active spec stream;
-2. frozen baseline follow-up stream-а:
-   - `origin/main`
-   - merge commit `1b2c39770894e9b42375d32ce1a89edcfb4b3e91`
-   - merge PR `#392`
-   - это frozen analytical/spec baseline, а не branch-base по умолчанию для нового code slice
-3. preparatory `Slice 0A` уже закрыт;
-4. `Slice 1A` уже материализован и прошёл delivery path;
-5. текущий активный implementation slice по spec — `Slice 1B`;
-6. `Slice 1B` покрывает:
-   - remote-chat reuse runtime change
-   - targeted tests
-   - author self-check
-7. execution ceiling текущего active slice:
-   - `draft PR` в `staging`
-8. фактический старт нового code slice остаётся `staging-first`; если к моменту старта `main` свежее `staging`, агент обязан остановиться и запросить отдельное решение пользователя.
-9. code stream по `Slice 1B` ещё не стартовал и требует отдельной явной команды пользователя.
-
-## Как использовать этот файл
-
-1. Если нужно понять, какой внешний spec реально открыт сейчас, сначала смотри этот файл.
-2. Если здесь указано, что активных stream-ов нет, новый существенный stream нужно сначала открыть во внешнем `specs`-контуре и зафиксировать `Spec repo / Spec doc / Spec revision`.
-3. После открытия нового существенного stream-а этот файл обновляется отдельным коротким `docs-only` шагом.
-4. Документы со статусом `planned` не должны фиксироваться в этом реестре; здесь допускаются только реально открытые существенные stream-ы.
-5. После закрытия существенного stream-а запись из этого файла удаляется или заменяется новой актуальной записью отдельным `docs-only` шагом.
+- `[bitrix24-multi-dev-profile-isolation-shared-staging-portal]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-multi-dev-profile-isolation-shared-staging-portal.md`; Spec revision: `1987f6e385f38cc7158d1902e4258af71191e1fe`; status: `opened`; opened-at: `2026-04-22`
 
 ## Связанные документы
 

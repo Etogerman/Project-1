@@ -1,5 +1,11 @@
 # Clean Stream Release Flow
 
+> Этот документ не является вторым canonical workflow-документом.
+> Основной source of truth по delivery-level, control points и publish-path
+> находится в [docs/task-delivery-workflow.md](/Users/abrikosov/Documents/Проект-1/docs/task-delivery-workflow.md).
+> Здесь остаётся только узкий appendix по clean-stream extraction, mixed-state
+> audit и release hygiene.
+
 ## Цель
 
 Зафиксировать рабочий процесс, по которому изменения режутся из mixed state

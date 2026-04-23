@@ -14,6 +14,7 @@ class HandleBitrix24RuntimeCallbackAction
 {
     public function __construct(
         private readonly NormalizeBitrix24WebhookPayloadAction $normalizeWebhookPayload,
+        private readonly ResolveBitrix24CallbackIngressAction $resolveCallbackIngress,
         private readonly BuildBitrix24AuthContextAction $buildAuthContext,
         private readonly ValidateBitrix24CallbackAction $validateCallback,
         private readonly BuildBitrix24WebhookFingerprintAction $buildFingerprint,
@@ -24,8 +25,15 @@ class HandleBitrix24RuntimeCallbackAction
     public function handle(Request $request, string $callbackType): Bitrix24CallbackHandlingResultData
     {
         $normalized = $this->normalizeWebhookPayload->handle($request);
+        $ingress = $this->resolveCallbackIngress->handle($request);
         $authContext = $this->buildAuthContext->handle($request->all());
-        $validation = $this->validateCallback->handle($callbackType, $authContext, $normalized['looks_like_bitrix']);
+        $validation = $this->validateCallback->handle(
+            callbackType: $callbackType,
+            authContext: $authContext,
+            looksLikeBitrix: $normalized['looks_like_bitrix'],
+            callbackBaseUrl: $ingress->callbackBaseUrl,
+            profile: $ingress->profile,
+        );
         $fingerprint = $this->buildFingerprint->handle($normalized['payload']);
 
         $connection = $validation->connection;
@@ -44,6 +52,7 @@ class HandleBitrix24RuntimeCallbackAction
                 callbackType: $callbackType,
                 eventName: $normalized['event_name'],
                 authContext: $authContext,
+                callbackBaseUrl: $ingress->callbackBaseUrl,
                 payload: $normalized['payload'],
                 headers: $normalized['headers'],
                 query: $normalized['query'],
