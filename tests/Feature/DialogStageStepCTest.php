@@ -11,8 +11,10 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Dialogs\UpdateDialogStageAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -114,6 +116,95 @@ class DialogStageStepCTest extends TestCase
             ->assertNotified();
 
         $this->assertSame(Dialog::STAGE_NEW_DIALOG, $dialog->fresh()->stage);
+        $this->assertDatabaseMissing('messages', [
+            'dialog_id' => $dialog->id,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+        ]);
+    }
+
+    public function test_dialog_view_can_switch_between_manual_stages_and_write_operator_history(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Оператор Перевода',
+        ]);
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'stage-chat-manual-switch',
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSet('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPL)
+            ->set('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPP)
+            ->call('updateDialogStage')
+            ->assertNotified()
+            ->assertSet('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPP)
+            ->assertSee('Оператор Оператор Перевода изменил этап диалога: Передан в МПЛ -> Передан в МПП');
+
+        $historyMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
+            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame($admin->id, $historyMessage->sent_by_user_id);
+        $this->assertSame('operator', $historyMessage->raw_payload['source_type']);
+        $this->assertSame($admin->id, $historyMessage->raw_payload['changed_by_user_id']);
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPL, $historyMessage->raw_payload['from_stage']);
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPP, $historyMessage->raw_payload['to_stage']);
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPP, $dialog->fresh()->stage);
+    }
+
+    public function test_update_dialog_stage_action_rejects_manual_transition_to_automatic_stage(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create();
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'stage-chat-invalid-transition',
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+        ]);
+
+        try {
+            app(UpdateDialogStageAction::class)->handle(
+                $dialog,
+                $admin,
+                Dialog::STAGE_PHONE_RECEIVED,
+            );
+
+            $this->fail('Expected manual to automatic transition to be rejected.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Недопустимый ручной переход этапа.',
+                $exception->errors()['dialogStageSelection'][0] ?? null,
+            );
+        }
+
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPL, $dialog->fresh()->stage);
         $this->assertDatabaseMissing('messages', [
             'dialog_id' => $dialog->id,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
