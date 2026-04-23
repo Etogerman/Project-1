@@ -209,10 +209,20 @@ class DialogResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                Filter::make('requires_manual_reply')
-                    ->label('Требует ответа')
-                    ->default()
-                    ->query(fn (Builder $query): Builder => static::applyRequiresManualReplyFilter($query)),
+                SelectFilter::make('inbox_status')
+                    ->label('Статус')
+                    ->options(static::getInboxStatusFilterOptions())
+                    ->placeholder('Все')
+                    ->default(DialogInboxStatusData::CODE_REQUIRES_REPLY)
+                    ->query(function (Builder $query, array $data): void {
+                        $status = $data['value'] ?? null;
+
+                        if (! is_string($status) || $status === '') {
+                            return;
+                        }
+
+                        static::applyInboxStatusFilter($query, $status);
+                    }),
                 Filter::make('assigned_to_me')
                     ->label('Назначены мне')
                     ->query(fn (Builder $query): Builder => static::applyAssignedToMeFilter($query)),
@@ -542,25 +552,11 @@ class DialogResource extends Resource
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
-        $chronology = static::messageChronology();
-        $latestInboundUserMessageId = $chronology->latestDialogMessageIdFragment(
-            Message::KIND_INBOUND_USER,
-        );
-        $latestInboundUserMessageSortAt = $chronology->latestDialogMessageSortAtFragment(
-            Message::KIND_INBOUND_USER,
-        );
-        $latestOutboundManualReplyMessageId = $chronology->latestDialogMessageIdFragment(
-            Message::KIND_OUTBOUND_MANUAL_REPLY,
-        );
-        $latestOutboundManualReplyMessageSortAt = $chronology->latestDialogMessageSortAtFragment(
-            Message::KIND_OUTBOUND_MANUAL_REPLY,
-        );
-        $latestInboundAfterOutboundManualReply = $chronology->buildIsAfterCondition(
-            $latestInboundUserMessageSortAt,
-            $latestInboundUserMessageId,
-            $latestOutboundManualReplyMessageSortAt,
-            $latestOutboundManualReplyMessageId,
-        );
+        [
+            'latestInboundUserMessageId' => $latestInboundUserMessageId,
+            'latestOutboundManualReplyMessageId' => $latestOutboundManualReplyMessageId,
+            'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
+        ] = static::buildInboxStatusFilterFragments();
 
         return $query
             ->whereRaw(
@@ -589,6 +585,71 @@ class DialogResource extends Resource
                         $latestInboundUserMessageId['bindings'],
                     );
             });
+    }
+
+    protected static function applyInboxStatusFilter(Builder $query, string $status): Builder
+    {
+        if ($status === DialogInboxStatusData::CODE_REQUIRES_REPLY) {
+            return static::applyRequiresManualReplyFilter($query);
+        }
+
+        [
+            'latestInboundUserMessageId' => $latestInboundUserMessageId,
+            'latestOutboundManualReplyMessageId' => $latestOutboundManualReplyMessageId,
+            'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
+        ] = static::buildInboxStatusFilterFragments();
+
+        return match ($status) {
+            DialogInboxStatusData::CODE_NOT_REQUIRED => $query
+                ->whereRaw(
+                    $latestInboundUserMessageId['sql'].' is not null',
+                    $latestInboundUserMessageId['bindings'],
+                )
+                ->where(function (Builder $query) use (
+                    $latestOutboundManualReplyMessageId,
+                    $latestInboundAfterOutboundManualReply,
+                ): Builder {
+                    return $query
+                        ->whereRaw(
+                            $latestOutboundManualReplyMessageId['sql'].' is null',
+                            $latestOutboundManualReplyMessageId['bindings'],
+                        )
+                        ->orWhereRaw(
+                            $latestInboundAfterOutboundManualReply['sql'],
+                            $latestInboundAfterOutboundManualReply['bindings'],
+                        );
+                })
+                ->whereRaw(
+                    $latestInboundUserMessageId['sql'].' = dialogs.manual_reply_dismissed_source_message_id',
+                    $latestInboundUserMessageId['bindings'],
+                ),
+            DialogInboxStatusData::CODE_NO_NEW => $query->where(function (Builder $query) use (
+                $latestInboundUserMessageId,
+                $latestOutboundManualReplyMessageId,
+                $latestInboundAfterOutboundManualReply,
+            ): Builder {
+                return $query
+                    ->whereRaw(
+                        $latestInboundUserMessageId['sql'].' is null',
+                        $latestInboundUserMessageId['bindings'],
+                    )
+                    ->orWhere(function (Builder $query) use (
+                        $latestOutboundManualReplyMessageId,
+                        $latestInboundAfterOutboundManualReply,
+                    ): Builder {
+                        return $query
+                            ->whereRaw(
+                                $latestOutboundManualReplyMessageId['sql'].' is not null',
+                                $latestOutboundManualReplyMessageId['bindings'],
+                            )
+                            ->whereRaw(
+                                'not ('.$latestInboundAfterOutboundManualReply['sql'].')',
+                                $latestInboundAfterOutboundManualReply['bindings'],
+                            );
+                    });
+            }),
+            default => $query,
+        };
     }
 
     protected static function applyAssignedToMeFilter(Builder $query): Builder
@@ -658,6 +719,57 @@ class DialogResource extends Resource
     protected static function messageChronology(): MessageChronology
     {
         return app(MessageChronology::class);
+    }
+
+    /**
+     * @return array{
+     *     latestInboundUserMessageId: array{sql: string, bindings: list<mixed>},
+     *     latestInboundUserMessageSortAt: array{sql: string, bindings: list<mixed>},
+     *     latestOutboundManualReplyMessageId: array{sql: string, bindings: list<mixed>},
+     *     latestOutboundManualReplyMessageSortAt: array{sql: string, bindings: list<mixed>},
+     *     latestInboundAfterOutboundManualReply: array{sql: string, bindings: list<mixed>}
+     * }
+     */
+    protected static function buildInboxStatusFilterFragments(): array
+    {
+        $chronology = static::messageChronology();
+        $latestInboundUserMessageId = $chronology->latestDialogMessageIdFragment(
+            Message::KIND_INBOUND_USER,
+        );
+        $latestInboundUserMessageSortAt = $chronology->latestDialogMessageSortAtFragment(
+            Message::KIND_INBOUND_USER,
+        );
+        $latestOutboundManualReplyMessageId = $chronology->latestDialogMessageIdFragment(
+            Message::KIND_OUTBOUND_MANUAL_REPLY,
+        );
+        $latestOutboundManualReplyMessageSortAt = $chronology->latestDialogMessageSortAtFragment(
+            Message::KIND_OUTBOUND_MANUAL_REPLY,
+        );
+
+        return [
+            'latestInboundUserMessageId' => $latestInboundUserMessageId,
+            'latestInboundUserMessageSortAt' => $latestInboundUserMessageSortAt,
+            'latestOutboundManualReplyMessageId' => $latestOutboundManualReplyMessageId,
+            'latestOutboundManualReplyMessageSortAt' => $latestOutboundManualReplyMessageSortAt,
+            'latestInboundAfterOutboundManualReply' => $chronology->buildIsAfterCondition(
+                $latestInboundUserMessageSortAt,
+                $latestInboundUserMessageId,
+                $latestOutboundManualReplyMessageSortAt,
+                $latestOutboundManualReplyMessageId,
+            ),
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected static function getInboxStatusFilterOptions(): array
+    {
+        return [
+            DialogInboxStatusData::CODE_REQUIRES_REPLY => 'Требует ответа',
+            DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
+            DialogInboxStatusData::CODE_NO_NEW => 'Нет новых',
+        ];
     }
 
     protected static function formatChannelLabel(Dialog $dialog): string

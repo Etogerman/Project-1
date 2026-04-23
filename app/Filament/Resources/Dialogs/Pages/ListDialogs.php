@@ -15,7 +15,26 @@ class ListDialogs extends ListRecords
     {
         parent::mount();
 
-        DialogResource::rememberNavigationUrl(DialogResource::getUrl('index'));
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function updated(string $name, mixed $value): void
+    {
+        if (
+            ! in_array($name, [
+                'tableFilters',
+                'tableSearch',
+                'tableSort',
+                'tableGrouping',
+                'activeTab',
+                'isTableReordering',
+            ], true)
+            && ! str_starts_with($name, 'tableFilters.')
+        ) {
+            return;
+        }
+
+        $this->rememberCurrentNavigationUrl();
     }
 
     protected function getTableQuery(): Builder
@@ -32,5 +51,46 @@ class ListDialogs extends ListRecords
                 ->color('warning')
                 ->url(DialogResource::getUrl('kanban')),
         ];
+    }
+
+    private function rememberCurrentNavigationUrl(): void
+    {
+        DialogResource::rememberNavigationUrl($this->currentTableUrl());
+    }
+
+    private function currentTableUrl(): string
+    {
+        $baseUrl = DialogResource::getUrl('index');
+        $query = [];
+
+        if (is_array($this->tableFilters) && $this->tableFilters !== []) {
+            $query['filters'] = $this->tableFilters;
+        }
+
+        if (is_string($this->tableSearch) && $this->tableSearch !== '') {
+            $query['search'] = $this->tableSearch;
+        }
+
+        if (is_string($this->tableSort) && $this->tableSort !== '') {
+            $query['sort'] = $this->tableSort;
+        }
+
+        if (is_string($this->tableGrouping) && $this->tableGrouping !== '') {
+            $query['grouping'] = $this->tableGrouping;
+        }
+
+        if (is_string($this->activeTab) && $this->activeTab !== '') {
+            $query['tab'] = $this->activeTab;
+        }
+
+        if ($this->isTableReordering) {
+            $query['reordering'] = 1;
+        }
+
+        if ($query === []) {
+            return $baseUrl;
+        }
+
+        return $baseUrl.'?'.http_build_query($query);
     }
 }
