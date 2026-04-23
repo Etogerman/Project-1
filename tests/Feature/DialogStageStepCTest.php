@@ -79,6 +79,8 @@ class DialogStageStepCTest extends TestCase
         $this->assertSame(Message::SENT_BY_TYPE_SYSTEM, $historyMessage->sent_by_type);
         $this->assertSame($admin->id, $historyMessage->sent_by_user_id);
         $this->assertSame(Message::DIRECTION_OUTBOUND, $historyMessage->direction);
+        $this->assertSame($contact->id, $historyMessage->contact_id);
+        $this->assertSame($channel->id, $historyMessage->channel_id);
         $this->assertSame($identity->id, $historyMessage->contact_identity_id);
         $this->assertSame('stage-chat-1', $historyMessage->external_chat_id);
         $this->assertSame('operator', $historyMessage->raw_payload['source_type']);
@@ -160,6 +162,10 @@ class DialogStageStepCTest extends TestCase
             ->latest('id')
             ->firstOrFail();
 
+        $this->assertSame($contact->id, $historyMessage->contact_id);
+        $this->assertSame($channel->id, $historyMessage->channel_id);
+        $this->assertSame($identity->id, $historyMessage->contact_identity_id);
+        $this->assertSame('stage-chat-manual-switch', $historyMessage->external_chat_id);
         $this->assertSame($admin->id, $historyMessage->sent_by_user_id);
         $this->assertSame('operator', $historyMessage->raw_payload['source_type']);
         $this->assertSame($admin->id, $historyMessage->raw_payload['changed_by_user_id']);
