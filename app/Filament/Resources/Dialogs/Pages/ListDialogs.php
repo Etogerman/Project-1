@@ -22,17 +22,125 @@ class ListDialogs extends ListRecords
     {
         if (
             ! in_array($name, [
-                'tableFilters',
-                'tableSearch',
-                'tableSort',
                 'tableGrouping',
-                'activeTab',
                 'isTableReordering',
             ], true)
             && ! str_starts_with($name, 'tableFilters.')
         ) {
             return;
         }
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function updatedTableFilters(): void
+    {
+        parent::updatedTableFilters();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function applyTableFilters(): void
+    {
+        parent::applyTableFilters();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function removeTableFilter(string $filterName, ?string $field = null, bool $isRemovingAllFilters = false): void
+    {
+        parent::removeTableFilter($filterName, $field, $isRemovingAllFilters);
+
+        if ($isRemovingAllFilters) {
+            return;
+        }
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function removeTableFilters(): void
+    {
+        parent::removeTableFilters();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function resetTableFiltersForm(): void
+    {
+        parent::resetTableFiltersForm();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function updatedTableSearch(): void
+    {
+        parent::updatedTableSearch();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function resetTableSearch(): void
+    {
+        parent::resetTableSearch();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    /**
+     * @param  string | null  $value
+     */
+    public function updatedTableColumnSearches($value = null, ?string $key = null): void
+    {
+        parent::updatedTableColumnSearches($value, $key);
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function resetTableColumnSearch(string $column): void
+    {
+        parent::resetTableColumnSearch($column);
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function resetTableColumnSearches(): void
+    {
+        parent::resetTableColumnSearches();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function sortTable(?string $column = null, ?string $direction = null): void
+    {
+        parent::sortTable($column, $direction);
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function updatedTableSort(): void
+    {
+        parent::updatedTableSort();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function updatedTableSortDirection(): void
+    {
+        parent::updatedTableSortDirection();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function updatedActiveTab(): void
+    {
+        parent::updatedActiveTab();
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function toggleTableReordering(): void
+    {
+        parent::toggleTableReordering();
 
         $this->rememberCurrentNavigationUrl();
     }

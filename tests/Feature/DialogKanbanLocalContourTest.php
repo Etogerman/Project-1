@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Data\Dialogs\DialogInboxStatusData;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Dialogs\Pages\DialogKanban;
+use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -172,8 +174,8 @@ class DialogKanbanLocalContourTest extends TestCase
             'search' => 'Срез',
             'sort' => 'last_message_at:desc',
             'filters' => [
-                'requires_manual_reply' => [
-                    'isActive' => true,
+                'inbox_status' => [
+                    'value' => DialogInboxStatusData::CODE_REQUIRES_REPLY,
                 ],
             ],
         ]);
@@ -189,6 +191,72 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk();
 
         $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
+    }
+
+    public function test_dialog_resource_navigation_url_updates_after_table_filter_is_removed(): void
+    {
+        $admin = $this->createAdmin();
+
+        $component = Livewire::actingAs($admin)->test(ListDialogs::class);
+
+        $component->filterTable('inbox_status', DialogInboxStatusData::CODE_REQUIRES_REPLY);
+
+        $this->assertStringContainsString(
+            'filters%5Binbox_status%5D%5Bvalue%5D='.DialogInboxStatusData::CODE_REQUIRES_REPLY,
+            DialogResource::getNavigationUrl(),
+        );
+
+        $component->removeTableFilter('inbox_status');
+
+        $this->assertStringNotContainsString('inbox_status', DialogResource::getNavigationUrl());
+    }
+
+    public function test_dialog_resource_navigation_url_updates_after_all_table_filters_are_removed(): void
+    {
+        $admin = $this->createAdmin();
+
+        $component = Livewire::actingAs($admin)->test(ListDialogs::class);
+
+        $component
+            ->filterTable('inbox_status', DialogInboxStatusData::CODE_REQUIRES_REPLY)
+            ->set('tableSearch', 'abc');
+
+        $this->assertStringContainsString(
+            'filters%5Binbox_status%5D%5Bvalue%5D='.DialogInboxStatusData::CODE_REQUIRES_REPLY,
+            DialogResource::getNavigationUrl(),
+        );
+        $this->assertStringContainsString('search=abc', DialogResource::getNavigationUrl());
+
+        $component->removeTableFilters();
+
+        $this->assertStringNotContainsString('inbox_status', DialogResource::getNavigationUrl());
+        $this->assertStringNotContainsString('search=abc', DialogResource::getNavigationUrl());
+    }
+
+    public function test_dialog_resource_navigation_url_updates_after_table_search_is_reset(): void
+    {
+        $admin = $this->createAdmin();
+
+        $component = Livewire::actingAs($admin)->test(ListDialogs::class);
+
+        $component->set('tableSearch', 'abc');
+
+        $this->assertStringContainsString('search=abc', DialogResource::getNavigationUrl());
+
+        $component->call('resetTableSearch');
+
+        $this->assertStringNotContainsString('search=abc', DialogResource::getNavigationUrl());
+    }
+
+    public function test_dialog_resource_navigation_url_updates_after_table_sort_changes(): void
+    {
+        $admin = $this->createAdmin();
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->call('sortTable', 'id', 'asc');
+
+        $this->assertStringContainsString('sort=id%3Aasc', DialogResource::getNavigationUrl());
     }
 
     public function test_kanban_page_can_move_review_card_to_working_stage_and_write_history(): void
