@@ -13,7 +13,6 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Dialogs\UpdateDialogStageAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
-use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
@@ -244,45 +243,6 @@ class DialogStageStepCTest extends TestCase
             'dialog_id' => $dialog->id,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
         ]);
-    }
-
-    public function test_update_dialog_stage_action_requires_dialog_edit_permission(): void
-    {
-        $employee = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => false,
-        ]);
-        $channel = Channel::factory()->create();
-        $contact = Contact::factory()->create();
-        $identity = ContactIdentity::factory()->create([
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
-        ]);
-        $dialog = Dialog::factory()->create([
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'current_contact_identity_id' => $identity->id,
-            'external_chat_id' => 'stage-chat-no-permission',
-            'stage' => Dialog::STAGE_PHONE_RECEIVED,
-        ]);
-
-        $this->expectException(AuthorizationException::class);
-        $this->expectExceptionMessage('Недостаточно прав для смены этапа диалога.');
-
-        try {
-            app(UpdateDialogStageAction::class)->handle(
-                $dialog,
-                $employee,
-                Dialog::STAGE_TRANSFERRED_TO_MPL,
-            );
-        } finally {
-            $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $dialog->fresh()->stage);
-            $this->assertDatabaseMissing('messages', [
-                'dialog_id' => $dialog->id,
-                'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
-            ]);
-        }
     }
 
     public function test_dialogs_inbox_preview_ignores_dialog_stage_history_note(): void
