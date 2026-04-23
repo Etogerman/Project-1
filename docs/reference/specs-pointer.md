@@ -90,6 +90,27 @@ git -C /Users/abrikosov/Documents/Project-1-specs rev-parse HEAD
 2. потом фиксируется новый `Spec revision`
 3. только после этого продолжается implementation stream
 
+## Текущий опубликованный spec-only handoff
+
+На `2026-04-23` во внешнем spec-repo уже опубликован следующий substantial
+stream-family, но implementation stream в основном repo по нему ещё не открыт:
+
+```md
+Spec repo: Etogerman/Project-1-specs
+Spec doc: streams/telegram-account/tz-core-connection-model-and-telegram-account-1to1-v1.md
+Spec revision: fe8dacaa4f645a53fd4d7729c6cfd9b069913826
+```
+
+Практический смысл этой фиксации:
+
+1. внешний `Spec doc` уже versioned и может использоваться как source of truth
+   для будущего stream-а
+2. сам implementation stream в основном repo ещё не открыт, пока не выполнен
+   отдельный stream-level handoff и не принято process-решение по sequencing
+3. если в [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md)
+   уже есть другой `opened` substantial stream, новый implementation stream по
+   этому документу не начинается автоматически
+
 ## Как закрывать внешний spec
 
 После закрытия acceptance существенного stream-а нужно синхронизировать весь
