@@ -297,6 +297,7 @@ class ViewDialog extends ViewRecord
         return [
             'dialogHeader' => $this->getDialogHeaderViewData(),
             'contactSummary' => $this->getContactSummaryViewData(),
+            'kanbanBackUrl' => $this->resolveKanbanBackUrl(),
             'contactUrl' => $this->getContactViewUrl(),
             'dialogInboxStatus' => $this->getDialogInboxStatusViewData(),
             'dialogStage' => $this->getDialogStageViewData(),
@@ -661,6 +662,21 @@ class ViewDialog extends ViewRecord
         }
 
         return ContactResource::getUrl('view', ['record' => $contact]);
+    }
+
+    protected function resolveKanbanBackUrl(): ?string
+    {
+        $backTo = request()->query('back_to');
+
+        if (! is_string($backTo) || $backTo === '') {
+            return null;
+        }
+
+        $kanbanUrl = DialogResource::getUrl('kanban');
+
+        return str_starts_with($backTo, $kanbanUrl)
+            ? $backTo
+            : null;
     }
 
     protected function resolveCurrentEmployee(): User

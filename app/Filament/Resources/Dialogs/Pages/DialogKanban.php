@@ -60,26 +60,54 @@ class DialogKanban extends Page
      */
     protected array $previewFeedCache = [];
 
+    protected function queryString(): array
+    {
+        return [
+            'selectedChannelId' => ['as' => 'channel', 'except' => ''],
+            'selectedAssignedUserId' => ['as' => 'assignee', 'except' => ''],
+            'selectedRouteStatus' => ['as' => 'route', 'except' => ''],
+            'selectedInboxStatus' => ['as' => 'inbox', 'except' => ''],
+        ];
+    }
+
     public function mount(): void
     {
         foreach (Dialog::kanbanStages() as $stage) {
             $this->visibleCardsPerStage[$stage] = self::INITIAL_VISIBLE_CARDS;
         }
+
+        $this->rememberCurrentNavigationUrl();
     }
 
     public function getTitle(): string|Htmlable
     {
-        return 'Канбан диалогов';
+        return 'Диалоги';
     }
 
     public function getHeading(): string|Htmlable
     {
-        return 'Канбан диалогов';
+        return 'Диалоги';
     }
 
     public function getSubheading(): ?string
     {
-        return 'Рабочая доска по этапам без фильтра «Требует ответа» по умолчанию.';
+        return null;
+    }
+
+    public function getBreadcrumb(): ?string
+    {
+        return 'Канбан';
+    }
+
+    protected function getHeaderActions(): array
+    {
+        return [
+            Action::make('table')
+                ->label('Таблица')
+                ->icon('heroicon-m-table-cells')
+                ->color('warning')
+                ->url(DialogResource::getUrl('index')),
+        ];
     }
 
     public function loadMoreCards(string $stage): void
@@ -90,6 +118,20 @@ class DialogKanban extends Page
 
         $this->visibleCardsPerStage[$stage] = ($this->visibleCardsPerStage[$stage] ?? self::INITIAL_VISIBLE_CARDS)
             + self::INITIAL_VISIBLE_CARDS;
+    }
+
+    public function updated(string $name, mixed $value): void
+    {
+        if (! in_array($name, [
+            'selectedChannelId',
+            'selectedAssignedUserId',
+            'selectedRouteStatus',
+            'selectedInboxStatus',
+        ], true)) {
+            return;
+        }
+
+        $this->rememberCurrentNavigationUrl();
     }
 
     public function moveDialogCard(int $dialogId, string $targetStage): void
@@ -132,17 +174,6 @@ class DialogKanban extends Page
                 ->body($throwable->getMessage())
                 ->send();
         }
-    }
-
-    protected function getHeaderActions(): array
-    {
-        return [
-            Action::make('table')
-                ->label('Таблица')
-                ->icon('heroicon-m-table-cells')
-                ->color('gray')
-                ->url(DialogResource::getUrl('index')),
-        ];
     }
 
     /**
@@ -241,9 +272,40 @@ class DialogKanban extends Page
             'inbox_status_tone' => $inboxStatus->tone,
             'route_status_label' => $routeStatus->label,
             'route_status_tone' => $routeStatus->tone,
-            'view_url' => DialogResource::getUrl('view', ['record' => $dialog]),
+            'view_url' => $this->buildDialogViewUrl($dialog),
             'allowed_target_stages' => $this->allowedTargetStages($dialog, $columnStage),
         ];
+    }
+
+    private function buildDialogViewUrl(Dialog $dialog): string
+    {
+        $url = DialogResource::getUrl('view', ['record' => $dialog]);
+
+        return $url.(str_contains($url, '?') ? '&' : '?').http_build_query([
+            'back_to' => $this->currentKanbanUrl(),
+        ]);
+    }
+
+    private function currentKanbanUrl(): string
+    {
+        $baseUrl = DialogResource::getUrl('kanban');
+        $query = array_filter([
+            'channel' => $this->selectedChannelId,
+            'assignee' => $this->selectedAssignedUserId,
+            'route' => $this->selectedRouteStatus,
+            'inbox' => $this->selectedInboxStatus,
+        ], fn (mixed $value): bool => is_string($value) && $value !== '');
+
+        if ($query === []) {
+            return $baseUrl;
+        }
+
+        return $baseUrl.'?'.http_build_query($query);
+    }
+
+    private function rememberCurrentNavigationUrl(): void
+    {
+        DialogResource::rememberNavigationUrl($this->currentKanbanUrl());
     }
 
     /**

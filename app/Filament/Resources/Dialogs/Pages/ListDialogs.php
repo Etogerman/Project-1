@@ -11,6 +11,13 @@ class ListDialogs extends ListRecords
 {
     protected static string $resource = DialogResource::class;
 
+    public function mount(): void
+    {
+        parent::mount();
+
+        DialogResource::rememberNavigationUrl(DialogResource::getUrl('index'));
+    }
+
     protected function getTableQuery(): Builder
     {
         return DialogResource::getTableRecordQuery();
