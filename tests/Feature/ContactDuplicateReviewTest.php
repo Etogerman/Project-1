@@ -54,4 +54,28 @@ class ContactDuplicateReviewTest extends TestCase
 
         $this->assertDatabaseCount('contact_duplicate_reviews', 2);
     }
+
+    public function test_it_allows_only_one_open_cross_channel_identity_review_per_identity_key(): void
+    {
+        $firstContact = Contact::factory()->create();
+        $secondContact = Contact::factory()->create();
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $firstContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-200',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        $this->expectException(QueryException::class);
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $secondContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-200',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+    }
 }

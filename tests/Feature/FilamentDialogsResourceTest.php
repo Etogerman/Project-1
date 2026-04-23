@@ -198,6 +198,57 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('MAX Клиент');
     }
 
+    public function test_dialogs_inbox_shows_telegram_account_dialog_even_when_route_is_not_sendable(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Inbox',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account inbox contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-inbox-1',
+            'display_name' => 'Telegram Account Клиент',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-message-1',
+            'text' => 'Новый account inbound',
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Account inbox contact')
+            ->assertSee('Telegram Account Inbox')
+            ->assertSee('Требует ответа')
+            ->assertSee('Не bot-канал');
+    }
+
     public function test_employee_can_open_dialog_view_page_with_reply_composer(): void
     {
         $user = User::factory()->create([
