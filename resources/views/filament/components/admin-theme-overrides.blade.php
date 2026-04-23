@@ -1500,6 +1500,19 @@
         grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
     }
 
+    .ac-card-grid--kanban-filters {
+        grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    }
+
+    .ac-kanban-filters-shell__header {
+        justify-content: flex-end;
+    }
+
+    .ac-kanban-filters-panel {
+        display: grid;
+        gap: 0.85rem;
+    }
+
     .ac-kanban-board {
         display: grid;
         grid-auto-flow: column;

@@ -134,6 +134,16 @@ class DialogKanban extends Page
         $this->rememberCurrentNavigationUrl();
     }
 
+    public function resetKanbanFilters(): void
+    {
+        $this->selectedChannelId = '';
+        $this->selectedAssignedUserId = '';
+        $this->selectedRouteStatus = '';
+        $this->selectedInboxStatus = '';
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
     public function moveDialogCard(int $dialogId, string $targetStage): void
     {
         if (! in_array($targetStage, Dialog::kanbanStages(), true)) {
@@ -189,6 +199,10 @@ class DialogKanban extends Page
                 'assigned_user_options' => $this->assignedUserOptions(),
                 'route_status_options' => $this->routeStatusOptions(),
                 'inbox_status_options' => $this->inboxStatusOptions(),
+            ],
+            'filter_state' => [
+                'active_count' => $this->activeFilterCount(),
+                'has_active_filters' => $this->hasActiveFilters(),
             ],
             'columns' => $this->buildColumns($dialogs),
             'can_manage_stages' => $this->canCurrentUserManageDialogStages(),
@@ -306,6 +320,21 @@ class DialogKanban extends Page
     private function rememberCurrentNavigationUrl(): void
     {
         DialogResource::rememberNavigationUrl($this->currentKanbanUrl());
+    }
+
+    private function activeFilterCount(): int
+    {
+        return count(array_filter([
+            $this->selectedChannelId,
+            $this->selectedAssignedUserId,
+            $this->selectedRouteStatus,
+            $this->selectedInboxStatus,
+        ], fn (string $value): bool => $value !== ''));
+    }
+
+    private function hasActiveFilters(): bool
+    {
+        return $this->activeFilterCount() > 0;
     }
 
     /**
