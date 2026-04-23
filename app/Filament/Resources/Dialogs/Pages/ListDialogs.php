@@ -145,6 +145,20 @@ class ListDialogs extends ListRecords
         $this->rememberCurrentNavigationUrl();
     }
 
+    public function setPage(int | string $page, ?string $pageName = null): void
+    {
+        parent::setPage($page, $pageName);
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function resetPage(?string $pageName = null): void
+    {
+        parent::resetPage($pageName);
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
     protected function getTableQuery(): Builder
     {
         return DialogResource::getTableRecordQuery();
@@ -193,6 +207,12 @@ class ListDialogs extends ListRecords
 
         if ($this->isTableReordering) {
             $query['reordering'] = 1;
+        }
+
+        $tablePage = $this->getTablePage();
+
+        if (((int) $tablePage) > 1) {
+            $query[$this->getTablePaginationPageName()] = $tablePage;
         }
 
         if ($query === []) {
