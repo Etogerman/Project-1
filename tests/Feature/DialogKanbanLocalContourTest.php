@@ -164,6 +164,29 @@ class DialogKanbanLocalContourTest extends TestCase
         $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
     }
 
+    public function test_dialog_resource_navigation_url_is_remembered_on_initial_table_get(): void
+    {
+        $admin = $this->createAdmin();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Начальный срез таблицы',
+            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+        ]);
+        $expectedUrl = DialogResource::getUrl('index').'?'.http_build_query([
+            'search' => 'Начальный',
+            'filters' => [
+                'channel_id' => [
+                    'value' => (string) $dialog->channel_id,
+                ],
+            ],
+        ]);
+
+        $this->actingAs($admin)
+            ->get($expectedUrl)
+            ->assertOk();
+
+        $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
+    }
+
     public function test_kanban_filters_can_be_reset_to_base_slice(): void
     {
         $admin = $this->createAdmin();
