@@ -23,7 +23,12 @@ class SyncDialogsStageForRootContactAction
      *   dialogs_already_correct: int,
      * }
      */
-    public function handle(Contact|int $contact, bool $apply = true, bool $writeHistory = true): array
+    public function handle(
+        Contact|int $contact,
+        bool $apply = true,
+        bool $writeHistory = true,
+        bool $allowReviewEscape = false,
+    ): array
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $memberContactIds = $this->resolveMemberContactIds($rootContact);
@@ -46,7 +51,11 @@ class SyncDialogsStageForRootContactAction
 
         foreach ($dialogs as $dialog) {
             $fromStage = $dialog->stage;
-            $stage = $this->resolveDialogStageAction->handle($dialog, $rootContact);
+            $stage = $this->resolveDialogStageAction->handle(
+                $dialog,
+                $rootContact,
+                allowReviewEscape: $allowReviewEscape,
+            );
 
             if ($fromStage === $stage) {
                 $stats['dialogs_already_correct']++;

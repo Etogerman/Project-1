@@ -538,7 +538,10 @@ class Contact extends Model
             'data_collection_attempts_count' => 0,
         ])->save();
 
-        app(SyncDialogsStageForRootContactAction::class)->handle($this);
+        app(SyncDialogsStageForRootContactAction::class)->handle(
+            $this,
+            allowReviewEscape: true,
+        );
     }
 
     protected function displayName(): Attribute

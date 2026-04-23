@@ -25,6 +25,10 @@ class ResolveConsolidatedDialogStageAction
         Collection $messages,
         mixed $phoneConfirmedAt,
     ): string {
+        if ($survivingDialog->stage === Dialog::STAGE_REQUIRES_REVIEW) {
+            return Dialog::STAGE_REQUIRES_REVIEW;
+        }
+
         if (Dialog::isManualStage($survivingDialog->stage)) {
             return (string) $survivingDialog->stage;
         }

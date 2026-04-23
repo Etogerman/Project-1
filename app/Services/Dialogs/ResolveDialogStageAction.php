@@ -7,7 +7,11 @@ use App\Models\Dialog;
 
 class ResolveDialogStageAction
 {
-    public function handle(Dialog $dialog, ?Contact $contact = null): string
+    public function handle(
+        Dialog $dialog,
+        ?Contact $contact = null,
+        bool $allowReviewEscape = false,
+    ): string
     {
         $contact ??= $dialog->relationLoaded('contact')
             ? $dialog->contact
@@ -17,11 +21,21 @@ class ResolveDialogStageAction
             currentStage: $dialog->stage,
             contact: $contact,
             phoneConfirmedAt: $dialog->phone_confirmed_at,
+            allowReviewEscape: $allowReviewEscape,
         );
     }
 
-    public function forAttributes(?string $currentStage, Contact $contact, mixed $phoneConfirmedAt): string
+    public function forAttributes(
+        ?string $currentStage,
+        Contact $contact,
+        mixed $phoneConfirmedAt,
+        bool $allowReviewEscape = false,
+    ): string
     {
+        if ($currentStage === Dialog::STAGE_REQUIRES_REVIEW && ! $allowReviewEscape) {
+            return Dialog::STAGE_REQUIRES_REVIEW;
+        }
+
         if ($this->isManualStage($currentStage)) {
             return $currentStage;
         }
