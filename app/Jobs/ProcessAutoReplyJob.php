@@ -354,6 +354,7 @@ class ProcessAutoReplyJob implements ShouldQueue
                     return false;
                 }
 
+                return true;
             });
 
         if (! $failureLog instanceof ChannelActivityLog) {
