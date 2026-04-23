@@ -12,6 +12,7 @@ use Illuminate\Support\Str;
 class QueueBitrix24LiveMessageExportAction
 {
     public const UNCLAIMED_PENDING_RECOVERY_SECONDS = 120;
+    private const DELAYED_PENDING_RECOVERY_BUFFER_SECONDS = 5;
 
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
@@ -102,6 +103,12 @@ class QueueBitrix24LiveMessageExportAction
         );
 
         ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)->afterCommit();
+        // The delayed recovery path must survive a failed afterCommit handoff of the immediate job.
+        ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)
+            ->delay(now()->addSeconds(
+                self::UNCLAIMED_PENDING_RECOVERY_SECONDS + self::DELAYED_PENDING_RECOVERY_BUFFER_SECONDS
+            ))
+            ->beforeCommit();
 
         return new Bitrix24LiveMessageExportQueueResultData(
             queued: true,
