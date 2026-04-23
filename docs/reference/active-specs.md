@@ -24,7 +24,7 @@
 
 ## Текущее состояние
 
-- none
+- `[bitrix24-dev-profile-bootstrap-self-service]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-dev-profile-bootstrap-self-service.md`; Spec revision: `2f86930f316477c359a2c73d845477eca63317c6`; status: `opened`; opened-at: `2026-04-23`
 
 ## Связанные документы
 
