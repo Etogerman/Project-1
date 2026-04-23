@@ -5,6 +5,7 @@ namespace App\Services\Bitrix24;
 use App\Data\Bitrix24\Bitrix24DevProfileBootstrapResultData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
+use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Throwable;
@@ -40,6 +41,8 @@ class BootstrapBitrix24DevProfileAction
             ->where('portal_domain', $resolvedPortalDomain)
             ->where('profile_key', $profileKey)
             ->first();
+        $callbackBaseUrlRotated = $existingProfile instanceof Bitrix24Profile
+            && $existingProfile->callback_base_url !== $normalizedCallbackBaseUrl;
 
         $otherProfiles = Bitrix24Profile::query()
             ->when(
@@ -157,7 +160,7 @@ class BootstrapBitrix24DevProfileAction
         return new Bitrix24DevProfileBootstrapResultData(
             profile: $profile,
             created: $created,
-            checks: $this->buildChecks($profile),
+            checks: $this->buildChecks($profile, $callbackBaseUrlRotated),
             instructionSteps: $this->buildInstructionSteps($profile),
         );
     }
@@ -297,7 +300,7 @@ class BootstrapBitrix24DevProfileAction
     /**
      * @return list<array{label: string, required: bool, status: string, value: string, notes: string}>
      */
-    private function buildChecks(Bitrix24Profile $profile): array
+    private function buildChecks(Bitrix24Profile $profile, bool $callbackBaseUrlRotated = false): array
     {
         $portalProfiles = Bitrix24Profile::query()
             ->where('portal_domain', $profile->portal_domain)
@@ -419,6 +422,7 @@ class BootstrapBitrix24DevProfileAction
             ),
             $this->activeInstallConnectionCheck($profile, $activeConnections),
             $this->installedConnectionClientIdCheck($profile, $verifiedConnection),
+            $this->installCallbackIngressCheck($profile, $verifiedConnection, $callbackBaseUrlRotated),
             $this->bitrixAppProbeCheck($profile, $verifiedConnection),
             $this->bitrixLineProbeCheck(
                 'Telegram LINE_ID exists on Bitrix',
@@ -504,6 +508,71 @@ class BootstrapBitrix24DevProfileAction
             Bitrix24DevProfileBootstrapResultData::STATUS_OK,
             true,
             'Value is filled.',
+        );
+    }
+
+    /**
+     * @return array{label: string, required: bool, status: string, value: string, notes: string}
+     */
+    private function installCallbackIngressCheck(
+        Bitrix24Profile $profile,
+        ?Bitrix24Connection $connection,
+        bool $callbackBaseUrlRotated,
+    ): array {
+        $required = $connection instanceof Bitrix24Connection
+            && filled($profile->client_id)
+            && filled($profile->application_code);
+
+        if (! $required) {
+            return $this->check(
+                'Install callback reached current callback_base_url',
+                '',
+                Bitrix24DevProfileBootstrapResultData::STATUS_WARNING,
+                false,
+                'The command verifies the current callback ingress after one active install connection is attached to the profile.',
+            );
+        }
+
+        $latestInstallEvent = Bitrix24WebhookEvent::query()
+            ->where('connection_id', $connection->getKey())
+            ->where('callback_type', Bitrix24WebhookEvent::TYPE_INSTALL)
+            ->where('callback_base_url', $profile->callback_base_url)
+            ->latest('id')
+            ->first();
+
+        if (! $latestInstallEvent instanceof Bitrix24WebhookEvent) {
+            return $this->check(
+                'Install callback reached current callback_base_url',
+                $profile->callback_base_url,
+                Bitrix24DevProfileBootstrapResultData::STATUS_MISSING,
+                true,
+                'No install callback has been recorded for the current callback_base_url yet. Re-save the Bitrix app install callback so it reaches this ingress, then rerun the command.',
+            );
+        }
+
+        if (
+            $callbackBaseUrlRotated
+            && $profile->updated_at !== null
+            && $latestInstallEvent->created_at !== null
+            && $latestInstallEvent->created_at->lt($profile->updated_at)
+        ) {
+            return $this->check(
+                'Install callback reached current callback_base_url',
+                $profile->callback_base_url,
+                Bitrix24DevProfileBootstrapResultData::STATUS_MISSING,
+                true,
+                'A stale install callback exists for this callback_base_url, but it predates the current tunnel rotation. Trigger a fresh install callback on the new ingress, then rerun the command.',
+            );
+        }
+
+        return $this->check(
+            'Install callback reached current callback_base_url',
+            $profile->callback_base_url,
+            Bitrix24DevProfileBootstrapResultData::STATUS_OK,
+            true,
+            $callbackBaseUrlRotated
+                ? 'A fresh install callback has been recorded on the rotated callback_base_url.'
+                : 'An install callback is already recorded on the current callback_base_url.',
         );
     }
 
@@ -880,7 +949,7 @@ class BootstrapBitrix24DevProfileAction
             return $returnedId === $lineId;
         }
 
-        return $result !== [];
+        return false;
     }
 
     private function isInstalled(mixed $value): bool
