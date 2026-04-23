@@ -37,4 +37,22 @@ class ChannelFactory extends Factory
             'is_active' => true,
         ];
     }
+
+    public function account(): static
+    {
+        return $this->state(fn (): array => [
+            'name' => fake()->company().' Account',
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'credentials' => [],
+            'bot_token_present' => false,
+            'bot_external_id' => null,
+            'bot_username' => null,
+            'bot_name' => null,
+            'bot_profile_url' => null,
+            'last_webhook_received_at' => null,
+            'last_reply_sent_at' => null,
+            'last_error_at' => null,
+            'last_error_message' => null,
+        ]);
+    }
 }

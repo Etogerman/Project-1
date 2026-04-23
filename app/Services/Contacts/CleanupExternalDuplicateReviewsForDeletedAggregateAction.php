@@ -32,15 +32,29 @@ class CleanupExternalDuplicateReviewsForDeletedAggregateAction
         /** @var Collection<int, ContactDuplicateReview> $reviews */
         $reviews = ContactDuplicateReview::query()
             ->whereNotIn('contact_id', $aggregateContactIds)
-            ->where('status', ContactDuplicateReview::STATUS_OPEN)
-            ->whereIn('review_type', [
-                ContactDuplicateReview::TYPE_PHONE_MULTIPLE_ROOTS,
-                ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE,
-            ])
             ->where(function ($query) use ($aggregateContactIds): void {
-                foreach ($aggregateContactIds as $contactId) {
-                    $query->orWhereJsonContains('candidate_root_contact_ids', $contactId);
-                }
+                $query
+                    ->where(function ($phoneReviews) use ($aggregateContactIds): void {
+                        $phoneReviews
+                            ->where('status', ContactDuplicateReview::STATUS_OPEN)
+                            ->whereIn('review_type', ContactDuplicateReview::phoneReviewTypes())
+                            ->where(function ($candidateQuery) use ($aggregateContactIds): void {
+                                foreach ($aggregateContactIds as $contactId) {
+                                    $candidateQuery->orWhereJsonContains('candidate_root_contact_ids', $contactId);
+                                }
+                            });
+                    })
+                    ->orWhere(function ($identityReviews) use ($aggregateContactIds): void {
+                        $identityReviews
+                            ->where('review_type', ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY)
+                            ->where(function ($identityQuery) use ($aggregateContactIds): void {
+                                foreach ($aggregateContactIds as $contactId) {
+                                    $identityQuery
+                                        ->orWhereJsonContains('candidate_root_contact_ids', $contactId)
+                                        ->orWhere('routed_contact_id', $contactId);
+                                }
+                            });
+                    });
             })
             ->orderBy('id')
             ->lockForUpdate()
@@ -71,6 +85,17 @@ class CleanupExternalDuplicateReviewsForDeletedAggregateAction
             $payload = [
                 'candidate_root_contact_ids' => $remainingCandidates === [] ? null : $remainingCandidates,
             ];
+
+            if ($review->isCrossChannelIdentityAmbiguity()) {
+                if (in_array((int) $review->routed_contact_id, $aggregateContactIds, true)) {
+                    $payload['routed_contact_id'] = $review->contact_id;
+                }
+
+                $review->forceFill($payload)->save();
+                $affectedContactIds[$review->contact_id] = true;
+
+                continue;
+            }
 
             if ($remainingCandidates === []) {
                 $payload['status'] = ContactDuplicateReview::STATUS_RESOLVED;

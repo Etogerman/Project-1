@@ -3,6 +3,7 @@
 namespace App\Services\Contacts;
 
 use App\Data\Contacts\MergeContactsResult;
+use App\Data\Contacts\SelectedMergeContactsResult;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
@@ -23,6 +24,7 @@ class MergeContactsAction
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly SelectPrimaryContactForMergeAction $selectPrimaryContactForMergeAction,
+        private readonly FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction $findOpenCrossChannelIdentityAmbiguityReviewForContactsAction,
         private readonly ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
         private readonly ConsolidateDialogsForRootContactAction $consolidateDialogsForRootContactAction,
         private readonly ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
@@ -36,8 +38,11 @@ class MergeContactsAction
         ?string $triggerPhone = null,
         ?Message $triggerMessage = null,
         string $createdByType = ContactMergeLog::CREATED_BY_TYPE_SYSTEM,
+        ?int $forcedPrimaryContactId = null,
     ): MergeContactsResult {
-        $selection = $this->selectPrimaryContactForMergeAction->handle($left, $right);
+        $selection = $forcedPrimaryContactId !== null
+            ? $this->resolveForcedPrimarySelection($left, $right, $forcedPrimaryContactId)
+            : $this->selectPrimaryContactForMergeAction->handle($left, $right);
 
         if ($selection === null) {
             $root = $this->resolveRootContactAction->handle($left);
@@ -68,6 +73,15 @@ class MergeContactsAction
             $lockedPrimary = $lockedContacts->get($selection->primary->id) ?? throw new ContactMergeException('Primary contact is missing during merge.');
             /** @var Contact $lockedSecondary */
             $lockedSecondary = $lockedContacts->get($selection->secondary->id) ?? throw new ContactMergeException('Secondary contact is missing during merge.');
+
+            $blockingReview = $this->findOpenCrossChannelIdentityAmbiguityReviewForContactsAction->handle([
+                $lockedPrimary,
+                $lockedSecondary,
+            ]);
+
+            if ($blockingReview instanceof ContactDuplicateReview) {
+                throw ContactFrozenByOpenCrossChannelIdentityReviewException::forMerge($blockingReview);
+            }
 
             if ($lockedPrimary->isMerged()) {
                 throw new ContactMergeException('Primary contact changed its root during merge.');
@@ -206,6 +220,35 @@ class MergeContactsAction
                 mergeLogId: $mergeLog->id,
             );
         });
+    }
+
+    private function resolveForcedPrimarySelection(
+        Contact|int $left,
+        Contact|int $right,
+        int $forcedPrimaryContactId,
+    ): ?SelectedMergeContactsResult {
+        $leftRoot = $this->resolveRootContactAction->handle($left);
+        $rightRoot = $this->resolveRootContactAction->handle($right);
+
+        if ($leftRoot->id === $rightRoot->id) {
+            return null;
+        }
+
+        if ($leftRoot->id === $forcedPrimaryContactId) {
+            return new SelectedMergeContactsResult(
+                primary: $leftRoot,
+                secondary: $rightRoot,
+            );
+        }
+
+        if ($rightRoot->id === $forcedPrimaryContactId) {
+            return new SelectedMergeContactsResult(
+                primary: $rightRoot,
+                secondary: $leftRoot,
+            );
+        }
+
+        throw new ContactMergeException('Forced primary contact must belong to the merge pair.');
     }
 
     /**
@@ -594,8 +637,7 @@ class MergeContactsAction
             ->whereIn('contact_id', [$primary->id, $secondary->id])
             ->where('phone_normalized', $triggerPhone)
             ->whereIn('review_type', [
-                ContactDuplicateReview::TYPE_PHONE_OTHER_ROOT_CANDIDATE,
-                ContactDuplicateReview::TYPE_PHONE_MULTIPLE_ROOTS,
+                ...ContactDuplicateReview::phoneReviewTypes(),
             ])
             ->where('status', ContactDuplicateReview::STATUS_OPEN)
             ->update([

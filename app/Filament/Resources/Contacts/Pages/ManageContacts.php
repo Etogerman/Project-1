@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Contacts\Pages;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Pages\ManageRecords;
 use App\Models\Contact;
+use App\Models\ContactDuplicateReview;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\AssignContactTagAction;
@@ -12,7 +13,9 @@ use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
+use App\Services\Contacts\DismissCrossChannelIdentityAmbiguityReviewAction;
 use App\Services\Contacts\RemoveContactTagAction;
+use App\Services\Contacts\ResolveCrossChannelIdentityAmbiguityReviewAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
 use App\Services\Contacts\ResolveRootContactAction;
@@ -56,6 +59,16 @@ class ManageContacts extends ManageRecords
     public bool $showDeleteContactDialog = false;
     public string $deletingContactLabel = '';
     public bool $deletingContactHasMergeHistory = false;
+    public bool $showResolveCrossChannelIdentityReviewDialog = false;
+    public string $resolvingCrossChannelIdentityReviewId = '';
+    public string $resolvingCrossChannelIdentityIdentityKey = '';
+    public string $resolvingCrossChannelIdentityAnchorLabel = '';
+    public string $selectedResolvedRoutedContactId = '';
+
+    /**
+     * @var array<int, string>
+     */
+    public array $resolvingCrossChannelIdentityContactOptions = [];
 
     /**
      * @var array<int, array{label:string,value:int}>
@@ -637,6 +650,126 @@ class ManageContacts extends ManageRecords
         }
     }
 
+    public function openResolveCrossChannelIdentityReviewDialog(int|string $reviewId): void
+    {
+        if ($this->abortIfContactMutationForbidden('Не удалось открыть разбор identity ambiguity')) {
+            return;
+        }
+
+        try {
+            $review = $this->resolveMountedOpenCrossChannelIdentityReview($reviewId);
+            $anchorContact = Contact::query()->findOrFail($review->contact_id);
+
+            $contactIds = collect([
+                $anchorContact->id,
+                ...($review->candidate_root_contact_ids ?? []),
+            ])
+                ->map(fn (mixed $id): int => (int) $id)
+                ->filter(fn (int $id): bool => $id > 0)
+                ->unique()
+                ->values()
+                ->all();
+
+            $contacts = Contact::query()
+                ->whereKey($contactIds)
+                ->get()
+                ->keyBy('id');
+
+            $options = [];
+
+            foreach ($contactIds as $contactId) {
+                $contact = $contacts->get($contactId);
+
+                $options[$contactId] = $contact instanceof Contact
+                    ? $this->formatCrossChannelIdentityReviewContactOption($contact, $contactId === $anchorContact->id)
+                    : sprintf('#%d', $contactId);
+            }
+
+            $this->resolvingCrossChannelIdentityReviewId = (string) $review->id;
+            $this->resolvingCrossChannelIdentityIdentityKey = (string) $review->identity_key;
+            $this->resolvingCrossChannelIdentityAnchorLabel = $this->formatCrossChannelIdentityReviewContactOption($anchorContact, true);
+            $this->resolvingCrossChannelIdentityContactOptions = $options;
+            $this->selectedResolvedRoutedContactId = '';
+            $this->showResolveCrossChannelIdentityReviewDialog = true;
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть разбор identity ambiguity')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function closeResolveCrossChannelIdentityReviewDialog(): void
+    {
+        $this->resetCrossChannelIdentityReviewResolutionState();
+    }
+
+    public function saveResolvedCrossChannelIdentityReview(): void
+    {
+        if ($this->abortIfContactMutationForbidden('Не удалось сохранить решение по identity ambiguity')) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'selectedResolvedRoutedContactId' => [
+                'required',
+                'integer',
+                Rule::in(array_map('strval', array_keys($this->resolvingCrossChannelIdentityContactOptions))),
+            ],
+        ]);
+
+        try {
+            $review = $this->resolveMountedOpenCrossChannelIdentityReview($this->resolvingCrossChannelIdentityReviewId);
+            $contact = app(ResolveCrossChannelIdentityAmbiguityReviewAction::class)->handle(
+                review: $review,
+                selectedContact: (int) $validated['selectedResolvedRoutedContactId'],
+            );
+
+            $this->resetCrossChannelIdentityReviewResolutionState();
+            $this->replaceMountedTableActionWithEffectiveContact($contact);
+
+            Notification::make()
+                ->success()
+                ->title('Identity ambiguity разобран')
+                ->body('Решение сохранено, durable routing обновлён.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить решение по identity ambiguity')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function dismissMountedCrossChannelIdentityReview(int|string $reviewId): void
+    {
+        if ($this->abortIfContactMutationForbidden('Не удалось dismiss identity ambiguity')) {
+            return;
+        }
+
+        try {
+            $review = $this->resolveMountedOpenCrossChannelIdentityReview($reviewId);
+            $contact = app(DismissCrossChannelIdentityAmbiguityReviewAction::class)->handle($review);
+
+            $this->resetCrossChannelIdentityReviewResolutionState();
+            $this->replaceMountedTableActionWithEffectiveContact($contact);
+
+            Notification::make()
+                ->success()
+                ->title('Identity ambiguity снят без merge')
+                ->body('Anchor contact сохранён как отдельный root.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось dismiss identity ambiguity')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     public function deleteMountedContactPhone(): void
     {
         if ($this->abortIfContactPhoneDeleteForbidden('Не удалось удалить номер')) {
@@ -826,6 +959,42 @@ class ManageContacts extends ManageRecords
         $this->mountTableAction('view', (string) $effectiveContact->id);
     }
 
+    protected function resolveMountedOpenCrossChannelIdentityReview(int|string $reviewId): ContactDuplicateReview
+    {
+        $record = $this->getMountedTableActionRecord();
+
+        if (! $record instanceof Contact) {
+            throw new RuntimeException('Не удалось определить текущий контакт.');
+        }
+
+        $review = ContactDuplicateReview::query()
+            ->whereKey((int) $reviewId)
+            ->where('status', ContactDuplicateReview::STATUS_OPEN)
+            ->where('review_type', ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY)
+            ->where(function ($query) use ($record): void {
+                $query
+                    ->where('contact_id', $record->id)
+                    ->orWhereJsonContains('candidate_root_contact_ids', $record->id);
+            })
+            ->first();
+
+        if (! $review instanceof ContactDuplicateReview) {
+            throw new RuntimeException('Открытая cross-channel identity review не найдена.');
+        }
+
+        return $review;
+    }
+
+    protected function formatCrossChannelIdentityReviewContactOption(Contact $contact, bool $isAnchor): string
+    {
+        return sprintf(
+            '#%d %s%s',
+            $contact->id,
+            $contact->display_name,
+            $isAnchor ? ' (anchor)' : ''
+        );
+    }
+
     protected function resetPhoneEditingState(): void
     {
         $this->showEditPhoneDialog = false;
@@ -879,6 +1048,17 @@ class ManageContacts extends ManageRecords
         $this->deletingContactLabel = '';
         $this->deletingContactHasMergeHistory = false;
         $this->deletingContactCounts = [];
+    }
+
+    protected function resetCrossChannelIdentityReviewResolutionState(): void
+    {
+        $this->showResolveCrossChannelIdentityReviewDialog = false;
+        $this->resolvingCrossChannelIdentityReviewId = '';
+        $this->resolvingCrossChannelIdentityIdentityKey = '';
+        $this->resolvingCrossChannelIdentityAnchorLabel = '';
+        $this->selectedResolvedRoutedContactId = '';
+        $this->resolvingCrossChannelIdentityContactOptions = [];
+        $this->resetErrorBag('selectedResolvedRoutedContactId');
     }
 
     protected function abortIfContactMutationForbidden(string $title): bool

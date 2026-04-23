@@ -88,6 +88,25 @@ class IsDialogBitrix24OpenLinesRetryRequiredActionTest extends TestCase
         $this->assertFalse($required);
     }
 
+    public function test_it_returns_false_for_account_connection_type_even_when_contact_is_synced(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = $this->createSyncedContact(channel: $channel);
+        $dialog = $this->makeDialog($contact, $channel);
+
+        $this->makeMessage($dialog, [
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Account inbound should not be exported to Bitrix live bridge',
+        ]);
+
+        $required = app(IsDialogBitrix24OpenLinesRetryRequiredAction::class)->handle($dialog);
+
+        $this->assertFalse($required);
+    }
+
     public function test_it_skips_latest_non_exportable_message_and_detects_older_candidate_in_same_dialog(): void
     {
         $channel = $this->makeTelegramChannel();

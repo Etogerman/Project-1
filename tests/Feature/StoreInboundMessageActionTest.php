@@ -1494,6 +1494,72 @@ class StoreInboundMessageActionTest extends TestCase
         ]);
     }
 
+    public function test_store_inbound_message_does_not_auto_merge_phone_when_contact_belongs_to_frozen_cross_channel_identity_review_set(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $anchorContact = Contact::factory()->create([
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_PENDING,
+        ]);
+        $otherRoot = Contact::factory()->create();
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $anchorContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'freeze-user-500',
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $otherRoot->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $anchorContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:freeze-user-500',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [$otherRoot->id],
+            'context_payload' => ['last_seen_channel_id' => $channel->id],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            new IncomingBotMessage(
+                platform: $channel->platform,
+                channelId: $channel->id,
+                externalChatId: 'freeze-chat-500',
+                externalUserId: 'freeze-user-500',
+                providerEventKey: 'telegram-freeze-500',
+                externalMessageId: 'freeze-500',
+                externalUsername: 'freeze_user_500',
+                contactName: 'Frozen anchor',
+                text: null,
+                inboundKind: IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE,
+                sharedPhoneNumber: '+7 999 123 45 67',
+                sharedContactUserId: 'freeze-user-500',
+                rawPayload: ['message' => ['contact' => ['phone_number' => '+7 999 123 45 67']]],
+                receivedAt: Carbon::parse('2026-04-07 16:50:00'),
+            ),
+        );
+
+        $review = ContactDuplicateReview::query()->firstOrFail();
+
+        $this->assertSame(StoredInboundMessageResult::PHONE_CAPTURE_STATUS_REVIEW_PENDING, $storedResult->phoneCaptureStatus);
+        $this->assertSame($anchorContact->id, $storedResult->message->contact_id);
+        $this->assertNull($otherRoot->fresh()->merged_into_contact_id);
+        $this->assertDatabaseCount('contact_merge_logs', 0);
+        $this->assertDatabaseCount('contact_duplicate_reviews', 1);
+        $this->assertSame($storedResult->message->id, $review->trigger_message_id);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_merge_blocked_by_cross_channel_identity_review',
+        ]);
+    }
+
     public function test_store_inbound_message_leaves_dialog_confirmed_phone_empty_for_unknown_format(): void
     {
         $channel = Channel::factory()->create([
@@ -1793,7 +1859,7 @@ class StoreInboundMessageActionTest extends TestCase
         ]);
     }
 
-    public function test_store_inbound_message_logs_ambiguous_cross_channel_identity_and_falls_back_to_new_contact(): void
+    public function test_store_inbound_message_creates_open_cross_channel_identity_review_and_anchor_contact(): void
     {
         $firstChannel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -1845,11 +1911,364 @@ class StoreInboundMessageActionTest extends TestCase
             ),
         );
 
-        $this->assertNotContains($storedResult->message->contact_id, [$firstRoot->id, $secondRoot->id]);
+        $anchorContactId = $storedResult->message->contact_id;
+        $review = ContactDuplicateReview::query()->firstOrFail();
+
+        $this->assertNotContains($anchorContactId, [$firstRoot->id, $secondRoot->id]);
         $this->assertDatabaseCount('contacts', 3);
+        $this->assertDatabaseCount('contact_duplicate_reviews', 1);
+        $this->assertSame($anchorContactId, $review->contact_id);
+        $this->assertSame(ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY, $review->review_type);
+        $this->assertSame('telegram:cross-user-400', $review->identity_key);
+        $this->assertSame([$firstRoot->id, $secondRoot->id], $review->candidate_root_contact_ids);
+        $this->assertSame($storedResult->message->id, $review->trigger_message_id);
+        $this->assertNull($review->routed_contact_id);
+        $this->assertSame($thirdChannel->id, data_get($review->context_payload, 'last_seen_channel_id'));
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $thirdChannel->id,
             'event' => 'contact.cross_channel_identity_ambiguous',
+        ]);
+    }
+
+    public function test_store_inbound_message_reuses_existing_open_cross_channel_identity_review_and_anchor_contact(): void
+    {
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $thirdChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $fourthChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $firstRoot = Contact::factory()->create();
+        $secondRoot = Contact::factory()->create();
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $firstRoot->id,
+            'channel_id' => $firstChannel->id,
+            'platform' => $firstChannel->platform,
+            'external_user_id' => 'cross-user-401',
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $secondRoot->id,
+            'channel_id' => $secondChannel->id,
+            'platform' => $secondChannel->platform,
+            'external_user_id' => 'cross-user-401',
+        ]);
+
+        $firstResult = app(StoreInboundMessageAction::class)->handle(
+            $thirdChannel,
+            new IncomingBotMessage(
+                platform: $thirdChannel->platform,
+                channelId: $thirdChannel->id,
+                externalChatId: 'cross-chat-401-a',
+                externalUserId: 'cross-user-401',
+                providerEventKey: 'telegram-cross-identity-401-a',
+                externalMessageId: 'cross-401-a',
+                externalUsername: 'telegram_cross_401_a',
+                contactName: 'Anchor A',
+                text: 'Первый ambiguous inbound',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Первый ambiguous inbound']],
+                receivedAt: Carbon::parse('2026-04-07 16:43:00'),
+            ),
+        );
+
+        $secondResult = app(StoreInboundMessageAction::class)->handle(
+            $fourthChannel,
+            new IncomingBotMessage(
+                platform: $fourthChannel->platform,
+                channelId: $fourthChannel->id,
+                externalChatId: 'cross-chat-401-b',
+                externalUserId: 'cross-user-401',
+                providerEventKey: 'telegram-cross-identity-401-b',
+                externalMessageId: 'cross-401-b',
+                externalUsername: 'telegram_cross_401_b',
+                contactName: 'Anchor B',
+                text: 'Второй ambiguous inbound',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Второй ambiguous inbound']],
+                receivedAt: Carbon::parse('2026-04-07 16:44:00'),
+            ),
+        );
+
+        $review = ContactDuplicateReview::query()->firstOrFail();
+
+        $this->assertSame($firstResult->message->contact_id, $secondResult->message->contact_id);
+        $this->assertSame($secondResult->message->contact_id, $review->contact_id);
+        $this->assertSame($secondResult->message->id, $review->trigger_message_id);
+        $this->assertSame($fourthChannel->id, data_get($review->context_payload, 'last_seen_channel_id'));
+        $this->assertDatabaseCount('contacts', 3);
+        $this->assertDatabaseCount('contact_duplicate_reviews', 1);
+        $this->assertDatabaseHas('contact_identities', [
+            'contact_id' => $review->contact_id,
+            'channel_id' => $thirdChannel->id,
+            'external_user_id' => 'cross-user-401',
+        ]);
+        $this->assertDatabaseHas('contact_identities', [
+            'contact_id' => $review->contact_id,
+            'channel_id' => $fourthChannel->id,
+            'external_user_id' => 'cross-user-401',
+        ]);
+    }
+
+    public function test_store_inbound_message_does_not_repoint_ambiguity_trigger_message_for_regular_follow_up_on_anchor_channel(): void
+    {
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $thirdChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $firstRoot = Contact::factory()->create();
+        $secondRoot = Contact::factory()->create();
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $firstRoot->id,
+            'channel_id' => $firstChannel->id,
+            'platform' => $firstChannel->platform,
+            'external_user_id' => 'cross-user-402',
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $secondRoot->id,
+            'channel_id' => $secondChannel->id,
+            'platform' => $secondChannel->platform,
+            'external_user_id' => 'cross-user-402',
+        ]);
+
+        $firstResult = app(StoreInboundMessageAction::class)->handle(
+            $thirdChannel,
+            new IncomingBotMessage(
+                platform: $thirdChannel->platform,
+                channelId: $thirdChannel->id,
+                externalChatId: 'cross-chat-402-a',
+                externalUserId: 'cross-user-402',
+                providerEventKey: 'telegram-cross-identity-402-a',
+                externalMessageId: 'cross-402-a',
+                externalUsername: 'telegram_cross_402_a',
+                contactName: 'Anchor first',
+                text: 'Первый ambiguous inbound',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Первый ambiguous inbound']],
+                receivedAt: Carbon::parse('2026-04-07 16:45:00'),
+            ),
+        );
+
+        $secondResult = app(StoreInboundMessageAction::class)->handle(
+            $thirdChannel,
+            new IncomingBotMessage(
+                platform: $thirdChannel->platform,
+                channelId: $thirdChannel->id,
+                externalChatId: 'cross-chat-402-a',
+                externalUserId: 'cross-user-402',
+                providerEventKey: 'telegram-cross-identity-402-b',
+                externalMessageId: 'cross-402-b',
+                externalUsername: 'telegram_cross_402_a',
+                contactName: 'Anchor first',
+                text: 'Обычный follow-up',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Обычный follow-up']],
+                receivedAt: Carbon::parse('2026-04-07 16:46:00'),
+            ),
+        );
+
+        $review = ContactDuplicateReview::query()->firstOrFail();
+
+        $this->assertSame($firstResult->message->contact_id, $secondResult->message->contact_id);
+        $this->assertSame($firstResult->message->id, $review->trigger_message_id);
+        $this->assertSame($thirdChannel->id, data_get($review->context_payload, 'last_seen_channel_id'));
+    }
+
+    public function test_store_inbound_message_routes_new_channel_to_current_root_from_terminal_resolved_identity_review(): void
+    {
+        $newChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $anchorContact = Contact::factory()->create();
+        $historicalRoutedContact = Contact::factory()->create([
+            'merged_into_contact_id' => null,
+        ]);
+        $currentRootContact = Contact::factory()->create([
+            'name' => 'Current routed root',
+        ]);
+
+        $historicalRoutedContact->forceFill([
+            'merged_into_contact_id' => $currentRootContact->id,
+            'merged_at' => Carbon::parse('2026-04-07 16:47:00'),
+            'merge_reason' => 'cross_channel_identity_resolution',
+        ])->save();
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $anchorContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-403',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [$historicalRoutedContact->id],
+            'routed_contact_id' => $historicalRoutedContact->id,
+            'status' => ContactDuplicateReview::STATUS_RESOLVED,
+            'resolved_at' => Carbon::parse('2026-04-07 16:48:00'),
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $newChannel,
+            new IncomingBotMessage(
+                platform: $newChannel->platform,
+                channelId: $newChannel->id,
+                externalChatId: 'cross-chat-403',
+                externalUserId: 'cross-user-403',
+                providerEventKey: 'telegram-cross-identity-403',
+                externalMessageId: 'cross-403',
+                externalUsername: 'telegram_cross_403',
+                contactName: 'Terminal route',
+                text: 'Привет после resolved review',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет после resolved review']],
+                receivedAt: Carbon::parse('2026-04-07 16:49:00'),
+            ),
+        );
+
+        $newIdentity = ContactIdentity::query()
+            ->where('channel_id', $newChannel->id)
+            ->where('external_user_id', 'cross-user-403')
+            ->firstOrFail();
+
+        $this->assertSame($currentRootContact->id, $storedResult->message->contact_id);
+        $this->assertSame($currentRootContact->id, $newIdentity->contact_id);
+        $this->assertDatabaseCount('contact_duplicate_reviews', 1);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $newChannel->id,
+            'event' => 'contact.cross_channel_identity_routed_by_terminal_review',
+        ]);
+    }
+
+    public function test_store_inbound_message_routes_new_channel_to_anchor_from_terminal_dismissed_identity_review(): void
+    {
+        $newChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $anchorContact = Contact::factory()->create([
+            'name' => 'Dismiss anchor',
+        ]);
+        $candidateRoot = Contact::factory()->create();
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $anchorContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-404',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [$candidateRoot->id],
+            'routed_contact_id' => $anchorContact->id,
+            'status' => ContactDuplicateReview::STATUS_DISMISSED,
+            'resolved_at' => Carbon::parse('2026-04-07 16:50:00'),
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $newChannel,
+            new IncomingBotMessage(
+                platform: $newChannel->platform,
+                channelId: $newChannel->id,
+                externalChatId: 'cross-chat-404',
+                externalUserId: 'cross-user-404',
+                providerEventKey: 'telegram-cross-identity-404',
+                externalMessageId: 'cross-404',
+                externalUsername: 'telegram_cross_404',
+                contactName: 'Dismiss route',
+                text: 'Привет после dismissed review',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет после dismissed review']],
+                receivedAt: Carbon::parse('2026-04-07 16:51:00'),
+            ),
+        );
+
+        $newIdentity = ContactIdentity::query()
+            ->where('channel_id', $newChannel->id)
+            ->where('external_user_id', 'cross-user-404')
+            ->firstOrFail();
+
+        $this->assertSame($anchorContact->id, $storedResult->message->contact_id);
+        $this->assertSame($anchorContact->id, $newIdentity->contact_id);
+        $this->assertDatabaseCount('contact_duplicate_reviews', 1);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $newChannel->id,
+            'event' => 'contact.cross_channel_identity_routed_by_terminal_review',
+        ]);
+    }
+
+    public function test_store_inbound_message_routes_by_terminal_review_using_review_contact_fallback_when_routed_contact_id_is_missing(): void
+    {
+        $newChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $currentRootContact = Contact::factory()->create([
+            'name' => 'Current fallback root',
+        ]);
+        $anchorMergedContact = Contact::factory()->create([
+            'name' => 'Historical anchor',
+            'merged_into_contact_id' => $currentRootContact->id,
+            'merged_at' => Carbon::parse('2026-04-07 16:52:00'),
+            'merge_reason' => 'cross_channel_identity_resolution',
+        ]);
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $anchorMergedContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-405',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => null,
+            'routed_contact_id' => null,
+            'status' => ContactDuplicateReview::STATUS_RESOLVED,
+            'resolved_at' => Carbon::parse('2026-04-07 16:53:00'),
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $newChannel,
+            new IncomingBotMessage(
+                platform: $newChannel->platform,
+                channelId: $newChannel->id,
+                externalChatId: 'cross-chat-405',
+                externalUserId: 'cross-user-405',
+                providerEventKey: 'telegram-cross-identity-405',
+                externalMessageId: 'cross-405',
+                externalUsername: 'telegram_cross_405',
+                contactName: 'Terminal fallback route',
+                text: 'Привет после terminal fallback',
+                inboundKind: IncomingBotMessage::KIND_INBOUND_USER,
+                sharedPhoneNumber: null,
+                sharedContactUserId: null,
+                rawPayload: ['message' => ['text' => 'Привет после terminal fallback']],
+                receivedAt: Carbon::parse('2026-04-07 16:54:00'),
+            ),
+        );
+
+        $newIdentity = ContactIdentity::query()
+            ->where('channel_id', $newChannel->id)
+            ->where('external_user_id', 'cross-user-405')
+            ->firstOrFail();
+
+        $this->assertSame($currentRootContact->id, $storedResult->message->contact_id);
+        $this->assertSame($currentRootContact->id, $newIdentity->contact_id);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $newChannel->id,
+            'event' => 'contact.cross_channel_identity_routed_by_terminal_review',
         ]);
     }
 
