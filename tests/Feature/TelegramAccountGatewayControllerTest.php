@@ -92,6 +92,43 @@ class TelegramAccountGatewayControllerTest extends TestCase
         Queue::assertNotPushed(SyncContactIdentityAvatarJob::class);
     }
 
+    public function test_gateway_persists_pending_media_download_placeholder_for_account_message(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Media Placeholder',
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700011',
+                externalUserId: 'tg-account-media-user-11',
+                externalMessageId: '900011',
+                text: null,
+                media: [
+                    ['type' => 'photo'],
+                    ['type' => 'document', 'file_name' => 'offer.pdf'],
+                ],
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $message = Message::query()->firstOrFail();
+        $media = data_get($message->raw_payload, 'media');
+
+        $this->assertIsArray($media);
+        $this->assertCount(2, $media);
+        $this->assertSame(Message::MEDIA_DOWNLOAD_STATUS_PENDING, data_get($media, '0.download_status'));
+        $this->assertSame(Message::MEDIA_DOWNLOAD_STATUS_PENDING, data_get($media, '1.download_status'));
+    }
+
     public function test_gateway_skips_non_private_peer_without_materializing_message_or_peer_sync_state(): void
     {
         Queue::fake();
@@ -208,6 +245,346 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertNotNull($runtimeState->last_sync_completed_at);
     }
 
+    public function test_gateway_skips_archived_private_backfill_peer_but_keeps_runtime_and_peer_sync_state(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+
+        $response = $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700094',
+                externalUserId: 'tg-account-archived-user-94',
+                externalMessageId: '900094',
+                text: 'Архивный private backfill',
+                historySource: 'backfill',
+                isArchived: true,
+            ),
+        );
+
+        $response->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('stored', false)
+            ->assertJsonPath('skipped', true);
+
+        $this->assertDatabaseCount('messages', 0);
+        $this->assertDatabaseCount('dialogs', 0);
+        $this->assertDatabaseCount('contact_identities', 0);
+        $this->assertDatabaseHas('channel_peer_sync_states', [
+            'channel_id' => $channel->id,
+            'peer_key' => 'telegram_account:'.$channel->id.':700094',
+            'external_chat_id' => '700094',
+            'backfill_status' => ChannelPeerSyncState::BACKFILL_STATUS_IN_PROGRESS,
+            'oldest_imported_message_id' => '900094',
+            'latest_observed_message_id' => '900094',
+        ]);
+        $this->assertDatabaseHas('channel_runtime_states', [
+            'channel_id' => $channel->id,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_BACKFILL_IN_PROGRESS,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'telegram_account_gateway.archived_private_peer_skipped',
+            'level' => 'info',
+        ]);
+    }
+
+    public function test_gateway_runtime_state_endpoint_materializes_auth_flow_before_first_message(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Runtime Only',
+        ]);
+
+        $response = $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.runtime-state.handle', ['channel' => $channel]),
+            $this->runtimeStatePayload(
+                channel: $channel,
+                authStatus: ChannelRuntimeState::AUTH_STATUS_PENDING,
+                authorizationState: ChannelRuntimeState::AUTHORIZATION_STATE_AWAITING_QR,
+                syncStatus: ChannelRuntimeState::SYNC_STATUS_IDLE,
+                runtimePayload: [
+                    'gateway_session' => 'session-qr-1',
+                ],
+                includeHeartbeat: false,
+                includeLastSyncStartedAt: false,
+                includeLastSyncCompletedAt: false,
+            ),
+        );
+
+        $response->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('stored', true);
+
+        $runtimeState = ChannelRuntimeState::query()->firstOrFail();
+
+        $this->assertSame(ChannelRuntimeState::AUTH_STATUS_PENDING, $runtimeState->auth_status);
+        $this->assertSame(ChannelRuntimeState::AUTHORIZATION_STATE_AWAITING_QR, $runtimeState->authorization_state);
+        $this->assertSame(ChannelRuntimeState::SYNC_STATUS_IDLE, $runtimeState->sync_status);
+        $this->assertNull($runtimeState->last_gateway_heartbeat_at);
+        $this->assertSame([
+            'gateway_session' => 'session-qr-1',
+        ], $runtimeState->runtime_payload);
+        $this->assertDatabaseCount('messages', 0);
+        $this->assertDatabaseCount('dialogs', 0);
+    }
+
+    public function test_gateway_runtime_state_endpoint_preserves_existing_sync_timestamps_on_partial_update(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $startedAt = now()->subMinutes(15)->startOfSecond();
+        $completedAt = now()->subMinutes(5)->startOfSecond();
+        $heartbeatAt = now()->subMinute()->startOfSecond();
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => $heartbeatAt,
+            'last_sync_started_at' => $startedAt,
+            'last_sync_completed_at' => $completedAt,
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.runtime-state.handle', ['channel' => $channel]),
+            $this->runtimeStatePayload(
+                channel: $channel,
+                authStatus: ChannelRuntimeState::AUTH_STATUS_FAILED,
+                authorizationState: ChannelRuntimeState::AUTHORIZATION_STATE_AWAITING_CODE,
+                syncStatus: ChannelRuntimeState::SYNC_STATUS_FAILED,
+                lastErrorAt: '2026-04-23T12:34:56+03:00',
+                lastErrorMessage: 'Код подтверждения отклонён',
+                includeHeartbeat: false,
+                includeLastSyncStartedAt: false,
+                includeLastSyncCompletedAt: false,
+                includeRuntimePayload: false,
+            ),
+        )->assertOk();
+
+        $runtimeState = ChannelRuntimeState::query()->firstOrFail();
+
+        $this->assertSame(ChannelRuntimeState::AUTH_STATUS_FAILED, $runtimeState->auth_status);
+        $this->assertSame(ChannelRuntimeState::AUTHORIZATION_STATE_AWAITING_CODE, $runtimeState->authorization_state);
+        $this->assertSame(ChannelRuntimeState::SYNC_STATUS_FAILED, $runtimeState->sync_status);
+        $this->assertTrue($runtimeState->last_gateway_heartbeat_at?->equalTo($heartbeatAt));
+        $this->assertTrue($runtimeState->last_sync_started_at?->equalTo($startedAt));
+        $this->assertTrue($runtimeState->last_sync_completed_at?->equalTo($completedAt));
+        $this->assertSame('Код подтверждения отклонён', $runtimeState->last_error_message);
+        $this->assertSame('2026-04-23T12:34:56+03:00', $runtimeState->last_error_at?->toIso8601String());
+    }
+
+    public function test_gateway_peer_sync_state_endpoint_materializes_terminal_backfill_status_for_peer(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+
+        $response = $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.peer-sync-state.handle', ['channel' => $channel]),
+            $this->peerSyncStatePayload(
+                channel: $channel,
+                externalChatId: '700777',
+                backfillStatus: ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE,
+                oldestImportedMessageId: '900001',
+                latestObservedMessageId: '900010',
+                historyCompleteAt: '2026-04-23T12:45:00+03:00',
+            ),
+        );
+
+        $response->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('stored', true);
+
+        $peerSyncState = ChannelPeerSyncState::query()->firstOrFail();
+
+        $this->assertSame($channel->id, $peerSyncState->channel_id);
+        $this->assertSame('telegram_account:'.$channel->id.':700777', $peerSyncState->peer_key);
+        $this->assertSame('700777', $peerSyncState->external_chat_id);
+        $this->assertSame(ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE, $peerSyncState->backfill_status);
+        $this->assertSame('900001', $peerSyncState->oldest_imported_message_id);
+        $this->assertSame('900010', $peerSyncState->latest_observed_message_id);
+        $this->assertSame('2026-04-23T12:45:00+03:00', $peerSyncState->history_complete_at?->toIso8601String());
+        $this->assertNull($peerSyncState->last_sync_error);
+    }
+
+    public function test_gateway_peer_sync_state_endpoint_preserves_existing_fields_on_partial_update(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+
+        ChannelPeerSyncState::query()->create([
+            'channel_id' => $channel->id,
+            'peer_key' => 'telegram_account:'.$channel->id.':700778',
+            'external_chat_id' => '700778',
+            'backfill_status' => ChannelPeerSyncState::BACKFILL_STATUS_IN_PROGRESS,
+            'oldest_imported_message_id' => '900001',
+            'latest_observed_message_id' => '900005',
+            'history_complete_at' => now()->subMinute()->startOfSecond(),
+            'last_sync_error' => 'Старый sync error',
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.peer-sync-state.handle', ['channel' => $channel]),
+            $this->peerSyncStatePayload(
+                channel: $channel,
+                externalChatId: '700778',
+                backfillStatus: ChannelPeerSyncState::BACKFILL_STATUS_FAILED,
+                includeOldestImportedMessageId: false,
+                includeLatestObservedMessageId: false,
+                includeHistoryCompleteAt: false,
+                lastSyncError: 'Backfill остановился на peer',
+            ),
+        )->assertOk();
+
+        $peerSyncState = ChannelPeerSyncState::query()->firstOrFail();
+
+        $this->assertSame(ChannelPeerSyncState::BACKFILL_STATUS_FAILED, $peerSyncState->backfill_status);
+        $this->assertSame('900001', $peerSyncState->oldest_imported_message_id);
+        $this->assertSame('900005', $peerSyncState->latest_observed_message_id);
+        $this->assertNull($peerSyncState->history_complete_at);
+        $this->assertSame('Backfill остановился на peer', $peerSyncState->last_sync_error);
+    }
+
+    public function test_gateway_peer_sync_state_endpoint_clears_stale_error_on_successful_completion(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+
+        ChannelPeerSyncState::query()->create([
+            'channel_id' => $channel->id,
+            'peer_key' => 'telegram_account:'.$channel->id.':700778a',
+            'external_chat_id' => '700778a',
+            'backfill_status' => ChannelPeerSyncState::BACKFILL_STATUS_FAILED,
+            'oldest_imported_message_id' => '900001',
+            'latest_observed_message_id' => '900020',
+            'last_sync_error' => 'Старый sync error',
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.peer-sync-state.handle', ['channel' => $channel]),
+            $this->peerSyncStatePayload(
+                channel: $channel,
+                externalChatId: '700778a',
+                backfillStatus: ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE,
+                includeOldestImportedMessageId: false,
+                latestObservedMessageId: '900030',
+                historyCompleteAt: '2026-04-23T13:10:00+03:00',
+                includeLastSyncError: false,
+            ),
+        )->assertOk();
+
+        $peerSyncState = ChannelPeerSyncState::query()->firstOrFail();
+
+        $this->assertSame(ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE, $peerSyncState->backfill_status);
+        $this->assertSame('900001', $peerSyncState->oldest_imported_message_id);
+        $this->assertSame('900030', $peerSyncState->latest_observed_message_id);
+        $this->assertSame('2026-04-23T13:10:00+03:00', $peerSyncState->history_complete_at?->toIso8601String());
+        $this->assertNull($peerSyncState->last_sync_error);
+    }
+
+    public function test_gateway_peer_sync_state_endpoint_rejects_non_canonical_peer_key(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.peer-sync-state.handle', ['channel' => $channel]),
+            array_merge(
+                $this->peerSyncStatePayload(channel: $channel, externalChatId: '700779'),
+                ['peer_key' => 'telegram_account:'.$channel->id.':WRONG'],
+            ),
+        )->assertUnprocessable()
+            ->assertJsonValidationErrors(['peer_key']);
+    }
+
+    public function test_gateway_peer_sync_state_endpoint_rejects_complete_status_without_history_complete_at(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.peer-sync-state.handle', ['channel' => $channel]),
+            $this->peerSyncStatePayload(
+                channel: $channel,
+                externalChatId: '700780',
+                backfillStatus: ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE,
+                historyCompleteAt: null,
+            ),
+        )->assertUnprocessable()
+            ->assertJsonValidationErrors(['history_complete_at']);
+    }
+
+    public function test_late_backfill_inbound_does_not_reopen_completed_peer_sync_state(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.peer-sync-state.handle', ['channel' => $channel]),
+            $this->peerSyncStatePayload(
+                channel: $channel,
+                externalChatId: '700781',
+                backfillStatus: ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE,
+                oldestImportedMessageId: '900010',
+                latestObservedMessageId: '900050',
+                historyCompleteAt: '2026-04-23T13:00:00+03:00',
+            ),
+        )->assertOk();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700781',
+                externalUserId: 'tg-account-user-complete-overlap',
+                externalMessageId: '900001',
+                text: 'Поздний overlap backfill',
+                historySource: 'backfill',
+            ),
+        )->assertOk();
+
+        $peerSyncState = ChannelPeerSyncState::query()->where('external_chat_id', '700781')->firstOrFail();
+
+        $this->assertSame(ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE, $peerSyncState->backfill_status);
+        $this->assertSame('900001', $peerSyncState->oldest_imported_message_id);
+        $this->assertSame('900050', $peerSyncState->latest_observed_message_id);
+        $this->assertSame('2026-04-23T13:00:00+03:00', $peerSyncState->history_complete_at?->toIso8601String());
+    }
+
     private function createTelegramAccountChannel(array $attributes = []): Channel
     {
         return Channel::factory()->account()->create(array_merge([
@@ -228,6 +605,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
         ?string $text = 'Привет',
         array $media = [],
         string $historySource = 'live',
+        bool $isArchived = false,
     ): array {
         return [
             'schema_version' => 'v1',
@@ -246,11 +624,105 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'message_kind' => $media === [] ? 'text' : 'media',
             'text' => $text,
             'media' => $media,
+            'is_archived' => $isArchived,
             'raw_payload' => [
                 'provider' => 'telegram_account_gateway',
             ],
             'occurred_at' => '2026-04-23T12:00:00+03:00',
             'history_source' => $historySource,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtimePayload
+     * @return array<string, mixed>
+     */
+    private function runtimeStatePayload(
+        Channel $channel,
+        string $authStatus = ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+        string $authorizationState = ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+        string $syncStatus = ChannelRuntimeState::SYNC_STATUS_LIVE,
+        ?string $lastErrorAt = null,
+        ?string $lastErrorMessage = null,
+        array $runtimePayload = [],
+        bool $includeHeartbeat = true,
+        bool $includeLastSyncStartedAt = true,
+        bool $includeLastSyncCompletedAt = true,
+        bool $includeRuntimePayload = true,
+    ): array {
+        $payload = [
+            'schema_version' => 'v1',
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'auth_status' => $authStatus,
+            'authorization_state' => $authorizationState,
+            'sync_status' => $syncStatus,
+            'last_error_at' => $lastErrorAt,
+            'last_error_message' => $lastErrorMessage,
+        ];
+
+        if ($includeHeartbeat) {
+            $payload['last_gateway_heartbeat_at'] = '2026-04-23T12:00:00+03:00';
+        }
+
+        if ($includeLastSyncStartedAt) {
+            $payload['last_sync_started_at'] = '2026-04-23T11:00:00+03:00';
+        }
+
+        if ($includeLastSyncCompletedAt) {
+            $payload['last_sync_completed_at'] = '2026-04-23T11:30:00+03:00';
+        }
+
+        if ($includeRuntimePayload) {
+            $payload['runtime_payload'] = $runtimePayload;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function peerSyncStatePayload(
+        Channel $channel,
+        string $externalChatId = '700770',
+        string $backfillStatus = ChannelPeerSyncState::BACKFILL_STATUS_IN_PROGRESS,
+        ?string $oldestImportedMessageId = '900001',
+        ?string $latestObservedMessageId = '900005',
+        ?string $historyCompleteAt = null,
+        ?string $lastSyncError = null,
+        bool $includeOldestImportedMessageId = true,
+        bool $includeLatestObservedMessageId = true,
+        bool $includeHistoryCompleteAt = true,
+        bool $includeLastSyncError = true,
+    ): array {
+        $payload = [
+            'schema_version' => 'v1',
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'peer_key' => 'telegram_account:'.$channel->id.':'.$externalChatId,
+            'external_chat_id' => $externalChatId,
+            'backfill_status' => $backfillStatus,
+        ];
+
+        if ($includeOldestImportedMessageId) {
+            $payload['oldest_imported_message_id'] = $oldestImportedMessageId;
+        }
+
+        if ($includeLatestObservedMessageId) {
+            $payload['latest_observed_message_id'] = $latestObservedMessageId;
+        }
+
+        if ($includeHistoryCompleteAt) {
+            $payload['history_complete_at'] = $historyCompleteAt;
+        }
+
+        if ($includeLastSyncError) {
+            $payload['last_sync_error'] = $lastSyncError;
+        }
+
+        return $payload;
     }
 }

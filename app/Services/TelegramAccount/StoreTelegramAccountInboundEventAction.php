@@ -42,6 +42,23 @@ class StoreTelegramAccountInboundEventAction
 
             $this->upsertChannelPeerSyncStateFromInboundEventAction->handle($channel, $event);
 
+            if ($event->isArchivedPrivatePeer()) {
+                $this->channelActivityLogger->info(
+                    $channel,
+                    'telegram_account_gateway.archived_private_peer_skipped',
+                    'Gateway event пропущен: archived private peer вне текущего import visibility contract.',
+                    [
+                        'gateway_event_id' => $event->gatewayEventId,
+                        'peer_key' => $event->peerKey,
+                        'message_key' => $event->messageKey,
+                        'history_source' => $event->historySource,
+                        'is_archived' => true,
+                    ],
+                );
+
+                return null;
+            }
+
             return $this->storeInboundMessageAction->handle($channel, $event->toIncomingBotMessage());
         });
     }

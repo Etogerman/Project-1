@@ -30,6 +30,7 @@ final readonly class NormalizedInboundMessageEvent
         public string $messageKind,
         public ?string $text,
         public array $media,
+        public bool $isArchived,
         public array $rawPayload,
         public Carbon $occurredAt,
         public string $historySource,
@@ -63,6 +64,11 @@ final readonly class NormalizedInboundMessageEvent
         return $this->media !== [];
     }
 
+    public function isArchivedPrivatePeer(): bool
+    {
+        return $this->isPrivatePeer() && $this->isArchived;
+    }
+
     public function toIncomingBotMessage(): IncomingBotMessage
     {
         $rawPayload = $this->rawPayload;
@@ -72,6 +78,7 @@ final readonly class NormalizedInboundMessageEvent
             'peer_key' => $this->peerKey,
             'message_key' => $this->messageKey,
             'peer_type' => $this->peerType,
+            'is_archived' => $this->isArchived,
             'message_kind' => $this->messageKind,
             'history_source' => $this->historySource,
         ];
