@@ -70,12 +70,16 @@ class DialogStageStepATest extends TestCase
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
         ]);
+        $lastMessageAt = now()->subMinutes(15);
+        $lastOutboundAt = now()->subMinutes(7);
         $dialog = Dialog::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
             'current_contact_identity_id' => $identity->id,
             'external_chat_id' => 'phone-stage-chat',
             'stage' => Dialog::STAGE_NEW_DIALOG,
+            'last_message_at' => $lastMessageAt,
+            'last_outbound_at' => $lastOutboundAt,
         ]);
 
         $inboundMessage = Message::factory()->create([
@@ -98,6 +102,8 @@ class DialogStageStepATest extends TestCase
         $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $dialog->stage);
         $this->assertSame('+7 999 123 45 67', $dialog->confirmed_phone_raw);
         $this->assertSame('+79991234567', $dialog->confirmed_phone_normalized);
+        $this->assertSame($lastMessageAt->format('Y-m-d H:i:s'), $dialog->last_message_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($lastOutboundAt->format('Y-m-d H:i:s'), $dialog->last_outbound_at?->format('Y-m-d H:i:s'));
         $this->assertDatabaseCount('messages', 2);
         $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
@@ -168,6 +174,8 @@ class DialogStageStepATest extends TestCase
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
         ]);
+        $lastMessageAt = now()->subMinutes(20);
+        $lastOutboundAt = now()->subMinutes(9);
         $mergedContact = Contact::factory()->create([
             'merged_into_contact_id' => $contact->id,
             'merged_at' => now(),
@@ -185,6 +193,8 @@ class DialogStageStepATest extends TestCase
             'channel_id' => $telegram->id,
             'current_contact_identity_id' => $telegramIdentity->id,
             'stage' => Dialog::STAGE_NEW_DIALOG,
+            'last_message_at' => $lastMessageAt,
+            'last_outbound_at' => $lastOutboundAt,
         ]);
         $routeIncompleteDialog = Dialog::factory()->create([
             'contact_id' => $contact->id,
@@ -206,6 +216,8 @@ class DialogStageStepATest extends TestCase
         $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $routeCompleteDialog->fresh()->stage);
         $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $routeIncompleteDialog->fresh()->stage);
         $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $mergedDialog->fresh()->stage);
+        $this->assertSame($lastMessageAt->format('Y-m-d H:i:s'), $routeCompleteDialog->fresh()->last_message_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($lastOutboundAt->format('Y-m-d H:i:s'), $routeCompleteDialog->fresh()->last_outbound_at?->format('Y-m-d H:i:s'));
         $this->assertDatabaseCount('messages', 1);
         $this->assertDatabaseHas('messages', [
             'dialog_id' => $routeCompleteDialog->id,
@@ -256,6 +268,8 @@ class DialogStageStepATest extends TestCase
         $rootContact = Contact::factory()->create();
         $mergedContact = Contact::factory()->create();
         $channel = Channel::factory()->create();
+        $lastMessageAt = now()->subMinutes(25);
+        $lastOutboundAt = now()->subMinutes(11);
         $rootIdentity = ContactIdentity::factory()->create([
             'contact_id' => $rootContact->id,
             'channel_id' => $channel->id,
@@ -273,6 +287,8 @@ class DialogStageStepATest extends TestCase
             'current_contact_identity_id' => $rootIdentity->id,
             'stage' => Dialog::STAGE_NEW_DIALOG,
             'external_chat_id' => 'chat-root',
+            'last_message_at' => $lastMessageAt,
+            'last_outbound_at' => $lastOutboundAt,
         ]);
         $redundantDialog = Dialog::factory()->create([
             'contact_id' => $mergedContact->id,
@@ -295,6 +311,8 @@ class DialogStageStepATest extends TestCase
 
         $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $survivingDialog->fresh()->stage);
         $this->assertSame('+7 999 555 44 33', $survivingDialog->fresh()->confirmed_phone_raw);
+        $this->assertSame($lastMessageAt->format('Y-m-d H:i:s'), $survivingDialog->fresh()->last_message_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($lastOutboundAt->format('Y-m-d H:i:s'), $survivingDialog->fresh()->last_outbound_at?->format('Y-m-d H:i:s'));
         $this->assertDatabaseMissing('dialogs', [
             'id' => $redundantDialog->id,
         ]);
