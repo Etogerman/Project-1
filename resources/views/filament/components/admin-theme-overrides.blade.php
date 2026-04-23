@@ -1500,6 +1500,155 @@
         grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
     }
 
+    .ac-kanban-board {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(20rem, 22rem);
+        gap: 1rem;
+        align-items: start;
+        overflow-x: auto;
+        padding-bottom: 0.35rem;
+        scrollbar-width: thin;
+    }
+
+    .ac-kanban-column {
+        display: flex;
+        flex-direction: column;
+        min-height: 20rem;
+        min-width: 0;
+        transition: opacity 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+    }
+
+    .ac-kanban-column--drop-target {
+        border-color: color-mix(in srgb, var(--ac-warning) 48%, var(--ac-border));
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--ac-warning) 45%, transparent);
+    }
+
+    .ac-kanban-column--inactive {
+        opacity: 0.7;
+    }
+
+    .ac-kanban-column__cards {
+        margin-top: 1rem;
+        display: grid;
+        gap: 0.75rem;
+        flex: 1;
+    }
+
+    .ac-kanban-column__footer {
+        margin-top: 1rem;
+    }
+
+    .ac-kanban-card {
+        border: 1px solid color-mix(in srgb, var(--ac-border) 82%, transparent);
+        border-radius: var(--ac-radius-lg);
+        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-strong) 92%, var(--ac-page-bg-alt)) 0%, color-mix(in srgb, var(--ac-surface-muted) 86%, var(--ac-surface-strong)) 100%);
+        padding: 1rem;
+        min-width: 0;
+        overflow: hidden;
+        box-shadow: var(--ac-shadow-sm);
+        transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+    }
+
+    .ac-kanban-card:hover {
+        border-color: color-mix(in srgb, var(--ac-warning) 26%, var(--ac-border));
+        transform: translateY(-1px);
+        box-shadow: var(--ac-shadow-md);
+    }
+
+    .ac-kanban-card__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+    }
+
+    .ac-kanban-card__title-group {
+        min-width: 0;
+        display: grid;
+        gap: 0.3rem;
+    }
+
+    .ac-kanban-card__title {
+        display: block;
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--ac-text);
+        text-decoration: none;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .ac-kanban-card__title:hover {
+        color: var(--ac-warning);
+    }
+
+    .ac-kanban-card__channel {
+        margin: 0;
+        font-size: 0.9rem;
+        line-height: 1.45;
+        color: var(--ac-text-soft);
+        overflow-wrap: anywhere;
+    }
+
+    .ac-kanban-card__body {
+        margin-top: 1rem;
+        display: grid;
+        gap: 0.9rem;
+    }
+
+    .ac-kanban-card__preview {
+        margin: 0;
+        font-size: 0.92rem;
+        line-height: 1.6;
+        color: var(--ac-text);
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .ac-kanban-card__meta-grid {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ac-kanban-card__meta-label {
+        margin: 0;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ac-text-soft);
+    }
+
+    .ac-kanban-card__meta-value {
+        margin: 0.25rem 0 0;
+        font-size: 0.9rem;
+        line-height: 1.45;
+        color: var(--ac-text);
+        overflow-wrap: anywhere;
+    }
+
+    .ac-kanban-empty-column {
+        display: flex;
+        flex: 1;
+        align-items: center;
+        justify-content: center;
+        min-height: 9rem;
+        border-radius: var(--ac-radius-lg);
+        border: 1px dashed color-mix(in srgb, var(--ac-border) 88%, transparent);
+        background: color-mix(in srgb, var(--ac-surface-muted) 82%, transparent);
+        padding: 1rem;
+        font-size: 0.9rem;
+        line-height: 1.6;
+        text-align: center;
+        color: var(--ac-text-soft);
+        overflow-wrap: anywhere;
+    }
+
     .ac-meta {
         min-width: 0;
     }
