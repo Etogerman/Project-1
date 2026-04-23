@@ -19,6 +19,11 @@ Route::post('/webhooks/max/{channel}', [BotWebhookController::class, 'max'])
 Route::post('/internal/gateway/telegram-account/{channel}/messages', [TelegramAccountGatewayController::class, 'inboundMessage'])
     ->name('internal.telegram-account.messages.handle');
 
+Route::post('/internal/gateway/telegram-account/{channel}/runtime-state', [TelegramAccountGatewayController::class, 'runtimeState'])
+    ->name('internal.telegram-account.runtime-state.handle');
+Route::post('/internal/gateway/telegram-account/{channel}/peer-sync-state', [TelegramAccountGatewayController::class, 'peerSyncState'])
+    ->name('internal.telegram-account.peer-sync-state.handle');
+
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])
     ->middleware('throttle:bitrix24-install')
     ->name('callbacks.bitrix24.install');

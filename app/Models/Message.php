@@ -39,6 +39,14 @@ class Message extends Model
 
     public const KIND_OUTBOUND_DIALOG_STATUS_CHANGE = 'outbound_dialog_status_change';
 
+    public const MEDIA_DOWNLOAD_STATUS_PENDING = 'pending';
+
+    public const MEDIA_DOWNLOAD_STATUS_DOWNLOADING = 'downloading';
+
+    public const MEDIA_DOWNLOAD_STATUS_DOWNLOADED = 'downloaded';
+
+    public const MEDIA_DOWNLOAD_STATUS_FAILED = 'failed';
+
     public const SENT_BY_TYPE_CONTACT = 'contact';
 
     public const SENT_BY_TYPE_OPERATOR = 'operator';
@@ -126,6 +134,24 @@ class Message extends Model
         return $value === self::TEXT_FORMAT_HTML
             ? self::TEXT_FORMAT_HTML
             : self::TEXT_FORMAT_PLAIN_TEXT;
+    }
+
+    public static function normalizeMediaDownloadStatus(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $normalized = trim($value);
+
+        return in_array($normalized, [
+            self::MEDIA_DOWNLOAD_STATUS_PENDING,
+            self::MEDIA_DOWNLOAD_STATUS_DOWNLOADING,
+            self::MEDIA_DOWNLOAD_STATUS_DOWNLOADED,
+            self::MEDIA_DOWNLOAD_STATUS_FAILED,
+        ], true)
+            ? $normalized
+            : null;
     }
 
     /**

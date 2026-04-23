@@ -8,6 +8,7 @@ use App\Models\ChannelActivityLog;
 use App\Models\Message;
 use App\Services\Bots\RegisterChannelWebhookAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
+use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\SyncChannelScenarioBindingsAction;
@@ -36,6 +37,7 @@ use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
 use Throwable;
 use UnitEnum;
@@ -314,7 +316,7 @@ class ChannelResource extends Resource
                         TextEntry::make('latest_message_text')
                             ->label('Текст')
                             ->placeholder('—')
-                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->text)
+                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessageDisplayText($record))
                             ->wrap()
                             ->columnSpanFull(),
                     ])
@@ -714,6 +716,40 @@ class ChannelResource extends Resource
             ->first();
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected static function resolveMessageFeedSummary(Message $message): ?array
+    {
+        /** @var array<int, array<string, mixed>|null> $cache */
+        static $cache = [];
+
+        if (array_key_exists($message->id, $cache)) {
+            return $cache[$message->id];
+        }
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(new Collection([$message]));
+
+        return $cache[$message->id] = $feed[0] ?? null;
+    }
+
+    protected static function resolveLatestSavedMessageDisplayText(Channel $record): ?string
+    {
+        $message = static::resolveLatestSavedMessage($record);
+
+        if (! $message instanceof Message) {
+            return null;
+        }
+
+        $feed = static::resolveMessageFeedSummary($message);
+
+        if (is_array($feed) && filled($feed['display_text'] ?? null)) {
+            return (string) $feed['display_text'];
+        }
+
+        return $message->text;
+    }
+
     protected static function renderRecentSavedMessages(Channel $record): HtmlString
     {
         $messages = $record->messages()
@@ -758,12 +794,25 @@ class ChannelResource extends Resource
                 );
             }
 
+            $feed = static::resolveMessageFeedSummary($message);
+
+            foreach ($feed['media_state_badges'] ?? [] as $badge) {
+                if (! is_array($badge) || ! filled($badge['label'] ?? null)) {
+                    continue;
+                }
+
+                $badges[] = static::renderFeedBadge(
+                    (string) $badge['label'],
+                    static::getMediaStateBadgeClasses((string) ($badge['tone'] ?? 'gray')),
+                );
+            }
+
             $badgeMarkup = implode('', $badges);
 
             return sprintf(
                 '<div class="rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
                 $badgeMarkup,
-                e(filled($message->text) ? (string) $message->text : '—'),
+                e(static::resolveLatestSavedMessageBodyText($message)),
             );
         })->implode('');
 
@@ -1024,6 +1073,17 @@ class ChannelResource extends Resource
         );
     }
 
+    protected static function resolveLatestSavedMessageBodyText(Message $message): string
+    {
+        $feed = static::resolveMessageFeedSummary($message);
+
+        if (is_array($feed) && filled($feed['display_text'] ?? null)) {
+            return (string) $feed['display_text'];
+        }
+
+        return filled($message->text) ? (string) $message->text : '—';
+    }
+
     protected static function getMessageDirectionBadgeClasses(?string $direction): string
     {
         if ($direction === Message::DIRECTION_INBOUND) {
@@ -1057,6 +1117,15 @@ class ChannelResource extends Resource
         }
 
         return 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200';
+    }
+
+    protected static function getMediaStateBadgeClasses(string $tone): string
+    {
+        return match ($tone) {
+            'danger' => 'inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200',
+            'warning' => 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200',
+            default => 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200',
+        };
     }
 
     protected static function appendRateLimitedActivityBadges(array &$badges, ChannelActivityLog $log): void

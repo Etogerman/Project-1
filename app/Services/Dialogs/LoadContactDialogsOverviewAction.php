@@ -33,7 +33,8 @@ class LoadContactDialogsOverviewAction
      *     last_outbound_label:string,
      *     preview_text:string,
      *     preview_sender_label:?string,
-     *     preview_sender_tone:?string
+     *     preview_sender_tone:?string,
+     *     preview_media_state_badges:list<array{label:string,tone:string}>
      * }>
      */
     public function handle(Contact $contact): Collection
@@ -80,6 +81,7 @@ class LoadContactDialogsOverviewAction
                     'preview_text' => is_array($previewFeed) ? (string) ($previewFeed['display_text'] ?? 'Сообщений ещё не было.') : 'Сообщений ещё не было.',
                     'preview_sender_label' => $this->resolvePreviewSenderLabel($previewMessage, $previewFeed),
                     'preview_sender_tone' => $this->resolvePreviewSenderTone($previewMessage, $previewFeed),
+                    'preview_media_state_badges' => $this->resolvePreviewMediaStateBadges($previewFeed),
                     'sort_at_timestamp' => $sortAt?->getTimestamp(),
                 ];
             })
@@ -187,6 +189,25 @@ class LoadContactDialogsOverviewAction
             Message::SENT_BY_TYPE_SYSTEM => 'gray',
             default => 'gray',
         };
+    }
+
+    /**
+     * @return list<array{label:string,tone:string}>
+     */
+    protected function resolvePreviewMediaStateBadges(mixed $previewFeed): array
+    {
+        if (! is_array($previewFeed) || ! is_array($previewFeed['media_state_badges'] ?? null)) {
+            return [];
+        }
+
+        return collect($previewFeed['media_state_badges'])
+            ->filter(fn (mixed $badge): bool => is_array($badge) && filled($badge['label'] ?? null))
+            ->map(fn (array $badge): array => [
+                'label' => (string) $badge['label'],
+                'tone' => filled($badge['tone'] ?? null) ? (string) $badge['tone'] : 'gray',
+            ])
+            ->values()
+            ->all();
     }
 
     protected function resolveDialogRouteStatus(Dialog $dialog): \App\Data\Dialogs\DialogRouteStatusData

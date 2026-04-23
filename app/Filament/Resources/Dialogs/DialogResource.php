@@ -414,6 +414,7 @@ class DialogResource extends Resource
     protected static function formatPreviewMetaSummary(Dialog $record): ?string
     {
         $previewMessage = static::resolvePreviewMessage($record);
+        $previewFeed = static::resolvePreviewFeed($record);
 
         if (! $previewMessage instanceof Message) {
             return null;
@@ -427,6 +428,14 @@ class DialogResource extends Resource
 
         if (filled($record->channel?->display_title)) {
             $parts[] = $record->channel->display_title;
+        }
+
+        if (is_array($previewFeed)) {
+            foreach ($previewFeed['media_state_badges'] ?? [] as $badge) {
+                if (is_array($badge) && filled($badge['label'] ?? null)) {
+                    $parts[] = (string) $badge['label'];
+                }
+            }
         }
 
         return implode(' · ', $parts);
