@@ -29,7 +29,7 @@ class SyncDialogConfirmedPhoneAction
         }
 
         $dialog->loadMissing('contact');
-        $fromStage = $dialog->stage;
+        $fromStage = $dialog->stage ?? $this->resolveDialogStageAction->handle($dialog);
 
         $payload = [];
 

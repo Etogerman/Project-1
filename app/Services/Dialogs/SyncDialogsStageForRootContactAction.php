@@ -28,6 +28,7 @@ class SyncDialogsStageForRootContactAction
         bool $apply = true,
         bool $writeHistory = true,
         bool $allowReviewEscape = false,
+        ?Contact $historySourceContact = null,
     ): array
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
@@ -50,7 +51,10 @@ class SyncDialogsStageForRootContactAction
         ];
 
         foreach ($dialogs as $dialog) {
-            $fromStage = $dialog->stage;
+            $fromStage = $this->resolveHistoryFromStage(
+                $dialog,
+                $historySourceContact ?? $rootContact,
+            );
             $stage = $this->resolveDialogStageAction->handle(
                 $dialog,
                 $rootContact,
@@ -94,5 +98,14 @@ class SyncDialogsStageForRootContactAction
         return $this->resolveContactAggregateAction
             ->handle($rootContact)
             ->aggregateContactIds;
+    }
+
+    private function resolveHistoryFromStage(Dialog $dialog, Contact $historySourceContact): string
+    {
+        return $dialog->stage ?? $this->resolveDialogStageAction->forAttributes(
+            currentStage: null,
+            contact: $historySourceContact,
+            phoneConfirmedAt: $dialog->phone_confirmed_at,
+        );
     }
 }
