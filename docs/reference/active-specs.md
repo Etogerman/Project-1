@@ -24,7 +24,7 @@
 
 ## Текущее состояние
 
-- `[critical-fixes-v7]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-critical-fixes-v7.md`; Spec revision: `aee1c51979465c32371b1c2fc33e22d9565d25c4`; status: `opened`; opened-at: `2026-04-23`
+- `[bitrix24-dev-profile-bootstrap-self-service]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-dev-profile-bootstrap-self-service.md`; Spec revision: `2f86930f316477c359a2c73d845477eca63317c6`; status: `opened`; opened-at: `2026-04-23`
 
 ## Связанные документы
 
