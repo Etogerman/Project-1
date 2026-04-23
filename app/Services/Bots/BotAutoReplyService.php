@@ -6,6 +6,7 @@ use App\Models\AutoReplyRule;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use Throwable;
@@ -86,9 +87,13 @@ class BotAutoReplyService
             return;
         }
 
-        foreach ($matchedRules as $matchedRule) {
-            $this->dispatchResolvedRule($storedMessage, $matchedRule, $channel, $contact, $baseContext);
-        }
+        $this->handleResolvedRules(
+            $storedMessage,
+            $matchedRules,
+            $channel,
+            $contact,
+            $baseContext,
+        );
     }
 
     public function handleResolvedRule(
@@ -136,6 +141,37 @@ class BotAutoReplyService
         }
 
         $this->dispatchResolvedRule($storedMessage, $matchedRule, $channel, $contact, $baseContext, $routeDialog);
+    }
+
+    /**
+     * @param  Collection<int, AutoReplyRule>  $matchedRules
+     * @param  array<string, mixed>  $baseContext
+     */
+    public function handleResolvedRules(
+        Message $storedMessage,
+        Collection $matchedRules,
+        \App\Models\Channel $channel,
+        Contact $contact,
+        array $baseContext,
+        ?Dialog $routeDialog = null,
+    ): void {
+        foreach ($matchedRules->values() as $index => $matchedRule) {
+            try {
+                $this->dispatchResolvedRule($storedMessage, $matchedRule, $channel, $contact, $baseContext, $routeDialog);
+            } catch (AutoReplyDispatchException $exception) {
+                throw new AutoReplyDispatchException(
+                    $exception->rule,
+                    $exception->buttonType,
+                    $exception->getPrevious() ?? $exception,
+                    $matchedRules
+                        ->slice($index)
+                        ->pluck('id')
+                        ->map(fn (mixed $ruleId): int => (int) $ruleId)
+                        ->values()
+                        ->all(),
+                );
+            }
+        }
     }
 
     /**

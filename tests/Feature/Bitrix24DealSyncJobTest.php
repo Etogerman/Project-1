@@ -95,6 +95,50 @@ class Bitrix24DealSyncJobTest extends TestCase
             ->andThrow(new \RuntimeException('Deal sync failed.'));
 
         $job = new EnsureBitrix24DealJob($contact->id);
+
+        try {
+            $job->handle(
+                app(ResolveRootContactAction::class),
+                $readyAction,
+                $ensureDealAction,
+                app(LogBitrix24ApiCallAction::class),
+            );
+
+            $this->fail('Expected deal sync job to bubble the retryable exception.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('Deal sync failed.', $exception->getMessage());
+        }
+
+        $contact->refresh();
+
+        $this->assertTrue($contact->bitrix24_deal_sync_pending);
+        $this->assertSame(Contact::BITRIX24_DEAL_SYNC_STATUS_PENDING, $contact->bitrix24_deal_sync_status);
+        $this->assertDatabaseCount('bitrix24_sync_logs', 0);
+
+        Log::shouldNotHaveReceived('critical');
+    }
+
+    public function test_job_marks_contact_as_failed_and_logs_on_final_deal_sync_attempt(): void
+    {
+        Log::spy();
+
+        $contact = $this->makePendingDealSyncContact();
+
+        $readyAction = Mockery::mock(IsContactReadyForBitrix24DealSyncAction::class);
+        $readyAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->is($contact))
+            ->andReturn(true);
+
+        $ensureDealAction = Mockery::mock(EnsureBitrix24DealAction::class);
+        $ensureDealAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->is($contact))
+            ->andThrow(new \RuntimeException('Deal sync failed.'));
+
+        $job = (new EnsureBitrix24DealJob($contact->id))->withFakeQueueInteractions();
+        $job->job->attempts = $job->tries;
+
         $job->handle(
             app(ResolveRootContactAction::class),
             $readyAction,
@@ -106,6 +150,7 @@ class Bitrix24DealSyncJobTest extends TestCase
 
         $this->assertFalse($contact->bitrix24_deal_sync_pending);
         $this->assertSame(Contact::BITRIX24_DEAL_SYNC_STATUS_FAILED, $contact->bitrix24_deal_sync_status);
+        $job->assertFailedWith(\RuntimeException::class);
 
         Log::shouldHaveReceived('critical')
             ->once()
