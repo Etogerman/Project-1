@@ -24,8 +24,13 @@ export async function loginToAdmin(page: Page, email: string, password: string):
     await expect(page.getByText('Инфопанель').first()).toBeVisible();
 }
 
-export async function findFirstResourceRecordPath(page: Page, resourcePath: string): Promise<string | null> {
-    return await page.locator('a[href]').evaluateAll((anchors, pathPrefix) => {
+export async function findFirstResourceRecordPath(
+    page: Page,
+    resourcePath: string,
+    excludedRecordKeys: string[] = [],
+): Promise<string | null> {
+    return await page.locator('a[href]').evaluateAll((anchors, args) => {
+        const { pathPrefix, excludedKeys } = args;
         const normalizedPrefix = `${pathPrefix}/`;
 
         for (const anchor of anchors) {
@@ -43,7 +48,11 @@ export async function findFirstResourceRecordPath(page: Page, resourcePath: stri
 
             const recordKey = url.pathname.slice(normalizedPrefix.length);
 
-            if (recordKey === '' || recordKey.includes('/')) {
+            if (
+                recordKey === ''
+                || recordKey.includes('/')
+                || excludedKeys.includes(recordKey)
+            ) {
                 continue;
             }
 
@@ -51,5 +60,8 @@ export async function findFirstResourceRecordPath(page: Page, resourcePath: stri
         }
 
         return null;
-    }, resourcePath);
+    }, {
+        pathPrefix: resourcePath,
+        excludedKeys: excludedRecordKeys,
+    });
 }
