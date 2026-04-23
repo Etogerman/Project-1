@@ -122,25 +122,29 @@
                                         {{ $card['preview_text'] }}
                                     </p>
 
-                                    <div class="ac-kanban-card__meta-grid">
-                                        <div>
-                                            <p class="ac-kanban-card__meta-label">Маршрут</p>
-                                            <p class="ac-kanban-card__meta-value">
-                                                <span class="ac-pill" data-tone="{{ $card['route_status_tone'] }}">
-                                                    {{ $card['route_status_label'] }}
-                                                </span>
-                                            </p>
+                                    <div class="ac-kanban-card__facts">
+                                        <div class="ac-kanban-card__fact ac-kanban-card__fact--route">
+                                            <span class="ac-kanban-card__fact-label">Маршрут</span>
+                                            <span class="ac-kanban-card__route-status" data-tone="{{ $card['route_status_tone'] }}">
+                                                {{ $card['route_status_label'] }}
+                                            </span>
                                         </div>
 
-                                        <div>
-                                            <p class="ac-kanban-card__meta-label">Ответственный</p>
-                                            <p class="ac-kanban-card__meta-value">{{ $card['assigned_user_label'] }}</p>
+                                        <div class="ac-kanban-card__fact">
+                                            <span class="ac-kanban-card__fact-label">Ответственный</span>
+                                            <span class="ac-kanban-card__fact-value">{{ $card['assigned_user_label'] }}</span>
                                         </div>
 
-                                        <div>
-                                            <p class="ac-kanban-card__meta-label">Активность</p>
-                                            <p class="ac-kanban-card__meta-value">{{ $card['activity_label'] }}</p>
+                                        <div class="ac-kanban-card__fact">
+                                            <span class="ac-kanban-card__fact-label">Активность</span>
+                                            <span class="ac-kanban-card__fact-value">{{ $card['activity_label'] }}</span>
                                         </div>
+                                    </div>
+
+                                    <div class="ac-kanban-card__footer">
+                                        <a href="{{ $card['view_url'] }}" class="ac-button ac-button--secondary ac-button--compact">
+                                            Открыть диалог
+                                        </a>
                                     </div>
                                 </div>
                             </article>

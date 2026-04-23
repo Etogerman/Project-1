@@ -40,7 +40,8 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk()
             ->assertSee('Канбан диалогов')
             ->assertSee('Требует проверки')
-            ->assertSee($dialog->contact->display_name);
+            ->assertSee($dialog->contact->display_name)
+            ->assertSee('Открыть диалог');
     }
 
     public function test_kanban_page_does_not_apply_requires_reply_filter_by_default(): void
