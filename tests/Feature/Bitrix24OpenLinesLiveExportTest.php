@@ -2916,6 +2916,78 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertNull($export->live_claim_expires_at);
     }
 
+    public function test_queue_action_requeues_stale_unclaimed_pending_live_export(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Stale unclaimed pending export should be requeued',
+        ]);
+
+        $export = Bitrix24MessageExport::query()->create([
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'live_batch_uuid' => 'stale-unclaimed-batch-1',
+            'live_claim_uuid' => null,
+            'live_claimed_at' => null,
+            'live_claim_expires_at' => null,
+        ]);
+
+        $export->forceFill([
+            'updated_at' => now()->subSeconds(QueueBitrix24LiveMessageExportAction::UNCLAIMED_PENDING_RECOVERY_SECONDS + 5),
+        ])->save();
+
+        $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
+
+        $this->assertTrue($result->queued);
+        $this->assertFalse($result->alreadyPending);
+        $this->assertTrue($result->ready);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message): bool {
+            return $job->messageId === $message->id
+                && $job->liveBatchUuid !== null
+                && $job->liveBatchUuid !== 'stale-unclaimed-batch-1';
+        });
+    }
+
+    public function test_queue_action_keeps_fresh_unclaimed_pending_live_export_as_already_pending(): void
+    {
+        Queue::fake();
+
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Fresh unclaimed pending export should stay pending',
+        ]);
+
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $message->id,
+            'contact_id' => $dialog->contact_id,
+            'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'live_batch_uuid' => 'fresh-unclaimed-batch-1',
+            'live_claim_uuid' => null,
+            'live_claimed_at' => null,
+            'live_claim_expires_at' => null,
+        ]);
+
+        $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
+
+        $this->assertFalse($result->queued);
+        $this->assertTrue($result->alreadyPending);
+        $this->assertTrue($result->ready);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+    }
+
     public function test_pending_live_claim_blocks_duplicate_direct_export_send(): void
     {
         $this->makeActiveConnection();

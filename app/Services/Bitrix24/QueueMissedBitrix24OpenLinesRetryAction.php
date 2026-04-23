@@ -80,6 +80,14 @@ class QueueMissedBitrix24OpenLinesRetryAction
                             ->where(function ($recoverablePendingQuery): void {
                                 $recoverablePendingQuery
                                     ->whereNull('live_export.live_batch_uuid')
+                                    ->orWhere(function ($staleUnclaimedQuery): void {
+                                        $staleUnclaimedQuery
+                                            ->whereNotNull('live_export.live_batch_uuid')
+                                            ->whereNull('live_export.live_claim_uuid')
+                                            ->where('live_export.updated_at', '<=', now()->subSeconds(
+                                                QueueBitrix24LiveMessageExportAction::UNCLAIMED_PENDING_RECOVERY_SECONDS
+                                            ));
+                                    })
                                     ->orWhere(function ($expiredClaimQuery): void {
                                         $expiredClaimQuery
                                             ->whereNotNull('live_export.live_claim_uuid')
