@@ -1,17 +1,7 @@
 <x-filament-panels::page>
     <div data-role="dialog-kanban-page" class="ac-panel-stack ac-panel-stack--relaxed">
         <section class="ac-surface ac-surface--hero">
-            <div class="ac-surface__header ac-surface__header--centered">
-                <div class="ac-surface__title-group">
-                    <p class="ac-surface__eyebrow">Рабочая доска</p>
-                    <h2 class="ac-surface__title ac-surface__title--hero">Канбан диалогов</h2>
-                    <p class="ac-surface__subtitle">
-                        Все доступные оператору диалоги по этапам без фильтра «Требует ответа» по умолчанию.
-                    </p>
-                </div>
-            </div>
-
-            <div class="ac-card-grid ac-surface__divider">
+            <div class="ac-card-grid">
                 <div class="ac-meta">
                     <label for="kanban-filter-channel" class="ac-meta__label">Канал</label>
                     <select id="kanban-filter-channel" wire:model.live="selectedChannelId" class="ac-select">
@@ -57,18 +47,18 @@
         <div
             data-role="dialog-kanban-board"
             x-data="{ draggingDialogId: null, allowedTargets: [] }"
-            class="grid gap-4 xl:grid-cols-3"
+            class="ac-kanban-board"
         >
             @foreach ($columns as $column)
                 <section
                     data-role="dialog-kanban-column"
                     data-stage="{{ $column['stage'] }}"
-                    class="ac-surface ac-surface--secondary flex min-h-[20rem] flex-col"
+                    class="ac-surface ac-surface--secondary ac-kanban-column"
                     x-bind:class="draggingDialogId === null
                         ? ''
                         : (allowedTargets.includes('{{ $column['stage'] }}')
-                            ? 'ring-2 ring-amber-400/80'
-                            : 'opacity-70')"
+                            ? 'ac-kanban-column--drop-target'
+                            : 'ac-kanban-column--inactive')"
                     x-on:dragover.prevent
                     x-on:drop.prevent="
                         if (draggingDialogId !== null && allowedTargets.includes('{{ $column['stage'] }}')) {
@@ -82,7 +72,6 @@
                     <div class="ac-surface__header ac-surface__header--centered">
                         <div class="ac-surface__title-group">
                             <h3 class="ac-surface__title">{{ $column['label'] }}</h3>
-                            <p class="ac-surface__subtitle">Диалогов: {{ $column['count'] }}</p>
                         </div>
 
                         <span class="ac-pill" data-tone="{{ $column['tone'] }}">
@@ -90,7 +79,7 @@
                         </span>
                     </div>
 
-                    <div class="mt-4 flex flex-1 flex-col gap-3">
+                    <div class="ac-kanban-column__cards">
                         @forelse ($column['cards'] as $card)
                             <article
                                 data-role="dialog-kanban-card"
@@ -108,35 +97,35 @@
                                     draggingDialogId = null;
                                     allowedTargets = [];
                                 "
-                                class="rounded-2xl border border-white/10 bg-slate-950/35 p-4 shadow-sm transition hover:border-amber-300/30"
+                                class="ac-kanban-card"
                             >
-                                <div class="flex items-start justify-between gap-3">
-                                    <div class="min-w-0">
+                                <div class="ac-kanban-card__header">
+                                    <div class="ac-kanban-card__title-group">
                                         <a
                                             href="{{ $card['view_url'] }}"
-                                            class="block truncate text-base font-semibold text-white hover:text-amber-200"
+                                            class="ac-kanban-card__title"
                                         >
                                             {{ $card['contact_label'] }}
                                         </a>
-                                        <p class="mt-1 text-sm text-slate-300">
+                                        <p class="ac-kanban-card__channel">
                                             {{ $card['channel_label'] }}
                                         </p>
                                     </div>
 
-                                    <span class="ac-pill shrink-0" data-tone="{{ $card['inbox_status_tone'] }}">
+                                    <span class="ac-pill" data-tone="{{ $card['inbox_status_tone'] }}">
                                         {{ $card['inbox_status_label'] }}
                                     </span>
                                 </div>
 
-                                <div class="mt-4 space-y-3">
-                                    <p class="line-clamp-3 text-sm leading-6 text-slate-100">
+                                <div class="ac-kanban-card__body">
+                                    <p class="ac-kanban-card__preview">
                                         {{ $card['preview_text'] }}
                                     </p>
 
-                                    <div class="grid gap-3 text-sm md:grid-cols-2">
+                                    <div class="ac-kanban-card__meta-grid">
                                         <div>
-                                            <p class="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Маршрут</p>
-                                            <p class="mt-1">
+                                            <p class="ac-kanban-card__meta-label">Маршрут</p>
+                                            <p class="ac-kanban-card__meta-value">
                                                 <span class="ac-pill" data-tone="{{ $card['route_status_tone'] }}">
                                                     {{ $card['route_status_label'] }}
                                                 </span>
@@ -144,13 +133,13 @@
                                         </div>
 
                                         <div>
-                                            <p class="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Ответственный</p>
-                                            <p class="mt-1 text-slate-200">{{ $card['assigned_user_label'] }}</p>
+                                            <p class="ac-kanban-card__meta-label">Ответственный</p>
+                                            <p class="ac-kanban-card__meta-value">{{ $card['assigned_user_label'] }}</p>
                                         </div>
 
                                         <div>
-                                            <p class="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Активность</p>
-                                            <p class="mt-1 text-slate-200">{{ $card['activity_label'] }}</p>
+                                            <p class="ac-kanban-card__meta-label">Активность</p>
+                                            <p class="ac-kanban-card__meta-value">{{ $card['activity_label'] }}</p>
                                         </div>
                                     </div>
                                 </div>
@@ -158,7 +147,7 @@
                         @empty
                             <div
                                 data-role="dialog-kanban-empty-column"
-                                class="flex flex-1 items-center justify-center rounded-2xl border border-dashed border-white/10 bg-slate-950/20 px-4 py-10 text-center text-sm text-slate-400"
+                                class="ac-kanban-empty-column"
                             >
                                 В этой колонке пока нет карточек.
                             </div>
@@ -166,7 +155,7 @@
                     </div>
 
                     @if ($column['has_more'])
-                        <div class="mt-4">
+                        <div class="ac-kanban-column__footer">
                             <button
                                 type="button"
                                 wire:click="loadMoreCards('{{ $column['stage'] }}')"
