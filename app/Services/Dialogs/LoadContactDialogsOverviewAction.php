@@ -192,7 +192,6 @@ class LoadContactDialogsOverviewAction
         };
     }
 
-    protected function resolveDialogRouteStatus(Dialog $dialog): DialogRouteStatusData
     /**
      * @return list<array{label:string,tone:string}>
      */
