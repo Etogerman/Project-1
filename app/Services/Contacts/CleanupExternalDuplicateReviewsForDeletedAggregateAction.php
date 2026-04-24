@@ -91,6 +91,13 @@ class CleanupExternalDuplicateReviewsForDeletedAggregateAction
                     $payload['routed_contact_id'] = $review->contact_id;
                 }
 
+                if ($remainingCandidates === [] && $review->isOpen()) {
+                    $payload['status'] = ContactDuplicateReview::STATUS_RESOLVED;
+                    $payload['resolved_at'] = now();
+                    $payload['routed_contact_id'] = $payload['routed_contact_id'] ?? $review->contact_id;
+                    $reviewsResolvedCount++;
+                }
+
                 $review->forceFill($payload)->save();
                 $affectedContactIds[$review->contact_id] = true;
 
