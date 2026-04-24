@@ -140,6 +140,14 @@ class HandleBitrix24InstallCallbackAction
         }
 
         if (! is_array($scope)) {
+            $scope = $this->caseInsensitiveValue($rawPayload, 'application_scope');
+        }
+
+        if (is_string($scope)) {
+            $scope = preg_split('/\s*,\s*/', $scope) ?: [];
+        }
+
+        if (! is_array($scope)) {
             $scope = [];
         }
 
@@ -152,9 +160,17 @@ class HandleBitrix24InstallCallbackAction
             memberId: $authContext->memberId,
             clientEndpoint: $authContext->clientEndpoint,
             serverEndpoint: $authContext->serverEndpoint,
-            accessToken: $this->nullableString($this->caseInsensitiveValue($auth, 'access_token')),
-            refreshToken: $this->nullableString($this->caseInsensitiveValue($auth, 'refresh_token')),
-            expiresAt: $this->nullableString($this->caseInsensitiveValue($auth, 'expires') ?? $this->caseInsensitiveValue($auth, 'expires_at')),
+            accessToken: $this->nullableString(
+                $this->caseInsensitiveValue($auth, 'access_token')
+                ?? $this->caseInsensitiveValue($rawPayload, 'access_token')
+                ?? $this->caseInsensitiveValue($rawPayload, 'auth_id'),
+            ),
+            refreshToken: $this->nullableString(
+                $this->caseInsensitiveValue($auth, 'refresh_token')
+                ?? $this->caseInsensitiveValue($rawPayload, 'refresh_token')
+                ?? $this->caseInsensitiveValue($rawPayload, 'refresh_id'),
+            ),
+            expiresAt: $this->resolveExpiresAtValue($auth, $rawPayload),
             scope: $scope,
             rawPayload: $sanitizedPayload,
         );
@@ -206,5 +222,29 @@ class HandleBitrix24InstallCallbackAction
         $trimmed = trim((string) $value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * @param  array<string, mixed>  $auth
+     * @param  array<string, mixed>  $rawPayload
+     */
+    private function resolveExpiresAtValue(array $auth, array $rawPayload): ?string
+    {
+        $expiresAt = $this->nullableString(
+            $this->caseInsensitiveValue($auth, 'expires')
+            ?? $this->caseInsensitiveValue($auth, 'expires_at'),
+        );
+
+        if ($expiresAt !== null) {
+            return $expiresAt;
+        }
+
+        $authExpires = $this->nullableString($this->caseInsensitiveValue($rawPayload, 'auth_expires'));
+
+        if ($authExpires !== null && ctype_digit($authExpires)) {
+            return (string) now()->addSeconds((int) $authExpires)->timestamp;
+        }
+
+        return $authExpires;
     }
 }

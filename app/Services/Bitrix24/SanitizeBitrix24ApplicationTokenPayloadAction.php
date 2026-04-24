@@ -30,7 +30,7 @@ class SanitizeBitrix24ApplicationTokenPayloadAction
                 ? mb_strtolower(str_replace('_', '', $key))
                 : null;
 
-            if ($normalizedKey === 'applicationtoken') {
+            if (in_array($normalizedKey, ['applicationtoken', 'appsid'], true)) {
                 $hash = $this->hashApplicationToken->handle($value);
 
                 if ($hash !== null) {

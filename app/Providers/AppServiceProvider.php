@@ -66,14 +66,16 @@ class AppServiceProvider extends ServiceProvider
 
     private function resolveBitrix24CallbackRateLimitKey(Request $request): string
     {
-        $memberId = $this->normalizeRateLimitValue($request->input('auth.member_id'));
-        $applicationToken = $this->normalizeRateLimitValue($request->input('auth.application_token'));
+        $memberId = $this->normalizeRateLimitValue($request->input('auth.member_id') ?? $request->input('member_id'));
+        $applicationToken = $this->normalizeRateLimitValue(
+            $request->input('auth.application_token') ?? $request->input('application_token') ?? $request->input('APP_SID'),
+        );
 
         if ($memberId !== null && $applicationToken !== null) {
             return $memberId.':'.$applicationToken;
         }
 
-        $domain = $this->normalizeRateLimitValue($request->input('auth.domain'));
+        $domain = $this->normalizeRateLimitValue($request->input('auth.domain') ?? $request->input('DOMAIN'));
 
         if ($domain !== null) {
             return $domain;
