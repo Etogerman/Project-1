@@ -4,6 +4,7 @@ namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24ContactUpdatePlanData;
 use App\Data\Bitrix24\Bitrix24ContactMatchResultData;
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Contact;
 use App\Services\Contacts\ResolveRootContactAction;
@@ -26,6 +27,7 @@ class SyncContactToBitrix24Action
         private readonly UpdateBitrix24ContactAction $updateBitrix24ContactAction,
         private readonly ComputeBitrix24ContactSyncFingerprintAction $computeBitrix24ContactSyncFingerprintAction,
         private readonly LogBitrix24ApiCallAction $logApiCallAction,
+        private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
     ) {}
 
     public function handle(Contact|int $contact): Contact
@@ -36,8 +38,10 @@ class SyncContactToBitrix24Action
             return $this->syncFakeContact($rootContact);
         }
 
+        $connection = $this->resolveCurrentConnectionAction->handle();
+
         if (filled($rootContact->bitrix24_contact_id)) {
-            return $this->syncExistingLinkedContact($rootContact);
+            return $this->syncExistingLinkedContact($rootContact, null, $connection);
         }
 
         $sourceId = $this->resolveContactSourceAction->handle($rootContact);
@@ -64,7 +68,7 @@ class SyncContactToBitrix24Action
         }
 
         $phones = $this->collectContactPhonesAction->handle($rootContact);
-        $lookupResult = $this->findDuplicateContactsByPhonesAction->handle($phones);
+        $lookupResult = $this->findDuplicateContactsByPhonesAction->handle($phones, $connection);
         $matchResult = $this->resolveContactMatchAction->handle($lookupResult);
 
         $this->logApiCallAction->handle(
@@ -89,14 +93,14 @@ class SyncContactToBitrix24Action
         );
 
         return match ($matchResult->type) {
-            Bitrix24ContactMatchResultData::TYPE_NO_MATCH => $this->createRemoteContact($rootContact),
-            Bitrix24ContactMatchResultData::TYPE_SINGLE_MATCH => $this->linkVerifiedRemoteContact($rootContact, (string) $matchResult->matchedContactId),
+            Bitrix24ContactMatchResultData::TYPE_NO_MATCH => $this->createRemoteContact($rootContact, $connection),
+            Bitrix24ContactMatchResultData::TYPE_SINGLE_MATCH => $this->linkVerifiedRemoteContact($rootContact, (string) $matchResult->matchedContactId, $connection),
             Bitrix24ContactMatchResultData::TYPE_CONFLICT => $this->markConflict($rootContact, $matchResult),
             default => $rootContact,
         };
     }
 
-    private function createRemoteContact(Contact $contact): Contact
+    private function createRemoteContact(Contact $contact, Bitrix24Connection $connection): Contact
     {
         $payload = $this->buildContactPayloadAction->handle($contact);
 
@@ -121,7 +125,7 @@ class SyncContactToBitrix24Action
             return $contact->fresh();
         }
 
-        $bitrix24ContactId = $this->createBitrix24ContactAction->handle($contact, $payload);
+        $bitrix24ContactId = $this->createBitrix24ContactAction->handle($contact, $payload, $connection);
         $linkedContact = $this->persistSyncedContactState(
             $this->linkBitrix24ContactAction->handle($contact, $bitrix24ContactId),
             $this->computeCreateFingerprint($payload),
@@ -145,9 +149,13 @@ class SyncContactToBitrix24Action
         return $linkedContact;
     }
 
-    private function linkVerifiedRemoteContact(Contact $contact, string $bitrix24ContactId): Contact
+    private function linkVerifiedRemoteContact(
+        Contact $contact,
+        string $bitrix24ContactId,
+        Bitrix24Connection $connection,
+    ): Contact
     {
-        $remoteSnapshot = $this->fetchRemoteContact($contact, $bitrix24ContactId);
+        $remoteSnapshot = $this->fetchRemoteContact($contact, $bitrix24ContactId, $connection);
 
         $linkedContact = $this->linkBitrix24ContactAction->handle($contact, $bitrix24ContactId);
 
@@ -166,7 +174,7 @@ class SyncContactToBitrix24Action
             entityId: (string) $contact->id,
         );
 
-        return $this->syncExistingLinkedContact($linkedContact, $remoteSnapshot);
+        return $this->syncExistingLinkedContact($linkedContact, $remoteSnapshot, $connection);
     }
 
     private function markConflict(Contact $contact, Bitrix24ContactMatchResultData $matchResult): Contact
@@ -199,10 +207,14 @@ class SyncContactToBitrix24Action
     /**
      * @param  array<string, mixed>|null  $remoteSnapshot
      */
-    private function syncExistingLinkedContact(Contact $contact, ?array $remoteSnapshot = null): Contact
+    private function syncExistingLinkedContact(
+        Contact $contact,
+        ?array $remoteSnapshot = null,
+        ?Bitrix24Connection $connection = null,
+    ): Contact
     {
         $bitrix24ContactId = (string) $contact->bitrix24_contact_id;
-        $remoteSnapshot ??= $this->fetchRemoteContact($contact, $bitrix24ContactId);
+        $remoteSnapshot ??= $this->fetchRemoteContact($contact, $bitrix24ContactId, $connection);
         $updatePlan = $this->buildBitrix24ContactUpdatePayloadAction->handle($contact, $remoteSnapshot);
 
         $this->logUpdateWarnings($contact, $updatePlan);
@@ -247,7 +259,7 @@ class SyncContactToBitrix24Action
             );
         }
 
-        $this->updateBitrix24ContactAction->handle($contact, $bitrix24ContactId, $updatePlan->payload);
+        $this->updateBitrix24ContactAction->handle($contact, $bitrix24ContactId, $updatePlan->payload, $connection);
         $syncedContact = $this->persistSyncedContactState($contact, $updatePlan->fingerprint);
 
         $this->logApiCallAction->handle(
@@ -399,9 +411,13 @@ class SyncContactToBitrix24Action
     /**
      * @return array<string, mixed>
      */
-    private function fetchRemoteContact(Contact $contact, string $bitrix24ContactId): array
+    private function fetchRemoteContact(
+        Contact $contact,
+        string $bitrix24ContactId,
+        ?Bitrix24Connection $connection = null,
+    ): array
     {
-        $remoteSnapshot = $this->fetchBitrix24ContactAction->handle($bitrix24ContactId);
+        $remoteSnapshot = $this->fetchBitrix24ContactAction->handle($bitrix24ContactId, $connection);
 
         $this->logApiCallAction->handle(
             direction: Bitrix24SyncLog::DIRECTION_SYSTEM,

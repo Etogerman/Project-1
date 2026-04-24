@@ -56,16 +56,18 @@ class RepairMergedContactDialogsCommand extends Command
 
                 $rootStats = $apply
                     ? DB::transaction(fn (): array => $this->consolidateDialogsForRootContactAction->handle(
-                        $rootContact,
-                        $rootGroups[$rootContactId],
-                        true,
-                        true,
+                        rootContact: $rootContact,
+                        memberContactIds: $rootGroups[$rootContactId],
+                        apply: true,
+                        normalizeMessageContacts: true,
+                        writeHistory: false,
                     ))
                     : $this->consolidateDialogsForRootContactAction->handle(
-                        $rootContact,
-                        $rootGroups[$rootContactId],
-                        false,
-                        true,
+                        rootContact: $rootContact,
+                        memberContactIds: $rootGroups[$rootContactId],
+                        apply: false,
+                        normalizeMessageContacts: true,
+                        writeHistory: false,
                     );
 
                 $this->accumulateStats($stats, $rootStats);

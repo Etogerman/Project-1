@@ -2,15 +2,19 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use Illuminate\Support\Str;
 
 class ExportMessageToBitrix24OpenLinesAction
 {
+    private const LIVE_CLAIM_LEASE_SECONDS = 120;
+
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ResolveBitrix24LiveChatKeyAction $resolveBitrix24LiveChatKeyAction,
@@ -25,9 +29,10 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly QueueDeferredParameterAutoReplyAction $queueDeferredParameterAutoReplyAction,
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
+        private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
     ) {}
 
-    public function handle(Message|int $message, bool $retryAfterSync = false): Message
+    public function handle(Message|int $message, bool $retryAfterSync = false, ?string $liveBatchUuid = null): Message
     {
         $message = $message instanceof Message
             ? $message
@@ -48,8 +53,17 @@ class ExportMessageToBitrix24OpenLinesAction
 
         $dialog = $message->dialog()->firstOrFail();
         $rootContact = $this->resolveRootContactAction->handle($message->contact()->firstOrFail());
+        $bitrix24ContactId = (string) $rootContact->bitrix24_contact_id;
+        $liveExport = $this->claimLiveExport(
+            $message,
+            $rootContact->id,
+            $bitrix24ContactId,
+            $liveBatchUuid,
+        );
 
-        $this->markPending($message, $rootContact->id, (string) $rootContact->bitrix24_contact_id);
+        if (! $liveExport instanceof Bitrix24MessageExport) {
+            return $message->fresh() ?? $message;
+        }
 
         try {
             $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
@@ -59,7 +73,7 @@ class ExportMessageToBitrix24OpenLinesAction
                     message: $message,
                     dialog: $dialog,
                     rootContactId: $rootContact->id,
-                    bitrix24ContactId: (string) $rootContact->bitrix24_contact_id,
+                    bitrix24ContactId: $bitrix24ContactId,
                     connectorCode: $route->connectorCode,
                     lineId: $route->lineId,
                     retryAfterSync: $retryAfterSync,
@@ -74,6 +88,8 @@ class ExportMessageToBitrix24OpenLinesAction
             }
 
             if ($this->shouldUseServiceActorManualReplyPath($message)) {
+                $manualReplyConnection = $this->resolveCurrentConnectionAction->handle();
+
                 try {
                     $manualReplyExport = $this->exportManualReplyToBitrix24OpenLinesAction->handle(
                         $message,
@@ -116,11 +132,12 @@ class ExportMessageToBitrix24OpenLinesAction
                             message: $message,
                             dialog: $dialog,
                             rootContactId: $rootContact->id,
-                            bitrix24ContactId: (string) $rootContact->bitrix24_contact_id,
+                            bitrix24ContactId: $bitrix24ContactId,
                             connectorCode: $route->connectorCode,
                             lineId: $route->lineId,
                             retryAfterSync: $retryAfterSync,
                             operation: 'openlines_manual_reply_exported_legacy_fallback',
+                            connection: $manualReplyConnection,
                             applyLegacyFallbackSignature: $this->shouldApplyLegacyFallbackSignature($message),
                             responsePayload: [
                                 'fallback_from_failure_code' => $exception->failureCode,
@@ -137,7 +154,7 @@ class ExportMessageToBitrix24OpenLinesAction
                 message: $message,
                 dialog: $dialog,
                 rootContactId: $rootContact->id,
-                bitrix24ContactId: (string) $rootContact->bitrix24_contact_id,
+                bitrix24ContactId: $bitrix24ContactId,
                 connectorCode: $route->connectorCode,
                 lineId: $route->lineId,
                 retryAfterSync: $retryAfterSync,
@@ -148,9 +165,25 @@ class ExportMessageToBitrix24OpenLinesAction
             $this->markFailed(
                 $message,
                 $rootContact->id,
-                (string) $rootContact->bitrix24_contact_id,
+                $bitrix24ContactId,
                 $exception->getMessage(),
                 Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+                failureCode: $exception->failureCode,
+                failureUncertain: $exception->failureUncertain,
+            );
+
+            $dialog->forceFill([
+                'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_FAILED,
+            ])->save();
+
+            throw $exception;
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->markFailed(
+                $message,
+                $rootContact->id,
+                $bitrix24ContactId,
+                $exception->getMessage(),
+                Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
                 failureCode: $exception->failureCode,
                 failureUncertain: $exception->failureUncertain,
             );
@@ -164,7 +197,7 @@ class ExportMessageToBitrix24OpenLinesAction
             $this->markFailed(
                 $message,
                 $rootContact->id,
-                (string) $rootContact->bitrix24_contact_id,
+                $bitrix24ContactId,
                 $throwable->getMessage(),
                 Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             );
@@ -177,7 +210,7 @@ class ExportMessageToBitrix24OpenLinesAction
         }
     }
 
-    private function markPending(Message $message, int $rootContactId, string $bitrix24ContactId): void
+    private function markPending(Message $message, int $rootContactId, string $bitrix24ContactId, string $liveBatchUuid): void
     {
         Bitrix24MessageExport::query()->updateOrCreate(
             [
@@ -188,6 +221,10 @@ class ExportMessageToBitrix24OpenLinesAction
                 'contact_id' => $rootContactId,
                 'bitrix24_contact_id' => $bitrix24ContactId,
                 'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+                'live_batch_uuid' => $liveBatchUuid,
+                'live_claim_uuid' => null,
+                'live_claimed_at' => null,
+                'live_claim_expires_at' => null,
                 'transport_method' => null,
                 'resolved_bitrix_chat_id' => null,
                 'resolved_crm_entity_type' => null,
@@ -202,6 +239,93 @@ class ExportMessageToBitrix24OpenLinesAction
                 'failure_reason' => null,
             ],
         );
+    }
+
+    private function claimLiveExport(
+        Message $message,
+        int $rootContactId,
+        string $bitrix24ContactId,
+        ?string $expectedLiveBatchUuid,
+    ): ?Bitrix24MessageExport {
+        $liveExport = Bitrix24MessageExport::query()
+            ->where('message_id', $message->id)
+            ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->first();
+
+        if ($liveExport?->export_status === Bitrix24MessageExport::STATUS_EXPORTED) {
+            return null;
+        }
+
+        if (
+            $liveExport?->export_status === Bitrix24MessageExport::STATUS_FAILED
+            && $liveExport->failure_uncertain
+        ) {
+            return null;
+        }
+
+        if ($liveExport?->export_status !== Bitrix24MessageExport::STATUS_PENDING) {
+            $expectedLiveBatchUuid ??= (string) Str::uuid();
+            $this->markPending($message, $rootContactId, $bitrix24ContactId, $expectedLiveBatchUuid);
+            $liveExport = Bitrix24MessageExport::query()
+                ->where('message_id', $message->id)
+                ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
+                ->first();
+        }
+
+        if (! $liveExport instanceof Bitrix24MessageExport) {
+            return null;
+        }
+
+        if (blank($liveExport->live_batch_uuid)) {
+            $expectedLiveBatchUuid ??= (string) Str::uuid();
+
+            Bitrix24MessageExport::query()
+                ->whereKey($liveExport->id)
+                ->update([
+                    'live_batch_uuid' => $expectedLiveBatchUuid,
+                    'live_claim_uuid' => null,
+                    'live_claimed_at' => null,
+                    'live_claim_expires_at' => null,
+                    'updated_at' => now(),
+                ]);
+
+            $liveExport->refresh();
+        }
+
+        if (
+            filled($expectedLiveBatchUuid)
+            && $liveExport->live_batch_uuid !== $expectedLiveBatchUuid
+        ) {
+            return null;
+        }
+
+        $claimUuid = (string) Str::uuid();
+        $claimedAt = now();
+        $claimExpiresAt = $claimedAt->copy()->addSeconds(self::LIVE_CLAIM_LEASE_SECONDS);
+
+        $updated = Bitrix24MessageExport::query()
+            ->whereKey($liveExport->id)
+            ->where('export_status', Bitrix24MessageExport::STATUS_PENDING)
+            ->when(
+                filled($expectedLiveBatchUuid),
+                fn ($query) => $query->where('live_batch_uuid', $expectedLiveBatchUuid),
+            )
+            ->where(function ($query) use ($claimedAt): void {
+                $query->whereNull('live_claim_uuid')
+                    ->orWhere('live_claim_expires_at', '<=', $claimedAt);
+            })
+            ->update([
+                'live_claim_uuid' => $claimUuid,
+                'live_claimed_at' => $claimedAt,
+                'live_claim_expires_at' => $claimExpiresAt,
+                'updated_at' => $claimedAt,
+            ]);
+
+        if ($updated !== 1) {
+            return null;
+        }
+
+        return $liveExport->fresh();
     }
 
     /**
@@ -369,6 +493,7 @@ class ExportMessageToBitrix24OpenLinesAction
         string $lineId,
         bool $retryAfterSync,
         string $operation,
+        ?Bitrix24Connection $connection = null,
         bool $applyLegacyFallbackSignature = false,
         array $responsePayload = [],
     ): Message {
@@ -377,10 +502,29 @@ class ExportMessageToBitrix24OpenLinesAction
             connectorCode: $connectorCode,
             lineId: $lineId,
         ), $retryAfterSync, $applyLegacyFallbackSignature);
-        $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload);
+
+        try {
+            $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload, $connection);
+        } catch (Bitrix24ApiException $exception) {
+            throw new Bitrix24LiveExportTransportException(
+                'Bitrix24 Open Lines live export transport outcome is uncertain.',
+                failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                failureUncertain: true,
+                previous: $exception,
+            );
+        }
 
         if (! $response->successful) {
-            throw new Bitrix24ApiException($response->errorMessage ?? 'Bitrix24 Open Lines message export failed.');
+            $failureCode = $response->httpStatus >= 500
+                ? Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN
+                : Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED;
+            $failureUncertain = $failureCode === Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN;
+
+            throw new Bitrix24LiveExportTransportException(
+                $response->errorMessage ?? 'Bitrix24 Open Lines message export failed.',
+                failureCode: $failureCode,
+                failureUncertain: $failureUncertain,
+            );
         }
 
         return $this->completeSuccessfulExport(
@@ -472,6 +616,9 @@ class ExportMessageToBitrix24OpenLinesAction
                 'failure_code' => null,
                 'failure_uncertain' => false,
                 'failure_reason' => null,
+                'live_claim_uuid' => null,
+                'live_claimed_at' => null,
+                'live_claim_expires_at' => null,
                 'updated_at' => now(),
             ]);
     }
@@ -507,6 +654,9 @@ class ExportMessageToBitrix24OpenLinesAction
                 'failure_code' => $failureCode,
                 'failure_uncertain' => $failureUncertain,
                 'failure_reason' => $failureReason,
+                'live_claim_uuid' => null,
+                'live_claimed_at' => null,
+                'live_claim_expires_at' => null,
             ],
         );
     }

@@ -127,6 +127,7 @@ composer test:ci          # CI-агрегированный прогон
 - [docs/playwright.md](docs/playwright.md) — Playwright smoke, локальный и remote запуск
 - [docs/backup.md](docs/backup.md) — backup и verify runbook
 - [docs/bitrix24/setup-sheet.md](docs/bitrix24/setup-sheet.md) — frozen Bitrix24 ops/setup sheet с подтверждёнными integration values
+- [docs/bitrix24/dev-local-setup.md](docs/bitrix24/dev-local-setup.md) — как разработчику подключить свою локалку к общему Bitrix24 staging через `dev-*` profile
 - [docs/dialog-workspace.md](docs/dialog-workspace.md) — текущая модель `Contact overview / Dialog workspace`
 
 ## Внешние ТЗ

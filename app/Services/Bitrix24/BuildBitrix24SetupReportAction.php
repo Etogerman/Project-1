@@ -3,12 +3,15 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24SetupReportResult;
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
 
 class BuildBitrix24SetupReportAction
 {
     public function __construct(
         private readonly NormalizeBitrix24CallbackBaseUrlAction $normalizeCallbackBaseUrl,
+        private readonly ResolveCurrentBitrix24ProfileAction $resolveCurrentProfile,
+        private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnection,
     ) {}
 
     public function handle(): Bitrix24SetupReportResult
@@ -22,8 +25,9 @@ class BuildBitrix24SetupReportAction
 
         $checks = [
             $this->buildProfileRegistryPresenceCheck($profiles->count()),
-            ...$this->buildProfileRegistryUniquenessChecks($profiles),
-            ...$this->buildProfileChecks($profiles),
+            ...$this->buildProfileRegistryUniquenessChecks($profiles->all()),
+            ...$this->buildProfileChecks($profiles->all()),
+            ...$this->buildCurrentRuntimeChecks(),
             $this->buildRequiredValueCheck(
                 key: 'application.client_id',
                 label: 'Bitrix24 client_id',
@@ -41,46 +45,6 @@ class BuildBitrix24SetupReportAction
                 label: 'Bitrix24 OAuth server URL',
                 value: (string) data_get($config, 'oauth.server_url', ''),
                 notes: 'Required while token refresh and install validation still trust the global OAuth host.',
-            ),
-            $this->buildRequiredValueCheck(
-                key: 'sources.telegram_id',
-                label: 'Telegram SOURCE_ID',
-                value: (string) data_get($config, 'sources.telegram_id', ''),
-                notes: 'Still required until per-profile CRM source routing is implemented.',
-            ),
-            $this->buildRequiredValueCheck(
-                key: 'sources.max_id',
-                label: 'MAX SOURCE_ID',
-                value: (string) data_get($config, 'sources.max_id', ''),
-                notes: 'Still required until per-profile CRM source routing is implemented.',
-            ),
-            $this->buildRequiredValueCheck(
-                key: 'openlines.telegram_line_id',
-                label: 'Telegram LINE_ID',
-                value: (string) data_get($config, 'openlines.telegram_line_id', ''),
-                notes: 'Still required until per-profile Open Lines routing is implemented.',
-            ),
-            $this->buildRequiredValueCheck(
-                key: 'openlines.max_line_id',
-                label: 'MAX LINE_ID',
-                value: (string) data_get($config, 'openlines.max_line_id', ''),
-                notes: 'Still required until per-profile Open Lines routing is implemented.',
-            ),
-            $this->buildRequiredValueCheck(
-                key: 'openlines.telegram_connector_code',
-                label: 'Telegram connector_code',
-                value: (string) data_get($config, 'openlines.telegram_connector_code', ''),
-                notes: 'Still required until per-profile Open Lines routing is implemented.',
-            ),
-            $this->buildRequiredValueCheck(
-                key: 'openlines.max_connector_code',
-                label: 'MAX connector_code',
-                value: (string) data_get($config, 'openlines.max_connector_code', ''),
-                notes: 'Still required until per-profile Open Lines routing is implemented.',
-            ),
-            $this->buildDistinctConnectorCodesCheck(
-                (string) data_get($config, 'openlines.telegram_connector_code', ''),
-                (string) data_get($config, 'openlines.max_connector_code', ''),
             ),
             $this->buildNumericCheck(
                 key: 'defaults.assigned_user_id',
@@ -110,7 +74,7 @@ class BuildBitrix24SetupReportAction
                 key: 'fields.'.$fieldKey,
                 label: 'Field code: '.$fieldKey,
                 value: (string) $fieldValue,
-                notes: 'Must stay frozen until per-profile routing lands.',
+                notes: 'Must stay frozen for the Bitrix24 CRM mapping contract.',
             );
         }
 
@@ -121,18 +85,174 @@ class BuildBitrix24SetupReportAction
     }
 
     /**
+     * @return list<array{key: string, label: string, value: string, status: string, required: bool, notes: string}>
+     */
+    private function buildCurrentRuntimeChecks(): array
+    {
+        try {
+            $profile = $this->resolveCurrentProfile->handle();
+        } catch (Bitrix24ConnectionStateException $exception) {
+            return [$this->check(
+                'runtime.current_profile',
+                'Current runtime Bitrix24 profile',
+                '—',
+                Bitrix24SetupReportResult::STATUS_MISSING,
+                true,
+                $exception->getMessage(),
+            )];
+        }
+
+        $checks = [$this->check(
+            'runtime.current_profile',
+            'Current runtime Bitrix24 profile',
+            sprintf('%s (%s)', $profile->profile_key, $profile->callback_base_url),
+            Bitrix24SetupReportResult::STATUS_OK,
+            true,
+            'Configured callback URLs resolve to exactly one full_live Bitrix24 profile for outbound/runtime selection.',
+        )];
+
+        $checks = array_merge($checks, $this->buildCurrentRuntimeRoutingChecks($profile));
+
+        try {
+            $connection = $this->resolveCurrentConnection->handle();
+        } catch (NoActiveBitrix24ConnectionException|Bitrix24ConnectionStateException $exception) {
+            $checks[] = $this->check(
+                'runtime.current_connection',
+                'Current runtime Bitrix24 connection',
+                '—',
+                Bitrix24SetupReportResult::STATUS_MISSING,
+                true,
+                $exception->getMessage(),
+            );
+
+            return $checks;
+        }
+
+        $checks[] = $this->buildCurrentRuntimeConnectionCheck($connection);
+
+        return $checks;
+    }
+
+    /**
+     * @return list<array{key: string, label: string, value: string, status: string, required: bool, notes: string}>
+     */
+    private function buildCurrentRuntimeRoutingChecks(Bitrix24Profile $profile): array
+    {
+        return [
+            $this->buildRequiredValueCheck(
+                key: 'runtime.current_profile.telegram_source_id',
+                label: 'Current runtime Telegram SOURCE_ID',
+                value: (string) ($profile->telegram_source_id ?? ''),
+                notes: sprintf(
+                    'Current runtime profile `%s` must carry a Telegram SOURCE_ID for covered Slice 3A CRM routing.',
+                    $profile->profile_key,
+                ),
+            ),
+            $this->buildRequiredValueCheck(
+                key: 'runtime.current_profile.max_source_id',
+                label: 'Current runtime MAX SOURCE_ID',
+                value: (string) ($profile->max_source_id ?? ''),
+                notes: sprintf(
+                    'Current runtime profile `%s` must carry a MAX SOURCE_ID for covered Slice 3A CRM routing.',
+                    $profile->profile_key,
+                ),
+            ),
+            $this->buildRequiredValueCheck(
+                key: 'runtime.current_profile.telegram_connector_code',
+                label: 'Current runtime Telegram connector_code',
+                value: (string) ($profile->telegram_connector_code ?? ''),
+                notes: sprintf(
+                    'Current runtime profile `%s` must carry a Telegram connector_code for covered Slice 3A Open Lines routing.',
+                    $profile->profile_key,
+                ),
+            ),
+            $this->buildRequiredValueCheck(
+                key: 'runtime.current_profile.telegram_line_id',
+                label: 'Current runtime Telegram LINE_ID',
+                value: (string) ($profile->telegram_line_id ?? ''),
+                notes: sprintf(
+                    'Current runtime profile `%s` must carry a Telegram LINE_ID for covered Slice 3A Open Lines routing.',
+                    $profile->profile_key,
+                ),
+            ),
+            $this->buildRequiredValueCheck(
+                key: 'runtime.current_profile.max_connector_code',
+                label: 'Current runtime MAX connector_code',
+                value: (string) ($profile->max_connector_code ?? ''),
+                notes: sprintf(
+                    'Current runtime profile `%s` must carry a MAX connector_code for covered Slice 3A Open Lines routing.',
+                    $profile->profile_key,
+                ),
+            ),
+            $this->buildRequiredValueCheck(
+                key: 'runtime.current_profile.max_line_id',
+                label: 'Current runtime MAX LINE_ID',
+                value: (string) ($profile->max_line_id ?? ''),
+                notes: sprintf(
+                    'Current runtime profile `%s` must carry a MAX LINE_ID for covered Slice 3A Open Lines routing.',
+                    $profile->profile_key,
+                ),
+            ),
+        ];
+    }
+
+    /**
+     * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
+     */
+    private function buildCurrentRuntimeConnectionCheck(Bitrix24Connection $connection): array
+    {
+        return $this->check(
+            'runtime.current_connection',
+            'Current runtime Bitrix24 connection',
+            sprintf('#%d (%s)', $connection->id, $connection->profile?->profile_key ?? '—'),
+            Bitrix24SetupReportResult::STATUS_OK,
+            true,
+            'Current runtime selector resolves to exactly one active Bitrix24 connection for covered Slice 3A runtime paths.',
+        );
+    }
+
+    /**
      * @param  list<Bitrix24Profile>  $profiles
      * @return list<array{key: string, label: string, value: string, status: string, required: bool, notes: string}>
      */
-    private function buildProfileRegistryUniquenessChecks($profiles): array
+    private function buildProfileRegistryUniquenessChecks(array $profiles): array
     {
         $profileKeys = [];
         $callbackBaseUrls = [];
+        $fullLiveConnectorCodes = [];
+        $fullLiveLineIds = [];
 
         foreach ($profiles as $profile) {
             $profileIdentity = $profile->portal_domain.'|'.$profile->profile_key;
+            $normalizedCallbackBaseUrl = $this->normalizeCallbackBaseUrl->handle($profile->callback_base_url) ?? $profile->callback_base_url;
             $profileKeys[$profileIdentity] = ($profileKeys[$profileIdentity] ?? 0) + 1;
-            $callbackBaseUrls[$profile->callback_base_url] = ($callbackBaseUrls[$profile->callback_base_url] ?? 0) + 1;
+            $callbackBaseUrls[$normalizedCallbackBaseUrl] = ($callbackBaseUrls[$normalizedCallbackBaseUrl] ?? 0) + 1;
+
+            if ($profile->profile_type !== Bitrix24Profile::TYPE_FULL_LIVE) {
+                continue;
+            }
+
+            foreach ([
+                $profile->telegram_connector_code,
+                $profile->max_connector_code,
+            ] as $connectorCode) {
+                $normalized = $this->nullableString($connectorCode);
+
+                if ($normalized === null) {
+                    continue;
+                }
+
+                $fullLiveConnectorCodes[$profile->portal_domain.'|'.$normalized] = ($fullLiveConnectorCodes[$profile->portal_domain.'|'.$normalized] ?? 0) + 1;
+            }
+
+            $profileLineIds = array_values(array_unique(array_filter([
+                $this->nullableString($profile->telegram_line_id),
+                $this->nullableString($profile->max_line_id),
+            ])));
+
+            foreach ($profileLineIds as $lineId) {
+                $fullLiveLineIds[$profile->portal_domain.'|'.$lineId] = ($fullLiveLineIds[$profile->portal_domain.'|'.$lineId] ?? 0) + 1;
+            }
         }
 
         return [
@@ -146,6 +266,20 @@ class BuildBitrix24SetupReportAction
                 label: 'Globally unique callback_base_url',
                 duplicates: array_filter($callbackBaseUrls, fn (int $count): bool => $count > 1),
             ),
+            $this->buildDuplicateCountCheck(
+                key: 'profiles.full_live_connector_code_unique',
+                label: 'Unique full_live connector_code values per portal',
+                duplicates: array_filter($fullLiveConnectorCodes, fn (int $count): bool => $count > 1),
+                duplicateNotes: 'Two full_live profiles cannot share the same connector_code within one portal.',
+                okNotes: 'No full_live connector_code collisions detected.',
+            ),
+            $this->buildDuplicateCountCheck(
+                key: 'profiles.full_live_line_id_unique',
+                label: 'Unique full_live LINE_ID values per portal',
+                duplicates: array_filter($fullLiveLineIds, fn (int $count): bool => $count > 1),
+                duplicateNotes: 'Two full_live profiles cannot share the same LINE_ID within one portal.',
+                okNotes: 'No full_live LINE_ID collisions detected.',
+            ),
         ];
     }
 
@@ -153,7 +287,7 @@ class BuildBitrix24SetupReportAction
      * @param  list<Bitrix24Profile>  $profiles
      * @return list<array{key: string, label: string, value: string, status: string, required: bool, notes: string}>
      */
-    private function buildProfileChecks($profiles): array
+    private function buildProfileChecks(array $profiles): array
     {
         $checks = [];
 
@@ -186,9 +320,86 @@ class BuildBitrix24SetupReportAction
             $checks[] = $this->buildCallbackBaseUrlCheck($profile);
             $checks[] = $this->buildProfileTypeCheck($profile);
             $checks[] = $this->buildCallbackMatrixCheck($profile);
+            $checks = array_merge($checks, $this->buildProfileRoutingChecks($profile));
         }
 
         return $checks;
+    }
+
+    /**
+     * @return list<array{key: string, label: string, value: string, status: string, required: bool, notes: string}>
+     */
+    private function buildProfileRoutingChecks(Bitrix24Profile $profile): array
+    {
+        $prefix = 'profiles.'.$profile->profile_key;
+
+        if ($profile->profile_type === Bitrix24Profile::TYPE_CRM_ONLY) {
+            $hasOpenLinesRouting = $this->nullableString($profile->telegram_connector_code) !== null
+                || $this->nullableString($profile->max_connector_code) !== null
+                || $this->nullableString($profile->telegram_line_id) !== null
+                || $this->nullableString($profile->max_line_id) !== null;
+
+            return [$this->check(
+                $prefix.'.openlines_forbidden',
+                sprintf('Profile `%s` Open Lines routing policy', $profile->profile_key),
+                $hasOpenLinesRouting ? 'configured' : 'forbidden',
+                $hasOpenLinesRouting
+                    ? Bitrix24SetupReportResult::STATUS_MISSING
+                    : Bitrix24SetupReportResult::STATUS_OK,
+                true,
+                $hasOpenLinesRouting
+                    ? 'crm_only profiles must not carry Open Lines connector_code or LINE_ID values.'
+                    : 'crm_only profile correctly forbids Open Lines routing.',
+            )];
+        }
+
+        return [
+            $this->buildRequiredValueCheck(
+                key: $prefix.'.telegram_source_id',
+                label: sprintf('Profile `%s` Telegram SOURCE_ID', $profile->profile_key),
+                value: (string) ($profile->telegram_source_id ?? ''),
+                notes: 'full_live profiles require a Telegram SOURCE_ID for CRM routing.',
+            ),
+            $this->buildRequiredValueCheck(
+                key: $prefix.'.max_source_id',
+                label: sprintf('Profile `%s` MAX SOURCE_ID', $profile->profile_key),
+                value: (string) ($profile->max_source_id ?? ''),
+                notes: 'full_live profiles require a MAX SOURCE_ID for CRM routing.',
+            ),
+            $this->buildRequiredValueCheck(
+                key: $prefix.'.telegram_connector_code',
+                label: sprintf('Profile `%s` Telegram connector_code', $profile->profile_key),
+                value: (string) ($profile->telegram_connector_code ?? ''),
+                notes: 'full_live profiles require a Telegram connector_code for Open Lines routing.',
+            ),
+            $this->buildRequiredValueCheck(
+                key: $prefix.'.telegram_line_id',
+                label: sprintf('Profile `%s` Telegram LINE_ID', $profile->profile_key),
+                value: (string) ($profile->telegram_line_id ?? ''),
+                notes: 'full_live profiles require a Telegram LINE_ID for Open Lines routing.',
+            ),
+            $this->buildRequiredValueCheck(
+                key: $prefix.'.max_connector_code',
+                label: sprintf('Profile `%s` MAX connector_code', $profile->profile_key),
+                value: (string) ($profile->max_connector_code ?? ''),
+                notes: 'full_live profiles require a MAX connector_code for Open Lines routing.',
+            ),
+            $this->buildRequiredValueCheck(
+                key: $prefix.'.max_line_id',
+                label: sprintf('Profile `%s` MAX LINE_ID', $profile->profile_key),
+                value: (string) ($profile->max_line_id ?? ''),
+                notes: 'full_live profiles require a MAX LINE_ID for Open Lines routing.',
+            ),
+            $this->buildDistinctValuePairCheck(
+                key: $prefix.'.connector_code_distinct',
+                label: sprintf('Profile `%s` distinct connector_code values', $profile->profile_key),
+                first: $profile->telegram_connector_code,
+                second: $profile->max_connector_code,
+                missingNotes: 'Both Telegram and MAX connector_code values must be filled before they can be compared.',
+                duplicateNotes: 'Telegram and MAX connector_code values must be different for a full_live profile.',
+                okNotes: 'Telegram and MAX connector_code values are distinct.',
+            ),
+        ];
     }
 
     /**
@@ -214,13 +425,24 @@ class BuildBitrix24SetupReportAction
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.portal_domain', $profile->portal_domain);
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.profile_type', $profile->profile_type);
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.callback_base_url', $profile->callback_base_url);
-        }
-
-        foreach ((array) ($config['sources'] ?? []) as $key => $value) {
-            $frozenValues[] = $this->frozenValue('sources', $key, $this->stringifyFrozenValue($value));
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.telegram_source_id', $this->stringifyFrozenValue($profile->telegram_source_id));
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.max_source_id', $this->stringifyFrozenValue($profile->max_source_id));
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.telegram_connector_code', $this->stringifyFrozenValue($profile->telegram_connector_code));
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.max_connector_code', $this->stringifyFrozenValue($profile->max_connector_code));
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.telegram_line_id', $this->stringifyFrozenValue($profile->telegram_line_id));
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.max_line_id', $this->stringifyFrozenValue($profile->max_line_id));
         }
 
         foreach ((array) ($config['openlines'] ?? []) as $key => $value) {
+            if (in_array($key, [
+                'telegram_line_id',
+                'max_line_id',
+                'telegram_connector_code',
+                'max_connector_code',
+            ], true)) {
+                continue;
+            }
+
             $frozenValues[] = $this->frozenValue('openlines', $key, $this->stringifyFrozenValue($value));
         }
 
@@ -261,10 +483,15 @@ class BuildBitrix24SetupReportAction
      * @param  array<string, int>  $duplicates
      * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
      */
-    private function buildDuplicateCountCheck(string $key, string $label, array $duplicates): array
-    {
+    private function buildDuplicateCountCheck(
+        string $key,
+        string $label,
+        array $duplicates,
+        string $duplicateNotes = 'Duplicate registry identities must be resolved before callbacks are accepted.',
+        string $okNotes = 'No duplicates detected.',
+    ): array {
         if ($duplicates === []) {
-            return $this->check($key, $label, 'ok', Bitrix24SetupReportResult::STATUS_OK, true, 'No duplicates detected.');
+            return $this->check($key, $label, 'ok', Bitrix24SetupReportResult::STATUS_OK, true, $okNotes);
         }
 
         return $this->check(
@@ -273,7 +500,7 @@ class BuildBitrix24SetupReportAction
             implode(', ', array_keys($duplicates)),
             Bitrix24SetupReportResult::STATUS_MISSING,
             true,
-            'Duplicate registry identities must be resolved before callbacks are accepted.',
+            $duplicateNotes,
         );
     }
 
@@ -311,6 +538,20 @@ class BuildBitrix24SetupReportAction
                 Bitrix24SetupReportResult::STATUS_MISSING,
                 true,
                 'callback_base_url must be a valid absolute base URL.',
+            );
+        }
+
+        if ($normalized !== $profile->callback_base_url) {
+            return $this->check(
+                'profiles.'.$profile->profile_key.'.callback_base_url',
+                $label,
+                $profile->callback_base_url,
+                Bitrix24SetupReportResult::STATUS_MISSING,
+                true,
+                sprintf(
+                    'Stored callback_base_url must already be normalized to the canonical ingress form `%s`.',
+                    $normalized,
+                ),
             );
         }
 
@@ -423,37 +664,47 @@ class BuildBitrix24SetupReportAction
     /**
      * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
      */
-    private function buildDistinctConnectorCodesCheck(string $telegram, string $max): array
-    {
-        if ($telegram === '' || $max === '') {
+    private function buildDistinctValuePairCheck(
+        string $key,
+        string $label,
+        mixed $first,
+        mixed $second,
+        string $missingNotes,
+        string $duplicateNotes,
+        string $okNotes,
+    ): array {
+        $firstValue = $this->nullableString($first);
+        $secondValue = $this->nullableString($second);
+
+        if ($firstValue === null || $secondValue === null) {
             return $this->check(
-                'openlines.connector_code_distinct',
-                'Distinct connector_code values',
+                $key,
+                $label,
                 '—',
                 Bitrix24SetupReportResult::STATUS_MISSING,
                 true,
-                'Both connector codes must be filled before they can be compared.',
+                $missingNotes,
             );
         }
 
-        if ($telegram === $max) {
+        if ($firstValue === $secondValue) {
             return $this->check(
-                'openlines.connector_code_distinct',
-                'Distinct connector_code values',
-                $telegram,
+                $key,
+                $label,
+                $firstValue,
                 Bitrix24SetupReportResult::STATUS_MISSING,
                 true,
-                'Telegram and MAX connector codes must be different.',
+                $duplicateNotes,
             );
         }
 
         return $this->check(
-            'openlines.connector_code_distinct',
-            'Distinct connector_code values',
-            $telegram.' / '.$max,
+            $key,
+            $label,
+            $firstValue.' / '.$secondValue,
             Bitrix24SetupReportResult::STATUS_OK,
             true,
-            'Connector codes are distinct.',
+            $okNotes,
         );
     }
 
@@ -540,5 +791,16 @@ class BuildBitrix24SetupReportAction
         }
 
         return trim((string) $value);
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed === '' ? null : $trimmed;
     }
 }

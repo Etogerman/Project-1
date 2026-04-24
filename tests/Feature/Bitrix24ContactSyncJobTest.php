@@ -24,10 +24,12 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class Bitrix24ContactSyncJobTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -116,6 +118,55 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'message_id' => $outboundAutoReply->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
         ]);
+    }
+
+    public function test_contact_sync_uses_current_runtime_profile_connection_when_multiple_active_connections_exist(): void
+    {
+        $this->makeActiveConnection([
+            'client_endpoint' => 'https://selected-client.example/rest/',
+            'server_endpoint' => 'https://selected-server.example/rest/',
+        ]);
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'member_id' => 'member-2',
+                'application_token' => 'application-token-2',
+                'client_endpoint' => 'https://ignored-client.example/rest/',
+                'server_endpoint' => 'https://ignored-server.example/rest/',
+            ],
+            profileOverrides: [
+                'profile_key' => 'dev-alex',
+                'display_name' => 'Dev Alex',
+                'application_code' => 'local.app.code.dev-alex',
+                'callback_base_url' => 'https://other.example.com',
+            ],
+            useForCurrentRuntime: false,
+        );
+
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_linked_at' => null,
+            'bitrix24_sync_fingerprint' => null,
+        ], channel: $channel);
+
+        Http::fake([
+            'https://selected-client.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'result' => ['CONTACT' => []],
+            ], 200),
+            'https://selected-client.example/rest/crm.contact.add.json' => Http::response([
+                'result' => 777,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        $contact->refresh();
+
+        $this->assertSame('777', $contact->bitrix24_contact_id);
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://selected-client.example/rest/'));
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://ignored-client.example/rest/'));
     }
 
     public function test_first_successful_contact_sync_queues_retry_for_missed_unsubscribe_system_event(): void
@@ -387,6 +438,53 @@ class Bitrix24ContactSyncJobTest extends TestCase
         ]);
     }
 
+    public function test_missed_live_retry_does_not_requeue_uncertain_failed_candidate(): void
+    {
+        Queue::fake();
+
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '70742',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_sync_pending' => false,
+            'bitrix24_linked_at' => now()->subDay(),
+            'bitrix24_last_synced_at' => now()->subMinute(),
+        ], channel: $channel);
+
+        $dialog = $this->makeDialog($contact, $channel);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Uncertain failed missed inbound',
+        ]);
+
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $message->id,
+            'contact_id' => $contact->id,
+            'bitrix24_contact_id' => $contact->bitrix24_contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'failed_at' => now()->subMinute(),
+            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            'failure_uncertain' => true,
+            'failure_reason' => 'Bitrix24 Open Lines live export transport outcome is uncertain.',
+        ]);
+
+        $queued = app(QueueMissedBitrix24OpenLinesRetryAction::class)->handle($contact);
+
+        $this->assertFalse($queued);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            'failure_uncertain' => true,
+        ]);
+    }
+
     public function test_first_successful_contact_sync_logs_raw_duplicate_phone_snapshot_when_diagnostic_is_enabled(): void
     {
         Queue::fake();
@@ -628,7 +726,11 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_job_marks_contact_failed_when_source_mapping_is_missing(): void
     {
-        config()->set('bitrix24.sources.telegram_id', null);
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            profileOverrides: [
+                'telegram_source_id' => null,
+            ],
+        );
 
         $contact = $this->createSyncReadyContact();
         $contact->forceFill([
@@ -1242,6 +1344,66 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_job_logs_critical_and_skips_follow_up_actions_when_sync_throws(): void
     {
+        Log::spy();
+
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_linked_at' => null,
+        ]);
+
+        $readyAction = Mockery::mock(IsContactReadyForBitrix24SyncAction::class);
+        $readyAction->shouldReceive('handle')
+            ->once()
+            ->andReturn(true);
+        $this->app->instance(IsContactReadyForBitrix24SyncAction::class, $readyAction);
+
+        $syncAction = Mockery::mock(SyncContactToBitrix24Action::class);
+        $syncAction->shouldReceive('handle')
+            ->once()
+            ->andThrow(new \RuntimeException('Bitrix sync exploded'));
+        $this->app->instance(SyncContactToBitrix24Action::class, $syncAction);
+
+        $rawSnapshotAction = Mockery::mock(LogBitrix24RawContactPhoneSnapshotAction::class);
+        $rawSnapshotAction->shouldNotReceive('handle');
+        $this->app->instance(LogBitrix24RawContactPhoneSnapshotAction::class, $rawSnapshotAction);
+
+        $retryAction = Mockery::mock(QueueMissedBitrix24OpenLinesRetryAction::class);
+        $retryAction->shouldNotReceive('handle');
+        $this->app->instance(QueueMissedBitrix24OpenLinesRetryAction::class, $retryAction);
+
+        $dealAction = Mockery::mock(QueueBitrix24DealSyncAction::class);
+        $dealAction->shouldNotReceive('handle');
+        $this->app->instance(QueueBitrix24DealSyncAction::class, $dealAction);
+
+        $historyAction = Mockery::mock(QueueBitrix24HistoryExportAction::class);
+        $historyAction->shouldNotReceive('handle');
+        $this->app->instance(QueueBitrix24HistoryExportAction::class, $historyAction);
+
+        try {
+            $this->runSyncJob($contact);
+            $this->fail('Expected contact sync job to bubble the retryable exception.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('Bitrix sync exploded', $exception->getMessage());
+        }
+
+        $contact->refresh();
+
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_PENDING, $contact->bitrix24_sync_status);
+        $this->assertTrue($contact->bitrix24_sync_pending);
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'contact_sync_failed',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+
+        Log::shouldNotHaveReceived('critical');
+    }
+
+    public function test_job_logs_critical_and_skips_follow_up_actions_on_final_sync_attempt(): void
+    {
         $contact = $this->createSyncReadyContact([
             'bitrix24_contact_id' => null,
             'bitrix24_sync_pending' => true,
@@ -1289,12 +1451,16 @@ class Bitrix24ContactSyncJobTest extends TestCase
                     && $context['exception_message'] === 'Bitrix sync exploded';
             }));
 
-        $this->runSyncJob($contact);
+        $job = (new SyncContactToBitrix24Job($contact->id))->withFakeQueueInteractions();
+        $job->job->attempts = $job->tries;
+
+        app()->call([$job, 'handle']);
 
         $contact->refresh();
 
         $this->assertSame(Contact::BITRIX24_SYNC_STATUS_FAILED, $contact->bitrix24_sync_status);
         $this->assertFalse($contact->bitrix24_sync_pending);
+        $job->assertFailedWith(\RuntimeException::class);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'contact_sync_failed',
             'status' => Bitrix24SyncLog::STATUS_FAILED,
@@ -1353,21 +1519,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
      */
     private function makeActiveConnection(array $overrides = []): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->forceCreate(array_merge([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'application_name' => 'Abrikosoff Connector',
-            'client_id' => 'local.app',
-            'member_id' => 'member-1',
-            'application_token' => 'application-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-            'access_token_encrypted' => 'access-token',
-            'refresh_token_encrypted' => 'refresh-token',
-            'access_token_expires_at' => now()->addHour(),
-            'scope' => ['crm'],
-            'client_endpoint' => 'https://client-endpoint.example/rest/',
-            'server_endpoint' => 'https://server-endpoint.example/rest/',
-            'installed_at' => now(),
-        ], $overrides));
+        return $this->makeProfileLinkedActiveBitrix24Connection($overrides);
     }
 
     /**

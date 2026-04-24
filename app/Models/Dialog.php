@@ -13,6 +13,18 @@ class Dialog extends Model
 {
     use HasFactory;
 
+    public const STAGE_REQUIRES_REVIEW = 'requires_review';
+
+    public const STAGE_NEW_DIALOG = 'new_dialog';
+
+    public const STAGE_PHONE_RECEIVED = 'phone_received';
+
+    public const STAGE_QUESTIONNAIRE_COMPLETED = 'questionnaire_completed';
+
+    public const STAGE_TRANSFERRED_TO_MPL = 'transferred_to_mpl';
+
+    public const STAGE_TRANSFERRED_TO_MPP = 'transferred_to_mpp';
+
     public const PHONE_CONFIRMED_VIA_PHONE_CAPTURE = 'phone_capture';
 
     public const BITRIX24_LIVE_STATUS_NOT_LINKED = 'not_linked';
@@ -26,11 +38,45 @@ class Dialog extends Model
     public const BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER = 'blocked_by_user';
 
     /**
+     * @return array<string, string>
+     */
+    public static function stageLabels(): array
+    {
+        return [
+            self::STAGE_REQUIRES_REVIEW => 'Требует проверки',
+            self::STAGE_NEW_DIALOG => 'Новый диалог',
+            self::STAGE_PHONE_RECEIVED => 'Телефон получен',
+            self::STAGE_QUESTIONNAIRE_COMPLETED => 'Анкета заполнена',
+            self::STAGE_TRANSFERRED_TO_MPL => 'Передан в МПЛ',
+            self::STAGE_TRANSFERRED_TO_MPP => 'Передан в МПП',
+        ];
+    }
+
+    public static function stageLabel(?string $stage): string
+    {
+        return self::stageLabels()[$stage] ?? 'Неизвестный этап';
+    }
+
+    public static function stageTone(?string $stage): string
+    {
+        return match ($stage) {
+            self::STAGE_REQUIRES_REVIEW => 'danger',
+            self::STAGE_NEW_DIALOG => 'gray',
+            self::STAGE_PHONE_RECEIVED => 'info',
+            self::STAGE_QUESTIONNAIRE_COMPLETED => 'success',
+            self::STAGE_TRANSFERRED_TO_MPL => 'warning',
+            self::STAGE_TRANSFERRED_TO_MPP => 'primary',
+            default => 'gray',
+        };
+    }
+
+    /**
      * @var list<string>
      */
     protected $fillable = [
         'contact_id',
         'channel_id',
+        'stage',
         'current_contact_identity_id',
         'pending_auto_reply_source_message_id',
         'manual_reply_dismissed_source_message_id',
@@ -63,6 +109,149 @@ class Dialog extends Model
         'last_inbound_at' => 'datetime',
         'last_outbound_at' => 'datetime',
     ];
+
+    /**
+     * @return list<string>
+     */
+    public static function automaticStages(): array
+    {
+        return [
+            self::STAGE_NEW_DIALOG,
+            self::STAGE_PHONE_RECEIVED,
+            self::STAGE_QUESTIONNAIRE_COMPLETED,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function manualStages(): array
+    {
+        return [
+            self::STAGE_TRANSFERRED_TO_MPL,
+            self::STAGE_TRANSFERRED_TO_MPP,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function serviceStages(): array
+    {
+        return [
+            self::STAGE_REQUIRES_REVIEW,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function workingStages(): array
+    {
+        return [
+            ...self::automaticStages(),
+            ...self::manualStages(),
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function kanbanStages(): array
+    {
+        return [
+            self::STAGE_REQUIRES_REVIEW,
+            ...self::workingStages(),
+        ];
+    }
+
+    public static function isAutomaticStage(?string $stage): bool
+    {
+        return in_array($stage, self::automaticStages(), true);
+    }
+
+    public static function isManualStage(?string $stage): bool
+    {
+        return in_array($stage, self::manualStages(), true);
+    }
+
+    public static function isServiceStage(?string $stage): bool
+    {
+        return in_array($stage, self::serviceStages(), true);
+    }
+
+    public static function isWorkingStage(?string $stage): bool
+    {
+        return in_array($stage, self::workingStages(), true);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function manualTransitionOptions(?string $currentStage): array
+    {
+        $options = [];
+
+        if (filled($currentStage)) {
+            $options[$currentStage] = self::stageLabel($currentStage);
+        } else {
+            $options[''] = 'Этап не задан';
+        }
+
+        foreach (self::allowedOperatorTransitionTargets($currentStage) as $stage) {
+            $options[$stage] = self::stageLabel($stage);
+        }
+
+        return $options;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function allowedManualTransitionTargets(?string $currentStage): array
+    {
+        return self::allowedOperatorTransitionTargets($currentStage);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function allowedOperatorTransitionTargets(?string $currentStage): array
+    {
+        if ($currentStage === self::STAGE_REQUIRES_REVIEW) {
+            return self::workingStages();
+        }
+
+        if (self::isAutomaticStage($currentStage) || $currentStage === null) {
+            return [
+                self::STAGE_TRANSFERRED_TO_MPL,
+                self::STAGE_TRANSFERRED_TO_MPP,
+            ];
+        }
+
+        return match ($currentStage) {
+            self::STAGE_TRANSFERRED_TO_MPL => [self::STAGE_TRANSFERRED_TO_MPP],
+            self::STAGE_TRANSFERRED_TO_MPP => [self::STAGE_TRANSFERRED_TO_MPL],
+            default => [],
+        };
+    }
+
+    public static function canManuallyTransition(?string $currentStage, string $targetStage): bool
+    {
+        if ($currentStage === $targetStage) {
+            return self::isServiceStage($targetStage) || self::isWorkingStage($targetStage);
+        }
+
+        if ($currentStage === self::STAGE_REQUIRES_REVIEW) {
+            return in_array($targetStage, self::workingStages(), true);
+        }
+
+        if (! self::isManualStage($targetStage)) {
+            return false;
+        }
+
+        return in_array($targetStage, self::allowedManualTransitionTargets($currentStage), true);
+    }
 
     public function isBotBlockedByUser(): bool
     {
@@ -112,6 +301,12 @@ class Dialog extends Model
     public function previewMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'preview_message_id');
+    }
+
+    public function hasCompleteStageHistoryRouteContext(): bool
+    {
+        return $this->current_contact_identity_id !== null
+            && filled($this->external_chat_id);
     }
 
     public function scopeWhereRouteReady(Builder $query): Builder

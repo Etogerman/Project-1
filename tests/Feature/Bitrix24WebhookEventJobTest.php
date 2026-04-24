@@ -78,7 +78,7 @@ class Bitrix24WebhookEventJobTest extends TestCase
         $this->assertDatabaseCount('bitrix24_sync_logs', 0);
     }
 
-    public function test_job_marks_event_as_failed_and_logs_when_openlines_action_throws(): void
+    public function test_job_rethrows_retryable_openlines_exception_and_keeps_event_pending_before_final_attempt(): void
     {
         $event = $this->makeWebhookEvent([
             'event_name' => 'OnSendMessageCustom',
@@ -92,6 +92,76 @@ class Bitrix24WebhookEventJobTest extends TestCase
             ->andThrow(new \RuntimeException('Webhook processing failed.'));
 
         $job = new ProcessBitrix24WebhookEventJob($event->id);
+
+        try {
+            $job->handle($action, app(LogBitrix24ApiCallAction::class));
+            $this->fail('Expected webhook event job to bubble the retryable exception.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('Webhook processing failed.', $exception->getMessage());
+        }
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
+        $this->assertNull($event->failed_at);
+        $this->assertNull($event->failure_reason);
+        $this->assertSame(2, $event->attempts);
+        $this->assertDatabaseCount('bitrix24_sync_logs', 0);
+    }
+
+    public function test_retryable_failure_releases_delayed_recheck_claim_for_next_attempt(): void
+    {
+        $event = $this->makeWebhookEvent([
+            'event_name' => 'OnSendMessageCustom',
+            'recheck_scheduled_at' => now()->subSecond(),
+            'recheck_attempted_at' => null,
+        ]);
+
+        $firstAction = Mockery::mock(ProcessBitrix24OpenLinesWebhookAction::class);
+        $firstAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Bitrix24WebhookEvent $handledEvent): bool => $handledEvent->is($event))
+            ->andThrow(new \RuntimeException('Delayed recheck failed.'));
+
+        $job = new ProcessBitrix24WebhookEventJob($event->id);
+
+        try {
+            $job->handle($firstAction, app(LogBitrix24ApiCallAction::class));
+            $this->fail('Expected delayed recheck attempt to bubble the retryable exception.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('Delayed recheck failed.', $exception->getMessage());
+        }
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
+        $this->assertNotNull($event->recheck_scheduled_at);
+        $this->assertNull($event->recheck_attempted_at);
+
+        $secondAction = Mockery::mock(ProcessBitrix24OpenLinesWebhookAction::class);
+        $secondAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Bitrix24WebhookEvent $handledEvent): bool => $handledEvent->id === $event->id);
+
+        $retryJob = new ProcessBitrix24WebhookEventJob($event->id);
+        $retryJob->handle($secondAction, app(LogBitrix24ApiCallAction::class));
+    }
+
+    public function test_job_marks_event_as_failed_and_logs_when_openlines_action_throws_on_final_attempt(): void
+    {
+        $event = $this->makeWebhookEvent([
+            'event_name' => 'OnSendMessageCustom',
+            'attempts' => 2,
+        ]);
+
+        $action = Mockery::mock(ProcessBitrix24OpenLinesWebhookAction::class);
+        $action->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Bitrix24WebhookEvent $handledEvent): bool => $handledEvent->is($event))
+            ->andThrow(new \RuntimeException('Webhook processing failed.'));
+
+        $job = (new ProcessBitrix24WebhookEventJob($event->id))->withFakeQueueInteractions();
+        $job->job->attempts = $job->tries;
         $job->handle($action, app(LogBitrix24ApiCallAction::class));
 
         $event->refresh();
@@ -99,7 +169,8 @@ class Bitrix24WebhookEventJobTest extends TestCase
         $this->assertSame(Bitrix24WebhookEvent::STATUS_FAILED, $event->processing_status);
         $this->assertNotNull($event->failed_at);
         $this->assertSame('Webhook processing failed.', $event->failure_reason);
-        $this->assertSame(3, $event->attempts);
+        $this->assertSame($job->tries, $event->attempts);
+        $job->assertFailedWith(\RuntimeException::class);
 
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'connection_id' => $event->connection_id,

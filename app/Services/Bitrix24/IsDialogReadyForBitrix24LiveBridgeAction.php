@@ -35,6 +35,10 @@ class IsDialogReadyForBitrix24LiveBridgeAction
             return false;
         }
 
+        if ($channel->connection_type !== Channel::CONNECTION_TYPE_BOT) {
+            return false;
+        }
+
         if (! in_array($channel->platform, [
             Channel::PLATFORM_TELEGRAM,
             Channel::PLATFORM_MAX,

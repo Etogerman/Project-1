@@ -8,6 +8,7 @@ use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
+use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
@@ -160,6 +161,29 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('+7 901 555 44 33');
     }
 
+    public function test_dialogs_inbox_shows_derived_stage_label_for_null_persisted_stage(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $dialog->forceFill([
+            'stage' => null,
+            'phone_confirmed_at' => now(),
+        ])->save();
+        $dialog = $dialog->fresh([
+            'channel',
+            'currentContactIdentity',
+            'contact.assignedUser',
+            'contact.primaryIdentity',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertTableColumnStateSet('stage', 'Телефон получен', $dialog);
+    }
+
     public function test_dialogs_inbox_uses_current_dialog_identity_label_for_each_row(): void
     {
         $admin = User::factory()->create([
@@ -173,6 +197,223 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('Telegram Клиент')
             ->assertSee('MAX Клиент');
+    }
+
+    public function test_dialogs_inbox_shows_telegram_account_dialog_even_when_route_is_not_sendable(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Inbox',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account inbox contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-inbox-1',
+            'display_name' => 'Telegram Account Клиент',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-message-1',
+            'text' => 'Новый account inbound',
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Account inbox contact')
+            ->assertSee('Telegram Account Inbox')
+            ->assertSee('Требует ответа')
+            ->assertSee('Не bot-канал');
+    }
+
+    public function test_dialog_view_renders_media_badges_for_telegram_account_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Media',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account media contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-media-1',
+            'display_name' => 'Telegram Account Медиа',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-media-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-media-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-media-message-1',
+            'text' => 'Отправил медиа',
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'photo'],
+                    ['type' => 'document', 'file_name' => 'offer.pdf'],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('Фото')
+            ->assertSee('Документ: offer.pdf')
+            ->assertSee('Ожидает загрузки');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(1, $messages);
+        $this->assertSame('Отправил медиа', $messages[0]['display_text']);
+        $this->assertSame(['Фото', 'Документ: offer.pdf'], $messages[0]['media_badges']);
+        $this->assertSame([
+            ['label' => 'Ожидает загрузки x2', 'tone' => 'gray'],
+        ], $messages[0]['media_state_badges']);
+    }
+
+    public function test_dialogs_inbox_preview_meta_shows_media_download_placeholder_for_telegram_account_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Placeholder Inbox',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account placeholder contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-placeholder-1',
+            'display_name' => 'Telegram Account Placeholder',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-placeholder-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-placeholder-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-placeholder-message-1',
+            'text' => null,
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'photo'],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Фото')
+            ->assertSee('Ожидает загрузки');
+    }
+
+    public function test_dialog_view_renders_peer_sync_state_for_telegram_account_dialog(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Sync',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account sync contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-sync-1',
+            'display_name' => 'Telegram Account Sync Клиент',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-sync-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        ChannelPeerSyncState::query()->create([
+            'channel_id' => $channel->id,
+            'peer_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id,
+            'external_chat_id' => $dialog->external_chat_id,
+            'backfill_status' => ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE,
+            'oldest_imported_message_id' => '900001',
+            'latest_observed_message_id' => '900050',
+            'history_complete_at' => now()->setDate(2026, 4, 23)->setTime(13, 15, 0),
+            'last_sync_error' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSeeHtml('data-role="dialog-peer-sync-status"')
+            ->assertSee('Завершена')
+            ->assertSee('23.04.2026 13:15')
+            ->assertSee('900001')
+            ->assertSee('900050');
     }
 
     public function test_employee_can_open_dialog_view_page_with_reply_composer(): void
@@ -483,7 +724,8 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->assertTableFilterExists('requires_manual_reply')
+            ->assertTableFilterExists('inbox_status')
+            ->assertSet('tableFilters.inbox_status.value', DialogInboxStatusData::CODE_REQUIRES_REPLY)
             ->assertCanSeeTableRecords([$openDialog])
             ->assertCanNotSeeTableRecords([$closedDialog]);
     }
@@ -519,8 +761,63 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('requires_manual_reply')
+            ->removeTableFilter('inbox_status')
             ->assertCanSeeTableRecords([$openDialog, $closedDialog]);
+    }
+
+    public function test_dialogs_inbox_status_filter_supports_all_inbox_states(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $requiresReplyDialog = $this->createInboxDialog([
+            'contactName' => 'Требует ответа',
+        ]);
+        $notRequiredDialog = $this->createInboxDialog([
+            'contactName' => 'Не требует ответа',
+        ]);
+        $noNewDialog = $this->createInboxDialog([
+            'contactName' => 'Нет новых',
+        ]);
+
+        $dismissedInbound = Message::query()
+            ->where('dialog_id', $notRequiredDialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $notRequiredDialog->forceFill([
+            'manual_reply_dismissed_source_message_id' => $dismissedInbound->id,
+        ])->save();
+
+        $closedInbound = Message::query()
+            ->where('dialog_id', $noNewDialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->createDialogMessage($noNewDialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'reply_to_message_id' => $closedInbound->id,
+            'text' => 'На это сообщение уже ответили',
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->filterTable('inbox_status', DialogInboxStatusData::CODE_NOT_REQUIRED)
+            ->assertCanSeeTableRecords([$notRequiredDialog])
+            ->assertCanNotSeeTableRecords([$requiresReplyDialog, $noNewDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->filterTable('inbox_status', DialogInboxStatusData::CODE_NO_NEW)
+            ->assertCanSeeTableRecords([$noNewDialog])
+            ->assertCanNotSeeTableRecords([$requiresReplyDialog, $notRequiredDialog]);
     }
 
     public function test_dialogs_inbox_default_requires_reply_filter_hides_manually_dismissed_dialogs(): void
@@ -631,7 +928,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('requires_manual_reply')
+            ->removeTableFilter('inbox_status')
             ->assertCanSeeTableRecords([$openDialog, $closedDialog])
             ->assertSee('Требует ответа')
             ->assertSee('Нет новых')
@@ -717,14 +1014,14 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('requires_manual_reply')
+            ->removeTableFilter('inbox_status')
             ->filterTable('assigned_to_me')
             ->assertCanSeeTableRecords([$myDialog])
             ->assertCanNotSeeTableRecords([$freeDialog, $foreignDialog]);
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('requires_manual_reply')
+            ->removeTableFilter('inbox_status')
             ->filterTable('unassigned_dialogs')
             ->assertCanSeeTableRecords([$freeDialog])
             ->assertCanNotSeeTableRecords([$myDialog, $foreignDialog]);
@@ -759,14 +1056,14 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('requires_manual_reply')
+            ->removeTableFilter('inbox_status')
             ->filterTable('route_ready')
             ->assertCanSeeTableRecords([$readyDialog])
             ->assertCanNotSeeTableRecords([$routeProblemDialog, $tokenlessDialog]);
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('requires_manual_reply')
+            ->removeTableFilter('inbox_status')
             ->filterTable('route_problem')
             ->assertCanSeeTableRecords([$routeProblemDialog, $tokenlessDialog])
             ->assertCanNotSeeTableRecords([$readyDialog])
@@ -774,7 +1071,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('requires_manual_reply')
+            ->removeTableFilter('inbox_status')
             ->filterTable('channel_id', $readyDialog->channel_id)
             ->assertCanSeeTableRecords([$readyDialog])
             ->assertCanNotSeeTableRecords([$routeProblemDialog]);
@@ -967,7 +1264,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('requires_manual_reply')
+            ->removeTableFilter('inbox_status')
             ->assertCanSeeTableRecords([$dialog])
             ->assertSee('Клиент заблокировал бота')
             ->assertSee('Система')

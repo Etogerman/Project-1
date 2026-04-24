@@ -10,6 +10,8 @@ class SyncDialogConfirmedPhoneAction
 {
     public function __construct(
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
+        private readonly ResolveDialogStageAction $resolveDialogStageAction,
+        private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
     ) {}
 
     public function handle(Message $inboundMessage, string $phoneRaw, string $phoneNormalized): Dialog
@@ -26,16 +28,26 @@ class SyncDialogConfirmedPhoneAction
             return $dialog;
         }
 
-        if (! $this->shouldUpdateConfirmedPhone($dialog, $inboundMessage->received_at)) {
-            return $dialog;
+        $dialog->loadMissing('contact');
+        $fromStage = $dialog->stage ?? $this->resolveDialogStageAction->handle($dialog);
+
+        $payload = [];
+
+        if ($this->shouldUpdateConfirmedPhone($dialog, $inboundMessage->received_at)) {
+            $payload = [
+                'confirmed_phone_raw' => $phoneRaw,
+                'confirmed_phone_normalized' => $phoneNormalized,
+                'phone_confirmed_at' => $inboundMessage->received_at,
+                'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
+            ];
         }
 
-        $payload = [
-            'confirmed_phone_raw' => $phoneRaw,
-            'confirmed_phone_normalized' => $phoneNormalized,
-            'phone_confirmed_at' => $inboundMessage->received_at,
-            'phone_confirmed_via' => Dialog::PHONE_CONFIRMED_VIA_PHONE_CAPTURE,
-        ];
+        $payload['stage'] = $this->resolveDialogStageAction->forAttributes(
+            currentStage: $dialog->stage,
+            contact: $dialog->contact,
+            phoneConfirmedAt: $payload['phone_confirmed_at'] ?? $dialog->phone_confirmed_at,
+            allowReviewEscape: true,
+        );
 
         if (! $this->dialogNeedsUpdate($dialog, $payload)) {
             return $dialog;
@@ -43,7 +55,16 @@ class SyncDialogConfirmedPhoneAction
 
         $dialog->forceFill($payload)->save();
 
-        return $dialog->fresh();
+        $dialog = $dialog->fresh(['channel', 'currentContactIdentity']);
+
+        $this->createDialogStageHistoryMessageAction->handle(
+            $dialog,
+            $fromStage,
+            $payload['stage'],
+            CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
+        );
+
+        return $dialog;
     }
 
     private function lockDialog(Dialog $dialog): Dialog

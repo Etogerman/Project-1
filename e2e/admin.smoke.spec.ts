@@ -56,7 +56,7 @@ test.describe('Admin smoke', () => {
             return;
         }
 
-        const dialogPath = await findFirstResourceRecordPath(page, '/admin/dialogs');
+        const dialogPath = await findFirstResourceRecordPath(page, '/admin/dialogs', ['kanban']);
 
         expect(dialogPath).not.toBeNull();
 

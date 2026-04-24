@@ -20,10 +20,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class DeferredParameterAutoReplyFlowTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -419,20 +421,8 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
 
     private function makeActiveConnection(): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->forceCreate([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'application_name' => 'Abrikosoff Connector',
-            'client_id' => 'local.app',
-            'member_id' => 'member-1',
-            'application_token' => 'application-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-            'access_token_encrypted' => 'access-token',
-            'refresh_token_encrypted' => 'refresh-token',
-            'access_token_expires_at' => now()->addHour(),
+        return $this->makeProfileLinkedActiveBitrix24Connection([
             'scope' => ['crm', 'imconnector', 'imopenlines'],
-            'client_endpoint' => 'https://client-endpoint.example/rest/',
-            'server_endpoint' => 'https://server-endpoint.example/rest/',
-            'installed_at' => now(),
         ]);
     }
 

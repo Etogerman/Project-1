@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bitrix24\Bitrix24OpenLinesOperatorMessageData;
 use App\Data\Bots\BotDialogTextSendResult;
 use App\Data\Dialogs\DialogRouteStatusData;
@@ -19,10 +20,13 @@ class ProcessBitrix24OpenLinesWebhookAction
 {
     private const BLOCKED_DIALOG_FEEDBACK_TEXT = 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
     private const BLOCKED_DIALOG_PHASE_ENTITY_TYPE = 'openlines_blocked_attempt';
+    private const DELIVERY_PHASE_ENTITY_TYPE = 'openlines_delivery_phase';
     private const BLOCKED_DIALOG_FEEDBACK_SENT_OPERATION = 'openlines_blocked_feedback_sent';
     private const BLOCKED_DIALOG_FEEDBACK_FAILED_OPERATION = 'openlines_blocked_feedback_failed';
     private const BLOCKED_DIALOG_ACK_SENT_OPERATION = 'openlines_blocked_feedback_ack_sent';
     private const BLOCKED_DIALOG_ACK_FAILED_OPERATION = 'openlines_blocked_feedback_ack_failed';
+    private const DELIVERY_SENT_OPERATION = 'openlines_message_delivery_sent';
+    private const DELIVERY_RESUMED_OPERATION = 'openlines_message_delivery_resumed';
     private const EXACT_ECHO_SKIPPED_OPERATION = 'openlines_exact_echo_skipped';
     private const DELAYED_RECHECK_SCHEDULED_OPERATION = 'openlines_delayed_recheck_scheduled';
     private const DELAYED_RECHECK_CONFIRMED_ECHO_OPERATION = 'openlines_delayed_recheck_confirmed_echo';
@@ -38,6 +42,7 @@ class ProcessBitrix24OpenLinesWebhookAction
         private readonly NormalizeBitrix24OpenLinesEventAction $normalizeBitrix24OpenLinesEventAction,
         private readonly HandleBitrix24OpenLinesSessionClosedAction $handleBitrix24OpenLinesSessionClosedAction,
         private readonly ResolveDialogByBitrix24LiveChatKeyAction $resolveDialogByBitrix24LiveChatKeyAction,
+        private readonly ResolveBitrix24OpenLinesRouteAction $resolveBitrix24OpenLinesRouteAction,
         private readonly IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
         private readonly DeliverBitrix24OpenLinesMessageToMessengerAction $deliverBitrix24OpenLinesMessageToMessengerAction,
         private readonly SendBitrix24OpenLinesBlockedDialogFeedbackAction $sendBitrix24OpenLinesBlockedDialogFeedbackAction,
@@ -100,6 +105,8 @@ class ProcessBitrix24OpenLinesWebhookAction
                     throw new Bitrix24ApiException('Bitrix24 Open Lines dialog is not ready for live bridge processing.');
                 }
 
+                $this->assertMatchesCurrentRuntimeRoute($dialog, $messageData);
+
                 $providerEventKey = 'bitrix24-openlines:'.$messageData->bitrixMessageId;
                 $existingMessage = Message::query()
                     ->where('channel_id', $dialog->channel_id)
@@ -137,49 +144,58 @@ class ProcessBitrix24OpenLinesWebhookAction
                     return $event->fresh();
                 }
 
-                $deliveryResult = $this->deliverBitrix24OpenLinesMessageToMessengerAction->handle(
-                    $dialog,
-                    $messageData,
-                );
+                $deliveryResultData = $this->findSuccessfulDeliveryPhaseResult($event, $messageData);
 
-                if ($event->recheck_attempted_at !== null) {
-                    $this->logEchoDecision(
-                        operation: self::DELAYED_RECHECK_FELL_THROUGH_OPERATION,
-                        event: $event,
-                        dialog: $dialog,
-                        messageData: $messageData,
-                    );
-                }
-
-                if ($this->isBlockedDialogSkip($deliveryResult)) {
-                    $preserveDialogLiveStatusOnFailure = true;
-                    [$feedbackMessageId, $acknowledgementMessageId] = $this->handleBlockedDialogSkip(
-                        $event,
+                if (! $deliveryResultData instanceof AutoReplyDeliveryResult) {
+                    $deliveryResult = $this->deliverBitrix24OpenLinesMessageToMessengerAction->handle(
                         $dialog,
                         $messageData,
                     );
 
-                    $this->activateDialog($dialog, $event, $messageData->chatId);
-                    $this->logBlockedDialogSkipped(
-                        $event,
-                        $dialog,
-                        $messageData,
-                        $deliveryResult,
-                        $feedbackMessageId,
-                        $acknowledgementMessageId,
-                    );
+                    if ($event->recheck_attempted_at !== null) {
+                        $this->logEchoDecision(
+                            operation: self::DELAYED_RECHECK_FELL_THROUGH_OPERATION,
+                            event: $event,
+                            dialog: $dialog,
+                            messageData: $messageData,
+                        );
+                    }
 
-                    continue;
+                    if ($this->isBlockedDialogSkip($deliveryResult)) {
+                        $preserveDialogLiveStatusOnFailure = true;
+                        [$feedbackMessageId, $acknowledgementMessageId] = $this->handleBlockedDialogSkip(
+                            $event,
+                            $dialog,
+                            $messageData,
+                        );
+
+                        $this->activateDialog($dialog, $event, $messageData->chatId);
+                        $this->logBlockedDialogSkipped(
+                            $event,
+                            $dialog,
+                            $messageData,
+                            $deliveryResult,
+                            $feedbackMessageId,
+                            $acknowledgementMessageId,
+                        );
+
+                        continue;
+                    }
+
+                    if (! $deliveryResult->wasSent() || $deliveryResult->deliveryResult === null) {
+                        throw new Bitrix24ApiException(
+                            $deliveryResult->routeStatus->blockedReason
+                                ?? 'Bitrix24 Open Lines dialog is not sendable for messenger delivery.'
+                        );
+                    }
+
+                    $deliveryResultData = $deliveryResult->deliveryResult;
+                    $this->logSuccessfulDeliveryPhase($event, $dialog, $messageData, $deliveryResultData);
+                } else {
+                    $this->logResumedDeliveryPhase($event, $dialog, $messageData, $deliveryResultData);
                 }
 
-                if (! $deliveryResult->wasSent() || $deliveryResult->deliveryResult === null) {
-                    throw new Bitrix24ApiException(
-                        $deliveryResult->routeStatus->blockedReason
-                            ?? 'Bitrix24 Open Lines dialog is not sendable for messenger delivery.'
-                    );
-                }
-
-                $externalMessageId = trim((string) ($deliveryResult->deliveryResult->externalMessageId ?? ''));
+                $externalMessageId = trim((string) ($deliveryResultData->externalMessageId ?? ''));
 
                 if ($externalMessageId === '') {
                     throw new Bitrix24ApiException('Messenger delivery did not return an external message id for Bitrix acknowledgement.');
@@ -188,7 +204,7 @@ class ProcessBitrix24OpenLinesWebhookAction
                 $storedMessage = $this->storeBitrix24OpenLinesOutboundMessageAction->handle(
                     $dialog,
                     $messageData,
-                    $deliveryResult->deliveryResult,
+                    $deliveryResultData,
                 );
 
                 $this->acknowledgeBitrix24OpenLinesDeliveryAction->handle(
@@ -218,6 +234,8 @@ class ProcessBitrix24OpenLinesWebhookAction
                     entityType: 'openlines_webhook_event',
                     entityId: (string) $event->id,
                 );
+            } catch (Bitrix24OpenLinesRouteMismatchException $exception) {
+                return $this->ignoreRouteMismatchEvent($event, $dialog, $messageData, $exception);
             } catch (Throwable $throwable) {
                 if ($dialog instanceof Dialog && ! $preserveDialogLiveStatusOnFailure) {
                     $dialog->forceFill([
@@ -230,6 +248,61 @@ class ProcessBitrix24OpenLinesWebhookAction
         }
 
         $this->markEventProcessed($event);
+
+        return $event->fresh();
+    }
+
+    private function assertMatchesCurrentRuntimeRoute(
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+    ): void {
+        $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
+
+        if ($messageData->connectorCode !== '' && $messageData->connectorCode !== $route->connectorCode) {
+            throw new Bitrix24OpenLinesRouteMismatchException(sprintf(
+                'Bitrix24 Open Lines callback connector `%s` does not match current runtime route `%s` for dialog #%d.',
+                $messageData->connectorCode,
+                $route->connectorCode,
+                $dialog->id,
+            ));
+        }
+
+        if ($messageData->lineId !== '' && $messageData->lineId !== $route->lineId) {
+            throw new Bitrix24OpenLinesRouteMismatchException(sprintf(
+                'Bitrix24 Open Lines callback line `%s` does not match current runtime route `%s` for dialog #%d.',
+                $messageData->lineId,
+                $route->lineId,
+                $dialog->id,
+            ));
+        }
+    }
+
+    private function ignoreRouteMismatchEvent(
+        Bitrix24WebhookEvent $event,
+        ?Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        Bitrix24OpenLinesRouteMismatchException $exception,
+    ): Bitrix24WebhookEvent {
+        $this->markEventIgnored($event);
+
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'openlines_route_mismatch_ignored',
+            status: Bitrix24SyncLog::STATUS_SKIPPED,
+            requestPayload: array_filter([
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog?->id,
+                'chat_id' => $messageData->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+                'connector_code' => $messageData->connectorCode,
+                'line_id' => $messageData->lineId,
+            ], static fn (mixed $value): bool => $value !== null),
+            connection: $event->connection,
+            errorMessage: $exception->getMessage(),
+            entityType: 'openlines_webhook_event',
+            entityId: (string) $event->id,
+        );
 
         return $event->fresh();
     }
@@ -399,6 +472,114 @@ class ProcessBitrix24OpenLinesWebhookAction
     private function buildBlockedDialogPhaseFingerprint(Bitrix24OpenLinesOperatorMessageData $messageData): string
     {
         return hash('sha256', $messageData->chatId.'|'.$messageData->bitrixMessageId);
+    }
+
+    private function buildDeliveryPhaseFingerprint(
+        Bitrix24WebhookEvent $event,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+    ): string
+    {
+        return hash('sha256', implode('|', [
+            (string) ($event->connection_id ?? ''),
+            (string) $event->portal_domain,
+            $messageData->chatId,
+            $messageData->bitrixMessageId,
+            $messageData->connectorCode,
+            $messageData->lineId,
+        ]));
+    }
+
+    private function findSuccessfulDeliveryPhaseResult(
+        Bitrix24WebhookEvent $event,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+    ): ?AutoReplyDeliveryResult {
+        $phaseLog = Bitrix24SyncLog::query()
+            ->where('operation', self::DELIVERY_SENT_OPERATION)
+            ->where('status', Bitrix24SyncLog::STATUS_SUCCESS)
+            ->where('connection_id', $event->connection_id)
+            ->where('fingerprint', $this->buildDeliveryPhaseFingerprint($event, $messageData))
+            ->latest('id')
+            ->first();
+
+        if (! $phaseLog instanceof Bitrix24SyncLog) {
+            return null;
+        }
+
+        $payload = $phaseLog->response_payload;
+
+        if (! is_array($payload)) {
+            return null;
+        }
+
+        $externalMessageId = trim((string) ($payload['external_message_id'] ?? ''));
+
+        if ($externalMessageId === '') {
+            return null;
+        }
+
+        return new AutoReplyDeliveryResult(
+            text: (string) ($payload['text'] ?? $messageData->text),
+            externalMessageId: $externalMessageId,
+            rawPayload: is_array($payload['raw_payload'] ?? null)
+                ? $payload['raw_payload']
+                : [],
+        );
+    }
+
+    private function logSuccessfulDeliveryPhase(
+        Bitrix24WebhookEvent $event,
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        AutoReplyDeliveryResult $deliveryResult,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: self::DELIVERY_SENT_OPERATION,
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog->id,
+                'chat_id' => $messageData->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+            ],
+            responsePayload: [
+                'external_message_id' => $deliveryResult->externalMessageId,
+                'text' => $deliveryResult->text,
+                'raw_payload' => $deliveryResult->rawPayload,
+            ],
+            connection: $event->connection,
+            entityType: self::DELIVERY_PHASE_ENTITY_TYPE,
+            entityId: $messageData->bitrixMessageId,
+            fingerprint: $this->buildDeliveryPhaseFingerprint($event, $messageData),
+        );
+    }
+
+    private function logResumedDeliveryPhase(
+        Bitrix24WebhookEvent $event,
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        AutoReplyDeliveryResult $deliveryResult,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: self::DELIVERY_RESUMED_OPERATION,
+            status: Bitrix24SyncLog::STATUS_SKIPPED,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog->id,
+                'chat_id' => $messageData->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+            ],
+            responsePayload: [
+                'external_message_id' => $deliveryResult->externalMessageId,
+            ],
+            connection: $event->connection,
+            entityType: self::DELIVERY_PHASE_ENTITY_TYPE,
+            entityId: $messageData->bitrixMessageId,
+            fingerprint: $this->buildDeliveryPhaseFingerprint($event, $messageData),
+        );
     }
 
     private function hasBlockedDialogPhaseSucceeded(string $operation, string $phaseFingerprint): bool

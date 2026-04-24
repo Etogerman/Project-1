@@ -13,10 +13,12 @@ use App\Services\Bitrix24\LinkBitrix24DealAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Mockery\MockInterface;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class Bitrix24DealLookupTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -84,6 +86,52 @@ class Bitrix24DealLookupTest extends TestCase
             'entity_type' => 'contact',
             'entity_id' => (string) $contact->id,
         ]);
+    }
+
+    public function test_deal_sync_uses_current_runtime_profile_connection_when_multiple_active_connections_exist(): void
+    {
+        $this->makeActiveConnection([
+            'client_endpoint' => 'https://selected-client.example/rest/',
+            'server_endpoint' => 'https://selected-server.example/rest/',
+        ]);
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'member_id' => 'member-2',
+                'application_token' => 'application-token-2',
+                'client_endpoint' => 'https://ignored-client.example/rest/',
+                'server_endpoint' => 'https://ignored-server.example/rest/',
+            ],
+            profileOverrides: [
+                'profile_key' => 'dev-alex',
+                'display_name' => 'Dev Alex',
+                'application_code' => 'local.app.code.dev-alex',
+                'callback_base_url' => 'https://other.example.com',
+            ],
+            useForCurrentRuntime: false,
+        );
+
+        $contact = $this->createDealSyncReadyContact([
+            'bitrix24_deal_id' => '999',
+            'bitrix24_deal_sync_pending' => true,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_PENDING,
+        ]);
+
+        Http::fake([
+            'https://selected-client.example/rest/crm.deal.list.json' => Http::response([
+                'result' => [],
+            ], 200),
+            'https://selected-client.example/rest/crm.deal.add.json' => Http::response([
+                'result' => 601,
+            ], 200),
+        ]);
+
+        $this->runDealEnsureJob($contact);
+
+        $contact->refresh();
+
+        $this->assertSame('601', $contact->bitrix24_deal_id);
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://selected-client.example/rest/'));
+        Http::assertNotSent(fn ($request): bool => str_starts_with($request->url(), 'https://ignored-client.example/rest/'));
     }
 
     public function test_single_active_deal_is_linked_locally(): void
@@ -312,9 +360,11 @@ class Bitrix24DealLookupTest extends TestCase
 
     public function test_missing_source_mapping_marks_deal_sync_failed_without_creating_deal(): void
     {
-        config()->set('bitrix24.sources.telegram_id', null);
-
-        $this->makeActiveConnection();
+        $this->makeProfileLinkedActiveBitrix24Connection(
+            profileOverrides: [
+                'telegram_source_id' => null,
+            ],
+        );
         $contact = $this->createDealSyncReadyContact([
             'bitrix24_deal_sync_pending' => true,
             'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_PENDING,
@@ -489,21 +539,6 @@ class Bitrix24DealLookupTest extends TestCase
      */
     private function makeActiveConnection(array $overrides = []): Bitrix24Connection
     {
-        return Bitrix24Connection::query()->forceCreate(array_merge([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'application_name' => 'Abrikosoff Connector',
-            'client_id' => 'local.app',
-            'member_id' => 'member-1',
-            'application_token' => 'application-token',
-            'status' => Bitrix24Connection::STATUS_ACTIVE,
-            'access_token_encrypted' => 'access-token',
-            'refresh_token_encrypted' => 'refresh-token',
-            'access_token_expires_at' => now()->addHour(),
-            'scope' => ['crm'],
-            'client_endpoint' => 'https://client-endpoint.example/rest/',
-            'server_endpoint' => 'https://server-endpoint.example/rest/',
-            'installed_at' => now()->subHour(),
-            'last_install_callback_at' => now()->subHour(),
-        ], $overrides));
+        return $this->makeProfileLinkedActiveBitrix24Connection($overrides);
     }
 }

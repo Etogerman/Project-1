@@ -55,7 +55,7 @@ production deploy.
 Если staging реально участвует в release flow:
 
 - merge или push в `staging` должен проверяться staging smoke
-- staging становится главным автоматическим acceptance gate
+- staging становится главным автоматическим acceptance gate уже после публикации change-set в среду, а не trigger-ом выхода из локалки
 
 Если staging smoke запускается автоматически по `push` в `staging`:
 

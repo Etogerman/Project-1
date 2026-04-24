@@ -21,8 +21,11 @@ class ContactDuplicateReviewFactory extends Factory
         return [
             'contact_id' => Contact::factory(),
             'phone_normalized' => '+79991234567',
+            'identity_key' => null,
             'review_type' => ContactDuplicateReview::TYPE_PHONE_MULTIPLE_ROOTS,
+            'routed_contact_id' => null,
             'candidate_root_contact_ids' => null,
+            'context_payload' => null,
             'trigger_message_id' => null,
             'status' => ContactDuplicateReview::STATUS_OPEN,
             'reason' => null,
