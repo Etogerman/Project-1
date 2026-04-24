@@ -3,7 +3,89 @@
 Этот документ — практический вход в локальный старт Abrikosoff Connector
 без чтения `composer.json`, исходников и тестов.
 
-## Что нужно заранее
+## Рекомендованный путь — VS Code Dev Container
+
+### Что нужно заранее
+
+1. [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+2. VS Code с расширением [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+
+### Запуск
+
+Перед стартом контейнера подготовь Laravel `.env` вручную:
+
+```bash
+cp .env.example .env
+```
+
+```
+Ctrl+Shift+P → Dev Containers: Reopen in Container
+```
+
+После старта `entrypoint.sh` выполняет:
+
+1. `composer install`
+2. `npm install`
+3. генерирует `APP_KEY`
+4. `php artisan migrate`
+5. `php artisan db:seed --class=AdminUserSeeder` (если задан `ADMIN_USER_SEEDER_PASSWORD` в `.env`)
+
+Після того як контейнер піднявся, запусти dev-runtime:
+
+```bash
+composer dev
+```
+
+### Чистый Docker (без VS Code)
+
+Требует только Docker Desktop. Перед запуском так же подготовь Laravel `.env` вручную:
+
+```bash
+cp .env.example .env
+```
+
+```bash
+docker compose up -d
+```
+
+Если нужен `ngrok`, создай отдельный compose-only файл `.env.ngrok` рядом с `docker-compose.yml`:
+
+```bash
+cp .env.ngrok.example .env.ngrok
+```
+
+И заполни в нём:
+
+```bash
+NGROK_AUTHTOKEN=your_token
+```
+
+Затем войди в контейнер и запусти dev-runtime:
+
+```bash
+docker compose exec dev bash
+composer dev
+```
+
+### Сервисы в контейнере
+
+| Сервис             | Адрес                 | Примечание                 |
+| ------------------ | --------------------- | -------------------------- |
+| Laravel Dev Server | http://127.0.0.1:8000 | `php artisan serve`        |
+| Vite Dev Server    | http://127.0.0.1:5173 | `npm run dev`              |
+| PostgreSQL 16      | 127.0.0.1:5432        | DB: `abrikosoff_connector` |
+| Redis 7.4          | 127.0.0.1:6379        |                            |
+| Mailpit UI         | http://127.0.0.1:8025 | перехват email             |
+| Adminer            | http://127.0.0.1:8080 | веб-интерфейс для DB       |
+
+VS Code расширения (PHP Intelephense, Laravel, GitLens и др.) устанавливаются
+автоматически при первом запуске контейнера.
+
+---
+
+## Ручной старт (без Docker)
+
+### Что нужно заранее
 
 Нужны:
 

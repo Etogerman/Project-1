@@ -6,27 +6,112 @@ collector flow и Bitrix24 integration.
 
 ## Быстрый локальный старт
 
-Полный локальный runbook описан в [docs/reference/local-bootstrap.md](docs/reference/local-bootstrap.md).
-Короткий стартовый контур такой:
+## Composer команды
+
+Основные shortcuts из `composer.json`, которые заменяют типовые ручные вызовы:
 
 ```bash
-composer install
-npm install
+composer dev                     # локальный dev-runtime вне Docker
+composer docker:build           # собрать docker-образы
+composer docker:up              # поднять контейнеры в фоне
+composer docker:dev             # запустить composer dev внутри контейнера dev
+composer docker:down            # остановить контейнеры
+composer docker:remove          # остановить контейнеры и удалить volumes
+composer test:feature:ui        # UI feature shard
+composer test:feature:bots      # bots/webhook shard
+composer test:feature:bitrix    # Bitrix24 shard
+composer test:feature:collector # collector shard
+composer test:feature:domain    # domain shard
+composer test:ci                # агрегированный CI-friendly прогон
+```
+
+## Старт
+
+### 1. Скопируй `.env.example`
+
+```bash
 cp .env.example .env
-php artisan key:generate
-php artisan migrate
+```
 
-export ADMIN_USER_SEEDER_PASSWORD='replace-with-local-secret'
-php artisan db:seed --class=AdminUserSeeder
+### 2. Настрой ngrok (до запуска контейнеров)
 
+Без ngrok Telegram/MAX не смогут доставлять webhook-сообщения на локальный сервер.
+
+1. Зарегистрируйся на [ngrok.com](https://ngrok.com)
+2. Получи [Authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) и [Static Domain](https://dashboard.ngrok.com/endpoints)
+3. Заполни в `.env`:
+
+```
+NGROK_AUTHTOKEN=your_token
+APP_URL=https://your-name.ngrok-free.app
+```
+
+### 3. Запусти контейнер
+
+**VS Code Dev Container** — нужны [Docker Desktop](https://www.docker.com/products/docker-desktop/) и расширение [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers):
+
+```
+Ctrl+Shift+P → Dev Containers: Reopen in Container
+```
+
+**Чистый Docker:**
+
+```bash
+composer docker:up
+```
+
+Прямой эквивалент: `docker compose up -d`.
+
+Контейнер автоматически копирует `.env`, ставит зависимости и применяет миграции.
+
+### 4. Запусти dev-сервер
+
+**VS Code Dev Container** — в терминале контейнера:
+
+```bash
 composer dev
 ```
 
-После старта:
+**Чистый Docker:**
 
-1. открой `http://127.0.0.1:8000/admin/login`
-2. войди под `admin@abrikosoff.local`
-3. используй пароль из `ADMIN_USER_SEEDER_PASSWORD`
+Удобнее сначала войти в контейнер и работать внутри него:
+
+```bash
+docker compose exec dev bash
+```
+
+Затем в той же сессии:
+
+```bash
+composer dev
+```
+
+Или одной командой без входа в контейнер:
+
+```bash
+composer docker:dev
+```
+
+| Сервис   | Адрес                       |
+| -------- | --------------------------- |
+| Admin UI | http://localhost:8000/admin |
+| Mailpit  | http://localhost:8025       |
+| Adminer  | http://localhost:8080       |
+| ngrok    | http://localhost:4040       |
+
+Логин: `admin@abrikosoff.local`, пароль из `ADMIN_USER_SEEDER_PASSWORD`.
+
+## Тесты
+
+```bash
+php artisan test          # полный suite
+composer test:feature:ui  # UI shard
+composer test:feature:bots
+composer test:feature:bitrix
+composer test:feature:collector
+composer test:feature:domain
+composer test:ci          # CI-агрегированный прогон
+```
 
 ## Карта документации
 
@@ -80,3 +165,4 @@ workflow и integration-контрактам находится в локаль�
 Если нужна именно framework-справка:
 
 - [Laravel documentation](https://laravel.com/docs)
+
