@@ -111,10 +111,6 @@ class ValidateBitrix24InstallCallbackAction
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe returned unexpected application code.'];
         }
 
-        if (! $this->isInstalled($result['INSTALLED'] ?? null)) {
-            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe reported application as not installed.'];
-        }
-
         return [Bitrix24WebhookEvent::STATUS_PENDING, null];
     }
 
@@ -170,16 +166,6 @@ class ValidateBitrix24InstallCallbackAction
         }
 
         return mb_strtolower(trim($trimmed, "/ \t\n\r\0\x0B"));
-    }
-
-    private function isInstalled(mixed $value): bool
-    {
-        return match (true) {
-            $value === true => true,
-            is_int($value) => $value === 1,
-            is_string($value) => in_array(mb_strtolower(trim($value)), ['1', 'true', 'y', 'yes'], true),
-            default => false,
-        };
     }
 
     private function nullableString(mixed $value): ?string
