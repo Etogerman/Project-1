@@ -8,6 +8,7 @@ use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\ChannelRuntimeState;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\User;
@@ -372,6 +373,107 @@ class FilamentChannelsResourceTest extends TestCase
             sprintf('#%d %s (%s)', $channel->id, $channel->name, 'MAX'),
             ChannelResource::getRecordTitle($channel),
         );
+    }
+
+    public function test_account_channel_table_summary_uses_runtime_state_labels(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+        ]);
+
+        $summaryBuilder = new ReflectionMethod(ChannelResource::class, 'buildChannelTableSummary');
+        $summaryBuilder->setAccessible(true);
+
+        $summary = $summaryBuilder->invoke(null, $channel->fresh('runtimeState'));
+
+        $this->assertSame('Авторизация: Авторизован · Синхронизация: В реальном времени', $summary);
+        $this->assertSame('Работает', $channel->fresh('runtimeState')->getHealthStatusLabel());
+    }
+
+    public function test_account_channel_view_modal_shows_runtime_state_block(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Runtime',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_BACKFILL_IN_PROGRESS,
+            'last_gateway_heartbeat_at' => now()->subMinute(),
+            'last_sync_started_at' => now()->subMinutes(10),
+            'last_error_message' => 'Временная деградация отсутствует.',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('view', $channel)
+            ->assertMountedActionModalSee('Авторизация')
+            ->assertMountedActionModalSee('Авторизован')
+            ->assertMountedActionModalSee('Шаг авторизации')
+            ->assertMountedActionModalSee('Готов')
+            ->assertMountedActionModalSee('Синхронизация')
+            ->assertMountedActionModalSee('Загрузка истории')
+            ->assertMountedActionModalSee('Последний heartbeat gateway')
+            ->assertMountedActionModalSee('Текст ошибки')
+            ->assertMountedActionModalSee('Временная деградация отсутствует.');
+    }
+
+    public function test_account_channel_hides_bot_only_edit_and_manage_scenarios_actions(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionHidden('edit', $channel)
+            ->assertTableActionHidden('manageScenarios', $channel);
+    }
+
+    public function test_account_channel_table_error_columns_use_runtime_state(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'last_error_message' => 'Устаревшая bot-side ошибка',
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_FAILED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_AWAITING_CODE,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_FAILED,
+            'last_error_message' => 'Актуальная account runtime ошибка',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableColumnStateSet('last_error_message', 'Актуальная account runtime ошибка', $channel->fresh('runtimeState'));
     }
 
     public function test_delete_and_bulk_delete_are_forbidden_by_policy(): void
@@ -834,6 +936,64 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('Event key: telegram-update-901', $recentMessagesHtml);
         $this->assertStringContainsString('Автоответ: —', $recentMessagesHtml);
         $this->assertStringContainsString('Статус: Ответ еще не отправлен', $recentMessagesHtml);
+    }
+
+    public function test_channel_diagnostics_use_media_summary_for_media_only_account_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'name' => 'Telegram Account Media Diagnostics',
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ext-account-media',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-account-media-901',
+            'external_chat_id' => 'chat-account-media-901',
+            'external_message_id' => 'msg-account-media-901',
+            'text' => null,
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'document', 'file_name' => 'offer.pdf'],
+                ],
+            ],
+            'received_at' => Carbon::create(2026, 4, 23, 12, 30, 0),
+            'auto_reply_sent_at' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('view', $channel)
+            ->assertMountedActionModalSee('Документ: offer.pdf')
+            ->assertMountedActionModalSee('Ожидает загрузки');
+
+        $latestMessageTextResolver = new ReflectionMethod(ChannelResource::class, 'resolveLatestSavedMessageDisplayText');
+        $latestMessageTextResolver->setAccessible(true);
+
+        $this->assertSame('Документ: offer.pdf', $latestMessageTextResolver->invoke(null, $channel));
+
+        $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
+        $recentMessagesRenderer->setAccessible(true);
+
+        $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Документ: offer.pdf', $recentMessagesHtml);
+        $this->assertStringContainsString('Ожидает загрузки', $recentMessagesHtml);
+        $this->assertStringNotContainsString('>—<', $recentMessagesHtml);
     }
 
     public function test_recent_activity_renderer_shows_and_highlights_dedupe_events(): void

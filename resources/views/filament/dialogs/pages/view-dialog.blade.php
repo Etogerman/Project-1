@@ -216,6 +216,57 @@
                         </p>
                     </div>
                 </div>
+
+                @if ($peerSyncState['is_visible'])
+                    <div class="ac-meta-grid ac-meta-grid--compact ac-surface__divider">
+                        <div class="ac-meta">
+                            <p class="ac-meta__label">
+                                Статус загрузки истории
+                            </p>
+                            <div class="ac-meta__value">
+                                <span
+                                    data-role="dialog-peer-sync-status"
+                                    data-tone="{{ $peerSyncState['status_tone'] }}"
+                                    class="ac-pill"
+                                >
+                                    {{ $peerSyncState['status_label'] }}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="ac-meta">
+                            <p class="ac-meta__label">
+                                История завершена
+                            </p>
+                            <p data-role="dialog-peer-sync-history-complete" class="ac-meta__value">
+                                {{ $peerSyncState['history_complete_label'] }}
+                            </p>
+                        </div>
+                        <div class="ac-meta">
+                            <p class="ac-meta__label">
+                                Самое раннее сообщение
+                            </p>
+                            <p data-role="dialog-peer-sync-oldest-message" class="ac-meta__value">
+                                {{ $peerSyncState['oldest_imported_message_id_label'] }}
+                            </p>
+                        </div>
+                        <div class="ac-meta">
+                            <p class="ac-meta__label">
+                                Последнее observed message
+                            </p>
+                            <p data-role="dialog-peer-sync-latest-message" class="ac-meta__value">
+                                {{ $peerSyncState['latest_observed_message_id_label'] }}
+                            </p>
+                        </div>
+                        <div class="ac-meta">
+                            <p class="ac-meta__label">
+                                Ошибка peer sync
+                            </p>
+                            <p data-role="dialog-peer-sync-error" class="ac-meta__value">
+                                {{ $peerSyncState['last_sync_error_label'] }}
+                            </p>
+                        </div>
+                    </div>
+                @endif
             </section>
         </div>
 

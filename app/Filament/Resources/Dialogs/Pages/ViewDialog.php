@@ -7,6 +7,7 @@ use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
+use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
@@ -296,6 +297,7 @@ class ViewDialog extends ViewRecord
     {
         return [
             'dialogHeader' => $this->getDialogHeaderViewData(),
+            'peerSyncState' => $this->getPeerSyncStateViewData(),
             'contactSummary' => $this->getContactSummaryViewData(),
             'kanbanBackUrl' => $this->resolveKanbanBackUrl(),
             'contactUrl' => $this->getContactViewUrl(),
@@ -445,6 +447,67 @@ class ViewDialog extends ViewRecord
             'route_status_label' => $routeStatus->label,
             'route_status_tone' => $routeStatus->tone,
             'phone_label' => $this->formatDialogPhoneLabel($dialog),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     is_visible:bool,
+     *     status_label:string,
+     *     status_tone:string,
+     *     history_complete_label:string,
+     *     oldest_imported_message_id_label:string,
+     *     latest_observed_message_id_label:string,
+     *     last_sync_error_label:string
+     * }
+     */
+    protected function getPeerSyncStateViewData(): array
+    {
+        $dialog = $this->getRecord();
+        $channel = $dialog->channel;
+
+        if (
+            ! $channel instanceof Channel
+            || ! $channel->isAccountConnection()
+            || $channel->platform !== Channel::PLATFORM_TELEGRAM
+            || ! filled($dialog->external_chat_id)
+        ) {
+            return [
+                'is_visible' => false,
+                'status_label' => '—',
+                'status_tone' => 'gray',
+                'history_complete_label' => '—',
+                'oldest_imported_message_id_label' => '—',
+                'latest_observed_message_id_label' => '—',
+                'last_sync_error_label' => '—',
+            ];
+        }
+
+        $peerSyncState = ChannelPeerSyncState::query()
+            ->where('channel_id', $channel->getKey())
+            ->where('external_chat_id', (string) $dialog->external_chat_id)
+            ->first();
+
+        if (! $peerSyncState instanceof ChannelPeerSyncState) {
+            return [
+                'is_visible' => true,
+                'status_label' => 'Нет sync-state',
+                'status_tone' => 'gray',
+                'history_complete_label' => '—',
+                'oldest_imported_message_id_label' => '—',
+                'latest_observed_message_id_label' => '—',
+                'last_sync_error_label' => '—',
+            ];
+        }
+
+        return [
+            'is_visible' => true,
+            'status_label' => $peerSyncState->getBackfillStatusLabel(),
+            'status_tone' => $peerSyncState->getBackfillStatusColor(),
+            'history_complete_label' => $this->formatPeerSyncTimestamp($peerSyncState->history_complete_at),
+            'oldest_imported_message_id_label' => $peerSyncState->oldest_imported_message_id ?: '—',
+            'latest_observed_message_id_label' => $peerSyncState->latest_observed_message_id ?: '—',
+            'last_sync_error_label' => $peerSyncState->last_sync_error ?: '—',
         ];
     }
 
@@ -926,5 +989,12 @@ class ViewDialog extends ViewRecord
         $initials = mb_strtoupper(mb_substr($candidate, 0, 2));
 
         return $initials !== '' ? $initials : null;
+    }
+
+    protected function formatPeerSyncTimestamp(mixed $value): string
+    {
+        return $value instanceof \Illuminate\Support\Carbon
+            ? $value->format('d.m.Y H:i')
+            : '—';
     }
 }

@@ -76,6 +76,34 @@
                         @else
                             <div class="ac-message__text">{{ $message['display_text'] }}</div>
                         @endif
+
+                        @if (! empty($message['media_badges'] ?? []))
+                            <div data-role="conversation-media" class="ac-message__meta-main">
+                                @foreach ($message['media_badges'] as $mediaBadge)
+                                    <span
+                                        data-role="conversation-media-badge"
+                                        class="ac-pill"
+                                        data-tone="gray"
+                                    >
+                                        {{ $mediaBadge }}
+                                    </span>
+                                @endforeach
+                            </div>
+                        @endif
+
+                        @if (! empty($message['media_state_badges'] ?? []))
+                            <div data-role="conversation-media-state" class="ac-message__meta-main">
+                                @foreach ($message['media_state_badges'] as $mediaStateBadge)
+                                    <span
+                                        data-role="conversation-media-status-badge"
+                                        class="ac-pill"
+                                        data-tone="{{ $mediaStateBadge['tone'] ?? 'gray' }}"
+                                    >
+                                        {{ $mediaStateBadge['label'] ?? 'Статус не определён' }}
+                                    </span>
+                                @endforeach
+                            </div>
+                        @endif
                     </article>
                 </div>
             @endforeach

@@ -8,6 +8,7 @@ use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
+use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
@@ -196,6 +197,223 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('Telegram Клиент')
             ->assertSee('MAX Клиент');
+    }
+
+    public function test_dialogs_inbox_shows_telegram_account_dialog_even_when_route_is_not_sendable(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Inbox',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account inbox contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-inbox-1',
+            'display_name' => 'Telegram Account Клиент',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-message-1',
+            'text' => 'Новый account inbound',
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Account inbox contact')
+            ->assertSee('Telegram Account Inbox')
+            ->assertSee('Требует ответа')
+            ->assertSee('Не bot-канал');
+    }
+
+    public function test_dialog_view_renders_media_badges_for_telegram_account_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Media',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account media contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-media-1',
+            'display_name' => 'Telegram Account Медиа',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-media-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-media-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-media-message-1',
+            'text' => 'Отправил медиа',
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'photo'],
+                    ['type' => 'document', 'file_name' => 'offer.pdf'],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('Фото')
+            ->assertSee('Документ: offer.pdf')
+            ->assertSee('Ожидает загрузки');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(1, $messages);
+        $this->assertSame('Отправил медиа', $messages[0]['display_text']);
+        $this->assertSame(['Фото', 'Документ: offer.pdf'], $messages[0]['media_badges']);
+        $this->assertSame([
+            ['label' => 'Ожидает загрузки x2', 'tone' => 'gray'],
+        ], $messages[0]['media_state_badges']);
+    }
+
+    public function test_dialogs_inbox_preview_meta_shows_media_download_placeholder_for_telegram_account_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Placeholder Inbox',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account placeholder contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-placeholder-1',
+            'display_name' => 'Telegram Account Placeholder',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-placeholder-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-placeholder-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-placeholder-message-1',
+            'text' => null,
+            'raw_payload' => [
+                'media' => [
+                    ['type' => 'photo'],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('Фото')
+            ->assertSee('Ожидает загрузки');
+    }
+
+    public function test_dialog_view_renders_peer_sync_state_for_telegram_account_dialog(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Sync',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account sync contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-sync-1',
+            'display_name' => 'Telegram Account Sync Клиент',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-sync-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        ChannelPeerSyncState::query()->create([
+            'channel_id' => $channel->id,
+            'peer_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id,
+            'external_chat_id' => $dialog->external_chat_id,
+            'backfill_status' => ChannelPeerSyncState::BACKFILL_STATUS_COMPLETE,
+            'oldest_imported_message_id' => '900001',
+            'latest_observed_message_id' => '900050',
+            'history_complete_at' => now()->setDate(2026, 4, 23)->setTime(13, 15, 0),
+            'last_sync_error' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSeeHtml('data-role="dialog-peer-sync-status"')
+            ->assertSee('Завершена')
+            ->assertSee('23.04.2026 13:15')
+            ->assertSee('900001')
+            ->assertSee('900050');
     }
 
     public function test_employee_can_open_dialog_view_page_with_reply_composer(): void
