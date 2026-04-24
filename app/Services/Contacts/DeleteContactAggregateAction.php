@@ -3,6 +3,7 @@
 namespace App\Services\Contacts;
 
 use App\Models\Contact;
+use App\Models\ContactDuplicateReview;
 use App\Models\ContactMergeLog;
 use Throwable;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +16,7 @@ class DeleteContactAggregateAction
         private readonly ResolveContactAggregateAction $resolveContactAggregateAction,
         private readonly BuildContactAggregateDeleteSummaryAction $buildContactAggregateDeleteSummaryAction,
         private readonly CleanupExternalDuplicateReviewsForDeletedAggregateAction $cleanupExternalDuplicateReviewsForDeletedAggregateAction,
+        private readonly FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction $findOpenCrossChannelIdentityAmbiguityReviewForContactsAction,
     ) {}
 
     public function handle(Contact|int $contact): void
@@ -37,6 +39,27 @@ class DeleteContactAggregateAction
 
                 if ($lockedContacts->count() !== count($resolvedAggregate->aggregateContactIds)) {
                     throw new RuntimeException('Contact aggregate changed during delete.');
+                }
+
+                $blockingReview = $this->findOpenCrossChannelIdentityAmbiguityReviewForContactsAction->handle(
+                    $lockedContacts->all(),
+                );
+
+                if ($blockingReview !== null) {
+                    throw ContactFrozenByOpenCrossChannelIdentityReviewException::forDelete($blockingReview);
+                }
+
+                $terminalBlockingReview = ContactDuplicateReview::query()
+                    ->where('review_type', ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY)
+                    ->whereIn('status', ContactDuplicateReview::terminalStatuses())
+                    ->whereIn('contact_id', $resolvedAggregate->aggregateContactIds)
+                    ->orderByDesc('resolved_at')
+                    ->orderByDesc('id')
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($terminalBlockingReview !== null) {
+                    throw ContactPinnedByTerminalCrossChannelIdentityReviewException::forDelete($terminalBlockingReview);
                 }
 
                 ContactMergeLog::query()

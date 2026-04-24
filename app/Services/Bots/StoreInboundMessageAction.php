@@ -20,6 +20,7 @@ use App\Services\Contacts\BrokenContactMergeChainException;
 use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use App\Services\Contacts\FindDuplicateContactRootsByPhoneAction;
+use App\Services\Contacts\FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction;
 use App\Services\Contacts\MergeContactsAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
@@ -28,6 +29,7 @@ use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class StoreInboundMessageAction
@@ -37,6 +39,7 @@ class StoreInboundMessageAction
         protected AssignContactStartTagAction $assignContactStartTagAction,
         protected FindDuplicateContactRootsByPhoneAction $findDuplicateContactRootsByPhoneAction,
         protected CreateContactDuplicateReviewAction $createContactDuplicateReviewAction,
+        protected FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction $findOpenCrossChannelIdentityAmbiguityReviewForContactsAction,
         protected MergeContactsAction $mergeContactsAction,
         protected ApplyContactFirstNameAction $applyContactFirstNameAction,
         protected ResolveRootContactAction $resolveRootContactAction,
@@ -58,8 +61,10 @@ class StoreInboundMessageAction
                 return $this->storeInboundSystemEvent($channel, $message, $receivedAt);
             }
 
-            $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId)
+            $existingIdentity = $this->findContactIdentityForChannel($channel, $message->externalUserId);
+            $identity = $existingIdentity
                 ?? $this->resolveOrCreateContactIdentity($channel, $message);
+            $shouldRefreshOpenCrossChannelIdentityReviewTrigger = $existingIdentity === null;
 
             $contact = $identity->contact;
 
@@ -75,6 +80,13 @@ class StoreInboundMessageAction
                     }
 
                     $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
+                    $this->syncOpenCrossChannelIdentityReviewContextIfNeeded(
+                        channel: $channel,
+                        contact: $contact,
+                        storedMessage: $existingMessage,
+                        message: $message,
+                        shouldRefreshTriggerMessage: $shouldRefreshOpenCrossChannelIdentityReviewTrigger,
+                    );
                     $this->clearMaxDialogSuspensionIfNeeded($channel, $existingMessage);
                     $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
                     $this->assignStartTagIfNeeded($channel, $contact, $existingMessage);
@@ -130,6 +142,13 @@ class StoreInboundMessageAction
                 }
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $storedMessage, $message);
+                $this->syncOpenCrossChannelIdentityReviewContextIfNeeded(
+                    channel: $channel,
+                    contact: $contact,
+                    storedMessage: $storedMessage,
+                    message: $message,
+                    shouldRefreshTriggerMessage: $shouldRefreshOpenCrossChannelIdentityReviewTrigger,
+                );
                 $this->clearMaxDialogSuspensionIfNeeded($channel, $storedMessage);
                 $this->syncDialogConfirmedPhoneIfNeeded($storedMessage, $message, $phoneCaptureStatus);
                 $this->assignStartTagIfNeeded($channel, $contact, $storedMessage);
@@ -154,6 +173,13 @@ class StoreInboundMessageAction
                 }
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
+                $this->syncOpenCrossChannelIdentityReviewContextIfNeeded(
+                    channel: $channel,
+                    contact: $contact,
+                    storedMessage: $existingMessage,
+                    message: $message,
+                    shouldRefreshTriggerMessage: $shouldRefreshOpenCrossChannelIdentityReviewTrigger,
+                );
                 $this->clearMaxDialogSuspensionIfNeeded($channel, $existingMessage);
                 $this->syncDialogConfirmedPhoneIfNeeded($existingMessage, $message, $phoneCaptureStatus);
                 $this->assignStartTagIfNeeded($channel, $contact, $existingMessage);
@@ -280,6 +306,17 @@ class StoreInboundMessageAction
 
     protected function resolveCrossChannelContactIdentity(Channel $channel, IncomingBotMessage $message): ?ContactIdentity
     {
+        $identityKey = $this->buildCrossChannelIdentityKey($channel, $message);
+        $reviewRoutedIdentity = $this->routeCrossChannelIdentityByReviewDecision(
+            channel: $channel,
+            message: $message,
+            identityKey: $identityKey,
+        );
+
+        if ($reviewRoutedIdentity instanceof ContactIdentity) {
+            return $reviewRoutedIdentity;
+        }
+
         $matchedIdentities = ContactIdentity::query()
             ->with('contact')
             ->where('platform', $channel->platform)
@@ -292,51 +329,22 @@ class StoreInboundMessageAction
         }
 
         $matchedIdentityIds = $matchedIdentities->pluck('id')->all();
-        $rootContactsById = [];
+        $rootContactsById = $this->resolveStableMatchedRootContactsById($channel, $message, $matchedIdentities);
 
-        foreach ($matchedIdentities as $matchedIdentity) {
-            try {
-                $rootContact = $this->resolveRootContactAction->handle($matchedIdentity->contact_id);
-            } catch (BrokenContactMergeChainException $exception) {
-                $this->channelActivityLogger->warning(
-                    $channel,
-                    'contact.cross_channel_identity_broken_merge_chain',
-                    'Cross-channel identity не удалось безопасно привязать из-за сломанной merge chain.',
-                    [
-                        'channel_id' => $channel->id,
-                        'platform' => $channel->platform,
-                        'external_user_id' => $message->externalUserId,
-                        'matched_identity_id' => $matchedIdentity->id,
-                        'matched_channel_id' => $matchedIdentity->channel_id,
-                        'error' => $exception->getMessage(),
-                    ],
-                );
-
-                return null;
-            }
-
-            $rootContactsById[$rootContact->id] = $rootContact;
+        if ($rootContactsById === null) {
+            return null;
         }
 
         $matchedRootContactIds = array_keys($rootContactsById);
         sort($matchedRootContactIds);
 
         if (count($matchedRootContactIds) !== 1) {
-            $this->channelActivityLogger->warning(
-                $channel,
-                'contact.cross_channel_identity_ambiguous',
-                'Cross-channel identity не привязана автоматически: найдено несколько root-контактов.',
-                [
-                    'channel_id' => $channel->id,
-                    'platform' => $channel->platform,
-                    'external_user_id' => $message->externalUserId,
-                    'matched_identity_ids' => $matchedIdentityIds,
-                    'matched_root_contact_ids' => $matchedRootContactIds,
-                    'matched_root_count' => count($matchedRootContactIds),
-                ],
+            return $this->resolveAmbiguousCrossChannelContactIdentity(
+                channel: $channel,
+                message: $message,
+                matchedIdentityIds: $matchedIdentityIds,
+                matchedRootContactIds: $matchedRootContactIds,
             );
-
-            return null;
         }
 
         /** @var Contact $rootContact */
@@ -369,6 +377,291 @@ class StoreInboundMessageAction
         );
 
         return $identity;
+    }
+
+    protected function routeCrossChannelIdentityByReviewDecision(
+        Channel $channel,
+        IncomingBotMessage $message,
+        string $identityKey,
+    ): ?ContactIdentity {
+        $openReview = $this->findOpenCrossChannelIdentityReviewByIdentityKey($identityKey);
+
+        if ($openReview instanceof ContactDuplicateReview) {
+            return $this->routeCrossChannelIdentityToOpenReviewAnchor($channel, $message, $openReview);
+        }
+
+        $terminalReview = $this->findLatestTerminalCrossChannelIdentityReviewByIdentityKey($identityKey);
+
+        if ($terminalReview instanceof ContactDuplicateReview) {
+            return $this->routeCrossChannelIdentityByTerminalReview($channel, $message, $terminalReview);
+        }
+
+        return null;
+    }
+
+    protected function routeCrossChannelIdentityToOpenReviewAnchor(
+        Channel $channel,
+        IncomingBotMessage $message,
+        ContactDuplicateReview $review,
+    ): ?ContactIdentity {
+        $anchorContact = Contact::query()
+            ->whereKey($review->contact_id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $anchorContact instanceof Contact) {
+            $this->channelActivityLogger->warning(
+                $channel,
+                'contact.cross_channel_identity_open_review_anchor_missing',
+                'Не удалось привязать identity по открытому review: anchor contact не найден.',
+                [
+                    'channel_id' => $channel->id,
+                    'external_user_id' => $message->externalUserId,
+                    'identity_key' => $review->identity_key,
+                    'duplicate_review_id' => $review->id,
+                    'anchor_contact_id' => $review->contact_id,
+                ],
+            );
+
+            return null;
+        }
+
+        $identity = $this->ensureContactIdentityForChannel($anchorContact, $channel, $message);
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'contact.cross_channel_identity_routed_to_open_review_anchor',
+            'Cross-channel identity привязана к anchor contact по открытому identity review.',
+            [
+                'channel_id' => $channel->id,
+                'contact_id' => $anchorContact->id,
+                'duplicate_review_id' => $review->id,
+                'identity_key' => $review->identity_key,
+                'external_user_id' => $message->externalUserId,
+            ],
+        );
+
+        return $identity;
+    }
+
+    protected function routeCrossChannelIdentityByTerminalReview(
+        Channel $channel,
+        IncomingBotMessage $message,
+        ContactDuplicateReview $review,
+    ): ?ContactIdentity {
+        $routeResolution = $this->resolveTerminalRouteTargetContact($channel, $message, $review);
+
+        if ($routeResolution === null) {
+            return null;
+        }
+
+        ['contact' => $routedRootContact, 'source' => $routeSource] = $routeResolution;
+
+        $lockedRoutedRootContact = Contact::query()
+            ->whereKey($routedRootContact->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $lockedRoutedRootContact instanceof Contact) {
+            $this->channelActivityLogger->warning(
+                $channel,
+                'contact.cross_channel_identity_terminal_route_missing',
+                'Не удалось применить terminal routing decision: routed root contact не найден.',
+                [
+                    'channel_id' => $channel->id,
+                    'external_user_id' => $message->externalUserId,
+                    'identity_key' => $review->identity_key,
+                    'duplicate_review_id' => $review->id,
+                    'routed_contact_id' => $review->routed_contact_id,
+                    'route_source' => $routeSource,
+                ],
+            );
+
+            return null;
+        }
+
+        $identity = $this->ensureContactIdentityForChannel($lockedRoutedRootContact, $channel, $message);
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'contact.cross_channel_identity_routed_by_terminal_review',
+            'Cross-channel identity привязана по terminal routing decision из review.',
+            [
+                'channel_id' => $channel->id,
+                'contact_id' => $lockedRoutedRootContact->id,
+                'duplicate_review_id' => $review->id,
+                'duplicate_review_status' => $review->status,
+                'identity_key' => $review->identity_key,
+                'external_user_id' => $message->externalUserId,
+                'route_source' => $routeSource,
+            ],
+        );
+
+        return $identity;
+    }
+
+    /**
+     * @return array{contact: Contact, source: string}|null
+     */
+    protected function resolveTerminalRouteTargetContact(
+        Channel $channel,
+        IncomingBotMessage $message,
+        ContactDuplicateReview $review,
+    ): ?array {
+        $candidateRouteTargets = collect([
+            is_int($review->routed_contact_id) && $review->routed_contact_id > 0
+                ? ['contact_id' => $review->routed_contact_id, 'source' => 'routed_contact_id']
+                : null,
+            ['contact_id' => $review->contact_id, 'source' => 'review_contact_id'],
+        ])
+            ->filter()
+            ->unique('contact_id')
+            ->values();
+
+        foreach ($candidateRouteTargets as $routeTarget) {
+            try {
+                $rootContact = $this->resolveRootContactAction->handle($routeTarget['contact_id']);
+
+                return [
+                    'contact' => $rootContact,
+                    'source' => $routeTarget['source'],
+                ];
+            } catch (BrokenContactMergeChainException $exception) {
+                $this->channelActivityLogger->warning(
+                    $channel,
+                    'contact.cross_channel_identity_terminal_route_broken',
+                    'Не удалось применить один из terminal routing targets из-за сломанной merge chain.',
+                    [
+                        'channel_id' => $channel->id,
+                        'external_user_id' => $message->externalUserId,
+                        'identity_key' => $review->identity_key,
+                        'duplicate_review_id' => $review->id,
+                        'route_contact_id' => $routeTarget['contact_id'],
+                        'route_source' => $routeTarget['source'],
+                        'error' => $exception->getMessage(),
+                    ],
+                );
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  list<int>  $matchedIdentityIds
+     * @param  list<int>  $matchedRootContactIds
+     */
+    protected function resolveAmbiguousCrossChannelContactIdentity(
+        Channel $channel,
+        IncomingBotMessage $message,
+        array $matchedIdentityIds,
+        array $matchedRootContactIds,
+    ): ContactIdentity {
+        $identityKey = $this->buildCrossChannelIdentityKey($channel, $message);
+        $existingReview = $this->findOpenCrossChannelIdentityReviewByIdentityKey($identityKey);
+
+        if ($existingReview instanceof ContactDuplicateReview) {
+            $anchorContact = Contact::query()
+                ->whereKey($existingReview->contact_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId);
+
+            if (! $identity instanceof ContactIdentity) {
+                try {
+                    $identity = $this->createContactIdentityForChannel($anchorContact, $channel, $message);
+                } catch (QueryException $exception) {
+                    if (! $this->wasUniqueConstraintViolation($exception)) {
+                        throw $exception;
+                    }
+
+                    $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId) ?? throw $exception;
+                }
+            }
+
+            $review = $this->createContactDuplicateReviewAction->handle(
+                contact: $anchorContact,
+                phoneNormalized: null,
+                reviewType: ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+                candidateRootContactIds: $matchedRootContactIds,
+                reason: 'Cross-channel identity matched multiple root contacts.',
+                identityKey: $identityKey,
+                contextPayload: $this->buildCrossChannelIdentityReviewContextPayload($channel, $message),
+            );
+
+            $this->channelActivityLogger->warning(
+                $channel,
+                'contact.cross_channel_identity_ambiguous',
+                'Cross-channel identity не привязана автоматически: найдено несколько root-контактов. Использован существующий anchor contact.',
+                [
+                    'channel_id' => $channel->id,
+                    'platform' => $channel->platform,
+                    'external_user_id' => $message->externalUserId,
+                    'matched_identity_ids' => $matchedIdentityIds,
+                    'matched_root_contact_ids' => $matchedRootContactIds,
+                    'matched_root_count' => count($matchedRootContactIds),
+                    'anchor_contact_id' => $anchorContact->id,
+                    'duplicate_review_id' => $review->id,
+                    'duplicate_review_reused' => true,
+                ],
+            );
+
+            return $identity;
+        }
+
+        $anchorIdentity = $this->createNewContactWithIdentity($channel, $message);
+        $anchorContact = $anchorIdentity->contact;
+        $review = $this->createContactDuplicateReviewAction->handle(
+            contact: $anchorContact,
+            phoneNormalized: null,
+            reviewType: ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            candidateRootContactIds: $matchedRootContactIds,
+            reason: 'Cross-channel identity matched multiple root contacts.',
+            identityKey: $identityKey,
+            contextPayload: $this->buildCrossChannelIdentityReviewContextPayload($channel, $message),
+        );
+
+        $this->channelActivityLogger->warning(
+            $channel,
+            'contact.cross_channel_identity_ambiguous',
+            'Cross-channel identity не привязана автоматически: найдено несколько root-контактов. Создан anchor contact для ручной проверки.',
+            [
+                'channel_id' => $channel->id,
+                'platform' => $channel->platform,
+                'external_user_id' => $message->externalUserId,
+                'matched_identity_ids' => $matchedIdentityIds,
+                'matched_root_contact_ids' => $matchedRootContactIds,
+                'matched_root_count' => count($matchedRootContactIds),
+                'anchor_contact_id' => $anchorContact->id,
+                'duplicate_review_id' => $review->id,
+                'duplicate_review_reused' => false,
+            ],
+        );
+
+        return $anchorIdentity;
+    }
+
+    protected function ensureContactIdentityForChannel(
+        Contact $contact,
+        Channel $channel,
+        IncomingBotMessage $message,
+    ): ContactIdentity {
+        $identity = $this->findContactIdentityForChannel($channel, $message->externalUserId);
+
+        if ($identity instanceof ContactIdentity) {
+            return $identity;
+        }
+
+        try {
+            return $this->createContactIdentityForChannel($contact, $channel, $message);
+        } catch (QueryException $exception) {
+            if (! $this->wasUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+
+            return $this->findContactIdentityForChannel($channel, $message->externalUserId) ?? throw $exception;
+        }
     }
 
     protected function createContactIdentityForChannel(Contact $contact, Channel $channel, IncomingBotMessage $message): ContactIdentity
@@ -593,6 +886,126 @@ class StoreInboundMessageAction
             $this->resolveInboundSentByType($message),
             sentBySystemCode: $this->resolveInboundSentBySystemCode($message),
         );
+    }
+
+    protected function syncOpenCrossChannelIdentityReviewContextIfNeeded(
+        Channel $channel,
+        ?Contact $contact,
+        Message $storedMessage,
+        IncomingBotMessage $message,
+        bool $shouldRefreshTriggerMessage,
+    ): void {
+        if (
+            ! $contact instanceof Contact
+            || ! filled($message->externalUserId)
+        ) {
+            return;
+        }
+
+        $review = $this->findOpenCrossChannelIdentityReviewByIdentityKey(
+            $this->buildCrossChannelIdentityKey($channel, $message),
+        );
+
+        if (
+            ! $review instanceof ContactDuplicateReview
+            || $review->contact_id !== $contact->id
+        ) {
+            return;
+        }
+
+        $payload = [
+            'context_payload' => array_replace(
+                $review->context_payload ?? [],
+                $this->buildCrossChannelIdentityReviewContextPayload($channel, $message),
+            ),
+        ];
+
+        if ($shouldRefreshTriggerMessage) {
+            $payload['trigger_message_id'] = $storedMessage->id;
+        }
+
+        $review->forceFill($payload)->save();
+    }
+
+    /**
+     * @param  Collection<int, ContactIdentity>  $matchedIdentities
+     * @return array<int, Contact>|null
+     */
+    protected function resolveStableMatchedRootContactsById(
+        Channel $channel,
+        IncomingBotMessage $message,
+        Collection $matchedIdentities,
+    ): ?array {
+        $lockedRootContactIds = [];
+
+        while (true) {
+            $rootContactsById = $this->resolveMatchedRootContactsById($channel, $message, $matchedIdentities);
+
+            if ($rootContactsById === null) {
+                return null;
+            }
+
+            $rootContactIds = array_keys($rootContactsById);
+            sort($rootContactIds);
+
+            $rootContactIdsToLock = array_values(array_diff($rootContactIds, $lockedRootContactIds));
+
+            if ($rootContactIdsToLock === []) {
+                return $rootContactsById;
+            }
+
+            Contact::query()
+                ->whereKey($rootContactIdsToLock)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+
+            $lockedRootContactIds = array_values(array_unique([
+                ...$lockedRootContactIds,
+                ...$rootContactIdsToLock,
+            ]));
+            sort($lockedRootContactIds);
+        }
+    }
+
+    /**
+     * @param  Collection<int, ContactIdentity>  $matchedIdentities
+     * @return array<int, Contact>|null
+     */
+    protected function resolveMatchedRootContactsById(
+        Channel $channel,
+        IncomingBotMessage $message,
+        Collection $matchedIdentities,
+    ): ?array {
+        $rootContactsById = [];
+
+        foreach ($matchedIdentities as $matchedIdentity) {
+            try {
+                $rootContact = $this->resolveRootContactAction->handle($matchedIdentity->contact_id);
+            } catch (BrokenContactMergeChainException $exception) {
+                $this->channelActivityLogger->warning(
+                    $channel,
+                    'contact.cross_channel_identity_broken_merge_chain',
+                    'Cross-channel identity не удалось безопасно привязать из-за сломанной merge chain.',
+                    [
+                        'channel_id' => $channel->id,
+                        'platform' => $channel->platform,
+                        'external_user_id' => $message->externalUserId,
+                        'matched_identity_id' => $matchedIdentity->id,
+                        'matched_channel_id' => $matchedIdentity->channel_id,
+                        'error' => $exception->getMessage(),
+                    ],
+                );
+
+                return null;
+            }
+
+            $rootContactsById[$rootContact->id] = $rootContact;
+        }
+
+        ksort($rootContactsById);
+
+        return $rootContactsById;
     }
 
     protected function resolveInboundSentByType(IncomingBotMessage $message): string
@@ -970,6 +1383,33 @@ class StoreInboundMessageAction
             $contact,
         );
 
+        $frozenReview = $duplicateRoots->matchedRootCount > 0
+            ? $this->findOpenCrossChannelIdentityAmbiguityReviewForContactsAction->handle([
+                $contact,
+                ...$duplicateRoots->matchedRootContactIds,
+            ])
+            : null;
+
+        if ($frozenReview instanceof ContactDuplicateReview) {
+            $this->channelActivityLogger->warning(
+                $channel,
+                'contact.phone_merge_blocked_by_cross_channel_identity_review',
+                'Автосклейка по номеру не выполнена: один из контактов заморожен открытой cross-channel identity проверкой.',
+                [
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                    'message_id' => $storedMessage->id,
+                    'phone_normalized' => $phoneNumber->phone_normalized,
+                    'matched_root_contact_ids' => $duplicateRoots->matchedRootContactIds,
+                    'matched_root_count' => $duplicateRoots->matchedRootCount,
+                    'blocking_review_id' => $frozenReview->id,
+                    'blocking_identity_key' => $frozenReview->identity_key,
+                ],
+            );
+
+            return StoredInboundMessageResult::PHONE_CAPTURE_STATUS_REVIEW_PENDING;
+        }
+
         if ($duplicateRoots->hasMultipleOtherRoots) {
             $this->createPhoneDuplicateReview(
                 contact: $contact,
@@ -1086,6 +1526,52 @@ class StoreInboundMessageAction
             'SELECT pg_advisory_xact_lock(hashtext(?))',
             ['cross_channel_identity:'.$platform.':'.$externalUserId],
         );
+    }
+
+    private function buildCrossChannelIdentityKey(Channel $channel, IncomingBotMessage $message): string
+    {
+        return $channel->platform.':'.$message->externalUserId;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildCrossChannelIdentityReviewContextPayload(Channel $channel, IncomingBotMessage $message): array
+    {
+        return array_filter([
+            'last_seen_channel_id' => $channel->id,
+            'last_seen_external_chat_id' => $message->externalChatId,
+            'gateway_event_refs' => array_filter([
+                'provider_event_key' => $message->providerEventKey,
+                'external_message_id' => $message->externalMessageId,
+            ], fn (mixed $value): bool => filled($value)),
+        ], function (mixed $value): bool {
+            if (is_array($value)) {
+                return $value !== [];
+            }
+
+            return filled($value);
+        });
+    }
+
+    private function findOpenCrossChannelIdentityReviewByIdentityKey(string $identityKey): ?ContactDuplicateReview
+    {
+        return ContactDuplicateReview::query()
+            ->where('review_type', ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY)
+            ->where('identity_key', $identityKey)
+            ->where('status', ContactDuplicateReview::STATUS_OPEN)
+            ->first();
+    }
+
+    private function findLatestTerminalCrossChannelIdentityReviewByIdentityKey(string $identityKey): ?ContactDuplicateReview
+    {
+        return ContactDuplicateReview::query()
+            ->where('review_type', ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY)
+            ->where('identity_key', $identityKey)
+            ->whereIn('status', ContactDuplicateReview::terminalStatuses())
+            ->orderByDesc('resolved_at')
+            ->orderByDesc('id')
+            ->first();
     }
 
     /**

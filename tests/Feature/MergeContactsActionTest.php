@@ -16,6 +16,7 @@ use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\Contacts\ContactFrozenByOpenCrossChannelIdentityReviewException;
 use App\Services\Contacts\MergeContactsAction;
 use App\Services\Dialogs\DialogConsolidationException;
 use Illuminate\Database\QueryException;
@@ -25,6 +26,32 @@ use Tests\TestCase;
 class MergeContactsActionTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_it_blocks_manual_merge_while_contact_belongs_to_open_cross_channel_identity_review_set(): void
+    {
+        $primary = Contact::factory()->create();
+        $secondary = Contact::factory()->create();
+
+        ContactDuplicateReview::factory()->create([
+            'contact_id' => $primary->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-merge-freeze',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [$secondary->id],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        $this->expectException(ContactFrozenByOpenCrossChannelIdentityReviewException::class);
+        $this->expectExceptionMessage('Склейка контактов заблокировано');
+
+        try {
+            app(MergeContactsAction::class)->handle($primary, $secondary);
+        } finally {
+            $this->assertDatabaseCount('contact_merge_logs', 0);
+            $this->assertNull($primary->fresh()->merged_into_contact_id);
+            $this->assertNull($secondary->fresh()->merged_into_contact_id);
+        }
+    }
 
     public function test_it_merges_two_root_contacts_and_moves_related_records(): void
     {

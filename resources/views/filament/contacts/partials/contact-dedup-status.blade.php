@@ -62,15 +62,52 @@
                         <p class="ac-list-card__title">
                             {{ $review['typeLabel'] }}
                         </p>
-                        <p class="ac-list-card__body">
-                            Телефон: <strong>{{ $review['phoneLabel'] }}</strong>
-                        </p>
+                        @if (filled($review['phoneLabel']))
+                            <p class="ac-list-card__body">
+                                Телефон: <strong>{{ $review['phoneLabel'] }}</strong>
+                            </p>
+                        @endif
+                        @if (filled($review['identityLabel']))
+                            <p class="ac-list-card__body">
+                                Identity: <strong>{{ $review['identityLabel'] }}</strong>
+                            </p>
+                        @endif
                         <p class="ac-list-card__body">
                             Кандидаты: {{ $review['candidateRootsLabel'] }}
                         </p>
+                        @if (filled($review['channelContextLabel']))
+                            <p class="ac-list-card__body">
+                                Канал: {{ $review['channelContextLabel'] }}
+                            </p>
+                        @endif
                         <p class="ac-note">
                             Создано: {{ $review['createdAtLabel'] }}
                         </p>
+
+                        @if (($review['isCrossChannelIdentityReview'] ?? false) && ($review['canManageLifecycle'] ?? false))
+                            <div class="ac-actions ac-surface__divider">
+                                <button
+                                    data-role="contact-open-cross-channel-review-resolve-dialog"
+                                    type="button"
+                                    wire:click="openResolveCrossChannelIdentityReviewDialog({{ $review['id'] }})"
+                                    wire:loading.attr="disabled"
+                                    wire:target="openResolveCrossChannelIdentityReviewDialog,saveResolvedCrossChannelIdentityReview"
+                                    class="ac-button ac-button--primary"
+                                >
+                                    Разобрать
+                                </button>
+                                <button
+                                    data-role="contact-dismiss-cross-channel-review"
+                                    type="button"
+                                    wire:click="dismissMountedCrossChannelIdentityReview({{ $review['id'] }})"
+                                    wire:loading.attr="disabled"
+                                    wire:target="dismissMountedCrossChannelIdentityReview"
+                                    class="ac-button ac-button--danger-soft"
+                                >
+                                    Оставить отдельным root
+                                </button>
+                            </div>
+                        @endif
                     </article>
                 @endforeach
             </div>
@@ -104,3 +141,72 @@
         </div>
     @endif
 </section>
+
+@if ($this->showResolveCrossChannelIdentityReviewDialog)
+    <div data-role="cross-channel-review-resolve-dialog-backdrop" class="ac-modal-backdrop">
+        <div data-role="cross-channel-review-resolve-dialog" class="ac-modal ac-modal--md">
+            <div class="ac-modal__body">
+                <div class="ac-modal__header">
+                    <div>
+                        <h3 class="ac-modal__title">Разобрать identity ambiguity</h3>
+                        <p class="ac-modal__description">
+                            Выберите root-контакт, в который должен маршрутизироваться этот platform user ID.
+                        </p>
+                    </div>
+
+                    <button
+                        type="button"
+                        wire:click="closeResolveCrossChannelIdentityReviewDialog"
+                        class="ac-modal__close"
+                    >
+                        Закрыть
+                    </button>
+                </div>
+
+                <div class="ac-note-box ac-note-box--info ac-copy--spaced">
+                    <p class="ac-copy"><strong>Identity:</strong> {{ $this->resolvingCrossChannelIdentityIdentityKey }}</p>
+                    <p class="ac-copy"><strong>Anchor:</strong> {{ $this->resolvingCrossChannelIdentityAnchorLabel }}</p>
+                </div>
+
+                <label for="cross-channel-review-routed-contact-select" class="ac-field-label">
+                    Канонический root-контакт
+                </label>
+                <select
+                    id="cross-channel-review-routed-contact-select"
+                    wire:model="selectedResolvedRoutedContactId"
+                    class="ac-select"
+                >
+                    <option value="">Выберите контакт</option>
+                    @foreach ($this->resolvingCrossChannelIdentityContactOptions as $contactId => $contactLabel)
+                        <option value="{{ $contactId }}">{{ $contactLabel }}</option>
+                    @endforeach
+                </select>
+
+                @error('selectedResolvedRoutedContactId')
+                    <p class="ac-field-error">{{ $message }}</p>
+                @enderror
+
+                <div class="ac-actions">
+                    <button
+                        type="button"
+                        wire:click="closeResolveCrossChannelIdentityReviewDialog"
+                        class="ac-button ac-button--secondary"
+                    >
+                        Отмена
+                    </button>
+                    <button
+                        data-role="contact-save-cross-channel-review-resolution"
+                        type="button"
+                        wire:click="saveResolvedCrossChannelIdentityReview"
+                        wire:loading.attr="disabled"
+                        wire:target="saveResolvedCrossChannelIdentityReview"
+                        class="ac-button ac-button--success"
+                    >
+                        <span wire:loading.remove wire:target="saveResolvedCrossChannelIdentityReview">Сохранить решение</span>
+                        <span wire:loading wire:target="saveResolvedCrossChannelIdentityReview">Сохраняем...</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+@endif

@@ -8,6 +8,7 @@ use App\Models\ChannelActivityLog;
 use App\Models\Message;
 use App\Services\Bots\RegisterChannelWebhookAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
+use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\SyncChannelScenarioBindingsAction;
@@ -34,7 +35,9 @@ use Filament\Tables\Enums\RecordActionsPosition;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
 use Throwable;
 use UnitEnum;
@@ -56,6 +59,12 @@ class ChannelResource extends Resource
     protected static ?int $navigationSort = 10;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedChatBubbleLeftRight;
+
+    public static function getEloquentQuery(): Builder
+    {
+        return parent::getEloquentQuery()
+            ->with('runtimeState');
+    }
 
     public static function form(Schema $schema): Schema
     {
@@ -149,7 +158,7 @@ class ChannelResource extends Resource
                         TextEntry::make('connection_type')
                             ->label('Тип')
                             ->badge()
-                            ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state),
+                            ->state(fn (Channel $record): string => $record->getConnectionTypeLabel()),
                         TextEntry::make('auto_reply_mode')
                             ->label('Автоответ')
                             ->state(fn (Channel $record): string => $record->getAutoReplyModeLabel())
@@ -160,16 +169,37 @@ class ChannelResource extends Resource
                             ->state(fn (Channel $record): string => $record->getHealthStatusLabel())
                             ->badge()
                             ->color(fn (Channel $record): string => $record->getHealthStatusColor()),
+                        TextEntry::make('runtime_auth_status')
+                            ->label('Авторизация')
+                            ->visible(fn (Channel $record): bool => $record->isAccountConnection())
+                            ->state(fn (Channel $record): string => $record->runtimeState?->getAuthStatusLabel() ?? 'Не авторизован')
+                            ->badge()
+                            ->color(fn (Channel $record): string => $record->runtimeState?->getAuthStatusColor() ?? 'gray'),
+                        TextEntry::make('runtime_authorization_state')
+                            ->label('Шаг авторизации')
+                            ->visible(fn (Channel $record): bool => $record->isAccountConnection())
+                            ->state(fn (Channel $record): string => $record->runtimeState?->getAuthorizationStateLabel() ?? 'Не начато')
+                            ->badge()
+                            ->color(fn (Channel $record): string => $record->runtimeState?->getAuthorizationStateColor() ?? 'gray'),
+                        TextEntry::make('runtime_sync_status')
+                            ->label('Синхронизация')
+                            ->visible(fn (Channel $record): bool => $record->isAccountConnection())
+                            ->state(fn (Channel $record): string => $record->runtimeState?->getSyncStatusLabel() ?? 'Ожидает')
+                            ->badge()
+                            ->color(fn (Channel $record): string => $record->runtimeState?->getSyncStatusColor() ?? 'gray'),
                         TextEntry::make('bot_name')
                             ->label('Имя бота')
+                            ->visible(fn (Channel $record): bool => $record->isBotConnection())
                             ->state(fn (Channel $record): string => filled($record->bot_name) ? (string) $record->bot_name : 'Не загружено'),
                         TextEntry::make('bot_username')
                             ->label('Username')
+                            ->visible(fn (Channel $record): bool => $record->isBotConnection())
                             ->state(fn (Channel $record): string => $record->getBotUsernameLabel() ?? 'Не загружен')
                             ->url(fn (Channel $record): ?string => $record->getBotProfileUrl())
                             ->openUrlInNewTab(),
                         TextEntry::make('bot_external_id')
                             ->label('Внешний ID')
+                            ->visible(fn (Channel $record): bool => $record->isBotConnection())
                             ->state(fn (Channel $record): string => filled($record->bot_external_id) ? (string) $record->bot_external_id : 'Не загружен')
                             ->copyable(),
                         IconEntry::make('is_active')
@@ -177,24 +207,54 @@ class ChannelResource extends Resource
                             ->boolean(),
                         TextEntry::make('webhook_secret_status')
                             ->label('Webhook')
+                            ->visible(fn (Channel $record): bool => $record->isBotConnection())
                             ->state(fn (Channel $record): string => $record->getWebhookStatusLabel())
                             ->badge()
                             ->color(fn (Channel $record): string => $record->getWebhookStatusColor()),
                         TextEntry::make('last_webhook_received_at')
                             ->label('Последний webhook')
+                            ->visible(fn (Channel $record): bool => $record->isBotConnection())
                             ->placeholder('Ещё не было')
                             ->dateTime('d.m.Y H:i'),
                         TextEntry::make('last_reply_sent_at')
                             ->label('Последний ответ')
+                            ->visible(fn (Channel $record): bool => $record->isBotConnection())
                             ->placeholder('Ещё не было')
+                            ->dateTime('d.m.Y H:i'),
+                        TextEntry::make('runtime_last_gateway_heartbeat_at')
+                            ->label('Последний heartbeat gateway')
+                            ->visible(fn (Channel $record): bool => $record->isAccountConnection())
+                            ->placeholder('Ещё не было')
+                            ->state(fn (Channel $record) => $record->runtimeState?->last_gateway_heartbeat_at)
+                            ->dateTime('d.m.Y H:i'),
+                        TextEntry::make('runtime_last_sync_started_at')
+                            ->label('Старт синхронизации')
+                            ->visible(fn (Channel $record): bool => $record->isAccountConnection())
+                            ->placeholder('Ещё не было')
+                            ->state(fn (Channel $record) => $record->runtimeState?->last_sync_started_at)
+                            ->dateTime('d.m.Y H:i'),
+                        TextEntry::make('runtime_last_sync_completed_at')
+                            ->label('Завершение синхронизации')
+                            ->visible(fn (Channel $record): bool => $record->isAccountConnection())
+                            ->placeholder('Ещё не было')
+                            ->state(fn (Channel $record) => $record->runtimeState?->last_sync_completed_at)
                             ->dateTime('d.m.Y H:i'),
                         TextEntry::make('last_error_at')
                             ->label('Последняя ошибка')
                             ->placeholder('Ошибок не было')
+                            ->state(fn (Channel $record) => $record->isAccountConnection()
+                                ? $record->runtimeState?->last_error_at
+                                : $record->last_error_at)
                             ->dateTime('d.m.Y H:i'),
                         TextEntry::make('last_error_message')
                             ->label('Текст ошибки')
-                            ->state(fn (Channel $record): string => filled($record->last_error_message) ? (string) $record->last_error_message : 'Ошибок не было')
+                            ->state(fn (Channel $record): string => filled($record->isAccountConnection()
+                                ? $record->runtimeState?->last_error_message
+                                : $record->last_error_message)
+                                ? (string) ($record->isAccountConnection()
+                                    ? $record->runtimeState?->last_error_message
+                                    : $record->last_error_message)
+                                : 'Ошибок не было')
                             ->columnSpanFull(),
                         TextEntry::make('created_at')
                             ->label('Создан')
@@ -205,7 +265,7 @@ class ChannelResource extends Resource
                     ])
                     ->columns(4)
                     ->columnSpanFull(),
-                Section::make('Последний webhook')
+                Section::make('Последнее входящее событие')
                     ->schema([
                         TextEntry::make('latest_message_saved_at')
                             ->label('Сохранено в системе')
@@ -256,7 +316,7 @@ class ChannelResource extends Resource
                         TextEntry::make('latest_message_text')
                             ->label('Текст')
                             ->placeholder('—')
-                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessage($record)?->text)
+                            ->state(fn (Channel $record): ?string => static::resolveLatestSavedMessageDisplayText($record))
                             ->wrap()
                             ->columnSpanFull(),
                     ])
@@ -333,9 +393,29 @@ class ChannelResource extends Resource
                     ->label('Тип')
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->formatStateUsing(fn (string $state): string => Channel::connectionTypeOptions()[$state] ?? $state)
+                    ->state(fn (Channel $record): string => $record->getConnectionTypeLabel())
                     ->color('gray')
                     ->sortable()
+                    ->toggleable(),
+                TextColumn::make('runtime_auth_status')
+                    ->label('Авторизация')
+                    ->state(fn (Channel $record): string => $record->isAccountConnection()
+                        ? ($record->runtimeState?->getAuthStatusLabel() ?? 'Не авторизован')
+                        : '—')
+                    ->badge()
+                    ->color(fn (Channel $record): string => $record->isAccountConnection()
+                        ? ($record->runtimeState?->getAuthStatusColor() ?? 'gray')
+                        : 'gray')
+                    ->toggleable(),
+                TextColumn::make('runtime_sync_status')
+                    ->label('Синхронизация')
+                    ->state(fn (Channel $record): string => $record->isAccountConnection()
+                        ? ($record->runtimeState?->getSyncStatusLabel() ?? 'Ожидает')
+                        : '—')
+                    ->badge()
+                    ->color(fn (Channel $record): string => $record->isAccountConnection()
+                        ? ($record->runtimeState?->getSyncStatusColor() ?? 'gray')
+                        : 'gray')
                     ->toggleable(),
                 TextColumn::make('auto_reply_mode')
                     ->label('Автоответ')
@@ -355,10 +435,10 @@ class ChannelResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('webhook_secret_status')
                     ->label('Webhook')
-                    ->state(fn (Channel $record): string => $record->getWebhookStatusLabel())
+                    ->state(fn (Channel $record): string => $record->isBotConnection() ? $record->getWebhookStatusLabel() : '—')
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->color(fn (Channel $record): string => $record->getWebhookStatusColor())
+                    ->color(fn (Channel $record): string => $record->isBotConnection() ? $record->getWebhookStatusColor() : 'gray')
                     ->toggleable(),
                 TextColumn::make('bot_external_id')
                     ->label('Внешний ID')
@@ -377,11 +457,17 @@ class ChannelResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('last_error_at')
                     ->label('Последняя ошибка')
+                    ->state(fn (Channel $record) => $record->isAccountConnection()
+                        ? $record->runtimeState?->last_error_at
+                        : $record->last_error_at)
                     ->dateTime('d.m.Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('last_error_message')
                     ->label('Текст ошибки')
+                    ->state(fn (Channel $record): ?string => $record->isAccountConnection()
+                        ? $record->runtimeState?->last_error_message
+                        : $record->last_error_message)
                     ->limit(60)
                     ->wrap()
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -485,6 +571,7 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Сценарии')
+                    ->visible(fn (Channel $record): bool => $record->isBotConnection())
                     ->modalWidth(Width::Large)
                     ->modalHeading('Сценарии канала')
                     ->modalSubmitAction(fn (Action $action): Action => $action
@@ -538,6 +625,7 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->color('gray')
                     ->extraAttributes(['class' => 'ac-channel-table-action'])
+                    ->visible(fn (Channel $record): bool => $record->isBotConnection())
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->extraModalWindowAttributes(['class' => 'ac-channel-form-modal'])
                     ->tooltip('Изменить')
@@ -628,6 +716,40 @@ class ChannelResource extends Resource
             ->first();
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected static function resolveMessageFeedSummary(Message $message): ?array
+    {
+        /** @var array<int, array<string, mixed>|null> $cache */
+        static $cache = [];
+
+        if (array_key_exists($message->id, $cache)) {
+            return $cache[$message->id];
+        }
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(new Collection([$message]));
+
+        return $cache[$message->id] = $feed[0] ?? null;
+    }
+
+    protected static function resolveLatestSavedMessageDisplayText(Channel $record): ?string
+    {
+        $message = static::resolveLatestSavedMessage($record);
+
+        if (! $message instanceof Message) {
+            return null;
+        }
+
+        $feed = static::resolveMessageFeedSummary($message);
+
+        if (is_array($feed) && filled($feed['display_text'] ?? null)) {
+            return (string) $feed['display_text'];
+        }
+
+        return $message->text;
+    }
+
     protected static function renderRecentSavedMessages(Channel $record): HtmlString
     {
         $messages = $record->messages()
@@ -672,12 +794,25 @@ class ChannelResource extends Resource
                 );
             }
 
+            $feed = static::resolveMessageFeedSummary($message);
+
+            foreach ($feed['media_state_badges'] ?? [] as $badge) {
+                if (! is_array($badge) || ! filled($badge['label'] ?? null)) {
+                    continue;
+                }
+
+                $badges[] = static::renderFeedBadge(
+                    (string) $badge['label'],
+                    static::getMediaStateBadgeClasses((string) ($badge['tone'] ?? 'gray')),
+                );
+            }
+
             $badgeMarkup = implode('', $badges);
 
             return sprintf(
                 '<div class="rounded-xl border border-gray-200/80 px-4 py-3 dark:border-white/10"><div class="mb-3 flex flex-wrap gap-2">%s</div><div class="whitespace-pre-wrap break-words text-sm text-gray-950 dark:text-white">%s</div></div>',
                 $badgeMarkup,
-                e(filled($message->text) ? (string) $message->text : '—'),
+                e(static::resolveLatestSavedMessageBodyText($message)),
             );
         })->implode('');
 
@@ -807,6 +942,28 @@ class ChannelResource extends Resource
 
     protected static function buildChannelTableSummary(Channel $record): string
     {
+        if ($record->isAccountConnection()) {
+            $runtimeState = $record->runtimeState;
+
+            if ($runtimeState === null) {
+                return 'Аккаунт ещё не авторизован';
+            }
+
+            if ($runtimeState->authorization_state === \App\Models\ChannelRuntimeState::AUTHORIZATION_STATE_READY) {
+                return sprintf(
+                    'Авторизация: %s · Синхронизация: %s',
+                    $runtimeState->getAuthStatusLabel(),
+                    $runtimeState->getSyncStatusLabel(),
+                );
+            }
+
+            return sprintf(
+                'Авторизация: %s · Шаг: %s',
+                $runtimeState->getAuthStatusLabel(),
+                $runtimeState->getAuthorizationStateLabel(),
+            );
+        }
+
         if (filled($record->bot_username)) {
             return $record->getBotUsernameLabel() ?? 'Данные бота синхронизированы';
         }
@@ -916,6 +1073,17 @@ class ChannelResource extends Resource
         );
     }
 
+    protected static function resolveLatestSavedMessageBodyText(Message $message): string
+    {
+        $feed = static::resolveMessageFeedSummary($message);
+
+        if (is_array($feed) && filled($feed['display_text'] ?? null)) {
+            return (string) $feed['display_text'];
+        }
+
+        return filled($message->text) ? (string) $message->text : '—';
+    }
+
     protected static function getMessageDirectionBadgeClasses(?string $direction): string
     {
         if ($direction === Message::DIRECTION_INBOUND) {
@@ -949,6 +1117,15 @@ class ChannelResource extends Resource
         }
 
         return 'inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:text-gray-200';
+    }
+
+    protected static function getMediaStateBadgeClasses(string $tone): string
+    {
+        return match ($tone) {
+            'danger' => 'inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200',
+            'warning' => 'inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200',
+            default => 'inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200',
+        };
     }
 
     protected static function appendRateLimitedActivityBadges(array &$badges, ChannelActivityLog $log): void

@@ -25,7 +25,8 @@ class QueueContactIdentityAvatarSyncAction
     protected function shouldQueue(Channel $channel, ContactIdentity $identity, IncomingBotMessage $message): bool
     {
         return match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => filled($identity->external_user_id),
+            Channel::PLATFORM_TELEGRAM => $channel->connection_type === Channel::CONNECTION_TYPE_BOT
+                && filled($identity->external_user_id),
             Channel::PLATFORM_MAX => filled($message->avatarUrl) || filled($message->externalChatId),
             default => false,
         };

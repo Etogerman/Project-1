@@ -13,7 +13,14 @@ class RefreshContactDuplicateReviewStatusAction
             ->where('status', ContactDuplicateReview::STATUS_OPEN)
             ->exists();
 
-        if ($hasOpenReviews) {
+        $hasOpenExternalCrossChannelCandidateReviews = ContactDuplicateReview::query()
+            ->where('review_type', ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY)
+            ->where('status', ContactDuplicateReview::STATUS_OPEN)
+            ->where('contact_id', '!=', $contact->id)
+            ->whereJsonContains('candidate_root_contact_ids', $contact->id)
+            ->exists();
+
+        if ($hasOpenReviews || $hasOpenExternalCrossChannelCandidateReviews) {
             $status = Contact::DUPLICATE_REVIEW_STATUS_PENDING;
         } elseif (
             $contact->duplicate_review_status === Contact::DUPLICATE_REVIEW_STATUS_PENDING

@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Throwable;
@@ -20,6 +21,8 @@ class Channel extends Model
     public const PLATFORM_MAX = 'max';
 
     public const CONNECTION_TYPE_BOT = 'bot';
+
+    public const CONNECTION_TYPE_ACCOUNT = 'account';
 
     public const CREDENTIAL_TOKEN = 'token';
 
@@ -91,6 +94,17 @@ class Channel extends Model
     }
 
     /**
+     * @return list<string>
+     */
+    public static function supportedConnectionTypes(): array
+    {
+        return [
+            self::CONNECTION_TYPE_BOT,
+            self::CONNECTION_TYPE_ACCOUNT,
+        ];
+    }
+
+    /**
      * @return array<string, string>
      */
     public static function autoReplyModeOptions(): array
@@ -117,6 +131,25 @@ class Channel extends Model
         $token = data_get($this->credentials, self::CREDENTIAL_TOKEN);
 
         return filled($token) ? (string) $token : null;
+    }
+
+    public function isBotConnection(): bool
+    {
+        return $this->connection_type === self::CONNECTION_TYPE_BOT;
+    }
+
+    public function isAccountConnection(): bool
+    {
+        return $this->connection_type === self::CONNECTION_TYPE_ACCOUNT;
+    }
+
+    public function getConnectionTypeLabel(): string
+    {
+        return match ($this->connection_type) {
+            self::CONNECTION_TYPE_BOT => 'Bot',
+            self::CONNECTION_TYPE_ACCOUNT => 'Account',
+            default => (string) $this->connection_type,
+        };
     }
 
     public function hasBotTokenConfigured(): bool
@@ -204,16 +237,38 @@ class Channel extends Model
 
     public function getWebhookStatusLabel(): string
     {
+        if ($this->isAccountConnection()) {
+            return 'Не используется';
+        }
+
         return filled($this->getWebhookSecret()) ? 'Настроен' : 'Не настроен';
+    }
+
+    public function runtimeState(): HasOne
+    {
+        return $this->hasOne(ChannelRuntimeState::class);
+    }
+
+    public function peerSyncStates(): HasMany
+    {
+        return $this->hasMany(ChannelPeerSyncState::class);
     }
 
     public function getWebhookStatusColor(): string
     {
+        if ($this->isAccountConnection()) {
+            return 'gray';
+        }
+
         return filled($this->getWebhookSecret()) ? 'success' : 'gray';
     }
 
     public function getHealthStatusLabel(): string
     {
+        if ($this->isAccountConnection()) {
+            return $this->getAccountHealthStatusLabel();
+        }
+
         if (! $this->is_active) {
             return 'Отключен';
         }
@@ -239,6 +294,17 @@ class Channel extends Model
 
     public function getHealthStatusColor(): string
     {
+        if ($this->isAccountConnection()) {
+            return match ($this->getHealthStatusLabel()) {
+                'Работает' => 'success',
+                'Синхронизация' => 'info',
+                'Авторизация', 'Ограниченно' => 'warning',
+                'Ошибка', 'Отозван' => 'danger',
+                'Отключен', 'Не авторизован' => 'gray',
+                default => 'gray',
+            };
+        }
+
         return match ($this->getHealthStatusLabel()) {
             'Работает' => 'success',
             'Webhook' => 'info',
@@ -247,6 +313,42 @@ class Channel extends Model
             'Ошибка' => 'danger',
             'Отключен' => 'gray',
             default => 'gray',
+        };
+    }
+
+    protected function getAccountHealthStatusLabel(): string
+    {
+        if (! $this->is_active) {
+            return 'Отключен';
+        }
+
+        $runtimeState = $this->runtimeState;
+
+        if (! $runtimeState instanceof ChannelRuntimeState) {
+            return 'Не авторизован';
+        }
+
+        if ($runtimeState->auth_status === ChannelRuntimeState::AUTH_STATUS_FAILED) {
+            return 'Ошибка';
+        }
+
+        if ($runtimeState->auth_status === ChannelRuntimeState::AUTH_STATUS_REVOKED) {
+            return 'Отозван';
+        }
+
+        if (
+            $runtimeState->auth_status !== ChannelRuntimeState::AUTH_STATUS_AUTHORIZED
+            || $runtimeState->authorization_state !== ChannelRuntimeState::AUTHORIZATION_STATE_READY
+        ) {
+            return 'Авторизация';
+        }
+
+        return match ($runtimeState->sync_status) {
+            ChannelRuntimeState::SYNC_STATUS_LIVE => 'Работает',
+            ChannelRuntimeState::SYNC_STATUS_BACKFILL_IN_PROGRESS => 'Синхронизация',
+            ChannelRuntimeState::SYNC_STATUS_DEGRADED => 'Ограниченно',
+            ChannelRuntimeState::SYNC_STATUS_FAILED => 'Ошибка',
+            default => 'Авторизация',
         };
     }
 

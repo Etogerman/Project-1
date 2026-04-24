@@ -302,6 +302,10 @@ return [
         ],
     ],
 
+    'telegram_account' => [
+        'gateway_shared_secret' => env('TELEGRAM_ACCOUNT_GATEWAY_SHARED_SECRET'),
+    ],
+
     'max' => [
         'webhook_secret_header' => 'X-Max-Bot-Api-Secret',
         'delayed_webhook_threshold_seconds' => (int) env('BOT_MAX_DELAYED_WEBHOOK_THRESHOLD_SECONDS', 60),

@@ -12,7 +12,9 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\BrokenContactMergeChainException;
 use App\Services\Contacts\CleanupExternalDuplicateReviewsForDeletedAggregateAction;
+use App\Services\Contacts\ContactFrozenByOpenCrossChannelIdentityReviewException;
 use App\Services\Contacts\DeleteContactAction;
+use App\Services\Contacts\DeleteContactAggregateAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\ResolveContactAggregateAction;
 use App\Services\Contacts\UpdateContactPhoneAction;
@@ -26,6 +28,58 @@ use Tests\TestCase;
 class MergedContactGuardActionsTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_delete_contact_action_blocks_frozen_cross_channel_identity_review_set(): void
+    {
+        $anchorContact = Contact::factory()->create();
+        $candidateRoot = Contact::factory()->create();
+
+        $review = ContactDuplicateReview::factory()->create([
+            'contact_id' => $anchorContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-delete-freeze',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [$candidateRoot->id],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        $this->expectException(ContactFrozenByOpenCrossChannelIdentityReviewException::class);
+        $this->expectExceptionMessage('Удаление контакта заблокировано');
+
+        try {
+            app(DeleteContactAction::class)->handle($candidateRoot);
+        } finally {
+            $this->assertModelExists($anchorContact);
+            $this->assertModelExists($candidateRoot);
+            $this->assertModelExists($review);
+        }
+    }
+
+    public function test_delete_contact_aggregate_action_blocks_frozen_cross_channel_identity_review_set(): void
+    {
+        $anchorContact = Contact::factory()->create();
+        $candidateRoot = Contact::factory()->create();
+
+        $review = ContactDuplicateReview::factory()->create([
+            'contact_id' => $anchorContact->id,
+            'phone_normalized' => null,
+            'identity_key' => 'telegram:cross-user-delete-aggregate-freeze',
+            'review_type' => ContactDuplicateReview::TYPE_CROSS_CHANNEL_IDENTITY_AMBIGUITY,
+            'candidate_root_contact_ids' => [$candidateRoot->id],
+            'status' => ContactDuplicateReview::STATUS_OPEN,
+        ]);
+
+        $this->expectException(ContactFrozenByOpenCrossChannelIdentityReviewException::class);
+        $this->expectExceptionMessage('Удаление контакта заблокировано');
+
+        try {
+            app(DeleteContactAggregateAction::class)->handle($candidateRoot);
+        } finally {
+            $this->assertModelExists($anchorContact);
+            $this->assertModelExists($candidateRoot);
+            $this->assertModelExists($review);
+        }
+    }
 
     public function test_update_contact_phone_action_rejects_phone_of_merged_contact(): void
     {
