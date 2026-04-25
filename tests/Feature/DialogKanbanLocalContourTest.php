@@ -34,7 +34,7 @@ class DialogKanbanLocalContourTest extends TestCase
         $admin = $this->createAdmin();
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Канбан Клиент',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
         ]);
 
         $this->actingAs($admin)
@@ -44,7 +44,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSee('Канбан')
             ->assertSee('Фильтры')
             ->assertSee('Таблица')
-            ->assertSee('Требует проверки')
+            ->assertDontSee('Требует проверки')
             ->assertSee($dialog->contact->display_name)
             ->assertSee('Открыть диалог');
     }
@@ -54,12 +54,12 @@ class DialogKanbanLocalContourTest extends TestCase
         $admin = $this->createAdmin();
         $requiresReplyDialog = $this->createKanbanDialog([
             'contactName' => 'Требует ответа',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
             'withInboundUserMessage' => true,
         ]);
         $noNewDialog = $this->createKanbanDialog([
             'contactName' => 'Нет новых',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
             'withInboundUserMessage' => false,
         ]);
 
@@ -68,6 +68,20 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk()
             ->assertSee($requiresReplyDialog->contact->display_name)
             ->assertSee($noNewDialog->contact->display_name);
+    }
+
+    public function test_kanban_page_marks_empty_columns_for_compact_layout(): void
+    {
+        $admin = $this->createAdmin();
+        $this->createKanbanDialog([
+            'contactName' => 'Только одна карточка',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('kanban'))
+            ->assertOk()
+            ->assertSee('ac-kanban-column--empty', false);
     }
 
     public function test_kanban_page_restores_filters_from_query_string(): void
@@ -100,7 +114,7 @@ class DialogKanbanLocalContourTest extends TestCase
         $channel = Channel::factory()->create();
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Срез канбана',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
         ]);
 
         $response = $this->actingAs($admin)->get(
@@ -128,7 +142,7 @@ class DialogKanbanLocalContourTest extends TestCase
         $admin = $this->createAdmin();
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Возврат в канбан',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
         ]);
         $backTo = DialogResource::getUrl('kanban').'?'.http_build_query([
             'route' => 'ready',
@@ -149,7 +163,7 @@ class DialogKanbanLocalContourTest extends TestCase
         $admin = $this->createAdmin();
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Запомненный канбан',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
         ]);
 
         $expectedUrl = DialogResource::getUrl('kanban').'?'.http_build_query([
@@ -169,7 +183,7 @@ class DialogKanbanLocalContourTest extends TestCase
         $admin = $this->createAdmin();
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Начальный срез таблицы',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
         ]);
         $expectedUrl = DialogResource::getUrl('index').'?'.http_build_query([
             'search' => 'Начальный',
@@ -226,7 +240,7 @@ class DialogKanbanLocalContourTest extends TestCase
         $admin = $this->createAdmin();
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Срез таблицы',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
         ]);
         $expectedUrl = DialogResource::getUrl('index').'?'.http_build_query([
             'search' => 'Срез',
@@ -332,19 +346,19 @@ class DialogKanbanLocalContourTest extends TestCase
         $this->assertStringNotContainsString('page=2', DialogResource::getNavigationUrl());
     }
 
-    public function test_kanban_page_can_move_review_card_to_working_stage_and_write_history(): void
+    public function test_kanban_page_can_move_automatic_card_to_manual_stage_and_write_history(): void
     {
         $admin = $this->createAdmin();
         $dialog = $this->createKanbanDialog([
-            'contactName' => 'Переход из проверки',
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'contactName' => 'Переход в ручной этап',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
         ]);
 
         Livewire::actingAs($admin)
             ->test(DialogKanban::class)
-            ->call('moveDialogCard', $dialog->id, Dialog::STAGE_PHONE_RECEIVED);
+            ->call('moveDialogCard', $dialog->id, Dialog::STAGE_TRANSFERRED_TO_MPL);
 
-        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $dialog->fresh()->stage);
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPL, $dialog->fresh()->stage);
         $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
             'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
@@ -379,14 +393,14 @@ class DialogKanbanLocalContourTest extends TestCase
             'channel_id' => Channel::factory()->create()->id,
             'current_contact_identity_id' => null,
             'external_chat_id' => null,
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => Dialog::STAGE_NEW_DIALOG,
         ]);
 
         Livewire::actingAs($admin)
             ->test(DialogKanban::class)
             ->call('moveDialogCard', $dialog->id, Dialog::STAGE_TRANSFERRED_TO_MPL);
 
-        $this->assertSame(Dialog::STAGE_REQUIRES_REVIEW, $dialog->fresh()->stage);
+        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $dialog->fresh()->stage);
     }
 
     public function test_kanban_page_loads_more_cards_per_column(): void
@@ -396,7 +410,7 @@ class DialogKanbanLocalContourTest extends TestCase
         foreach (range(1, 31) as $number) {
             $this->createKanbanDialog([
                 'contactName' => 'Карточка '.$number,
-                'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+                'stage' => Dialog::STAGE_NEW_DIALOG,
                 'lastMessageAt' => now()->subMinutes($number),
             ]);
         }
@@ -405,8 +419,23 @@ class DialogKanbanLocalContourTest extends TestCase
             ->test(DialogKanban::class)
             ->assertSee('Карточка 1')
             ->assertDontSee('Карточка 31')
-            ->call('loadMoreCards', Dialog::STAGE_REQUIRES_REVIEW)
+            ->call('loadMoreCards', Dialog::STAGE_NEW_DIALOG)
             ->assertSee('Карточка 31');
+    }
+
+    public function test_kanban_page_renders_legacy_review_dialog_in_effective_stage_column(): void
+    {
+        $admin = $this->createAdmin();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Legacy review диалог',
+            'stage' => 'requires_review',
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('kanban'))
+            ->assertOk()
+            ->assertDontSee('Требует проверки')
+            ->assertSee($dialog->contact->display_name);
     }
 
     private function createAdmin(): User
@@ -444,7 +473,7 @@ class DialogKanbanLocalContourTest extends TestCase
             'channel_id' => $channel->id,
             'current_contact_identity_id' => $identity->id,
             'external_chat_id' => 'kanban-chat-'.$contact->id,
-            'stage' => $overrides['stage'] ?? Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => $overrides['stage'] ?? Dialog::STAGE_NEW_DIALOG,
             'last_message_at' => $lastMessageAt,
         ]);
 
