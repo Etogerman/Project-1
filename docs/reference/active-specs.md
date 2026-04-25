@@ -24,7 +24,7 @@
 
 ## Текущее состояние
 
-- `[dialog-stage-ui-history-and-kanban]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-dialog-stage-ui-history-and-kanban.md`; Spec revision: `f10dee1813f8d6fbe0a7522c77dbe58244e40077`; status: `opened`; opened-at: `2026-04-23`
+- `[dialog-stage-remove-review-stage]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-dialog-stage-remove-review-stage.md`; Spec revision: `5053bdbaf2c8310d319fb435f8fa39f6802f4704`; status: `opened`; opened-at: `2026-04-25`
 
 ## Связанные документы
 

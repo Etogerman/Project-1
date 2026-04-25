@@ -90,8 +90,9 @@ class SyncDialogsStageForRootContactAction
                 $dialog,
                 $rootContact,
             );
+            $needsPersistedStageRewrite = $dialog->stage !== $stage;
 
-            if ($fromStage === $stage) {
+            if (! $needsPersistedStageRewrite && $fromStage === $stage) {
                 $stats['dialogs_already_correct']++;
 
                 continue;
@@ -107,7 +108,7 @@ class SyncDialogsStageForRootContactAction
                 'stage' => $stage,
             ])->save();
 
-            if ($writeHistory) {
+            if ($writeHistory && $fromStage !== $stage) {
                 $this->createDialogStageHistoryMessageAction->handle(
                     $dialog->fresh(['channel', 'currentContactIdentity']),
                     $fromStage,
