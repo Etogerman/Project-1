@@ -561,7 +561,7 @@ class ViewDialog extends ViewRecord
 
     protected function resolveEffectiveDialogStage(Dialog $dialog): string
     {
-        return $dialog->stage ?? app(ResolveDialogStageAction::class)->handle($dialog);
+        return app(ResolveDialogStageAction::class)->handle($dialog);
     }
 
     protected function appendLatestConversationMessages(): int

@@ -13,8 +13,6 @@ class Dialog extends Model
 {
     use HasFactory;
 
-    public const STAGE_REQUIRES_REVIEW = 'requires_review';
-
     public const STAGE_NEW_DIALOG = 'new_dialog';
 
     public const STAGE_PHONE_RECEIVED = 'phone_received';
@@ -43,11 +41,10 @@ class Dialog extends Model
     public static function stageLabels(): array
     {
         return [
-            self::STAGE_REQUIRES_REVIEW => 'Требует проверки',
             self::STAGE_NEW_DIALOG => 'Новый диалог',
             self::STAGE_PHONE_RECEIVED => 'Телефон получен',
             self::STAGE_QUESTIONNAIRE_COMPLETED => 'Анкета заполнена',
-            self::STAGE_TRANSFERRED_TO_MPL => 'Передан в МПЛ',
+            self::STAGE_TRANSFERRED_TO_MPL => 'МПЛ взял в работу',
             self::STAGE_TRANSFERRED_TO_MPP => 'Передан в МПП',
         ];
     }
@@ -60,7 +57,6 @@ class Dialog extends Model
     public static function stageTone(?string $stage): string
     {
         return match ($stage) {
-            self::STAGE_REQUIRES_REVIEW => 'danger',
             self::STAGE_NEW_DIALOG => 'gray',
             self::STAGE_PHONE_RECEIVED => 'info',
             self::STAGE_QUESTIONNAIRE_COMPLETED => 'success',
@@ -138,9 +134,7 @@ class Dialog extends Model
      */
     public static function serviceStages(): array
     {
-        return [
-            self::STAGE_REQUIRES_REVIEW,
-        ];
+        return [];
     }
 
     /**
@@ -159,10 +153,7 @@ class Dialog extends Model
      */
     public static function kanbanStages(): array
     {
-        return [
-            self::STAGE_REQUIRES_REVIEW,
-            ...self::workingStages(),
-        ];
+        return self::workingStages();
     }
 
     public static function isAutomaticStage(?string $stage): bool
@@ -218,10 +209,6 @@ class Dialog extends Model
      */
     public static function allowedOperatorTransitionTargets(?string $currentStage): array
     {
-        if ($currentStage === self::STAGE_REQUIRES_REVIEW) {
-            return self::workingStages();
-        }
-
         if (self::isAutomaticStage($currentStage) || $currentStage === null) {
             return [
                 self::STAGE_TRANSFERRED_TO_MPL,
@@ -240,10 +227,6 @@ class Dialog extends Model
     {
         if ($currentStage === $targetStage) {
             return self::isServiceStage($targetStage) || self::isWorkingStage($targetStage);
-        }
-
-        if ($currentStage === self::STAGE_REQUIRES_REVIEW) {
-            return in_array($targetStage, self::workingStages(), true);
         }
 
         if (! self::isManualStage($targetStage)) {

@@ -29,7 +29,7 @@ class UpdateDialogStageAction
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $currentStage = $dialog->stage ?? $this->resolveDialogStageAction->handle($dialog);
+            $currentStage = $this->resolveDialogStageAction->handle($dialog);
 
             if (! Dialog::canManuallyTransition($currentStage, $targetStage)) {
                 throw ValidationException::withMessages([

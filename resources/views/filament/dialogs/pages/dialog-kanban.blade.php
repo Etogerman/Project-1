@@ -65,7 +65,7 @@
                 <section
                     data-role="dialog-kanban-column"
                     data-stage="{{ $column['stage'] }}"
-                    class="ac-surface ac-surface--secondary ac-kanban-column"
+                    class="ac-surface ac-surface--secondary ac-kanban-column{{ $column['count'] === 0 ? ' ac-kanban-column--empty' : '' }}"
                     x-bind:class="draggingDialogId === null
                         ? ''
                         : (allowedTargets.includes('{{ $column['stage'] }}')

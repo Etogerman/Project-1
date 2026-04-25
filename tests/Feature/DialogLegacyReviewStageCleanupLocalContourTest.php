@@ -12,37 +12,25 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Tests\TestCase;
 
-class DialogReviewStageLocalContourTest extends TestCase
+class DialogLegacyReviewStageCleanupLocalContourTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_assign_review_stage_command_moves_existing_dialogs_and_writes_history_from_effective_stage(): void
+    public function test_backfill_stage_command_remaps_legacy_review_stage_to_effective_phone_stage_without_history(): void
     {
         $dialog = $this->createRouteCompleteDialog([
-            'stage' => null,
+            'stage' => 'requires_review',
             'phone_confirmed_at' => now(),
-            'external_chat_id' => 'review-command-chat',
+            'external_chat_id' => 'legacy-review-backfill-phone',
         ]);
 
-        Artisan::call('dialogs:assign-review-stage', ['--apply' => true]);
+        Artisan::call('dialogs:backfill-stage', ['--apply' => true]);
 
-        $dialog->refresh();
-
-        $this->assertSame(Dialog::STAGE_REQUIRES_REVIEW, $dialog->stage);
-
-        $historyMessage = Message::query()
-            ->where('dialog_id', $dialog->id)
-            ->where('message_kind', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE)
-            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE)
-            ->latest('id')
-            ->firstOrFail();
-
-        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $historyMessage->raw_payload['from_stage']);
-        $this->assertSame(Dialog::STAGE_REQUIRES_REVIEW, $historyMessage->raw_payload['to_stage']);
-        $this->assertSame('system', $historyMessage->raw_payload['source_type']);
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $dialog->fresh()->stage);
+        $this->assertDatabaseCount('messages', 0);
     }
 
-    public function test_backfill_stage_command_does_not_escape_review_stage_without_live_event(): void
+    public function test_backfill_stage_command_remaps_legacy_review_stage_to_effective_completed_stage_without_history(): void
     {
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
@@ -50,20 +38,21 @@ class DialogReviewStageLocalContourTest extends TestCase
         ]);
         $dialog = $this->createRouteCompleteDialog([
             'contact_id' => $contact->id,
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
+            'stage' => 'requires_review',
+            'external_chat_id' => 'legacy-review-backfill-completed',
         ], $contact);
 
         Artisan::call('dialogs:backfill-stage', ['--apply' => true]);
 
-        $this->assertSame(Dialog::STAGE_REQUIRES_REVIEW, $dialog->fresh()->stage);
+        $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $dialog->fresh()->stage);
         $this->assertDatabaseCount('messages', 0);
     }
 
-    public function test_phone_confirmation_can_escape_review_stage_after_live_event(): void
+    public function test_phone_confirmation_rewrites_legacy_review_stage_history_from_effective_automatic_stage(): void
     {
         $dialog = $this->createRouteCompleteDialog([
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
-            'external_chat_id' => 'review-phone-chat',
+            'stage' => 'requires_review',
+            'external_chat_id' => 'legacy-review-phone-chat',
         ]);
 
         $inboundMessage = Message::factory()->create([
@@ -73,7 +62,7 @@ class DialogReviewStageLocalContourTest extends TestCase
             'channel_id' => $dialog->channel_id,
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
-            'external_chat_id' => 'review-phone-chat',
+            'external_chat_id' => 'legacy-review-phone-chat',
             'received_at' => now(),
         ]);
 
@@ -92,11 +81,11 @@ class DialogReviewStageLocalContourTest extends TestCase
             ->latest('id')
             ->firstOrFail();
 
-        $this->assertSame(Dialog::STAGE_REQUIRES_REVIEW, $historyMessage->raw_payload['from_stage']);
+        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $historyMessage->raw_payload['from_stage']);
         $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $historyMessage->raw_payload['to_stage']);
     }
 
-    public function test_contact_completion_can_escape_review_stage_after_live_event(): void
+    public function test_contact_completion_rewrites_legacy_review_stage_history_from_effective_automatic_stage(): void
     {
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
@@ -104,8 +93,8 @@ class DialogReviewStageLocalContourTest extends TestCase
         ]);
         $dialog = $this->createRouteCompleteDialog([
             'contact_id' => $contact->id,
-            'stage' => Dialog::STAGE_REQUIRES_REVIEW,
-            'external_chat_id' => 'review-completion-chat',
+            'stage' => 'requires_review',
+            'external_chat_id' => 'legacy-review-completion-chat',
         ], $contact);
 
         $contact->completeDataCollection();
@@ -119,7 +108,7 @@ class DialogReviewStageLocalContourTest extends TestCase
             ->latest('id')
             ->firstOrFail();
 
-        $this->assertSame(Dialog::STAGE_REQUIRES_REVIEW, $historyMessage->raw_payload['from_stage']);
+        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $historyMessage->raw_payload['from_stage']);
         $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $historyMessage->raw_payload['to_stage']);
     }
 

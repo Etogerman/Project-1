@@ -28,7 +28,6 @@ class SyncDialogsStageForRootContactAction
         Contact|int $contact,
         bool $apply = true,
         bool $writeHistory = true,
-        bool $allowReviewEscape = false,
         ?Contact $historySourceContact = null,
     ): array
     {
@@ -37,7 +36,6 @@ class SyncDialogsStageForRootContactAction
                 contact: $contact,
                 apply: true,
                 writeHistory: $writeHistory,
-                allowReviewEscape: $allowReviewEscape,
                 historySourceContact: $historySourceContact,
             ));
         }
@@ -46,7 +44,6 @@ class SyncDialogsStageForRootContactAction
             contact: $contact,
             apply: false,
             writeHistory: $writeHistory,
-            allowReviewEscape: $allowReviewEscape,
             historySourceContact: $historySourceContact,
         );
     }
@@ -62,7 +59,6 @@ class SyncDialogsStageForRootContactAction
         Contact|int $contact,
         bool $apply,
         bool $writeHistory,
-        bool $allowReviewEscape,
         ?Contact $historySourceContact,
     ): array
     {
@@ -93,7 +89,6 @@ class SyncDialogsStageForRootContactAction
             $stage = $this->resolveDialogStageAction->handle(
                 $dialog,
                 $rootContact,
-                allowReviewEscape: $allowReviewEscape,
             );
 
             if ($fromStage === $stage) {
@@ -137,10 +132,6 @@ class SyncDialogsStageForRootContactAction
 
     private function resolveHistoryFromStage(Dialog $dialog, Contact $historySourceContact): string
     {
-        return $dialog->stage ?? $this->resolveDialogStageAction->forAttributes(
-            currentStage: null,
-            contact: $historySourceContact,
-            phoneConfirmedAt: $dialog->phone_confirmed_at,
-        );
+        return $this->resolveDialogStageAction->handle($dialog, $historySourceContact);
     }
 }

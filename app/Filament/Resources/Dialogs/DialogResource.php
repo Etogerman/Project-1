@@ -508,7 +508,7 @@ class DialogResource extends Resource
 
     protected static function resolveEffectiveStage(Dialog $record): string
     {
-        return $record->stage ?? app(ResolveDialogStageAction::class)->handle($record);
+        return app(ResolveDialogStageAction::class)->handle($record);
     }
 
     protected static function applyStageFilter(Builder $query, string $stage): void
@@ -528,7 +528,10 @@ class DialogResource extends Resource
         $query->where(function (Builder $query) use ($stage): void {
             $query->where('dialogs.stage', $stage)
                 ->orWhere(function (Builder $query) use ($stage): void {
-                    $query->whereNull('dialogs.stage');
+                    $query->where(function (Builder $query): void {
+                        $query->whereNull('dialogs.stage')
+                            ->orWhereNotIn('dialogs.stage', Dialog::workingStages());
+                    });
 
                     match ($stage) {
                         Dialog::STAGE_QUESTIONNAIRE_COMPLETED => $query

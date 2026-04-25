@@ -391,11 +391,7 @@ class DialogKanban extends Page
 
     private function resolveKanbanColumnStage(Dialog $dialog): string
     {
-        if ($dialog->stage === Dialog::STAGE_REQUIRES_REVIEW) {
-            return Dialog::STAGE_REQUIRES_REVIEW;
-        }
-
-        return $dialog->stage ?? app(ResolveDialogStageAction::class)->handle($dialog);
+        return app(ResolveDialogStageAction::class)->handle($dialog);
     }
 
     /**

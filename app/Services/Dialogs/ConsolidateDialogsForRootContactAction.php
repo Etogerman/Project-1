@@ -456,7 +456,7 @@ class ConsolidateDialogsForRootContactAction
 
     private function resolveHistoryFromStage(Dialog $dialog, Contact $rootContact): string
     {
-        return $dialog->stage ?? $this->resolveDialogStageAction->handle($dialog, $rootContact);
+        return $this->resolveDialogStageAction->handle($dialog, $rootContact);
     }
 
     /**
