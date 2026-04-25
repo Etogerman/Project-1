@@ -20,19 +20,27 @@ class BackfillBitrix24ConnectionProfilesAction
             return;
         }
 
-        $profile = Bitrix24Profile::query()->firstOrCreate(
-            [
-                'portal_domain' => $portalDomain,
-                'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
-            ],
-            [
-                'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
-                'display_name' => 'Staging',
-                'client_id' => $this->nullableString(config('bitrix24.application.client_id')),
-                'application_code' => $this->nullableString(config('bitrix24.application.code')),
-                'callback_base_url' => $callbackBaseUrl,
-            ],
-        );
+        $profile = Bitrix24Profile::query()->firstOrNew([
+            'portal_domain' => $portalDomain,
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+        ]);
+
+        $clientId = $this->nullableString(config('bitrix24.application.client_id'));
+        $applicationCode = $this->nullableString(config('bitrix24.application.code'));
+        $profileClientId = $profile->exists ? $profile->client_id : $clientId;
+        $profileApplicationCode = $profile->exists ? $profile->application_code : $applicationCode;
+
+        $profile->forceFill([
+            'profile_type' => $profile->profile_type ?: Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => $profile->display_name ?: 'Staging',
+            'client_id' => $profileClientId,
+            'application_code' => $profileApplicationCode,
+            'callback_base_url' => $callbackBaseUrl,
+        ]);
+
+        if (! $profile->exists || $profile->isDirty()) {
+            $profile->save();
+        }
 
         Bitrix24Connection::query()
             ->whereNull('profile_id')

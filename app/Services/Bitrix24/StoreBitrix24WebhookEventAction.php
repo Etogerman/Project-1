@@ -38,7 +38,7 @@ class StoreBitrix24WebhookEventAction
                 'portal_domain' => $eventData->authContext->portalDomain,
                 'payload' => $this->sanitizePayload->handle($eventData->payload),
                 'headers' => $eventData->headers,
-                'query' => $eventData->query,
+                'query' => $this->sanitizePayload->handle($eventData->query),
                 'processing_status' => $processingStatus,
                 'failure_reason' => $failureReason,
             ],

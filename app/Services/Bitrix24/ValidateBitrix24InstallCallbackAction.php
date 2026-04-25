@@ -111,7 +111,7 @@ class ValidateBitrix24InstallCallbackAction
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe returned unexpected application code.'];
         }
 
-        if (! $this->isInstalled($result['INSTALLED'] ?? null)) {
+        if ($this->isExplicitlyUninstalled($result['INSTALLED'] ?? null) && ! $this->allowsUninstalledAppProbe()) {
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe reported application as not installed.'];
         }
 
@@ -155,6 +155,28 @@ class ValidateBitrix24InstallCallbackAction
             && trim($host) !== '';
     }
 
+    private function isExplicitlyUninstalled(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value === false;
+        }
+
+        if (is_int($value)) {
+            return $value === 0;
+        }
+
+        if (is_string($value)) {
+            return in_array(mb_strtolower(trim($value)), ['0', 'false', 'n', 'no'], true);
+        }
+
+        return false;
+    }
+
+    private function allowsUninstalledAppProbe(): bool
+    {
+        return (bool) config('bitrix24.install_validation.allow_uninstalled_app_probe', false);
+    }
+
     private function normalizePortalDomain(?string $value): ?string
     {
         $trimmed = $this->nullableString($value);
@@ -170,16 +192,6 @@ class ValidateBitrix24InstallCallbackAction
         }
 
         return mb_strtolower(trim($trimmed, "/ \t\n\r\0\x0B"));
-    }
-
-    private function isInstalled(mixed $value): bool
-    {
-        return match (true) {
-            $value === true => true,
-            is_int($value) => $value === 1,
-            is_string($value) => in_array(mb_strtolower(trim($value)), ['1', 'true', 'y', 'yes'], true),
-            default => false,
-        };
     }
 
     private function nullableString(mixed $value): ?string

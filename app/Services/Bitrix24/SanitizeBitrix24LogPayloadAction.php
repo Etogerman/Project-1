@@ -23,8 +23,11 @@ class SanitizeBitrix24LogPayloadAction
 
         foreach ($payload as $key => $value) {
             $normalizedKey = strtolower((string) $key);
+            $normalizedCompactKey = str_replace('_', '', $normalizedKey);
 
-            if (in_array($normalizedKey, ['access_token', 'refresh_token', 'client_secret', 'auth'], true)) {
+            if (in_array($normalizedCompactKey, ['accesstoken', 'authid', 'clientsecret', 'refreshid', 'refreshtoken'], true)
+                || $normalizedKey === 'auth'
+            ) {
                 if ($normalizedKey === 'auth' && is_array($value)) {
                     $sanitized[(string) $key] = $this->sanitizeArray($value);
                 }

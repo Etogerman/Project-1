@@ -26,6 +26,7 @@ class Bitrix24CallbackControllerTest extends TestCase
         config()->set('bitrix24.portal_domain', 'crm.alexlesley.biz');
         config()->set('bitrix24.application.code', 'local.app.code');
         config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+        config()->set('bitrix24.install_validation.allow_uninstalled_app_probe', false);
 
         $this->defaultProfile = Bitrix24Profile::query()->create([
             'portal_domain' => 'crm.alexlesley.biz',
@@ -53,7 +54,7 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::fake();
 
         $response = $this->postJson('/callbacks/bitrix24/install', [
-                'event' => 'ONAPPINSTALL',
+            'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
                 'member_id' => 'member-1',
@@ -427,6 +428,100 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertPushed(ProcessBitrix24InstallCallbackJob::class, 1);
     }
 
+    public function test_install_callback_accepts_flat_bitrix24_local_app_payload(): void
+    {
+        Queue::fake();
+
+        $response = $this->postJson('/callbacks/bitrix24/install?APP_SID=query-app-token', [
+            'DOMAIN' => 'crm.alexlesley.biz',
+            'status' => 'L',
+            'APP_SID' => 'flat-app-token',
+            'AUTH_ID' => 'flat-access-token',
+            'PROTOCOL' => '1',
+            'PLACEMENT' => 'DEFAULT',
+            'member_id' => 'member-flat',
+            'REFRESH_ID' => 'flat-refresh-token',
+            'AUTH_EXPIRES' => '3600',
+            'SERVER_ENDPOINT' => 'https://oauth.bitrix24.tech/rest/',
+            'APPLICATION_SCOPE' => 'crm,task,imopenlines,imbot,im,tasks,imconnector',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'install')
+            ->assertJsonPath('method', 'POST');
+
+        $connection = Bitrix24Connection::query()->firstOrFail();
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+        $expectedTokenHash = hash('sha256', 'flat-app-token');
+        $expectedQueryTokenHash = hash('sha256', 'query-app-token');
+
+        $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
+        $this->assertSame('member-flat', $connection->member_id);
+        $this->assertSame('https://crm.alexlesley.biz/rest/', $connection->client_endpoint);
+        $this->assertSame('flat-access-token', $connection->access_token_encrypted);
+        $this->assertSame('flat-refresh-token', $connection->refresh_token_encrypted);
+        $this->assertSame(['crm', 'task', 'imopenlines', 'imbot', 'im', 'tasks', 'imconnector'], $connection->scope);
+        $this->assertSame($expectedTokenHash, $connection->application_token_hash);
+        $this->assertTrue($connection->access_token_expires_at->isFuture());
+        $this->assertArrayNotHasKey('AUTH_ID', $connection->install_payload);
+        $this->assertArrayNotHasKey('REFRESH_ID', $connection->install_payload);
+        $this->assertSame($expectedTokenHash, $connection->install_payload['application_token_hash']);
+        $this->assertArrayNotHasKey('APP_SID', $event->query);
+        $this->assertSame($expectedQueryTokenHash, $event->query['application_token_hash']);
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
+        $this->assertNull($event->failure_reason);
+
+        Queue::assertPushed(ProcessBitrix24InstallCallbackJob::class, 1);
+    }
+
+    public function test_install_callback_syncs_stale_configured_profile_callback_base_url(): void
+    {
+        Queue::fake();
+
+        config()->set('bitrix24.callbacks.install_url', 'https://fresh-ngrok.example.test/callbacks/bitrix24/install');
+        config()->set('bitrix24.callbacks.events_url', 'https://fresh-ngrok.example.test/callbacks/bitrix24/events');
+        config()->set('bitrix24.callbacks.openlines_url', 'https://fresh-ngrok.example.test/callbacks/bitrix24/openlines');
+        config()->set('bitrix24.application.client_id', 'stale-config-client-id');
+        config()->set('bitrix24.application.code', 'stale.config.app.code');
+
+        $this->defaultProfile->forceFill([
+            'client_id' => 'existing-client-id',
+            'application_code' => 'local.app.code',
+            'callback_base_url' => 'https://stale-ngrok.example.test',
+        ])->save();
+
+        $response = $this->postJson('https://fresh-ngrok.example.test/callbacks/bitrix24/install', [
+            'event' => 'ONAPPINSTALL',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+                'client_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'server_endpoint' => 'https://oauth.bitrix24.tech/rest/',
+                'scope' => ['crm', 'tasks'],
+                'access_token' => 'secret-access-token',
+                'refresh_token' => 'secret-refresh-token',
+                'expires' => (string) now()->addHour()->timestamp,
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'install');
+
+        $connection = Bitrix24Connection::query()->firstOrFail();
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+
+        $this->assertSame('https://fresh-ngrok.example.test', $this->defaultProfile->fresh()->callback_base_url);
+        $this->assertSame('existing-client-id', $this->defaultProfile->fresh()->client_id);
+        $this->assertSame('local.app.code', $this->defaultProfile->fresh()->application_code);
+        $this->assertSame('existing-client-id', $connection->client_id);
+        $this->assertSame($this->defaultProfile->id, $connection->profile_id);
+        $this->assertSame($connection->id, $event->connection_id);
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
+
+        Queue::assertPushed(ProcessBitrix24InstallCallbackJob::class, 1);
+    }
+
     public function test_install_callback_with_foreign_domain_is_saved_as_failed_and_not_dispatched(): void
     {
         Queue::fake();
@@ -492,7 +587,7 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertNotPushed(ProcessBitrix24InstallCallbackJob::class);
     }
 
-    public function test_install_callback_with_probe_reporting_not_installed_is_saved_as_failed_and_not_dispatched(): void
+    public function test_install_callback_with_probe_reporting_not_installed_is_saved_as_failed_by_default(): void
     {
         Queue::fake();
 
@@ -526,8 +621,49 @@ class Bitrix24CallbackControllerTest extends TestCase
         $event = Bitrix24WebhookEvent::query()->firstOrFail();
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_FAILED, $event->processing_status);
+        $this->assertSame('Bitrix24 install probe reported application as not installed.', $event->failure_reason);
         $this->assertSame(0, Bitrix24Connection::query()->count());
         Queue::assertNotPushed(ProcessBitrix24InstallCallbackJob::class);
+    }
+
+    public function test_install_callback_with_probe_reporting_not_installed_can_be_allowed_for_local_install_flow(): void
+    {
+        Queue::fake();
+        config()->set('bitrix24.install_validation.allow_uninstalled_app_probe', true);
+
+        Http::fake([
+            'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
+                'result' => [
+                    'CODE' => 'local.app.code',
+                    'INSTALLED' => false,
+                ],
+            ]),
+        ]);
+
+        $response = $this->postJson('/callbacks/bitrix24/install', [
+            'event' => 'ONAPPINSTALL',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'app-token',
+                'client_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'server_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'scope' => ['crm', 'tasks'],
+                'access_token' => 'secret-access-token',
+                'refresh_token' => 'secret-refresh-token',
+                'expires' => (string) now()->addHour()->timestamp,
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'install');
+
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+        $connection = Bitrix24Connection::query()->firstOrFail();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
+        $this->assertSame($connection->id, $event->connection_id);
+        Queue::assertPushed(ProcessBitrix24InstallCallbackJob::class, 1);
     }
 
     public function test_install_callback_with_unexpected_app_code_is_saved_as_failed_and_not_dispatched(): void

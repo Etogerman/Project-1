@@ -33,7 +33,10 @@ class NormalizeBitrix24WebhookPayloadAction
             'headers' => $this->sanitizeHeaders($request->headers->all()),
             'query' => $sanitizedQuery,
             'event_name' => $eventName,
-            'looks_like_bitrix' => $eventName !== '' || $this->hasCaseInsensitiveKey($payload, 'auth'),
+            'looks_like_bitrix' => $eventName !== ''
+                || $this->hasCaseInsensitiveKey($payload, 'auth')
+                || $this->hasCaseInsensitiveKey($payload, 'auth_id')
+                || $this->hasCaseInsensitiveKey($payload, 'refresh_id'),
         ];
     }
 
@@ -63,7 +66,16 @@ class NormalizeBitrix24WebhookPayloadAction
         foreach ($values as $key => $value) {
             $normalizedKey = strtolower((string) $key);
 
-            if (in_array($normalizedKey, ['access_token', 'refresh_token', 'client_secret'], true)) {
+            $normalizedCompactKey = str_replace('_', '', $normalizedKey);
+
+            if (in_array($normalizedCompactKey, [
+                'accessid',
+                'accesstoken',
+                'authid',
+                'clientsecret',
+                'refreshid',
+                'refreshtoken',
+            ], true)) {
                 continue;
             }
 
