@@ -29,7 +29,7 @@ class SyncDialogConfirmedPhoneAction
         }
 
         $dialog->loadMissing('contact');
-        $fromStage = $dialog->stage ?? $this->resolveDialogStageAction->handle($dialog);
+        $fromStage = $this->resolveDialogStageAction->handle($dialog);
 
         $payload = [];
 
@@ -46,7 +46,6 @@ class SyncDialogConfirmedPhoneAction
             currentStage: $dialog->stage,
             contact: $dialog->contact,
             phoneConfirmedAt: $payload['phone_confirmed_at'] ?? $dialog->phone_confirmed_at,
-            allowReviewEscape: true,
         );
 
         if (! $this->dialogNeedsUpdate($dialog, $payload)) {
