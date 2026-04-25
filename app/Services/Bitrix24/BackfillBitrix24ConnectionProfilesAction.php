@@ -27,12 +27,14 @@ class BackfillBitrix24ConnectionProfilesAction
 
         $clientId = $this->nullableString(config('bitrix24.application.client_id'));
         $applicationCode = $this->nullableString(config('bitrix24.application.code'));
+        $profileClientId = $profile->exists ? $profile->client_id : $clientId;
+        $profileApplicationCode = $profile->exists ? $profile->application_code : $applicationCode;
 
         $profile->forceFill([
             'profile_type' => $profile->profile_type ?: Bitrix24Profile::TYPE_FULL_LIVE,
             'display_name' => $profile->display_name ?: 'Staging',
-            'client_id' => $clientId ?? $profile->client_id,
-            'application_code' => $applicationCode ?? $profile->application_code,
+            'client_id' => $profileClientId,
+            'application_code' => $profileApplicationCode,
             'callback_base_url' => $callbackBaseUrl,
         ]);
 

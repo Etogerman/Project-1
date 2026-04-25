@@ -29,6 +29,10 @@ return [
         'openlines_url' => env('BITRIX24_OPENLINES_CALLBACK_URL'),
     ],
 
+    'install_validation' => [
+        'allow_uninstalled_app_probe' => env('BITRIX24_ALLOW_UNINSTALLED_APP_PROBE', env('APP_ENV') === 'local'),
+    ],
+
     'features' => [
         'contacts_sync_enabled' => (bool) env('BITRIX24_CONTACTS_SYNC_ENABLED', false),
         'deals_sync_enabled' => (bool) env('BITRIX24_DEALS_SYNC_ENABLED', false),

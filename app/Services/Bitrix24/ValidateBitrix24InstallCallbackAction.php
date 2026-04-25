@@ -111,6 +111,10 @@ class ValidateBitrix24InstallCallbackAction
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe returned unexpected application code.'];
         }
 
+        if ($this->isExplicitlyUninstalled($result['INSTALLED'] ?? null) && ! $this->allowsUninstalledAppProbe()) {
+            return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe reported application as not installed.'];
+        }
+
         return [Bitrix24WebhookEvent::STATUS_PENDING, null];
     }
 
@@ -149,6 +153,28 @@ class ValidateBitrix24InstallCallbackAction
             && is_string($host)
             && mb_strtolower($scheme) === 'https'
             && trim($host) !== '';
+    }
+
+    private function isExplicitlyUninstalled(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value === false;
+        }
+
+        if (is_int($value)) {
+            return $value === 0;
+        }
+
+        if (is_string($value)) {
+            return in_array(mb_strtolower(trim($value)), ['0', 'false', 'n', 'no'], true);
+        }
+
+        return false;
+    }
+
+    private function allowsUninstalledAppProbe(): bool
+    {
+        return (bool) config('bitrix24.install_validation.allow_uninstalled_app_probe', false);
     }
 
     private function normalizePortalDomain(?string $value): ?string
