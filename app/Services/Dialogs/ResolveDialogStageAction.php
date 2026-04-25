@@ -10,7 +10,6 @@ class ResolveDialogStageAction
     public function handle(
         Dialog $dialog,
         ?Contact $contact = null,
-        bool $allowReviewEscape = false,
     ): string
     {
         $contact ??= $dialog->relationLoaded('contact')
@@ -21,7 +20,6 @@ class ResolveDialogStageAction
             currentStage: $dialog->stage,
             contact: $contact,
             phoneConfirmedAt: $dialog->phone_confirmed_at,
-            allowReviewEscape: $allowReviewEscape,
         );
     }
 
@@ -29,13 +27,8 @@ class ResolveDialogStageAction
         ?string $currentStage,
         Contact $contact,
         mixed $phoneConfirmedAt,
-        bool $allowReviewEscape = false,
     ): string
     {
-        if ($currentStage === Dialog::STAGE_REQUIRES_REVIEW && ! $allowReviewEscape) {
-            return Dialog::STAGE_REQUIRES_REVIEW;
-        }
-
         if ($this->isManualStage($currentStage)) {
             return $currentStage;
         }

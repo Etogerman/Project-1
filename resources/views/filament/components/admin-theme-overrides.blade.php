@@ -1514,9 +1514,7 @@
     }
 
     .ac-kanban-board {
-        display: grid;
-        grid-auto-flow: column;
-        grid-auto-columns: minmax(20rem, 22rem);
+        display: flex;
         gap: 1rem;
         align-items: start;
         overflow-x: auto;
@@ -1525,11 +1523,33 @@
     }
 
     .ac-kanban-column {
+        --ac-kanban-column-width: min(22rem, calc(100vw - 2rem));
+        flex: 0 0 var(--ac-kanban-column-width);
+        width: var(--ac-kanban-column-width);
         display: flex;
         flex-direction: column;
         min-height: 20rem;
         min-width: 0;
-        transition: opacity 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+        transition:
+            opacity 150ms ease,
+            box-shadow 150ms ease,
+            border-color 150ms ease,
+            flex-basis 180ms ease,
+            width 180ms ease;
+    }
+
+    .ac-kanban-column--empty {
+        --ac-kanban-column-width: 10.75rem;
+    }
+
+    .ac-kanban-column--empty:hover,
+    .ac-kanban-column--empty.ac-kanban-column--drop-target {
+        --ac-kanban-column-width: 13rem;
+    }
+
+    .ac-kanban-column--empty .ac-surface__title {
+        font-size: 0.95rem;
+        line-height: 1.35;
     }
 
     .ac-kanban-column--drop-target {
@@ -1717,6 +1737,14 @@
         text-align: center;
         color: var(--ac-text-soft);
         overflow-wrap: anywhere;
+    }
+
+    .ac-kanban-column--empty .ac-kanban-empty-column {
+        min-height: 7.5rem;
+        padding: 0.85rem;
+        font-size: 0.82rem;
+        line-height: 1.45;
+        text-wrap: balance;
     }
 
     .ac-meta {

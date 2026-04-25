@@ -542,7 +542,6 @@ class Contact extends Model
 
         app(SyncDialogsStageForRootContactAction::class)->handle(
             $this,
-            allowReviewEscape: true,
             historySourceContact: $historySourceContact,
         );
     }

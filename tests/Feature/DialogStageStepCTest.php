@@ -68,7 +68,7 @@ class DialogStageStepCTest extends TestCase
             ->call('updateDialogStage')
             ->assertNotified()
             ->assertSet('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPL)
-            ->assertSee('Оператор Оператор Этапа изменил этап диалога: Телефон получен -> Передан в МПЛ');
+            ->assertSee('Оператор Оператор Этапа изменил этап диалога: Телефон получен -> МПЛ взял в работу');
 
         $historyMessage = Message::query()
             ->where('dialog_id', $dialog->id)
@@ -182,7 +182,7 @@ class DialogStageStepCTest extends TestCase
             ->call('updateDialogStage')
             ->assertNotified()
             ->assertSet('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPP)
-            ->assertSee('Оператор Оператор Перевода изменил этап диалога: Передан в МПЛ -> Передан в МПП');
+            ->assertSee('Оператор Оператор Перевода изменил этап диалога: МПЛ взял в работу -> Передан в МПП');
 
         $historyMessage = Message::query()
             ->where('dialog_id', $dialog->id)
@@ -304,7 +304,7 @@ class DialogStageStepCTest extends TestCase
             'sent_by_user_id' => null,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
             'external_chat_id' => $dialog->external_chat_id,
-            'text' => 'Система изменила этап диалога: Телефон получен -> Передан в МПЛ',
+            'text' => 'Система изменила этап диалога: Телефон получен -> МПЛ взял в работу',
             'received_at' => now(),
             'raw_payload' => [
                 'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
@@ -322,7 +322,7 @@ class DialogStageStepCTest extends TestCase
 
         $response->assertOk()
             ->assertSee('Последнее реальное сообщение')
-            ->assertDontSee('Система изменила этап диалога: Телефон получен -> Передан в МПЛ');
+            ->assertDontSee('Система изменила этап диалога: Телефон получен -> МПЛ взял в работу');
     }
 
     public function test_contact_overview_preview_ignores_dialog_stage_history_note(): void
