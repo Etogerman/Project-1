@@ -38,7 +38,8 @@
 ## Термины
 
 - `ТЗ` — согласованный контракт текущего шага
-- `Внешнее ТЗ` — versioned ТЗ, которое хранится вне основного репозитория проекта в отдельном spec-repo
+- `Внешнее ТЗ` — versioned ТЗ, которое хранится вне основного репозитория проекта во внешнем репозитории документации
+- `Spec repo` — конкретный внешний репозиторий документации, в котором лежит зафиксированное ТЗ
 - `Spec revision` — конкретный commit/hash внешнего ТЗ, на который опирается implementation stream
 - `Активный slice` — внутренний инженерный подшаг текущего stream-а; slice может быть меньше пользовательски видимого результата и сам по себе не является trigger-ом выхода в `staging`
 - `Локальный MVP` — минимальный локально тестируемый feature increment текущего stream-а; default trigger перехода из локалки в первый внешний publish-level
@@ -78,39 +79,26 @@
 
 ## Где хранится ТЗ
 
-Для существенного stream-а ТЗ должно быть versioned, иметь стабильную ссылку и жить во внешнем spec-repo.
+Для существенного stream-а ТЗ должно быть versioned и жить во внешнем репозитории документации.
 
-Локальный `docs/` в основном репозитории не хранит полные stream-ТЗ как source of truth.
-Локально допустимы только:
+Основной репозиторий не хранит:
 
-1. process-docs
-2. policy-docs
-3. короткие index/reference документы по внешним ТЗ
+1. полные stream-ТЗ
+2. живые указатели на версии ТЗ
+3. реестр активных работ
+4. историю статусов ТЗ
 
 ### Внешнее ТЗ
 
-Если используется внешний spec-repo, обязательны:
+Перед существенной реализацией агент проверяет зафиксированный внешний репозиторий документации:
 
-1. ссылка на конкретный документ
-2. ссылка на конкретный commit/hash (`Spec revision`)
-3. явная фиксация, что именно эта revision является source of truth для текущего implementation stream
-4. актуальный stream-level registry в [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md), если существенный stream реально открыт в основном repo; по умолчанию он обновляется в том же открывающем или закрывающем шаге, а не отдельным PR ради синхронизации
+1. конкретный `Spec repo`
+2. `active-streams.md`
+3. `streams/README.md`
+4. конкретный `Spec doc`
+5. конкретный `Spec revision`
 
-### Жизненный цикл внешнего spec-doc
-
-Статусы внешнего `Spec doc` интерпретируются так:
-
-1. `planned` — направление согласовано, но implementation stream по документу ещё не открыт в основном repo и acceptance ещё не материализован в runtime
-2. `active` — существенный implementation stream реально открыт; `Spec revision` зафиксирован; документ является текущим source of truth для активного slice
-3. `partial` — часть acceptance уже материализована или завершён отдельный slice, но документ ещё не закрыт полностью и имеет следующий рабочий follow-up
-4. `implemented` — acceptance документа в рамках согласованного scope закрыт и материализован в основном repo; перенос в `archive/` может быть отдельным `docs-only` follow-up
-
-Жёсткие правила:
-
-1. закрытый runtime-acceptance не может оставаться в статусе `planned`
-2. если acceptance уже материализован, но архивирование ещё не выполнено, допустимо состояние `implemented` + явный `archive pending`, но не `planned`
-3. если существенный stream реально открыт в основном repo, локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md) должен отражать stream-level запись на тот же `Spec doc` и актуальную `Spec revision`, но не обязан дублировать slice-level state
-4. если внешний spec-repo, нужный `Spec doc` или согласованная `Spec revision` недоступны, substantial stream paused до восстановления доступа
+Если внешний репозиторий документации недоступен, substantial stream paused до восстановления доступа.
 
 ### Чего недостаточно
 
@@ -193,7 +181,7 @@
 - критерий `Локального MVP`
 - уровень делегации
 - где именно хранится versioned ТЗ
-- если ТЗ внешнее — какой `Spec revision` является согласованным
+- если ТЗ внешнее — какие `Spec repo`, `Spec doc` и `Spec revision` являются согласованными
 
 Уровни делегации:
 - локальный режим
@@ -203,8 +191,8 @@
 - dangerous ops
 
 Для мелких исправлений и коротких локальных действий ТЗ может оставаться в чате.
-Для существенных stream-ов должно существовать versioned ТЗ во внешнем spec-repo на конкретной `Spec revision`.
-Если такой stream реально открыт в основном repo, его нужно явно зафиксировать в [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md).
+Для существенных stream-ов должно существовать versioned ТЗ в конкретном `Spec repo` на конкретной `Spec revision`.
+Если такой stream реально открыт, его нужно явно зафиксировать во внешнем `active-streams.md`.
 По умолчанию согласование нового code stream означает staging-first rollout после достижения `Локального MVP`.
 Если пользователь хочет идти в `staging` раньше или позже, это должно быть оговорено отдельно и явно.
 По умолчанию это не поднимает execution ceiling выше `draft PR в staging`; `ready`, `merge`, `staging smoke`, `PR в main`, `merge` в `main`, `production deploy` и `production smoke` требуют отдельной явной делегации, если иное заранее не согласовано.
@@ -243,7 +231,7 @@ Preflight делается непосредственно перед запус�
   - для clean PR в `main` после успешного прохождения через `staging`
   - для `docs-only` stream
   - для direct-to-main path, отдельно и явно разрешённого пользователем
-- для существенного stream-а сначала зафиксировать ссылку на внешнее ТЗ и конкретную `Spec revision`
+- для существенного stream-а сначала зафиксировать `Spec repo`, ссылку на внешнее ТЗ и конкретную `Spec revision`
 - для мелкого шага сохранять ТЗ только в чате или как короткий локальный reference-документ при явной договорённости, но не как полный stream-ТЗ в основном репозитории
 - запустить implementation stream в рамках активного slice и согласованного уровня делегации
 
@@ -517,7 +505,6 @@ Helper-review не заменяет `author self-check` и не заменяет
 - `AGENTS.md`
 - `docs/**`
 - `README*.md`
-- короткие указатели, ссылки и reference-документы по внешнему ТЗ, но не полный текст stream-ТЗ
 - другие markdown/текстовые регламенты
 
 И только если stream стартует из clean branch/worktree от `origin/main` без недокументального хвоста в рабочем контексте.
@@ -561,14 +548,16 @@ Helper-review не заменяет `author self-check` и не заменяет
 
 1. описание PR
 2. рабочий implementation summary
-3. локальный index/reference doc в проекте
-4. task tracker, если он используется как versioned process-layer
+3. внешний `active-streams.md`
+4. task tracker, если он используется как дополнительный process-layer
 
 Если PR делается по внешнему ТЗ, в описании PR должен быть блок вида:
 
 - `Spec repo:` `<repo-or-location>`
 - `Spec doc:` `<path-or-doc-name>`
 - `Spec revision:` `<commit-hash>`
+
+`Spec repo` в PR-описании указывает только внешний репозиторий документации и не создаёт живой реестр в основном проекте.
 
 ## Этап 18. Закрытие stream
 
@@ -591,7 +580,7 @@ Stream считается полностью закрытым только ко�
 Нужно различать два типа хвоста:
 
 1. runtime/release tail: открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy и smoke; это жёсткие blockers
-2. spec/admin tail: `Spec doc` status, `streams/README.md`, stream-level запись в `active-specs.md`, `archive pending`; это обязательные follow-up, но не отдельный rollout gate сами по себе
+2. spec/admin tail: `Spec doc` status, `streams/README.md`, запись в `active-streams.md`, `archive pending`; это обязательные follow-up, но не отдельный rollout gate сами по себе
 
 ### Spec Closure Checklist
 
@@ -600,7 +589,7 @@ Stream считается полностью закрытым только ко�
 1. сверить фактический runtime / validated diff / acceptance с внешним `Spec doc`
 2. обновить статус в самом `Spec doc`, если документ всё ещё содержит собственный статусный блок
 3. обновить каноническую запись во внешнем `streams/README.md`
-4. синхронизировать локальный [docs/reference/active-specs.md](/Users/abrikosov/Documents/Проект-1/docs/reference/active-specs.md): оставить там только реально открытые существенные stream-ы, а закрытую запись удалить или заменить актуальной; по умолчанию это делается в том же открывающем/закрывающем шаге, а отдельный `docs-only` sync нужен только как fallback
+4. синхронизировать внешний `active-streams.md`: оставить там только реально открытые существенные stream-ы, а закрытую запись удалить или заменить актуальной
 5. если перенос документа в `archive/` не делается в том же шаге, явно оставить документ в состоянии `implemented` с отдельным follow-up `archive pending`
 
 Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
