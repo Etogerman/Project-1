@@ -16,17 +16,24 @@ Route::post('/webhooks/telegram/{channel}', [BotWebhookController::class, 'teleg
 Route::post('/webhooks/max/{channel}', [BotWebhookController::class, 'max'])
     ->name('webhooks.max.handle');
 
-Route::post('/internal/gateway/telegram-account/{channel}/messages', [TelegramAccountGatewayController::class, 'inboundMessage'])
-    ->name('internal.telegram-account.messages.handle');
+Route::middleware('throttle:telegram-account-gateway')
+    ->prefix('/internal/gateway/telegram-account/{channel}')
+    ->group(function (): void {
+        Route::post('/messages', [TelegramAccountGatewayController::class, 'inboundMessage'])
+            ->name('internal.telegram-account.messages.handle');
 
-Route::post('/internal/gateway/telegram-account/{channel}/runtime-state', [TelegramAccountGatewayController::class, 'runtimeState'])
-    ->name('internal.telegram-account.runtime-state.handle');
-Route::post('/internal/gateway/telegram-account/{channel}/peer-sync-state', [TelegramAccountGatewayController::class, 'peerSyncState'])
-    ->name('internal.telegram-account.peer-sync-state.handle');
-Route::post('/internal/gateway/telegram-account/{channel}/outgoing-messages/claim', [TelegramAccountGatewayController::class, 'claimOutgoingMessage'])
-    ->name('internal.telegram-account.outgoing-messages.claim');
-Route::post('/internal/gateway/telegram-account/{channel}/outgoing-messages/{outgoingMessage}/result', [TelegramAccountGatewayController::class, 'outgoingMessageResult'])
-    ->name('internal.telegram-account.outgoing-messages.result');
+        Route::post('/runtime-state', [TelegramAccountGatewayController::class, 'runtimeState'])
+            ->name('internal.telegram-account.runtime-state.handle');
+
+        Route::post('/peer-sync-state', [TelegramAccountGatewayController::class, 'peerSyncState'])
+            ->name('internal.telegram-account.peer-sync-state.handle');
+
+        Route::post('/outgoing-messages/claim', [TelegramAccountGatewayController::class, 'claimOutgoingMessage'])
+            ->name('internal.telegram-account.outgoing-messages.claim');
+
+        Route::post('/outgoing-messages/{outgoingMessage}/result', [TelegramAccountGatewayController::class, 'outgoingMessageResult'])
+            ->name('internal.telegram-account.outgoing-messages.result');
+    });
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])
     ->middleware('throttle:bitrix24-install')
