@@ -10,6 +10,8 @@ final readonly class DialogRouteStatusData
 
     public const CODE_NOT_BOT_CHANNEL = 'not_bot_channel';
 
+    public const CODE_ACCOUNT_NOT_READY = 'account_not_ready';
+
     public const CODE_MISSING_TOKEN = 'missing_token';
 
     public const CODE_MISSING_CHAT_ID = 'missing_chat_id';

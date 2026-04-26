@@ -2,16 +2,16 @@
 
 namespace App\Providers;
 
-use App\Models\AutoReplyRule;
 use App\Models\AutoReplyCategory;
+use App\Models\AutoReplyRule;
 use App\Models\Bitrix24Connection;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Scenario;
 use App\Models\User;
-use App\Policies\AutoReplyRulePolicy;
 use App\Policies\AutoReplyCategoryPolicy;
+use App\Policies\AutoReplyRulePolicy;
 use App\Policies\Bitrix24ConnectionPolicy;
 use App\Policies\ChannelPolicy;
 use App\Policies\ContactPolicy;
@@ -62,6 +62,21 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perMinute(max(1, (int) config('bitrix24.rate_limits.openlines.max_per_minute', 300)))
                 ->by($this->resolveBitrix24CallbackRateLimitKey($request));
         });
+
+        RateLimiter::for('telegram-account-gateway', function (Request $request): Limit {
+            return Limit::perMinute(max(1, (int) config('bots.telegram_account.gateway_rate_limit_per_minute', 120)))
+                ->by($this->resolveTelegramAccountGatewayRateLimitKey($request));
+        });
+    }
+
+    private function resolveTelegramAccountGatewayRateLimitKey(Request $request): string
+    {
+        $channel = $request->route('channel');
+        $channelKey = $channel instanceof Channel
+            ? (string) $channel->getKey()
+            : (is_scalar($channel) ? (string) $channel : 'unknown-channel');
+
+        return $channelKey.':'.($request->ip() ?: 'unknown');
     }
 
     private function resolveBitrix24CallbackRateLimitKey(Request $request): string
