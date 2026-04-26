@@ -35,6 +35,26 @@ class TelegramAccountGatewayControllerTest extends TestCase
         )->assertForbidden();
     }
 
+    public function test_gateway_internal_endpoints_are_rate_limited(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+        config()->set('bots.telegram_account.gateway_rate_limit_per_minute', 1);
+
+        $channel = $this->createTelegramAccountChannel();
+        $headers = ['Authorization' => 'Bearer gateway-secret'];
+        $payload = $this->runtimeStatePayload(channel: $channel);
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.240'])
+            ->withHeaders($headers)
+            ->postJson(route('internal.telegram-account.runtime-state.handle', ['channel' => $channel]), $payload)
+            ->assertOk();
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.240'])
+            ->withHeaders($headers)
+            ->postJson(route('internal.telegram-account.runtime-state.handle', ['channel' => $channel]), $payload)
+            ->assertStatus(429);
+    }
+
     public function test_gateway_stores_private_live_event_and_updates_read_model_without_bot_dispatch(): void
     {
         Queue::fake();
@@ -165,6 +185,67 @@ class TelegramAccountGatewayControllerTest extends TestCase
 
         $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PROCESSING, $outgoing->status);
         $this->assertNotNull($outgoing->claimed_at);
+    }
+
+    public function test_gateway_marks_stale_processing_account_reply_failed_before_next_claim(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $dialog = $this->createLiveTelegramAccountDialog($channel, '700024', '900024');
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $firstMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Первый ответ завис после claim',
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_message', true);
+
+        $staleOutgoing = TelegramAccountOutgoingMessage::query()
+            ->where('message_id', $firstMessage->id)
+            ->firstOrFail();
+
+        $staleOutgoing->forceFill([
+            'claimed_at' => now()->subMinutes(11),
+        ])->save();
+
+        $secondMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Второй ответ можно забрать',
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_message', true)
+            ->assertJsonPath('outgoing_message.message_id', $secondMessage->id);
+
+        $staleOutgoing->refresh();
+        $firstMessage->refresh();
+
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_FAILED, $staleOutgoing->status);
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_FAILED, data_get($firstMessage->raw_payload, 'delivery_status'));
+        $this->assertSame(
+            'Gateway did not report delivery result before processing timeout.',
+            data_get($firstMessage->raw_payload, 'error_message'),
+        );
+
+        $this->assertDatabaseHas('telegram_account_outgoing_messages', [
+            'message_id' => $secondMessage->id,
+            'status' => TelegramAccountOutgoingMessage::STATUS_PROCESSING,
+        ]);
     }
 
     public function test_gateway_stores_successful_outgoing_account_reply_result(): void

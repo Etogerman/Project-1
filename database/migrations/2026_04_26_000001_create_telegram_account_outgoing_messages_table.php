@@ -28,6 +28,7 @@ return new class extends Migration
             $table->timestamps();
 
             $table->index(['channel_id', 'status', 'id']);
+            $table->index(['channel_id', 'status', 'claimed_at']);
             $table->index(['dialog_id', 'status']);
         });
     }
