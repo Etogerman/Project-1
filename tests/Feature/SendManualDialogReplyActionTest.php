@@ -3,10 +3,12 @@
 namespace Tests\Feature;
 
 use App\Models\Channel;
+use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\TelegramAccountOutgoingMessage;
 use App\Models\User;
 use App\Services\Bots\SendManualDialogReplyAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -428,6 +430,60 @@ class SendManualDialogReplyActionTest extends TestCase
             && $request['text'] === 'MAX user route через dialog');
     }
 
+    public function test_send_manual_dialog_reply_queues_telegram_account_reply_for_gateway(): void
+    {
+        Http::fake();
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createTelegramAccountDialog(assignedUserId: $employee->id, externalChatId: 'account-chat-100');
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Ответ через Telegram account',
+        );
+
+        $outgoing = TelegramAccountOutgoingMessage::query()->firstOrFail();
+
+        $this->assertSame($dialog->id, $outboundMessage->dialog_id);
+        $this->assertSame(Message::DIRECTION_OUTBOUND, $outboundMessage->direction);
+        $this->assertSame(Message::KIND_OUTBOUND_MANUAL_REPLY, $outboundMessage->message_kind);
+        $this->assertNull($outboundMessage->external_message_id);
+        $this->assertSame('telegram_account_gateway', data_get($outboundMessage->raw_payload, 'provider'));
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, data_get($outboundMessage->raw_payload, 'delivery_status'));
+        $this->assertSame($outgoing->id, data_get($outboundMessage->raw_payload, 'outgoing_message_id'));
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, $outgoing->status);
+        $this->assertSame('account-chat-100', $outgoing->external_chat_id);
+        $this->assertSame('Ответ через Telegram account', $outgoing->text);
+        $this->assertNull($dialog->channel->fresh()->last_reply_sent_at);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_send_manual_dialog_reply_rejects_telegram_account_html_until_gateway_supports_it(): void
+    {
+        Http::fake();
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createTelegramAccountDialog(assignedUserId: $employee->id, externalChatId: 'account-chat-html');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Для Telegram account пока доступен только простой текст.');
+
+        app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            '<b>HTML пока нельзя</b>',
+            Message::TEXT_FORMAT_HTML,
+        );
+    }
+
     public function test_send_manual_dialog_reply_fails_when_exact_dialog_has_no_sendable_route(): void
     {
         Http::fake();
@@ -506,5 +562,50 @@ class SendManualDialogReplyActionTest extends TestCase
         ]);
 
         return $dialog->fresh(['contact.assignedUser', 'channel', 'currentContactIdentity']);
+    }
+
+    protected function createTelegramAccountDialog(?int $assignedUserId, string $externalChatId): Dialog
+    {
+        $contact = Contact::factory()->create([
+            'assigned_user_id' => $assignedUserId,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-account-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => $externalChatId,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
+            'runtime_payload' => [],
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $externalChatId,
+            'external_message_id' => 'telegram-account-inbound',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        return $dialog->fresh(['contact.assignedUser', 'channel.runtimeState', 'currentContactIdentity']);
     }
 }

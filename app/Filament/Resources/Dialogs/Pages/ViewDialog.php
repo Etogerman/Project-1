@@ -19,14 +19,15 @@ use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
-use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
-use App\Services\Dialogs\UpdateDialogStageAction;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
+use App\Services\Dialogs\UpdateDialogStageAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
@@ -276,10 +277,15 @@ class ViewDialog extends ViewRecord
             $this->syncDialogInboxStatusSelection();
             $this->dispatch('dialog-reply-sent');
 
+            $isQueuedForGateway = data_get($outboundMessage->raw_payload, 'provider') === 'telegram_account_gateway'
+                && data_get($outboundMessage->raw_payload, 'delivery_status') === 'pending';
+
             Notification::make()
                 ->success()
-                ->title('Ответ отправлен')
-                ->body('Сообщение отправлено и сохранено в истории диалога.')
+                ->title($isQueuedForGateway ? 'Ответ поставлен в очередь' : 'Ответ отправлен')
+                ->body($isQueuedForGateway
+                    ? 'Gateway заберёт сообщение и отправит его через Telegram account.'
+                    : 'Сообщение отправлено и сохранено в истории диалога.')
                 ->send();
         } catch (Throwable $throwable) {
             Notification::make()
@@ -993,7 +999,7 @@ class ViewDialog extends ViewRecord
 
     protected function formatPeerSyncTimestamp(mixed $value): string
     {
-        return $value instanceof \Illuminate\Support\Carbon
+        return $value instanceof Carbon
             ? $value->format('d.m.Y H:i')
             : '—';
     }

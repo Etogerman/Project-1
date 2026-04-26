@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Models\Channel;
+use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
@@ -199,6 +200,67 @@ class ResolveDialogRouteStatusActionTest extends TestCase
         $this->assertSame(DialogRouteStatusData::CODE_NOT_BOT_CHANNEL, $status->code);
         $this->assertSame('Не bot-канал', $status->label);
         $this->assertFalse($status->isSendable);
+    }
+
+    public function test_resolve_dialog_route_status_marks_ready_telegram_account_route_when_gateway_is_live(): void
+    {
+        $dialog = $this->createDialog(
+            channelAttributes: [
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+                'credentials' => [],
+                'bot_token_present' => false,
+            ],
+            dialogAttributes: [
+                'external_chat_id' => 'telegram-account-chat',
+            ],
+        );
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $dialog->channel_id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
+            'runtime_payload' => [],
+        ]);
+
+        $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog->fresh(['channel.runtimeState', 'currentContactIdentity']));
+
+        $this->assertSame(DialogRouteStatusData::CODE_READY, $status->code);
+        $this->assertSame('Маршрут готов', $status->label);
+        $this->assertTrue($status->isSendable);
+        $this->assertTrue(app(CanSendThroughDialogAction::class)->handle($dialog->fresh(['channel.runtimeState', 'currentContactIdentity'])));
+    }
+
+    public function test_resolve_dialog_route_status_blocks_telegram_account_route_until_gateway_is_live(): void
+    {
+        $dialog = $this->createDialog(
+            channelAttributes: [
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+                'credentials' => [],
+                'bot_token_present' => false,
+            ],
+            dialogAttributes: [
+                'external_chat_id' => 'telegram-account-chat',
+            ],
+        );
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $dialog->channel_id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_PENDING,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_AWAITING_QR,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_IDLE,
+            'runtime_payload' => [],
+        ]);
+
+        $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog->fresh(['channel.runtimeState', 'currentContactIdentity']));
+
+        $this->assertSame(DialogRouteStatusData::CODE_ACCOUNT_NOT_READY, $status->code);
+        $this->assertSame('Gateway не готов', $status->label);
+        $this->assertFalse($status->isSendable);
+        $this->assertSame('У этого диалога сейчас нет рабочего маршрута для отправки ответа.', $status->blockedReason);
     }
 
     public function test_resolve_dialog_route_status_marks_unsupported_platform(): void

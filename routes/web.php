@@ -23,6 +23,10 @@ Route::post('/internal/gateway/telegram-account/{channel}/runtime-state', [Teleg
     ->name('internal.telegram-account.runtime-state.handle');
 Route::post('/internal/gateway/telegram-account/{channel}/peer-sync-state', [TelegramAccountGatewayController::class, 'peerSyncState'])
     ->name('internal.telegram-account.peer-sync-state.handle');
+Route::post('/internal/gateway/telegram-account/{channel}/outgoing-messages/claim', [TelegramAccountGatewayController::class, 'claimOutgoingMessage'])
+    ->name('internal.telegram-account.outgoing-messages.claim');
+Route::post('/internal/gateway/telegram-account/{channel}/outgoing-messages/{outgoingMessage}/result', [TelegramAccountGatewayController::class, 'outgoingMessageResult'])
+    ->name('internal.telegram-account.outgoing-messages.result');
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])
     ->middleware('throttle:bitrix24-install')
