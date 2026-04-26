@@ -13,6 +13,7 @@ use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use App\Services\Messages\PrepareMessageContentAction;
+use App\Services\TelegramAccount\QueueTelegramAccountManualReplyAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -28,6 +29,7 @@ class SendManualDialogReplyAction
         protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
         protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreManualOutboundMessageAction $storeManualOutboundMessageAction,
+        protected QueueTelegramAccountManualReplyAction $queueTelegramAccountManualReplyAction,
         protected PrepareMessageContentAction $prepareMessageContentAction,
     ) {}
 
@@ -60,6 +62,53 @@ class SendManualDialogReplyAction
         }
 
         $replyToMessage = $this->resolveReplyToMessage($dialog);
+
+        if ($channel->isAccountConnection()) {
+            try {
+                $outboundMessage = $this->queueTelegramAccountManualReplyAction->handle(
+                    $dialog,
+                    $employee,
+                    $content,
+                    $replyToMessage,
+                );
+            } catch (Throwable $throwable) {
+                $channel->markError($throwable);
+
+                $this->channelActivityLogger->error(
+                    $channel,
+                    'contact.reply_queue_failed',
+                    'Ручной ответ не поставлен в очередь gateway.',
+                    $this->buildFailureLogContext(
+                        $dialog,
+                        $effectiveContact,
+                        $employee,
+                        $replyToMessage,
+                        $content->textFormat,
+                    ),
+                );
+
+                throw $throwable;
+            }
+
+            $this->channelActivityLogger->info(
+                $channel,
+                'contact.reply_queued',
+                'Ручной ответ поставлен в очередь gateway.',
+                [
+                    'contact_id' => $effectiveContact->id,
+                    'dialog_id' => $dialog->id,
+                    'contact_identity_id' => $dialog->current_contact_identity_id,
+                    'employee_id' => $employee->id,
+                    'platform' => $channel->platform,
+                    'external_chat_id' => $dialog->external_chat_id,
+                    'outgoing_message_id' => data_get($outboundMessage->raw_payload, 'outgoing_message_id'),
+                    'reply_to_message_id' => $replyToMessage?->id,
+                    'text_format' => $content->textFormat,
+                ],
+            );
+
+            return $outboundMessage;
+        }
 
         try {
             $deliveryResult = $this->sendTextMessage($dialog, $content->transportText, $content->textFormat);

@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Filament\Resources\Dialogs\DialogResource;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
@@ -13,7 +12,9 @@ use App\Models\ChannelPeerSyncState;
 use App\Models\ChannelRuntimeState;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\TelegramAccountOutgoingMessage;
 use App\Models\User;
+use App\Services\Bots\SendManualDialogReplyAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
@@ -127,6 +128,98 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertCount(2, $media);
         $this->assertSame(Message::MEDIA_DOWNLOAD_STATUS_PENDING, data_get($media, '0.download_status'));
         $this->assertSame(Message::MEDIA_DOWNLOAD_STATUS_PENDING, data_get($media, '1.download_status'));
+    }
+
+    public function test_gateway_claims_queued_manual_account_reply(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $dialog = $this->createLiveTelegramAccountDialog($channel, '700021', '900021');
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Ответ из админки через account',
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('has_message', true)
+            ->assertJsonPath('outgoing_message.channel_id', $channel->id)
+            ->assertJsonPath('outgoing_message.dialog_id', $dialog->id)
+            ->assertJsonPath('outgoing_message.external_chat_id', '700021')
+            ->assertJsonPath('outgoing_message.text', 'Ответ из админки через account')
+            ->assertJsonPath('outgoing_message.text_format', Message::TEXT_FORMAT_PLAIN_TEXT)
+            ->assertJsonPath('outgoing_message.attempts', 1);
+
+        $outgoing = TelegramAccountOutgoingMessage::query()->firstOrFail();
+
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PROCESSING, $outgoing->status);
+        $this->assertNotNull($outgoing->claimed_at);
+    }
+
+    public function test_gateway_stores_successful_outgoing_account_reply_result(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $dialog = $this->createLiveTelegramAccountDialog($channel, '700022', '900022');
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Подтверждённый ответ',
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_message', true);
+
+        $outgoing = TelegramAccountOutgoingMessage::query()->firstOrFail();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.outgoing-messages.result', [
+            'channel' => $channel,
+            'outgoingMessage' => $outgoing,
+        ]), [
+            'status' => TelegramAccountOutgoingMessage::STATUS_SENT,
+            'external_message_id' => 'tdlib-outgoing-100',
+            'raw_payload' => [
+                'tdlib_message_id' => 'tdlib-outgoing-100',
+            ],
+        ])->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('stored', true)
+            ->assertJsonPath('status', TelegramAccountOutgoingMessage::STATUS_SENT)
+            ->assertJsonPath('message_id', $outboundMessage->id);
+
+        $outgoing->refresh();
+        $outboundMessage->refresh();
+        $channel->refresh();
+
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_SENT, $outgoing->status);
+        $this->assertSame('tdlib-outgoing-100', $outgoing->sent_external_message_id);
+        $this->assertSame('tdlib-outgoing-100', $outboundMessage->external_message_id);
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_SENT, data_get($outboundMessage->raw_payload, 'delivery_status'));
+        $this->assertSame('tdlib-outgoing-100', data_get($outboundMessage->raw_payload, 'external_message_id'));
+        $this->assertNotNull($channel->last_reply_sent_at);
     }
 
     public function test_gateway_skips_non_private_peer_without_materializing_message_or_peer_sync_state(): void
@@ -631,6 +724,33 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'occurred_at' => '2026-04-23T12:00:00+03:00',
             'history_source' => $historySource,
         ];
+    }
+
+    private function createLiveTelegramAccountDialog(
+        Channel $channel,
+        string $externalChatId,
+        string $externalMessageId,
+    ): Dialog {
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: $externalChatId,
+                externalUserId: 'tg-account-user-'.$externalChatId,
+                externalMessageId: $externalMessageId,
+                text: 'Входящее для проверки ответа',
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        return Dialog::query()
+            ->where('channel_id', $channel->id)
+            ->where('external_chat_id', $externalChatId)
+            ->firstOrFail()
+            ->fresh(['contact.assignedUser', 'channel.runtimeState', 'currentContactIdentity']);
     }
 
     /**

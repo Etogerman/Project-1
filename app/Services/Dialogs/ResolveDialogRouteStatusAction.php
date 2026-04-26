@@ -33,7 +33,10 @@ class ResolveDialogRouteStatusAction
             );
         }
 
-        if ($this->dialogRoutePredicate->isBlockedByUser($dialog)) {
+        if (
+            $this->dialogRoutePredicate->isBotChannel($channel)
+            && $this->dialogRoutePredicate->isBlockedByUser($dialog)
+        ) {
             return new DialogRouteStatusData(
                 code: DialogRouteStatusData::CODE_BLOCKED_BY_USER,
                 label: 'Бот заблокирован',
@@ -50,6 +53,28 @@ class ResolveDialogRouteStatusAction
                 'gray',
                 false,
             );
+        }
+
+        if ($this->dialogRoutePredicate->isTelegramAccountChannel($channel)) {
+            if (! $this->dialogRoutePredicate->hasTelegramRouteSource($dialog)) {
+                return $this->make(
+                    DialogRouteStatusData::CODE_MISSING_CHAT_ID,
+                    'Нет chat id',
+                    'warning',
+                    false,
+                );
+            }
+
+            if (! $this->dialogRoutePredicate->hasReadyTelegramAccountRuntime($channel)) {
+                return $this->make(
+                    DialogRouteStatusData::CODE_ACCOUNT_NOT_READY,
+                    'Gateway не готов',
+                    'warning',
+                    false,
+                );
+            }
+
+            return $this->make(DialogRouteStatusData::CODE_READY, 'Маршрут готов', 'success', true);
         }
 
         if (! $this->dialogRoutePredicate->isBotChannel($channel)) {
