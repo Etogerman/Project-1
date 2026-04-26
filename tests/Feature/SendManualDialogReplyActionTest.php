@@ -591,7 +591,11 @@ class SendManualDialogReplyActionTest extends TestCase
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
             'last_gateway_heartbeat_at' => now(),
-            'runtime_payload' => [],
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => true,
+                ],
+            ],
         ]);
 
         Message::factory()->create([

@@ -97,7 +97,8 @@ class DialogRoutePredicate
 
         return $runtimeState->auth_status === ChannelRuntimeState::AUTH_STATUS_AUTHORIZED
             && $runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY
-            && $runtimeState->sync_status === ChannelRuntimeState::SYNC_STATUS_LIVE;
+            && $runtimeState->sync_status === ChannelRuntimeState::SYNC_STATUS_LIVE
+            && data_get($runtimeState->runtime_payload, 'gateway_capabilities.outgoing_replies') === true;
     }
 
     public function isReady(Dialog $dialog): bool
