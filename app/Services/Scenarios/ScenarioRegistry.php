@@ -132,10 +132,6 @@ class ScenarioRegistry
         $compatibleScenarioCodes = [];
 
         foreach ($this->definitions() as $scenarioCode => $definition) {
-            if ($scenarioCode === Scenario::CONSTRUCTOR_WORKSPACE_CODE) {
-                continue;
-            }
-
             if ($this->supportsChannel($scenarioCode, $channel)) {
                 $compatibleScenarioCodes[] = $scenarioCode;
             }
@@ -145,13 +141,24 @@ class ScenarioRegistry
     }
 
     /**
+     * @return list<string>
+     */
+    public function selectableScenarioCodesForChannel(Channel $channel): array
+    {
+        return array_values(array_filter(
+            $this->compatibleScenarioCodesForChannel($channel),
+            static fn (string $scenarioCode): bool => $scenarioCode !== Scenario::CONSTRUCTOR_WORKSPACE_CODE,
+        ));
+    }
+
+    /**
      * @return array<string, string>
      */
     public function optionsForChannel(Channel $channel): array
     {
         $options = [];
 
-        foreach ($this->compatibleScenarioCodesForChannel($channel) as $scenarioCode) {
+        foreach ($this->selectableScenarioCodesForChannel($channel) as $scenarioCode) {
             $options[$scenarioCode] = $this->label($scenarioCode) ?? $scenarioCode;
         }
 

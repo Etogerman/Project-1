@@ -10,8 +10,12 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ChannelRuntimeState;
 use App\Models\Message;
+use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
+use App\Models\ScenarioVersion;
 use App\Models\User;
+use App\Services\Scenarios\CreateScenarioAction;
+use App\Services\Scenarios\PublishScenarioVersionAction;
 use Filament\Facades\Filament;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -668,6 +672,77 @@ class FilamentChannelsResourceTest extends TestCase
             'channel_id' => $channel->id,
             'scenario_code' => 'warmup',
             'is_active' => false,
+        ]);
+    }
+
+    public function test_manage_scenarios_preserves_hidden_constructor_workspace_binding(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $workspace = app(CreateScenarioAction::class)->handle([
+            'code' => Scenario::CONSTRUCTOR_WORKSPACE_CODE,
+            'name' => 'Конструктор',
+            'is_active' => true,
+        ]);
+        $workspace->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => [
+                'version' => 1,
+                'start_block_id' => 'welcome',
+                'triggers' => [
+                    [
+                        'type' => 'parameter',
+                        'value' => 'constructor_hidden',
+                    ],
+                ],
+                'blocks' => [
+                    'welcome' => [
+                        'type' => 'message',
+                        'text' => 'Ответ из конструктора',
+                        'text_format' => 'plain_text',
+                        'next' => 'done',
+                    ],
+                    'done' => [
+                        'type' => 'complete',
+                    ],
+                ],
+            ],
+        ])->save();
+
+        $publishedVersion = app(PublishScenarioVersionAction::class)
+            ->handle($workspace->draftVersion()->firstOrFail());
+
+        $this->assertSame(ScenarioVersion::STATUS_PUBLISHED, $publishedVersion->status);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => Scenario::CONSTRUCTOR_WORKSPACE_CODE,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('manageScenarios', $channel)
+            ->assertTableActionDataSet([
+                'scenario_codes' => [],
+            ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('manageScenarios', $channel, [
+                'scenario_codes' => [],
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => Scenario::CONSTRUCTOR_WORKSPACE_CODE,
+            'is_active' => true,
         ]);
     }
 

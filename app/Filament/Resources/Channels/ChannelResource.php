@@ -579,12 +579,12 @@ class ChannelResource extends Resource
                         ->color('success'))
                     ->fillForm(function (Channel $record): array {
                         $scenarioRegistry = app(ScenarioRegistry::class);
-                        $compatibleScenarioCodes = $scenarioRegistry->compatibleScenarioCodesForChannel($record);
+                        $selectableScenarioCodes = $scenarioRegistry->selectableScenarioCodesForChannel($record);
 
                         return [
                             'scenario_codes' => $record->scenarioBindings()
                                 ->active()
-                                ->whereIn('scenario_code', $compatibleScenarioCodes)
+                                ->whereIn('scenario_code', $selectableScenarioCodes)
                                 ->pluck('scenario_code')
                                 ->all(),
                         ];
