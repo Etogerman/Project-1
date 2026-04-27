@@ -6,9 +6,6 @@ use App\Models\AutoReplyRule;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
-use App\Models\ScenarioBuilderBlock;
-use App\Services\Scenarios\ResolveScenarioBuilderStartBlockAction;
-use App\Services\Scenarios\SyncScenarioBuilderStartBlockAction;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -21,9 +18,6 @@ class BotAutoReplyService
         protected ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
         protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
-        protected StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
-        protected ResolveScenarioBuilderStartBlockAction $resolveScenarioBuilderStartBlockAction,
-        protected SyncScenarioBuilderStartBlockAction $syncScenarioBuilderStartBlockAction,
     ) {}
 
     public function handle(Message $storedMessage): void
@@ -62,10 +56,6 @@ class BotAutoReplyService
                 ],
             );
 
-            return;
-        }
-
-        if ($contact instanceof Contact && $this->handleScenarioBuilderStartBlock($storedMessage, $channel, $contact, $baseContext)) {
             return;
         }
 
@@ -151,97 +141,6 @@ class BotAutoReplyService
         }
 
         $this->dispatchResolvedRule($storedMessage, $matchedRule, $channel, $contact, $baseContext, $routeDialog);
-    }
-
-    /**
-     * @param  array<string, mixed>  $baseContext
-     */
-    protected function handleScenarioBuilderStartBlock(
-        Message $storedMessage,
-        \App\Models\Channel $channel,
-        Contact $contact,
-        array $baseContext,
-    ): bool {
-        $matchedBlock = $this->resolveScenarioBuilderStartBlockAction->handle(
-            $channel,
-            $contact,
-            $storedMessage->text,
-            $storedMessage->message_parameter,
-        );
-
-        if (! $matchedBlock instanceof ScenarioBuilderBlock) {
-            return false;
-        }
-
-        $matchedBlock->loadMissing('scenarioVersion.scenario');
-
-        $replyText = $this->syncScenarioBuilderStartBlockAction->replyText($matchedBlock);
-        $sendResult = $this->sendBotDialogTextAction->handleMessage($storedMessage, $replyText);
-
-        if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
-            $this->channelActivityLogger->info(
-                $channel,
-                'bot.reply_skipped_dialog_not_sendable',
-                'Автоответ не отправлен: диалог сейчас недоступен для отправки.',
-                $baseContext + [
-                    'auto_reply_source' => 'scenario_builder_start_condition',
-                    'scenario_id' => $matchedBlock->scenarioVersion?->scenario?->id,
-                    'scenario_code' => $matchedBlock->scenarioVersion?->scenario?->code,
-                    'scenario_builder_block_id' => $matchedBlock->id,
-                    'scenario_builder_block_title' => $matchedBlock->title,
-                    'dialog_id' => $sendResult->dialog?->id ?? $storedMessage->dialog_id,
-                    'route_status_code' => $sendResult->routeStatus->code,
-                    'blocked_reason' => $sendResult->routeStatus->blockedReason,
-                ],
-            );
-
-            return true;
-        }
-
-        $this->channelActivityLogger->info(
-            $channel,
-            'bot.scenario_builder_start_condition_matched',
-            'Выбрано стартовое условие конструктора.',
-            $baseContext + [
-                'auto_reply_source' => 'scenario_builder_start_condition',
-                'scenario_id' => $matchedBlock->scenarioVersion?->scenario?->id,
-                'scenario_code' => $matchedBlock->scenarioVersion?->scenario?->code,
-                'scenario_builder_block_id' => $matchedBlock->id,
-                'scenario_builder_block_title' => $matchedBlock->title,
-                'match_scope' => $this->syncScenarioBuilderStartBlockAction->conditionMatch($matchedBlock),
-            ],
-        );
-
-        $deliveryResult = $sendResult->deliveryResult;
-
-        $this->storeOutboundScenarioMessageAction->handle(
-            $channel,
-            $storedMessage,
-            $deliveryResult,
-            Message::SENT_BY_SYSTEM_CODE_SCENARIO_BUILDER_START_CONDITION,
-            $sendResult->dialog,
-        );
-
-        $channel->markReplySent();
-
-        $this->channelActivityLogger->info(
-            $channel,
-            'bot.reply_sent',
-            'Автоответ отправлен.',
-            $baseContext + [
-                'auto_reply_source' => 'scenario_builder_start_condition',
-                'external_chat_id' => $sendResult->dialog?->external_chat_id ?? $storedMessage->external_chat_id,
-                'external_user_id' => $sendResult->dialog?->currentContactIdentity?->external_user_id ?? $storedMessage->contactIdentity?->external_user_id,
-                'outbound_external_message_id' => $deliveryResult->externalMessageId,
-                'scenario_id' => $matchedBlock->scenarioVersion?->scenario?->id,
-                'scenario_code' => $matchedBlock->scenarioVersion?->scenario?->code,
-                'scenario_builder_block_id' => $matchedBlock->id,
-                'scenario_builder_block_title' => $matchedBlock->title,
-                'match_scope' => $this->syncScenarioBuilderStartBlockAction->conditionMatch($matchedBlock),
-            ],
-        );
-
-        return true;
     }
 
     /**
