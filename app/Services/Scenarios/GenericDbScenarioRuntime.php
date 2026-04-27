@@ -5,6 +5,7 @@ namespace App\Services\Scenarios;
 use App\Data\Messages\PreparedMessageContentData;
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -61,7 +62,6 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             ! in_array($message->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
             || $message->message_kind !== Message::KIND_INBOUND_USER
             || $message->dialog_id === null
-            || ! filled($message->message_parameter)
             || ($message->contact !== null && ! $message->contact->isAutoReplyEnabled())
         ) {
             return false;
@@ -77,15 +77,58 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             return false;
         }
 
-        $messageParameter = trim((string) $message->message_parameter);
-
         foreach ($schema['triggers'] as $trigger) {
-            if ($trigger['value'] === $messageParameter) {
+            if ($this->messageMatchesTrigger($message, $trigger)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /**
+     * @param  array{type: string, value?: string, match_scope?: string, match?: string}  $trigger
+     */
+    private function messageMatchesTrigger(Message $message, array $trigger): bool
+    {
+        $matchScope = $this->normalizeTriggerMatchScope($trigger['match_scope'] ?? ($trigger['match'] ?? null));
+
+        if ($matchScope === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+            return true;
+        }
+
+        $expectedValue = AutoReplyRule::normalizeKeyword((string) ($trigger['value'] ?? ''));
+        $messageText = AutoReplyRule::normalizeKeyword($message->text);
+        $messageParameter = AutoReplyRule::normalizeKeyword($message->message_parameter);
+
+        if (! filled($expectedValue)) {
+            return false;
+        }
+
+        return match ($matchScope) {
+            AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT => filled($messageText)
+                && str_contains((string) $messageText, (string) $expectedValue),
+            AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD => $messageText === $expectedValue,
+            AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER => $messageText === $expectedValue
+                || $messageParameter === $expectedValue,
+            default => $messageParameter === $expectedValue,
+        };
+    }
+
+    private function normalizeTriggerMatchScope(mixed $matchScope): string
+    {
+        $normalizedMatchScope = is_string($matchScope) && trim($matchScope) !== ''
+            ? trim($matchScope)
+            : AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER;
+
+        return match ($normalizedMatchScope) {
+            'exact' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'contains' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'starts_with', 'ends_with' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            default => array_key_exists($normalizedMatchScope, AutoReplyRule::matchScopeOptions())
+                ? $normalizedMatchScope
+                : AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+        };
     }
 
     public function start(ScenarioRun $run, Message $message): void

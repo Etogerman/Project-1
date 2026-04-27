@@ -48,14 +48,14 @@ class Scenario extends Model
     {
         return $this->hasOne(ScenarioVersion::class)
             ->where('status', ScenarioVersion::STATUS_PUBLISHED)
-            ->latestOfMany('version_number');
+            ->orderByDesc('version_number');
     }
 
     public function draftVersion(): HasOne
     {
         return $this->hasOne(ScenarioVersion::class)
             ->where('status', ScenarioVersion::STATUS_DRAFT)
-            ->latestOfMany('version_number');
+            ->orderByDesc('version_number');
     }
 
     protected function guardCode(): void
