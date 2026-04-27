@@ -639,10 +639,84 @@ JSON,
             'is_active' => true,
         ]);
         $this->assertNotNull(app(ScenarioRegistry::class)->makeRuntime(ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE));
-        $this->assertNotContains(
+        $this->assertContains(
             ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE,
             app(ScenarioRegistry::class)->compatibleScenarioCodesForChannel($channel),
         );
+        $this->assertArrayNotHasKey(
+            ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE,
+            app(ScenarioRegistry::class)->optionsForChannel($channel),
+        );
+    }
+
+    public function test_constructor_requires_channel_edit_permission_for_selected_channels(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Канал без права',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'scenarios.edit')
+            ->update(['granted' => true]);
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'channels.edit')
+            ->update(['granted' => false]);
+
+        $component = Livewire::actingAs($employee->fresh())
+            ->test(ScenarioConstructor::class);
+
+        $this->assertSame([], $component->instance()->channelOptions());
+
+        $component
+            ->set('draftStartTriggers', [
+                ['value' => 'no_channel_permission'],
+            ])
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartReplyText', 'Не должно сохраниться')
+            ->call('saveDraft')
+            ->assertHasErrors(['draftStartChannelIds']);
+
+        $this->assertDatabaseMissing('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE,
+        ]);
+    }
+
+    public function test_opening_constructor_does_not_reactivate_disabled_workspace(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $workspace = app(CreateScenarioAction::class)->handle([
+            'code' => ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE,
+            'name' => 'Конструктор',
+            'is_active' => true,
+        ]);
+        $workspace->forceFill([
+            'is_active' => false,
+            'is_archived' => true,
+        ])->save();
+
+        $this->actingAs($admin)
+            ->get(ScenarioConstructor::getUrl())
+            ->assertOk();
+
+        $this->assertDatabaseHas('scenarios', [
+            'id' => $workspace->id,
+            'is_active' => false,
+            'is_archived' => true,
+        ]);
     }
 
     public function test_admin_can_open_standalone_scenario_constructor(): void

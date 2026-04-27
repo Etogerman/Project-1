@@ -3,6 +3,7 @@
 namespace App\Services\Scenarios;
 
 use App\Models\Channel;
+use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -19,6 +20,7 @@ class SyncChannelScenarioBindingsAction
     public function handle(Channel $channel, array $selectedScenarioCodes): void
     {
         $compatibleScenarioCodes = $this->scenarioRegistry->compatibleScenarioCodesForChannel($channel);
+        $selectableScenarioCodes = $this->scenarioRegistry->selectableScenarioCodesForChannel($channel);
         $normalizedSelectedScenarioCodes = $this->normalizeSelectedScenarioCodes($selectedScenarioCodes);
 
         foreach ($normalizedSelectedScenarioCodes as $scenarioCode) {
@@ -28,19 +30,19 @@ class SyncChannelScenarioBindingsAction
                 ]);
             }
 
-            if (! in_array($scenarioCode, $compatibleScenarioCodes, true)) {
+            if (! in_array($scenarioCode, $selectableScenarioCodes, true)) {
                 throw ValidationException::withMessages([
                     'scenario_codes' => 'Выбранный сценарий недоступен для этого канала.',
                 ]);
             }
         }
 
-        DB::transaction(function () use ($channel, $compatibleScenarioCodes, $normalizedSelectedScenarioCodes): void {
+        DB::transaction(function () use ($channel, $compatibleScenarioCodes, $selectableScenarioCodes, $normalizedSelectedScenarioCodes): void {
             $existingBindings = $channel->scenarioBindings()
                 ->get()
                 ->keyBy('scenario_code');
 
-            foreach ($compatibleScenarioCodes as $scenarioCode) {
+            foreach ($selectableScenarioCodes as $scenarioCode) {
                 $binding = $existingBindings->get($scenarioCode);
                 $shouldBeActive = in_array($scenarioCode, $normalizedSelectedScenarioCodes, true);
 
@@ -68,6 +70,7 @@ class SyncChannelScenarioBindingsAction
             foreach ($existingBindings as $scenarioCode => $binding) {
                 if (
                     $binding instanceof ScenarioChannelBinding
+                    && $scenarioCode !== Scenario::CONSTRUCTOR_WORKSPACE_CODE
                     && $binding->is_active
                     && ! in_array($scenarioCode, $compatibleScenarioCodes, true)
                 ) {

@@ -23,6 +23,7 @@ use Filament\Support\Icons\Heroicon;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
 class ScenarioConstructor extends Page
@@ -241,6 +242,8 @@ class ScenarioConstructor extends Page
 
         abort_unless(auth()->user()?->can('update', $record) ?? false, 403);
 
+        $this->guardCanManageSelectedChannels();
+
         [$selectedBlockId, $selectedBlockIsPrimary] = DB::transaction(function () use ($record): array {
             $draftVersion = $record->draftVersion()->firstOrFail();
             $selectedBlockId = $this->selectedBuilderBlockId
@@ -290,6 +293,16 @@ class ScenarioConstructor extends Page
 
         if ($this->isConstructorWorkspace($record)) {
             DB::transaction(function () use ($record): void {
+                if ((bool) $record->is_archived || ! (bool) $record->is_active) {
+                    $record->forceFill([
+                        'name' => self::CONSTRUCTOR_WORKSPACE_NAME,
+                        'is_active' => true,
+                        'is_archived' => false,
+                    ])->save();
+
+                    app(ScenarioRegistry::class)->forgetCachedDefinitions();
+                }
+
                 $publishedVersion = app(PublishScenarioVersionAction::class)
                     ->handle($record->draftVersion()->firstOrFail());
 
@@ -435,7 +448,7 @@ class ScenarioConstructor extends Page
     public function channelOptions(): array
     {
         return Channel::query()
-            ->where('is_active', true)
+            ->whereKey($this->manageableConstructorChannelIds())
             ->orderBy('id')
             ->get()
             ->mapWithKeys(fn (Channel $channel): array => [
@@ -577,15 +590,7 @@ class ScenarioConstructor extends Page
                 ]);
             }
 
-            if ((bool) $existingScenario->is_archived || ! (bool) $existingScenario->is_active) {
-                $existingScenario->forceFill([
-                    'name' => self::CONSTRUCTOR_WORKSPACE_NAME,
-                    'is_active' => true,
-                    'is_archived' => false,
-                ])->save();
-            }
-
-            if (! $existingScenario->draftVersion()->exists()) {
+            if (! (bool) $existingScenario->is_archived && ! $existingScenario->draftVersion()->exists()) {
                 $lastVersionNumber = (int) $existingScenario->versions()->max('version_number');
 
                 ScenarioVersion::query()->create([
@@ -594,9 +599,9 @@ class ScenarioConstructor extends Page
                     'status' => ScenarioVersion::STATUS_DRAFT,
                     'schema_payload' => [],
                 ]);
-            }
 
-            app(ScenarioRegistry::class)->forgetCachedDefinitions();
+                app(ScenarioRegistry::class)->forgetCachedDefinitions();
+            }
 
             return $existingScenario->fresh(['draftVersion', 'publishedVersion', 'versions']);
         });
@@ -639,12 +644,19 @@ class ScenarioConstructor extends Page
             ->values()
             ->all();
 
-        ScenarioChannelBinding::query()
-            ->where('scenario_code', self::CONSTRUCTOR_WORKSPACE_CODE)
-            ->when($channelIds !== [], fn ($query) => $query->whereNotIn('channel_id', $channelIds))
-            ->update([
-                'is_active' => false,
-            ]);
+        $this->guardCanManageChannelIds($channelIds);
+
+        $manageableChannelIds = $this->manageableConstructorChannelIds();
+
+        if ($manageableChannelIds !== []) {
+            ScenarioChannelBinding::query()
+                ->where('scenario_code', self::CONSTRUCTOR_WORKSPACE_CODE)
+                ->whereIn('channel_id', $manageableChannelIds)
+                ->when($channelIds !== [], fn ($query) => $query->whereNotIn('channel_id', $channelIds))
+                ->update([
+                    'is_active' => false,
+                ]);
+        }
 
         foreach ($channelIds as $channelId) {
             ScenarioChannelBinding::query()->updateOrCreate(
@@ -656,6 +668,72 @@ class ScenarioConstructor extends Page
                     'is_active' => true,
                 ],
             );
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    protected function manageableConstructorChannelIds(): array
+    {
+        $user = auth()->user();
+
+        if (! $user instanceof User) {
+            return [];
+        }
+
+        return Channel::query()
+            ->where('is_active', true)
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (Channel $channel): bool => $user->can('update', $channel))
+            ->pluck('id')
+            ->map(fn (mixed $channelId): int => (int) $channelId)
+            ->all();
+    }
+
+    protected function guardCanManageSelectedChannels(): void
+    {
+        $this->guardCanManageChannelIds($this->draftStartChannelIds);
+    }
+
+    /**
+     * @param  array<int, mixed>  $channelIds
+     */
+    protected function guardCanManageChannelIds(array $channelIds): void
+    {
+        $normalizedChannelIds = collect($channelIds)
+            ->map(fn (mixed $channelId): int => (int) $channelId)
+            ->filter(fn (int $channelId): bool => $channelId > 0)
+            ->unique()
+            ->values();
+
+        if ($normalizedChannelIds->isEmpty()) {
+            return;
+        }
+
+        $channels = Channel::query()
+            ->whereKey($normalizedChannelIds->all())
+            ->get();
+
+        if ($channels->count() !== $normalizedChannelIds->count()) {
+            throw ValidationException::withMessages([
+                'draftStartChannelIds' => 'Выбранный канал не найден.',
+            ]);
+        }
+
+        if ($channels->contains(fn (Channel $channel): bool => ! (bool) $channel->is_active)) {
+            throw ValidationException::withMessages([
+                'draftStartChannelIds' => 'Выбранный канал недоступен.',
+            ]);
+        }
+
+        $user = auth()->user();
+
+        if (! $user instanceof User || $channels->contains(fn (Channel $channel): bool => ! $user->can('update', $channel))) {
+            throw ValidationException::withMessages([
+                'draftStartChannelIds' => 'Недостаточно прав для настройки выбранных каналов.',
+            ]);
         }
     }
 
