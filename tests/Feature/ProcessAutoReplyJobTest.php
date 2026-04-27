@@ -109,7 +109,7 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertSame($rule->display_name, $sentLog->context['rule_name']);
     }
 
-    public function test_job_sends_scenario_builder_start_condition_reply_from_draft(): void
+    public function test_job_keeps_draft_scenario_builder_out_of_live_auto_reply_runtime(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -162,6 +162,14 @@ class ProcessAutoReplyJobTest extends TestCase
             'value' => 'тест',
             'sort_order' => 1,
         ]);
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'keyword' => 'тест',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('тест'),
+            'reply_text' => 'Ответ обычного правила.',
+            'is_active' => true,
+        ]);
 
         $message = $this->createInboundMessage($channel, [
             'text' => 'это тестовое сообщение',
@@ -178,7 +186,7 @@ class ProcessAutoReplyJobTest extends TestCase
         Http::assertSent(function ($request): bool {
             return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
                 && $request['chat_id'] === '300'
-                && $request['text'] === 'Ответ из конструктора.';
+                && $request['text'] === 'Ответ обычного правила.';
         });
 
         $message->refresh();
@@ -189,17 +197,24 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
             'direction' => Message::DIRECTION_OUTBOUND,
-            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'reply_to_message_id' => $message->id,
             'external_message_id' => '9101',
-            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_type' => Message::SENT_BY_TYPE_AUTO_REPLY,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
+            'text' => 'Ответ обычного правила.',
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'reply_to_message_id' => $message->id,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_SCENARIO_BUILDER_START_CONDITION,
             'text' => 'Ответ из конструктора.',
         ]);
-        $this->assertDatabaseHas('channel_activity_logs', [
+        $this->assertDatabaseMissing('channel_activity_logs', [
             'channel_id' => $channel->id,
             'event' => 'bot.scenario_builder_start_condition_matched',
-            'level' => 'info',
         ]);
     }
 
