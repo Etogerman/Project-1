@@ -427,10 +427,12 @@ JSON,
         $response = $this->actingAs($admin)
             ->get(ScenarioConstructor::getUrl(['scenario' => $scenario->id]));
 
-        $builderBlock = ScenarioBuilderBlock::query()
-            ->where('scenario_version_id', $scenario->fresh()->draftVersion?->id)
-            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
-            ->firstOrFail();
+        $this->assertFalse(
+            ScenarioBuilderBlock::query()
+                ->where('scenario_version_id', $scenario->fresh()->draftVersion?->id)
+                ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+                ->exists(),
+        );
 
         $response
             ->assertOk()
@@ -457,7 +459,6 @@ JSON,
             ->assertSee('Кнопки')
             ->assertSee('События для аналитики')
             ->assertSee('Вложения')
-            ->assertSee((string) $builderBlock->id)
             ->assertSee('start_condition')
             ->assertSee('Добавить стартовое условие');
 
@@ -479,6 +480,11 @@ JSON,
 
         $scenario->refresh();
         $scenario->load('draftVersion');
+
+        $builderBlock = ScenarioBuilderBlock::query()
+            ->where('scenario_version_id', $scenario->draftVersion?->id)
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->firstOrFail();
 
         $this->assertSame(
             [

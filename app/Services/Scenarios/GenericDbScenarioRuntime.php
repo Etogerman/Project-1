@@ -13,6 +13,7 @@ use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
+use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Services\Bots\SendBotDialogTextAction;
@@ -38,6 +39,10 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
     private const PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY = 'run.pending_prompt_remove_telegram_keyboard';
 
+    private ?int $matchedBuilderStartMessageId = null;
+
+    private ?string $matchedBuilderRuntimeBlockId = null;
+
     public function __construct(
         private readonly Scenario $scenario,
         private readonly ScenarioVersion $publishedVersion,
@@ -60,6 +65,9 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
     public function shouldStart(Message $message): bool
     {
+        $this->matchedBuilderStartMessageId = null;
+        $this->matchedBuilderRuntimeBlockId = null;
+
         if (
             ! in_array($message->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
             || $message->message_kind !== Message::KIND_INBOUND_USER
@@ -79,10 +87,23 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             return false;
         }
 
-        $builderStartMatches = $this->messageMatchesBuilderStartBlocks($message);
+        $builderStartBlocks = $this->runtimeEligibleBuilderStartBlocks();
 
-        if ($builderStartMatches !== null) {
-            return $builderStartMatches;
+        if ($builderStartBlocks->isNotEmpty()) {
+            foreach ($builderStartBlocks as $block) {
+                /** @var ScenarioBuilderBlock $block */
+                if (
+                    $this->builderBlockAllowsChannel($block, $message)
+                    && $this->builderBlockMatchesMessage($block, $message)
+                ) {
+                    $this->matchedBuilderStartMessageId = (int) $message->id;
+                    $this->matchedBuilderRuntimeBlockId = $this->builderBlockRuntimeStartBlockId($block, $schema);
+
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         foreach ($schema['triggers'] as $trigger) {
@@ -94,18 +115,9 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         return false;
     }
 
-    private function messageMatchesBuilderStartBlocks(Message $message): ?bool
+    private function matchingBuilderStartBlock(Message $message): ?ScenarioBuilderBlock
     {
-        $blocks = $this->publishedVersion
-            ->builderBlocks()
-            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
-            ->with(['channels', 'conditions'])
-            ->orderBy('id')
-            ->get();
-
-        if ($blocks->isEmpty()) {
-            return null;
-        }
+        $blocks = $this->runtimeEligibleBuilderStartBlocks();
 
         foreach ($blocks as $block) {
             /** @var ScenarioBuilderBlock $block */
@@ -114,11 +126,44 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             }
 
             if ($this->builderBlockMatchesMessage($block, $message)) {
-                return true;
+                return $block;
             }
         }
 
-        return false;
+        return null;
+    }
+
+    private function runtimeEligibleBuilderStartBlocks(): \Illuminate\Support\Collection
+    {
+        return $this->publishedVersion
+            ->builderBlocks()
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->with(['channels', 'conditions', 'outgoingEdges'])
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (ScenarioBuilderBlock $block): bool => $block->channels->isNotEmpty())
+            ->values();
+    }
+
+    /**
+     * @param  array<string, mixed>  $schema
+     */
+    private function builderBlockRuntimeStartBlockId(ScenarioBuilderBlock $block, array $schema): string
+    {
+        $block->loadMissing('outgoingEdges');
+
+        $edge = $block->outgoingEdges->first();
+        $candidate = $edge instanceof ScenarioBuilderEdge && filled($edge->to_runtime_block_id)
+            ? (string) $edge->to_runtime_block_id
+            : (string) data_get($block->settings_payload, 'start_block_id', '');
+        $candidate = trim($candidate);
+        $blocks = is_array($schema['blocks'] ?? null) ? $schema['blocks'] : [];
+
+        if ($candidate !== '' && array_key_exists($candidate, $blocks)) {
+            return $candidate;
+        }
+
+        return (string) $schema['start_block_id'];
     }
 
     private function builderBlockAllowsChannel(ScenarioBuilderBlock $block, Message $message): bool
@@ -212,11 +257,12 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
     public function start(ScenarioRun $run, Message $message): void
     {
         $schema = $this->validatedSchema();
+        $startBlockId = $this->startBlockIdForMessage($message, $schema);
 
         $progress = $this->advanceFromBlock(
             $message,
             $schema,
-            $schema['start_block_id'],
+            $startBlockId,
             $this->normalizeStatePayload($run->state_payload),
         );
 
@@ -227,6 +273,28 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             'exit_outcome' => $progress['exit_outcome'],
             'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
         ])->save();
+    }
+
+    /**
+     * @param  array<string, mixed>  $schema
+     */
+    private function startBlockIdForMessage(Message $message, array $schema): string
+    {
+        if (
+            $this->matchedBuilderStartMessageId === (int) $message->id
+            && $this->matchedBuilderRuntimeBlockId !== null
+            && array_key_exists($this->matchedBuilderRuntimeBlockId, $schema['blocks'])
+        ) {
+            return $this->matchedBuilderRuntimeBlockId;
+        }
+
+        $matchingBlock = $this->matchingBuilderStartBlock($message);
+
+        if ($matchingBlock instanceof ScenarioBuilderBlock) {
+            return $this->builderBlockRuntimeStartBlockId($matchingBlock, $schema);
+        }
+
+        return (string) $schema['start_block_id'];
     }
 
     public function supportsContactShareContinuation(ScenarioRun $run): bool
