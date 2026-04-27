@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -9,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -128,7 +130,7 @@ class Channel extends Model
 
     public function getToken(): ?string
     {
-        $token = data_get($this->credentials, self::CREDENTIAL_TOKEN);
+        $token = data_get($this->readableCredentials(), self::CREDENTIAL_TOKEN);
 
         return filled($token) ? (string) $token : null;
     }
@@ -159,7 +161,7 @@ class Channel extends Model
 
     public function getWebhookSecret(): ?string
     {
-        $secret = data_get($this->credentials, self::CREDENTIAL_WEBHOOK_SECRET);
+        $secret = data_get($this->readableCredentials(), self::CREDENTIAL_WEBHOOK_SECRET);
 
         return filled($secret) ? (string) $secret : null;
     }
@@ -192,7 +194,7 @@ class Channel extends Model
 
     public function putCredential(string $key, mixed $value): static
     {
-        $credentials = $this->credentials ?? [];
+        $credentials = $this->readableCredentials();
 
         Arr::set($credentials, $key, $value);
 
@@ -204,7 +206,7 @@ class Channel extends Model
 
     public function syncTokenPresenceFromCredentials(): static
     {
-        $this->bot_token_present = filled(data_get($this->credentials, self::CREDENTIAL_TOKEN));
+        $this->bot_token_present = filled(data_get($this->readableCredentials(), self::CREDENTIAL_TOKEN));
 
         return $this;
     }
@@ -241,6 +243,10 @@ class Channel extends Model
             return 'Не используется';
         }
 
+        if ($this->hasUnreadableCredentials()) {
+            return 'Ошибка настроек';
+        }
+
         return filled($this->getWebhookSecret()) ? 'Настроен' : 'Не настроен';
     }
 
@@ -260,11 +266,19 @@ class Channel extends Model
             return 'gray';
         }
 
+        if ($this->hasUnreadableCredentials()) {
+            return 'danger';
+        }
+
         return filled($this->getWebhookSecret()) ? 'success' : 'gray';
     }
 
     public function getHealthStatusLabel(): string
     {
+        if ($this->hasUnreadableCredentials()) {
+            return 'Ошибка настроек';
+        }
+
         if ($this->isAccountConnection()) {
             return $this->getAccountHealthStatusLabel();
         }
@@ -310,10 +324,19 @@ class Channel extends Model
             'Webhook' => 'info',
             'Не проверен' => 'gray',
             'Без webhook' => 'warning',
-            'Ошибка' => 'danger',
+            'Ошибка', 'Ошибка настроек' => 'danger',
             'Отключен' => 'gray',
             default => 'gray',
         };
+    }
+
+    public function isReadyForConstructorAutoReplies(): bool
+    {
+        if (! $this->exists || ! $this->is_active) {
+            return false;
+        }
+
+        return in_array($this->getHealthStatusColor(), ['success', 'info'], true);
     }
 
     protected function getAccountHealthStatusLabel(): string
@@ -352,22 +375,49 @@ class Channel extends Model
         };
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function readableCredentials(): array
+    {
+        try {
+            $credentials = $this->credentials;
+        } catch (DecryptException) {
+            return [];
+        }
+
+        return is_array($credentials) ? $credentials : [];
+    }
+
+    public function hasUnreadableCredentials(): bool
+    {
+        try {
+            $this->credentials;
+        } catch (DecryptException) {
+            return true;
+        }
+
+        return false;
+    }
+
     public function markWebhookReceived(): static
     {
-        $this->forceFill([
+        $this->persistOperationalState([
             'last_webhook_received_at' => now(),
-        ])->saveQuietly();
+            'last_error_at' => null,
+            'last_error_message' => null,
+        ]);
 
         return $this;
     }
 
     public function markReplySent(): static
     {
-        $this->forceFill([
+        $this->persistOperationalState([
             'last_reply_sent_at' => now(),
             'last_error_at' => null,
             'last_error_message' => null,
-        ])->saveQuietly();
+        ]);
 
         return $this;
     }
@@ -376,22 +426,49 @@ class Channel extends Model
     {
         $message = $error instanceof Throwable ? $error->getMessage() : $error;
 
-        $this->forceFill([
+        $this->persistOperationalState([
             'last_error_at' => now(),
             'last_error_message' => Str::limit(trim($message), 1000),
-        ])->saveQuietly();
+        ]);
 
         return $this;
     }
 
     public function clearOperationalError(): static
     {
-        $this->forceFill([
+        $this->persistOperationalState([
             'last_error_at' => null,
             'last_error_message' => null,
-        ])->saveQuietly();
+        ]);
 
         return $this;
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    private function persistOperationalState(array $attributes): void
+    {
+        $this->forceFill($attributes);
+
+        if (! $this->hasUnreadableCredentials()) {
+            $this->saveQuietly();
+
+            return;
+        }
+
+        if ($this->usesTimestamps()) {
+            $this->setUpdatedAt($this->freshTimestamp());
+            $attributes[$this->getUpdatedAtColumn()] = true;
+        }
+
+        $columns = array_keys($attributes);
+
+        DB::table($this->getTable())
+            ->where($this->getKeyName(), $this->getKey())
+            ->update(Arr::only($this->getAttributes(), $columns));
+
+        $this->syncOriginalAttributes($columns);
     }
 
     public function activityLogs(): HasMany

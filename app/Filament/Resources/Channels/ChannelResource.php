@@ -38,6 +38,7 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
 use Throwable;
 use UnitEnum;
@@ -629,8 +630,18 @@ class ChannelResource extends Resource
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->extraModalWindowAttributes(['class' => 'ac-channel-form-modal'])
                     ->tooltip('Изменить')
+                    ->fillForm(fn (Channel $record): array => [
+                        'name' => $record->name,
+                        'platform' => $record->platform,
+                        'connection_type' => $record->connection_type,
+                        'auto_reply_mode' => $record->auto_reply_mode,
+                        'credentials' => [
+                            'token' => null,
+                        ],
+                        'is_active' => $record->is_active,
+                    ])
                     ->using(function (array $data, Channel $record): void {
-                        $record->update(static::mutateChannelData($data, $record));
+                        static::updateChannelRecord($record, static::mutateChannelData($data, $record));
                     }),
             ], position: RecordActionsPosition::BeforeColumns)
             ->toolbarActions([]);
@@ -650,7 +661,7 @@ class ChannelResource extends Resource
     public static function mutateChannelData(array $data, ?Channel $record = null): array
     {
         $token = trim((string) data_get($data, 'credentials.token', ''));
-        $credentials = $record?->credentials ?? [];
+        $credentials = $record?->readableCredentials() ?? [];
 
         if (static::shouldClearBotMetadata($data, $record, $token)) {
             $data = static::clearBotMetadata($data);
@@ -663,8 +674,8 @@ class ChannelResource extends Resource
             return $data;
         }
 
-        if ($record?->credentials !== null) {
-            Arr::set($data, 'credentials', $record->credentials);
+        if ($credentials !== []) {
+            Arr::set($data, 'credentials', $credentials);
 
             return $data;
         }
@@ -672,6 +683,32 @@ class ChannelResource extends Resource
         Arr::forget($data, 'credentials');
 
         return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected static function updateChannelRecord(Channel $record, array $data): void
+    {
+        if (! $record->hasUnreadableCredentials() || ! array_key_exists('credentials', $data)) {
+            $record->update($data);
+
+            return;
+        }
+
+        $record->forceFill($data);
+        $record->syncTokenPresenceFromCredentials();
+
+        $columns = array_merge(array_keys($data), ['bot_token_present']);
+
+        if ($record->usesTimestamps()) {
+            $record->setUpdatedAt($record->freshTimestamp());
+            $columns[] = $record->getUpdatedAtColumn();
+        }
+
+        DB::table($record->getTable())
+            ->where($record->getKeyName(), $record->getKey())
+            ->update(Arr::only($record->getAttributes(), array_values(array_unique($columns))));
     }
 
     /**

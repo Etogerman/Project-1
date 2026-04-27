@@ -73,6 +73,8 @@ class Message extends Model
 
     public const SENT_BY_SYSTEM_CODE_SCENARIO_BUILDER_START_CONDITION = 'scenario_builder_start_condition';
 
+    public const SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK = 'bot_constructor_block';
+
     public const SENT_BY_SYSTEM_CODE_LEGACY_UNKNOWN_KIND = 'legacy_unknown_kind';
 
     public const SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES = 'bitrix24_openlines';
