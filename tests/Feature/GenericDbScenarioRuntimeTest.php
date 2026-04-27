@@ -410,11 +410,23 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'value' => 'secondary_start',
             'sort_order' => 1,
         ]);
+        $secondaryRuntimeBlockId = 'builder_start_'.$secondaryBlock->id;
+        $publishedVersion = $scenario->publishedVersion()->firstOrFail();
+        $schemaPayload = $publishedVersion->schema_payload;
+        $schemaPayload['blocks'][$secondaryRuntimeBlockId] = [
+            'type' => 'message',
+            'text' => 'Ответ второго стартового условия.',
+            'text_format' => 'plain_text',
+            'next' => 'done',
+        ];
+        $publishedVersion->forceFill([
+            'schema_payload' => $schemaPayload,
+        ])->save();
         ScenarioBuilderEdge::query()->create([
             'scenario_version_id' => $scenario->publishedVersion?->id,
             'from_scenario_builder_block_id' => $secondaryBlock->id,
             'to_scenario_builder_block_id' => null,
-            'to_runtime_block_id' => 'alternate',
+            'to_runtime_block_id' => $secondaryRuntimeBlockId,
             'condition_payload' => [],
             'sort_order' => 1,
         ]);
@@ -443,7 +455,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->firstOrFail();
 
         $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
-        $this->assertSame('Альтернативный старт.', $outboundMessage->text);
+        $this->assertSame('Ответ второго стартового условия.', $outboundMessage->text);
     }
 
     public function test_database_backed_scenario_saves_answers_and_completes_linear_flow(): void

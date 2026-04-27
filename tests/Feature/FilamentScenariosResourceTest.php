@@ -419,6 +419,33 @@ JSON,
             'name' => 'Визуальный старт',
             'is_active' => true,
         ]);
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => [
+                'version' => 1,
+                'start_block_id' => 'welcome',
+                'triggers' => [
+                    [
+                        'type' => 'parameter',
+                        'value' => 'visual_start',
+                    ],
+                ],
+                'blocks' => [
+                    'welcome' => [
+                        'type' => 'message',
+                        'text' => 'Старт по умолчанию',
+                        'next' => 'done',
+                    ],
+                    'alternate' => [
+                        'type' => 'message',
+                        'text' => 'Альтернативный старт',
+                        'next' => 'done',
+                    ],
+                    'done' => [
+                        'type' => 'complete',
+                    ],
+                ],
+            ],
+        ])->save();
 
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
@@ -444,6 +471,8 @@ JSON,
             ->assertSee('ID: #')
             ->assertSee('Тип блока')
             ->assertSee('Название блока')
+            ->assertSee('Первый блок сценария')
+            ->assertSee('alternate')
             ->assertSee('Канал')
             ->assertSee('Telegram визуальный')
             ->assertSee('Условия')
@@ -464,7 +493,6 @@ JSON,
 
         Livewire::actingAs($admin)
             ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
-            ->set('draftSchemaPayloadJson', '{}')
             ->set('draftStartTriggers', [
                 ['value' => 'visual_start_1'],
                 ['value' => 'visual_start_2'],
@@ -472,7 +500,7 @@ JSON,
             ->set('draftStartConditionMatch', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT)
             ->set('draftStartReplyText', 'Ответ из конструктора')
             ->set('draftStartChannelIds', [$channel->id])
-            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartBlockId', 'alternate')
             ->set('draftStartNodeTitle', 'Стартовая точка')
             ->set('draftStartNodePosition', ['x' => 240, 'y' => 160])
             ->call('saveDraft')
@@ -501,8 +529,9 @@ JSON,
             ],
             $scenario->draftVersion?->schema_payload['triggers'] ?? null,
         );
-        $this->assertSame('welcome', $scenario->draftVersion?->schema_payload['start_block_id'] ?? null);
-        $this->assertSame('Ответ из конструктора', $scenario->draftVersion?->schema_payload['blocks']['welcome']['text'] ?? null);
+        $this->assertSame('alternate', $scenario->draftVersion?->schema_payload['start_block_id'] ?? null);
+        $this->assertSame('Старт по умолчанию', $scenario->draftVersion?->schema_payload['blocks']['welcome']['text'] ?? null);
+        $this->assertSame('Ответ из конструктора', $scenario->draftVersion?->schema_payload['blocks']['alternate']['text'] ?? null);
         $this->assertSame(
             'Стартовая точка',
             data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.title"),
@@ -542,7 +571,25 @@ JSON,
             $builderBlock->conditions->pluck('match_operator')->all(),
         );
         $this->assertSame('Ответ из конструктора', $builderBlock->settings_payload['message_text'] ?? null);
-        $this->assertSame('welcome', $builderBlock->outgoingEdges->first()?->to_runtime_block_id);
+        $this->assertSame('alternate', $builderBlock->outgoingEdges->first()?->to_runtime_block_id);
+    }
+
+    public function test_scenario_constructor_requires_explicit_scenario_id(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        app(CreateScenarioAction::class)->handle([
+            'code' => 'implicit_constructor_target',
+            'name' => 'Неявный конструктор',
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(ScenarioConstructor::getUrl())
+            ->assertNotFound();
     }
 
     public function test_admin_can_open_standalone_scenario_constructor(): void
@@ -645,7 +692,16 @@ JSON,
             'x' => $secondaryBlock->position_x,
             'y' => $secondaryBlock->position_y,
         ]);
-        $this->assertSame('welcome', $secondaryBlock->outgoingEdges->first()?->to_runtime_block_id);
+        $this->assertSame('builder_start_'.$secondaryBlock->id, $secondaryBlock->outgoingEdges->first()?->to_runtime_block_id);
+        $this->assertSame(
+            [
+                'type' => 'message',
+                'text' => 'Старт сценария',
+                'text_format' => 'plain_text',
+                'next' => 'done',
+            ],
+            $scenario->draftVersion?->schema_payload['blocks']['builder_start_'.$secondaryBlock->id] ?? null,
+        );
         $this->assertSame(
             [
                 [
@@ -699,6 +755,56 @@ JSON,
         $this->assertDatabaseHas('scenario_builder_blocks', [
             'id' => $primaryBlock->id,
         ]);
+    }
+
+    public function test_start_builder_rejects_normalized_duplicate_triggers_between_blocks(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram дубли',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_normalized_duplicate',
+            'name' => 'Нормализованный дубль',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->set('draftStartTriggers', [
+                ['value' => 'Start'],
+            ])
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartNodeTitle', 'Основной старт')
+            ->call('saveDraft')
+            ->call('addStartBuilderBlock')
+            ->assertHasNoErrors();
+
+        $scenario->refresh();
+        $secondaryBlock = ScenarioBuilderBlock::query()
+            ->where('scenario_version_id', $scenario->draftVersion?->id)
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->orderByDesc('id')
+            ->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->call('selectStartBuilderBlock', $secondaryBlock->id)
+            ->set('draftStartTriggers', [
+                ['value' => ' start '],
+            ])
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartNodeTitle', 'Дублирующий старт')
+            ->call('saveDraft')
+            ->assertHasErrors(['draft_start_triggers']);
     }
 
     public function test_next_draft_copies_normalized_builder_blocks_from_published_version(): void
@@ -804,8 +910,8 @@ JSON,
                 'name' => $duplicateScenario->name,
                 'is_active' => true,
                 'draft_start_triggers' => [
-                    ['value' => 'same_trigger'],
-                    ['value' => 'same_trigger'],
+                    ['value' => 'Same_Trigger'],
+                    ['value' => ' same_trigger '],
                 ],
                 'draft_start_block_id' => 'welcome',
             ], $duplicateScenario);

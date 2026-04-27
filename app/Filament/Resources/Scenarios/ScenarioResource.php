@@ -691,13 +691,21 @@ class ScenarioResource extends Resource
                 ]);
             }
 
-            if (array_key_exists($value, $seenValues)) {
+            $normalizedValue = AutoReplyRule::normalizeKeyword($value);
+
+            if ($normalizedValue === null) {
+                throw ValidationException::withMessages([
+                    'draft_start_triggers' => 'Значение trigger-а не может быть пустым.',
+                ]);
+            }
+
+            if (array_key_exists($normalizedValue, $seenValues)) {
                 throw ValidationException::withMessages([
                     'draft_start_triggers' => 'Trigger-ы не должны повторяться.',
                 ]);
             }
 
-            $seenValues[$value] = true;
+            $seenValues[$normalizedValue] = true;
             $trigger = [
                 'type' => self::START_TRIGGER_TYPE_PARAMETER,
                 'value' => $value,
