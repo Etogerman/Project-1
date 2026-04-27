@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -91,6 +92,53 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Как вас зовут?');
+    }
+
+    public function test_database_backed_scenario_can_start_by_contains_text_scope(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('contains_parameter_rule', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'green_start',
+                    'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Ответ из зелёного правила.',
+                    'next' => 'done',
+                ],
+                'done' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Пожалуйста, запусти green_start сейчас',
+            'message_parameter' => null,
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertTrue($runtime->shouldStart($message));
     }
 
     public function test_database_backed_scenario_saves_answers_and_completes_linear_flow(): void

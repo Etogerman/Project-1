@@ -34,12 +34,16 @@ class CreateNextScenarioDraftAction
         return DB::transaction(function () use ($scenario, $publishedVersion): ScenarioVersion {
             $nextVersionNumber = (int) $scenario->versions()->max('version_number') + 1;
 
-            return ScenarioVersion::query()->create([
+            $draftVersion = ScenarioVersion::query()->create([
                 'scenario_id' => $scenario->id,
                 'version_number' => $nextVersionNumber,
                 'status' => ScenarioVersion::STATUS_DRAFT,
                 'schema_payload' => $publishedVersion->schema_payload,
             ]);
+
+            app(SyncScenarioBuilderStartBlockAction::class)->copyBuilderVersion($publishedVersion, $draftVersion);
+
+            return $draftVersion;
         });
     }
 }

@@ -4,7 +4,12 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\Scenarios\Pages\ManageScenarios;
 use App\Filament\Resources\Scenarios\ScenarioResource;
+use App\Filament\Pages\ScenarioConstructor;
+use App\Models\AutoReplyRule;
+use App\Models\Channel;
 use App\Models\Scenario;
+use App\Models\ScenarioBuilderBlock;
+use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use App\Models\User;
@@ -38,7 +43,6 @@ class FilamentScenariosResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
         ]);
-
         $this->actingAs($admin)
             ->get(ScenarioResource::getUrl())
             ->assertOk()
@@ -51,7 +55,6 @@ class FilamentScenariosResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
         ]);
-
         app(CreateScenarioAction::class)->handle([
             'code' => 'slice3_page_open',
             'name' => 'Проверка страницы сценариев',
@@ -189,7 +192,6 @@ class FilamentScenariosResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
         ]);
-
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
             ->callAction('create', [
@@ -279,6 +281,695 @@ JSON,
                 ],
             ],
         ], $scenario->draftVersion?->schema_payload);
+    }
+
+    public function test_admin_can_configure_green_start_block_without_manual_json(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram локалка',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callAction('create', [
+                'code' => 'green_start_builder',
+                'name' => 'Зелёный старт',
+                'is_active' => true,
+            ])
+            ->assertHasNoFormErrors();
+
+        $scenario = Scenario::query()->with('draftVersion')->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->set('draftSchemaPayloadJson', '{}')
+            ->set('draftStartTriggers', [
+                ['value' => 'green_start_apply'],
+                ['value' => 'green_start_tg1'],
+            ])
+            ->set('draftStartConditionMatch', 'exact')
+            ->set('draftStartReplyText', 'Ответ зелёного старта')
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartNodeTitle', 'Зелёный старт')
+            ->set('draftStartNodePosition', ['x' => 180, 'y' => 120])
+            ->call('saveDraft')
+            ->assertHasNoErrors();
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $expectedPublishedSchema = [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'green_start_apply',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'green_start_tg1',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Ответ зелёного старта',
+                    'text_format' => 'plain_text',
+                    'next' => 'done',
+                ],
+                'done' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
+        $this->assertSame($expectedPublishedSchema, collect($scenario->draftVersion?->schema_payload)->except('builder_schema')->all());
+
+        $builderBlock = ScenarioBuilderBlock::query()
+            ->with(['channels', 'conditions', 'outgoingEdges'])
+            ->where('scenario_version_id', $scenario->draftVersion?->id)
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->firstOrFail();
+
+        $this->assertSame('Зелёный старт', $builderBlock->title);
+        $this->assertSame([$channel->id], $builderBlock->channels->pluck('id')->all());
+        $this->assertSame(['x' => 180, 'y' => 120], [
+            'x' => $builderBlock->position_x,
+            'y' => $builderBlock->position_y,
+        ]);
+        $this->assertSame(
+            ['green_start_apply', 'green_start_tg1'],
+            $builderBlock->conditions->pluck('value')->all(),
+        );
+        $this->assertSame('welcome', $builderBlock->outgoingEdges->first()?->to_runtime_block_id);
+        $this->assertSame(
+            $builderBlock->id,
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.id"),
+        );
+        $this->assertSame(
+            [
+                'type' => ScenarioBuilderCondition::TYPE_MESSAGE_PARAMETER,
+                'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+                'variable' => ScenarioBuilderCondition::VARIABLE_MESSAGE_PARAMETER,
+                'values' => [
+                    'green_start_apply',
+                    'green_start_tg1',
+                ],
+            ],
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.settings.condition"),
+        );
+        $this->assertSame(
+            'Ответ зелёного старта',
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.settings.message_text"),
+        );
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertNull($scenario->draftVersion);
+        $this->assertSame($expectedPublishedSchema, $scenario->publishedVersion?->schema_payload);
+    }
+
+    public function test_admin_can_use_scenario_constructor_action_for_green_start_block(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram визуальный',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_visual_builder',
+            'name' => 'Визуальный старт',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('builder', $scenario);
+
+        $response = $this->actingAs($admin)
+            ->get(ScenarioConstructor::getUrl(['scenario' => $scenario->id]));
+
+        $builderBlock = ScenarioBuilderBlock::query()
+            ->where('scenario_version_id', $scenario->fresh()->draftVersion?->id)
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->firstOrFail();
+
+        $response
+            ->assertOk()
+            ->assertSee('Конструктор')
+            ->assertSee('Полотно конструктора')
+            ->assertSee('Настройки элемента')
+            ->assertSee('Стартовое условие')
+            ->assertSee('Состояние диалога')
+            ->assertSee('ID: #')
+            ->assertSee('Тип блока')
+            ->assertSee('Название блока')
+            ->assertSee('Канал')
+            ->assertSee('Telegram визуальный')
+            ->assertSee('Условия')
+            ->assertSee('Область срабатывания')
+            ->assertSee('Содержит текст в сообщении')
+            ->assertSee('Точное соответствие текста в сообщении')
+            ->assertSee('Точное соответствие параметра сообщения')
+            ->assertDontSee('Начинается с')
+            ->assertDontSee('Заканчивается на')
+            ->assertSee('Текст ответа')
+            ->assertSee('Калькулятор')
+            ->assertSee('Действия')
+            ->assertSee('Кнопки')
+            ->assertSee('События для аналитики')
+            ->assertSee('Вложения')
+            ->assertSee((string) $builderBlock->id)
+            ->assertSee('start_condition')
+            ->assertSee('Добавить стартовое условие');
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->set('draftSchemaPayloadJson', '{}')
+            ->set('draftStartTriggers', [
+                ['value' => 'visual_start_1'],
+                ['value' => 'visual_start_2'],
+            ])
+            ->set('draftStartConditionMatch', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT)
+            ->set('draftStartReplyText', 'Ответ из конструктора')
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartNodeTitle', 'Стартовая точка')
+            ->set('draftStartNodePosition', ['x' => 240, 'y' => 160])
+            ->call('saveDraft')
+            ->assertHasNoErrors();
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $this->assertSame(
+            [
+                [
+                    'type' => 'parameter',
+                    'value' => 'visual_start_1',
+                    'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'visual_start_2',
+                    'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+                ],
+            ],
+            $scenario->draftVersion?->schema_payload['triggers'] ?? null,
+        );
+        $this->assertSame('welcome', $scenario->draftVersion?->schema_payload['start_block_id'] ?? null);
+        $this->assertSame('Ответ из конструктора', $scenario->draftVersion?->schema_payload['blocks']['welcome']['text'] ?? null);
+        $this->assertSame(
+            'Стартовая точка',
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.title"),
+        );
+        $this->assertSame(
+            'start_condition',
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.type"),
+        );
+        $this->assertSame(
+            [
+                'x' => 240,
+                'y' => 160,
+            ],
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.position"),
+        );
+        $this->assertSame(
+            [
+                'type' => 'message_parameter',
+                'match' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+                'variable' => 'message_parameter',
+                'values' => [
+                    'visual_start_1',
+                    'visual_start_2',
+                ],
+            ],
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.settings.condition"),
+        );
+
+        $builderBlock->refresh();
+        $builderBlock->load(['channels', 'conditions', 'outgoingEdges']);
+
+        $this->assertSame('Стартовая точка', $builderBlock->title);
+        $this->assertSame([$channel->id], $builderBlock->channels->pluck('id')->all());
+        $this->assertSame(['visual_start_1', 'visual_start_2'], $builderBlock->conditions->pluck('value')->all());
+        $this->assertSame(
+            [AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT, AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT],
+            $builderBlock->conditions->pluck('match_operator')->all(),
+        );
+        $this->assertSame('Ответ из конструктора', $builderBlock->settings_payload['message_text'] ?? null);
+        $this->assertSame('welcome', $builderBlock->outgoingEdges->first()?->to_runtime_block_id);
+    }
+
+    public function test_admin_can_open_standalone_scenario_constructor(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'standalone_constructor',
+            'name' => 'Отдельный конструктор',
+            'is_active' => true,
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->get(ScenarioConstructor::getUrl(['scenario' => $scenario->id]));
+
+        $response
+            ->assertOk()
+            ->assertSee('Конструктор')
+            ->assertSee('Полотно конструктора')
+            ->assertSee('Добавить стартовое условие')
+            ->assertSee('ID: #')
+            ->assertSee('Тип блока');
+    }
+
+    public function test_admin_can_create_select_save_and_delete_multiple_green_start_blocks(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram мульти',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_multi_builder',
+            'name' => 'Несколько зелёных блоков',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->set('draftSchemaPayloadJson', '{}')
+            ->set('draftStartTriggers', [
+                ['value' => 'primary_start'],
+            ])
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartNodeTitle', 'Основной старт')
+            ->set('draftStartNodePosition', ['x' => 140, 'y' => 110])
+            ->call('saveDraft')
+            ->call('addStartBuilderBlock')
+            ->assertHasNoErrors();
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $blocks = ScenarioBuilderBlock::query()
+            ->with(['conditions', 'outgoingEdges'])
+            ->where('scenario_version_id', $scenario->draftVersion?->id)
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertCount(2, $blocks);
+
+        /** @var ScenarioBuilderBlock $primaryBlock */
+        $primaryBlock = $blocks[0];
+        /** @var ScenarioBuilderBlock $secondaryBlock */
+        $secondaryBlock = $blocks[1];
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->call('selectStartBuilderBlock', $secondaryBlock->id)
+            ->set('draftStartTriggers', [
+                ['value' => 'secondary_start_1'],
+                ['value' => 'secondary_start_2'],
+            ])
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartNodeTitle', 'Второй старт')
+            ->set('draftStartNodePosition', ['x' => 420, 'y' => 260])
+            ->call('saveDraft')
+            ->assertHasNoErrors();
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+        $secondaryBlock->refresh();
+        $secondaryBlock->load(['channels', 'conditions', 'outgoingEdges']);
+
+        $this->assertSame('Второй старт', $secondaryBlock->title);
+        $this->assertSame([$channel->id], $secondaryBlock->channels->pluck('id')->all());
+        $this->assertSame(['secondary_start_1', 'secondary_start_2'], $secondaryBlock->conditions->pluck('value')->all());
+        $this->assertSame(['x' => 420, 'y' => 260], [
+            'x' => $secondaryBlock->position_x,
+            'y' => $secondaryBlock->position_y,
+        ]);
+        $this->assertSame('welcome', $secondaryBlock->outgoingEdges->first()?->to_runtime_block_id);
+        $this->assertSame(
+            [
+                [
+                    'type' => 'parameter',
+                    'value' => 'primary_start',
+                ],
+            ],
+            $scenario->draftVersion?->schema_payload['triggers'] ?? null,
+        );
+        $this->assertSame(
+            'Основной старт',
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$primaryBlock->id}.title"),
+        );
+        $this->assertSame(
+            'Второй старт',
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$secondaryBlock->id}.title"),
+        );
+        $this->assertTrue((bool) data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$primaryBlock->id}.is_primary"));
+        $this->assertFalse((bool) data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$secondaryBlock->id}.is_primary"));
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->call('moveStartBuilderBlock', $primaryBlock->id, 640, 360)
+            ->assertHasNoErrors();
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+        $primaryBlock->refresh();
+
+        $this->assertSame(['x' => 640, 'y' => 360], [
+            'x' => $primaryBlock->position_x,
+            'y' => $primaryBlock->position_y,
+        ]);
+        $this->assertSame(
+            [
+                'x' => 640,
+                'y' => 360,
+            ],
+            data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$primaryBlock->id}.position"),
+        );
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->call('selectStartBuilderBlock', $secondaryBlock->id)
+            ->call('deleteSelectedStartBuilderBlock')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseMissing('scenario_builder_blocks', [
+            'id' => $secondaryBlock->id,
+        ]);
+        $this->assertDatabaseHas('scenario_builder_blocks', [
+            'id' => $primaryBlock->id,
+        ]);
+    }
+
+    public function test_next_draft_copies_normalized_builder_blocks_from_published_version(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram копия',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_builder_copy',
+            'name' => 'Копия конструктора',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->set('draftSchemaPayloadJson', '{}')
+            ->set('draftStartTriggers', [
+                ['value' => 'copy_start_1'],
+                ['value' => 'copy_start_2'],
+            ])
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartNodeTitle', 'Блок для копии')
+            ->set('draftStartNodePosition', ['x' => 320, 'y' => 210])
+            ->call('saveDraft')
+            ->assertHasNoErrors();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load('publishedVersion');
+
+        $publishedBlock = ScenarioBuilderBlock::query()
+            ->with(['channels', 'conditions', 'outgoingEdges'])
+            ->where('scenario_version_id', $scenario->publishedVersion?->id)
+            ->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('createNextDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $draftBlock = ScenarioBuilderBlock::query()
+            ->with(['channels', 'conditions', 'outgoingEdges'])
+            ->where('scenario_version_id', $scenario->draftVersion?->id)
+            ->firstOrFail();
+
+        $this->assertNotSame($publishedBlock->id, $draftBlock->id);
+        $this->assertSame(ScenarioBuilderBlock::TYPE_START_CONDITION, $draftBlock->type);
+        $this->assertSame('Блок для копии', $draftBlock->title);
+        $this->assertSame($publishedBlock->channels->pluck('id')->all(), $draftBlock->channels->pluck('id')->all());
+        $this->assertSame(['copy_start_1', 'copy_start_2'], $draftBlock->conditions->pluck('value')->all());
+        $this->assertSame('welcome', $draftBlock->outgoingEdges->first()?->to_runtime_block_id);
+    }
+
+    public function test_green_start_block_rejects_empty_and_duplicate_triggers(): void
+    {
+        $emptyScenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_empty',
+            'name' => 'Пустой старт',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $emptyScenario->name,
+                'is_active' => true,
+                'draft_start_triggers' => [
+                    ['value' => ''],
+                ],
+                'draft_start_block_id' => 'welcome',
+            ], $emptyScenario);
+
+            $this->fail('Green start editor should reject empty trigger values.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Значение trigger-а не может быть пустым.',
+                $exception->errors()['draft_start_triggers'][0] ?? null,
+            );
+        }
+
+        $duplicateScenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_duplicate',
+            'name' => 'Дубли старт',
+            'is_active' => true,
+        ]);
+
+        try {
+            ScenarioResource::saveScenario([
+                'name' => $duplicateScenario->name,
+                'is_active' => true,
+                'draft_start_triggers' => [
+                    ['value' => 'same_trigger'],
+                    ['value' => 'same_trigger'],
+                ],
+                'draft_start_block_id' => 'welcome',
+            ], $duplicateScenario);
+
+            $this->fail('Green start editor should reject duplicate trigger values.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Trigger-ы не должны повторяться.',
+                $exception->errors()['draft_start_triggers'][0] ?? null,
+            );
+        }
+    }
+
+    public function test_green_start_block_updates_only_draft_and_preserves_existing_blocks(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_draft_only',
+            'name' => 'Draft only start',
+            'is_active' => true,
+        ]);
+        $publishedSchema = $this->sliceOneSchema('original_trigger');
+
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => $publishedSchema,
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertNull($scenario->draftVersion);
+        $this->assertSame($publishedSchema, $scenario->publishedVersion?->schema_payload);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('createNextDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        ScenarioResource::saveScenario([
+            'name' => $scenario->name,
+            'is_active' => true,
+            'draft_start_triggers' => [
+                ['value' => 'updated_trigger'],
+                ['value' => 'updated_trigger_alt'],
+            ],
+            'draft_start_block_id' => 'welcome',
+        ], $scenario);
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertSame(
+            [
+                [
+                    'type' => 'parameter',
+                    'value' => 'original_trigger',
+                ],
+            ],
+            $scenario->publishedVersion?->schema_payload['triggers'] ?? null,
+        );
+        $this->assertSame(
+            [
+                [
+                    'type' => 'parameter',
+                    'value' => 'updated_trigger',
+                ],
+                [
+                    'type' => 'parameter',
+                    'value' => 'updated_trigger_alt',
+                ],
+            ],
+            $scenario->draftVersion?->schema_payload['triggers'] ?? null,
+        );
+        $this->assertSame(
+            $publishedSchema['blocks'],
+            $scenario->draftVersion?->schema_payload['blocks'] ?? null,
+        );
+    }
+
+    public function test_manual_json_fallback_wins_when_json_changes_alongside_green_start_fields(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_json_fallback',
+            'name' => 'JSON fallback',
+            'is_active' => true,
+        ]);
+        $jsonSchema = $this->sliceOneSchema('json_trigger');
+
+        ScenarioResource::saveScenario([
+            'name' => $scenario->name,
+            'is_active' => true,
+            'draft_schema_payload_json' => json_encode(
+                $jsonSchema,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            ),
+            'draft_start_triggers' => [
+                ['value' => 'stale_visual_trigger'],
+            ],
+            'draft_start_block_id' => 'welcome',
+        ], $scenario);
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $this->assertSame($jsonSchema, $scenario->draftVersion?->schema_payload);
+    }
+
+    public function test_published_scenario_without_draft_still_shows_green_start_preview_and_draft_hint(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_published_preview',
+            'name' => 'Published preview',
+            'is_active' => true,
+        ]);
+
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => $this->sliceOneSchema('published_preview_trigger'),
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->callTableAction('publishDraft', $scenario)
+            ->assertHasNoTableActionErrors();
+
+        $scenario->refresh();
+        $scenario->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertNull($scenario->draftVersion);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->mountTableAction('edit', $scenario)
+            ->assertMountedActionModalSee('Стартовое условие')
+            ->assertMountedActionModalSee('Опубликованная версия показана только для просмотра')
+            ->assertMountedActionModalSee('published_preview_trigger')
+            ->assertMountedActionModalSee('Создать новый черновик');
+    }
+
+    public function test_edit_modal_points_green_start_changes_to_constructor_page(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'green_start_edit_entrypoint',
+            'name' => 'Edit entrypoint',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->mountTableAction('edit', $scenario)
+            ->assertMountedActionModalSee('Визуальное редактирование вынесено в конструктор')
+            ->assertMountedActionModalSee('Открыть конструктор');
     }
 
     public function test_admin_can_save_slice_two_lite_schema_with_condition_and_tag_actions(): void
@@ -833,6 +1524,8 @@ JSON,
 
         $this->assertSame(2, $scenario->draftVersion?->version_number);
         $this->assertSame(ScenarioVersion::STATUS_DRAFT, $scenario->draftVersion?->status);
+        $this->assertSame(1, $scenario->publishedVersion?->version_number);
+        $this->assertSame(ScenarioVersion::STATUS_PUBLISHED, $scenario->publishedVersion?->status);
         $this->assertSame(
             $scenario->publishedVersion?->schema_payload,
             $scenario->draftVersion?->schema_payload,
