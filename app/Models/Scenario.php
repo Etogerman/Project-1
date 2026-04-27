@@ -13,6 +13,8 @@ class Scenario extends Model
 {
     use HasFactory;
 
+    public const CONSTRUCTOR_WORKSPACE_CODE = '__scenario_constructor_workspace';
+
     /**
      * @var list<string>
      */

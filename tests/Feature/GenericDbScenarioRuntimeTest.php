@@ -325,6 +325,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $channel = $this->createTelegramChannel();
         [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $startTag = Tag::factory()->create([
+            'name' => 'Secondary start',
+        ]);
         $scenario = $this->createPublishedScenario('builder_target_start', [
             'version' => 1,
             'start_block_id' => 'welcome',
@@ -418,6 +421,12 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'text' => 'Ответ второго стартового условия.',
             'text_format' => 'plain_text',
             'next' => 'done',
+            'actions' => [
+                [
+                    'type' => 'set_tag',
+                    'value' => $startTag->slug,
+                ],
+            ],
         ];
         $publishedVersion->forceFill([
             'schema_payload' => $schemaPayload,
@@ -456,6 +465,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
         $this->assertSame('Ответ второго стартового условия.', $outboundMessage->text);
+        $contact->refresh()->load('tags');
+        $this->assertSame([$startTag->slug], $contact->tags->pluck('slug')->all());
     }
 
     public function test_database_backed_scenario_saves_answers_and_completes_linear_flow(): void
