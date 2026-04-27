@@ -12,6 +12,8 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
+use App\Models\ScenarioBuilderBlock;
+use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
@@ -139,6 +141,119 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $this->assertNotNull($runtime);
         $this->assertTrue($runtime->shouldStart($message));
+    }
+
+    public function test_published_builder_start_condition_only_starts_on_selected_channels(): void
+    {
+        $selectedChannel = $this->createTelegramChannel([
+            'name' => 'Selected Telegram',
+        ]);
+        $otherChannel = $this->createTelegramChannel([
+            'name' => 'Other Telegram',
+        ]);
+        [$selectedContact, $selectedIdentity, $selectedDialog] = $this->createDialogContext($selectedChannel, identityOverrides: [
+            'external_user_id' => 'selected-user',
+        ], dialogOverrides: [
+            'external_chat_id' => 'selected-chat',
+        ]);
+        [$otherContact, $otherIdentity, $otherDialog] = $this->createDialogContext($otherChannel, identityOverrides: [
+            'external_user_id' => 'other-user',
+        ], dialogOverrides: [
+            'external_chat_id' => 'other-chat',
+        ]);
+        $scenario = $this->createPublishedScenario('builder_channel_gate', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'green_start',
+                    'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Ответ выбранного канала.',
+                    'next' => 'done',
+                ],
+                'done' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        ScenarioChannelBinding::query()->insert([
+            [
+                'channel_id' => $selectedChannel->id,
+                'scenario_code' => $scenario->code,
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'channel_id' => $otherChannel->id,
+                'scenario_code' => $scenario->code,
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $builderBlock = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $scenario->publishedVersion?->id,
+            'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
+            'title' => 'Старт по выбранному каналу',
+            'position_x' => 120,
+            'position_y' => 160,
+            'settings_payload' => [
+                'condition' => [
+                    'match' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+                ],
+            ],
+        ]);
+        $builderBlock->channels()->sync([$selectedChannel->id]);
+        ScenarioBuilderCondition::query()->create([
+            'scenario_builder_block_id' => $builderBlock->id,
+            'type' => ScenarioBuilderCondition::TYPE_MESSAGE_PARAMETER,
+            'match_operator' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'variable' => ScenarioBuilderCondition::VARIABLE_MESSAGE_PARAMETER,
+            'value' => 'green_start',
+            'sort_order' => 1,
+        ]);
+
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        $selectedMessage = Message::factory()->create([
+            'contact_id' => $selectedContact->id,
+            'contact_identity_id' => $selectedIdentity->id,
+            'channel_id' => $selectedChannel->id,
+            'dialog_id' => $selectedDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $selectedDialog->external_chat_id,
+            'text' => 'Пожалуйста, запусти green_start сейчас',
+            'message_parameter' => null,
+        ]);
+        $otherMessage = Message::factory()->create([
+            'contact_id' => $otherContact->id,
+            'contact_identity_id' => $otherIdentity->id,
+            'channel_id' => $otherChannel->id,
+            'dialog_id' => $otherDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $otherDialog->external_chat_id,
+            'text' => 'Пожалуйста, запусти green_start сейчас',
+            'message_parameter' => null,
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertTrue($runtime->shouldStart($selectedMessage));
+        $this->assertFalse($runtime->shouldStart($otherMessage));
     }
 
     public function test_database_backed_scenario_saves_answers_and_completes_linear_flow(): void

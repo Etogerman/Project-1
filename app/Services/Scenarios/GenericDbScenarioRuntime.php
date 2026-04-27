@@ -11,6 +11,8 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Message;
 use App\Models\Scenario;
+use App\Models\ScenarioBuilderBlock;
+use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Services\Bots\SendBotDialogTextAction;
@@ -77,8 +79,73 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             return false;
         }
 
+        $builderStartMatches = $this->messageMatchesBuilderStartBlocks($message);
+
+        if ($builderStartMatches !== null) {
+            return $builderStartMatches;
+        }
+
         foreach ($schema['triggers'] as $trigger) {
             if ($this->messageMatchesTrigger($message, $trigger)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function messageMatchesBuilderStartBlocks(Message $message): ?bool
+    {
+        $blocks = $this->publishedVersion
+            ->builderBlocks()
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->with(['channels', 'conditions'])
+            ->orderBy('id')
+            ->get();
+
+        if ($blocks->isEmpty()) {
+            return null;
+        }
+
+        foreach ($blocks as $block) {
+            /** @var ScenarioBuilderBlock $block */
+            if (! $this->builderBlockAllowsChannel($block, $message)) {
+                continue;
+            }
+
+            if ($this->builderBlockMatchesMessage($block, $message)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function builderBlockAllowsChannel(ScenarioBuilderBlock $block, Message $message): bool
+    {
+        if ($message->channel_id === null) {
+            return false;
+        }
+
+        return $block->channels
+            ->contains(fn (Channel $channel): bool => (int) $channel->id === (int) $message->channel_id);
+    }
+
+    private function builderBlockMatchesMessage(ScenarioBuilderBlock $block, Message $message): bool
+    {
+        $conditionMatch = $this->normalizeTriggerMatchScope(data_get($block->settings_payload, 'condition.match'));
+
+        if ($conditionMatch === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND && $block->conditions->isEmpty()) {
+            return true;
+        }
+
+        foreach ($block->conditions as $condition) {
+            /** @var ScenarioBuilderCondition $condition */
+            if ($this->messageMatchesCondition(
+                $message,
+                $condition->match_operator ?? $conditionMatch,
+                (string) $condition->value,
+            )) {
                 return true;
             }
         }
@@ -97,7 +164,18 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             return true;
         }
 
-        $expectedValue = AutoReplyRule::normalizeKeyword((string) ($trigger['value'] ?? ''));
+        return $this->messageMatchesCondition($message, $matchScope, (string) ($trigger['value'] ?? ''));
+    }
+
+    private function messageMatchesCondition(Message $message, mixed $matchScope, string $expectedValue): bool
+    {
+        $matchScope = $this->normalizeTriggerMatchScope($matchScope);
+
+        if ($matchScope === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+            return true;
+        }
+
+        $expectedValue = AutoReplyRule::normalizeKeyword($expectedValue);
         $messageText = AutoReplyRule::normalizeKeyword($message->text);
         $messageParameter = AutoReplyRule::normalizeKeyword($message->message_parameter);
 
