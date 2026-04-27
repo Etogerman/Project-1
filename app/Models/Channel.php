@@ -336,6 +336,10 @@ class Channel extends Model
             return false;
         }
 
+        if (! $this->isBotConnection() || ! $this->hasBotTokenConfigured()) {
+            return false;
+        }
+
         return in_array($this->getHealthStatusColor(), ['success', 'info'], true);
     }
 

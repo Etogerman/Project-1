@@ -177,15 +177,17 @@ class ProcessBotConstructorBlocksAction
                 ],
             );
         } catch (Throwable $throwable) {
-            $channel->markError($throwable);
-            $this->markFailed($run, $this->safeErrorMessage($throwable->getMessage(), $channel));
+            $safeErrorMessage = $this->safeErrorMessage($throwable->getMessage(), $channel);
+
+            $channel->markError($safeErrorMessage);
+            $this->markFailed($run, $safeErrorMessage);
 
             $this->channelActivityLogger->error(
                 $channel,
                 'bot.constructor_block_failed',
                 'Стартовое условие сработало, но ответ не отправлен.',
                 $this->logContext($message, $block) + [
-                    'error' => $throwable->getMessage(),
+                    'error' => $safeErrorMessage,
                 ],
             );
         }

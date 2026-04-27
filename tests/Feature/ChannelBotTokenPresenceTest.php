@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Channel;
+use App\Models\ChannelRuntimeState;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -68,6 +69,47 @@ class ChannelBotTokenPresenceTest extends TestCase
         $this->assertNull($channel->last_error_message);
         $this->assertSame('Webhook', $channel->getHealthStatusLabel());
         $this->assertTrue($channel->isReadyForConstructorAutoReplies());
+    }
+
+    public function test_ready_account_channel_is_not_ready_for_constructor_auto_replies_without_gateway_delivery(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => true,
+                ],
+            ],
+        ]);
+
+        $channel = $channel->fresh('runtimeState');
+
+        $this->assertSame('Работает', $channel->getHealthStatusLabel());
+        $this->assertSame('success', $channel->getHealthStatusColor());
+        $this->assertFalse($channel->isReadyForConstructorAutoReplies());
+    }
+
+    public function test_bot_channel_without_token_is_not_ready_for_constructor_auto_replies(): void
+    {
+        $channel = Channel::factory()->create([
+            'credentials' => [
+                'webhook_secret' => 'webhook-secret',
+            ],
+            'last_webhook_received_at' => now(),
+            'last_error_at' => null,
+        ]);
+
+        $channel = $channel->fresh();
+
+        $this->assertFalse($channel->hasBotTokenConfigured());
+        $this->assertFalse($channel->isReadyForConstructorAutoReplies());
     }
 
     public function test_operational_state_can_be_saved_when_credentials_are_unreadable(): void
