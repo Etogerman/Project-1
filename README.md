@@ -118,7 +118,7 @@ composer test:ci          # CI-агрегированный прогон
 - [AGENTS.md](AGENTS.md) — верхнеуровневые рамки, инварианты и правила работы агента
 - [docs/reference/project-scope.md](docs/reference/project-scope.md) — проектовый контур и текущие жёсткие границы
 - [docs/reference/local-bootstrap.md](docs/reference/local-bootstrap.md) — локальный bootstrap и ежедневный dev-runtime
-- [docs/task-delivery-workflow.md](docs/task-delivery-workflow.md) — canonical delivery-playbook; default trigger выхода из локалки в `staging` — согласованный локальный MVP
+- [docs/task-delivery-workflow.md](docs/task-delivery-workflow.md) — canonical delivery-playbook; согласованный локальный MVP ведёт к операторской приёмке, а выход в `staging` начинается после явного решения о выкладке
 - [docs/clean-stream-release-flow.md](docs/clean-stream-release-flow.md) — дополнительный appendix по clean-stream extraction и mixed-state cleanup
 - [docs/staging-laravel-cloud.md](docs/staging-laravel-cloud.md) — staging, deploy baseline и real Bitrix integration flow
 - [docs/post-deploy-smoke.md](docs/post-deploy-smoke.md) — post-deploy smoke и rev-check контур
@@ -130,9 +130,11 @@ composer test:ci          # CI-агрегированный прогон
 
 ## Внешние ТЗ
 
-Полные ТЗ, статусы ТЗ, реестр активных работ и архив живут во внешнем репозитории документации: `Etogerman/Project-1-specs`.
+Полные опубликованные ТЗ, статусы ТЗ, реестр активных работ и архив живут во внешнем репозитории документации: `Etogerman/Project-1-specs`.
 
-Основной проект не хранит живые указатели на версии ТЗ и не хранит реестр активных работ. Для конкретной работы актуальные `Spec repo`, `Spec doc` и `Spec revision` фиксируются во внешнем репозитории документации, в описании задачи или в PR.
+`Project-1-specs` считается внешним контуром, а не локальным местом для ранних черновиков. До операторского решения о выкладке существенный stream может идти по ТЗ из чата или явно указанного локального черновика вне `Project-1` и вне `Project-1-specs`.
+
+Основной проект не хранит живые указатели на версии ТЗ и не хранит реестр активных работ. Для конкретной работы актуальные `Spec repo`, `Spec doc` и `Spec revision` фиксируются во внешнем репозитории документации, в описании задачи или в PR перед первым внешним code/runtime действием.
 
 ## Тесты и smoke
 
