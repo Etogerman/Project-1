@@ -90,7 +90,11 @@ class ScenarioConstructor extends Page
     {
         abort_unless(static::canAccess(), 403);
 
-        $record = $this->resolveScenarioRecord($scenario ?: (request()->integer('scenario') ?: null));
+        $scenarioId = $scenario ?: (request()->integer('scenario') ?: null);
+
+        abort_unless($scenarioId !== null, 404);
+
+        $record = $this->resolveScenarioRecord($scenarioId);
 
         abort_unless($record instanceof Scenario, 404);
         abort_unless(auth()->user()?->can('update', $record) ?? false, 403);
@@ -539,11 +543,7 @@ class ScenarioConstructor extends Page
             return (clone $query)->whereKey($scenarioId)->first();
         }
 
-        return (clone $query)
-            ->whereHas('versions', fn ($versionQuery) => $versionQuery->where('status', ScenarioVersion::STATUS_DRAFT))
-            ->orderByDesc('updated_at')
-            ->first()
-            ?? $query->orderByDesc('updated_at')->first();
+        return null;
     }
 
     /**

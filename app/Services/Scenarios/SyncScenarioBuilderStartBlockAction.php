@@ -255,6 +255,11 @@ class SyncScenarioBuilderStartBlockAction
             $normalizedReplyText = $this->normalizeReplyText($replyText);
             $normalizedStartBlockId = $this->normalizeStartBlockId($startBlockId);
             $normalizedChannelIds = $this->normalizeChannelIds($channelIds);
+            $isPrimaryBlock = $this->isPrimaryStartBlock($lockedVersion, (int) $block->id);
+            $schemaPayload = $this->schemaPayload($lockedVersion);
+            $runtimeStartBlockId = $isPrimaryBlock
+                ? $normalizedStartBlockId
+                : $this->materializeRuntimeStartBlock($schemaPayload, $block, $normalizedStartBlockId, $normalizedReplyText);
 
             $block->forceFill([
                 'title' => $this->normalizeTitle($title),
@@ -269,7 +274,13 @@ class SyncScenarioBuilderStartBlockAction
 
             $block->channels()->sync($normalizedChannelIds);
             $this->replaceConditions($block, $normalizedTriggerValues, $normalizedConditionMatch);
-            $this->replaceStartEdge($lockedVersion, $block, $normalizedStartBlockId);
+            $this->replaceStartEdge($lockedVersion, $block, $runtimeStartBlockId);
+
+            if (! $isPrimaryBlock) {
+                $lockedVersion->forceFill([
+                    'schema_payload' => $schemaPayload,
+                ])->save();
+            }
 
             return $this->persistBuilderSchema($lockedVersion);
         });
@@ -383,9 +394,10 @@ class SyncScenarioBuilderStartBlockAction
             );
             $conditionMatch = $this->conditionMatch($block);
             $startEdge = $block->outgoingEdges->first();
-            $startBlockId = $startEdge instanceof ScenarioBuilderEdge && filled($startEdge->to_runtime_block_id)
+            $startBlockId = $this->normalizeStartBlockId(data_get($block->settings_payload, 'start_block_id'));
+            $runtimeStartBlockId = $startEdge instanceof ScenarioBuilderEdge && filled($startEdge->to_runtime_block_id)
                 ? (string) $startEdge->to_runtime_block_id
-                : $this->normalizeStartBlockId(data_get($block->settings_payload, 'start_block_id'));
+                : $startBlockId;
             $replyText = $this->replyText($block);
 
             $blocks[$block->id] = [
@@ -418,7 +430,7 @@ class SyncScenarioBuilderStartBlockAction
                 'from' => $block->id,
                 'to' => $startEdge instanceof ScenarioBuilderEdge && $startEdge->to_scenario_builder_block_id !== null
                     ? $startEdge->to_scenario_builder_block_id
-                    : $startBlockId,
+                    : $runtimeStartBlockId,
                 'condition' => null,
                 'delay' => null,
             ];
@@ -450,14 +462,6 @@ class SyncScenarioBuilderStartBlockAction
 
     public function startBlockId(ScenarioBuilderBlock $block): string
     {
-        $block->loadMissing('outgoingEdges');
-
-        $edge = $block->outgoingEdges->first();
-
-        if ($edge instanceof ScenarioBuilderEdge && filled($edge->to_runtime_block_id)) {
-            return (string) $edge->to_runtime_block_id;
-        }
-
         return $this->normalizeStartBlockId(data_get($block->settings_payload, 'start_block_id'));
     }
 
@@ -593,13 +597,21 @@ class SyncScenarioBuilderStartBlockAction
                 ]);
             }
 
-            if (array_key_exists($value, $seen)) {
+            $normalizedValue = AutoReplyRule::normalizeKeyword($value);
+
+            if ($normalizedValue === null) {
+                throw ValidationException::withMessages([
+                    'draft_start_triggers' => 'Значение trigger-а не может быть пустым.',
+                ]);
+            }
+
+            if (array_key_exists($normalizedValue, $seen)) {
                 throw ValidationException::withMessages([
                     'draft_start_triggers' => 'Trigger-ы не должны повторяться.',
                 ]);
             }
 
-            $seen[$value] = true;
+            $seen[$normalizedValue] = true;
             $values[] = $value;
         }
 
@@ -624,14 +636,28 @@ class SyncScenarioBuilderStartBlockAction
             return;
         }
 
+        $normalizedValues = collect($values)
+            ->map(fn (string $value): ?string => AutoReplyRule::normalizeKeyword($value))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($normalizedValues === []) {
+            return;
+        }
+
         $duplicateExists = ScenarioBuilderCondition::query()
-            ->whereIn('value', $values)
             ->whereHas('builderBlock', function ($query) use ($version, $block): void {
                 $query
                     ->where('scenario_version_id', $version->id)
                     ->whereKeyNot($block->id);
             })
-            ->exists();
+            ->pluck('value')
+            ->map(fn (?string $value): ?string => AutoReplyRule::normalizeKeyword($value))
+            ->filter()
+            ->intersect($normalizedValues)
+            ->isNotEmpty();
 
         if ($duplicateExists) {
             throw ValidationException::withMessages([
@@ -672,6 +698,38 @@ class SyncScenarioBuilderStartBlockAction
             'condition_payload' => [],
             'sort_order' => 1,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $schemaPayload
+     */
+    private function materializeRuntimeStartBlock(
+        array &$schemaPayload,
+        ScenarioBuilderBlock $block,
+        string $targetBlockId,
+        string $replyText,
+    ): string {
+        $blocks = is_array($schemaPayload['blocks'] ?? null) ? $schemaPayload['blocks'] : [];
+        $targetBlock = is_array($blocks[$targetBlockId] ?? null) ? $blocks[$targetBlockId] : [];
+        $nextBlockId = (($targetBlock['type'] ?? null) === 'message' && filled($targetBlock['next'] ?? null))
+            ? (string) $targetBlock['next']
+            : $targetBlockId;
+        $runtimeBlockId = 'builder_start_'.$block->id;
+
+        if ($nextBlockId === $runtimeBlockId) {
+            $nextBlockId = self::DEFAULT_START_BLOCK_ID;
+        }
+
+        $schemaPayload['version'] = (int) ($schemaPayload['version'] ?? 1);
+        $schemaPayload['blocks'] = $blocks;
+        $schemaPayload['blocks'][$runtimeBlockId] = [
+            'type' => 'message',
+            'text' => $replyText,
+            'text_format' => 'plain_text',
+            'next' => $nextBlockId,
+        ];
+
+        return $runtimeBlockId;
     }
 
     private function persistBuilderSchema(ScenarioVersion $version): ScenarioVersion

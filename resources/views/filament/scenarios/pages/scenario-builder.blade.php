@@ -274,6 +274,20 @@
                     </div>
 
                     <div class="ac-scenario-builder-fieldset">
+                        <label for="scenario-builder-runtime-start">Первый блок сценария</label>
+                        <select
+                            id="scenario-builder-runtime-start"
+                            wire:model.live="draftStartBlockId"
+                            @disabled(! $this->hasDraftVersion())
+                        >
+                            @foreach ($this->startBlockOptions() as $blockId => $label)
+                                <option value="{{ $blockId }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                        <p>После срабатывания стартовое условие начнёт сценарий с выбранного блока.</p>
+                    </div>
+
+                    <div class="ac-scenario-builder-fieldset">
                         <label for="scenario-builder-channels">Каналы</label>
                         <select
                             id="scenario-builder-channels"
