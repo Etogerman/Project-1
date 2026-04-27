@@ -79,6 +79,8 @@ return new class extends Migration
                 });
         }
 
-        Schema::dropIfExists('scenario_builder_block_channels');
+        // The pivot table belongs to the base scenario builder migration.
+        // This migration only moves old single-channel data back on rollback.
+        return;
     }
 };

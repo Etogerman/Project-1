@@ -8,15 +8,21 @@ use App\Models\AutoReplyRule;
 use App\Models\BotConstructorBlock;
 use App\Models\BotConstructorBlockRun;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
+use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Bots\ProcessBotConstructorBlocksAction;
+use App\Services\Bots\SendBotDialogTextAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
+use Mockery;
+use RuntimeException;
 use Tests\TestCase;
 
 class BotConstructorTest extends TestCase
@@ -96,6 +102,40 @@ class BotConstructorTest extends TestCase
             'last_webhook_received_at' => null,
             'last_reply_sent_at' => null,
             'last_error_at' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->call('addBlock')
+            ->set('draftIsActive', true)
+            ->set('draftChannelIds', [$channel->id])
+            ->set('draftMatchType', BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD)
+            ->set('draftMatchValuesInput', 'привет')
+            ->set('draftResponseText', 'Ответ')
+            ->call('saveBlock')
+            ->assertHasErrors(['draftChannelIds']);
+    }
+
+    public function test_active_block_rejects_ready_account_channel_until_constructor_gateway_delivery_exists(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => true,
+                ],
+            ],
         ]);
 
         Livewire::actingAs($admin)
@@ -290,6 +330,48 @@ class BotConstructorTest extends TestCase
             'status' => BotConstructorBlockRun::STATUS_NO_REPLY,
         ]);
         $this->assertSame(1, Message::query()->count());
+    }
+
+    public function test_constructor_failure_masks_channel_secrets_in_state_runs_and_activity_log(): void
+    {
+        $token = 'telegram-token';
+        $webhookSecret = 'webhook-secret';
+        $channel = $this->readyTelegramChannel();
+        $block = BotConstructorBlock::factory()->active()->create([
+            'match_type' => BotConstructorBlock::MATCH_TYPE_ANY_INBOUND,
+            'match_values' => [],
+            'response_text' => 'Ответ',
+        ]);
+        $block->channels()->attach($channel->id);
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-secret-mask',
+        ]);
+
+        $sendAction = Mockery::mock(SendBotDialogTextAction::class);
+        $sendAction
+            ->shouldReceive('handleMessage')
+            ->once()
+            ->andThrow(new RuntimeException(
+                "POST https://api.telegram.org/bot{$token}/sendMessage failed with secret {$webhookSecret}",
+            ));
+        $this->app->instance(SendBotDialogTextAction::class, $sendAction);
+
+        app(ProcessBotConstructorBlocksAction::class)->handle($message);
+
+        $run = BotConstructorBlockRun::query()->firstOrFail();
+        $channel = $channel->fresh();
+        $log = ChannelActivityLog::query()
+            ->where('event', 'bot.constructor_block_failed')
+            ->latest('created_at')
+            ->firstOrFail();
+
+        $this->assertSame(BotConstructorBlockRun::STATUS_FAILED, $run->status);
+
+        foreach ([$run->error_message, $channel->last_error_message, data_get($log->context, 'error')] as $storedMessage) {
+            $this->assertStringNotContainsString($token, (string) $storedMessage);
+            $this->assertStringNotContainsString($webhookSecret, (string) $storedMessage);
+            $this->assertStringContainsString('[secret]', (string) $storedMessage);
+        }
     }
 
     public function test_block_matching_supports_parameter_and_text_or_parameter_modes(): void
