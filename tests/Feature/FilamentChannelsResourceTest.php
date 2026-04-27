@@ -20,10 +20,11 @@ use Filament\Facades\Filament;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Encryption\Encrypter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
-use Illuminate\Support\Carbon;
 use Livewire\Livewire;
 use ReflectionMethod;
 use Tests\TestCase;
@@ -364,6 +365,57 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertIsString($storedCredentials);
         $this->assertStringNotContainsString('new-token', $storedCredentials);
+    }
+
+    public function test_admin_can_open_and_replace_unreadable_channel_credentials(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Broken Local Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+        ]);
+
+        DB::table('channels')
+            ->where('id', $channel->id)
+            ->update([
+                'credentials' => (new Encrypter(random_bytes(32), config('app.cipher')))
+                    ->encrypt(['token' => 'old-unreadable-token'], false),
+            ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('edit', $channel->fresh())
+            ->assertTableActionDataSet([
+                'name' => 'Broken Local Bot',
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'credentials' => [
+                    'token' => null,
+                ],
+                'is_active' => true,
+            ])
+            ->callMountedTableAction([
+                'name' => 'Fixed Local Bot',
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                'credentials' => [
+                    'token' => 'new-local-token',
+                ],
+                'is_active' => true,
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $channel->refresh();
+
+        $this->assertSame('Fixed Local Bot', $channel->name);
+        $this->assertSame('new-local-token', $channel->getToken());
+        $this->assertTrue($channel->bot_token_present);
     }
 
     public function test_channel_record_title_is_human_readable(): void

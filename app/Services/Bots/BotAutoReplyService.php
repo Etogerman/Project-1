@@ -18,6 +18,7 @@ class BotAutoReplyService
         protected ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
         protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
+        protected ProcessBotConstructorBlocksAction $processBotConstructorBlocksAction,
     ) {}
 
     public function handle(Message $storedMessage): void
@@ -69,6 +70,12 @@ class BotAutoReplyService
             : collect();
 
         if ($matchedRules->isEmpty()) {
+            $constructorHandled = $this->processBotConstructorBlocksAction->handle($storedMessage);
+
+            if ($constructorHandled) {
+                return;
+            }
+
             $autoReplySource = 'skipped_no_rule';
 
             $this->channelActivityLogger->info(
@@ -94,6 +101,8 @@ class BotAutoReplyService
             $contact,
             $baseContext,
         );
+
+        $this->processBotConstructorBlocksAction->handle($storedMessage);
     }
 
     public function handleResolvedRule(

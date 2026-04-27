@@ -1440,6 +1440,69 @@
         padding: 0.3rem 0.58rem;
     }
 
+    .ac-bot-constructor-node.ac-scenario-builder-node--green {
+        display: grid;
+        place-items: center;
+        width: 14rem;
+        height: 5.2rem;
+        min-height: 5.2rem;
+        padding: 0.7rem 1rem;
+        overflow: hidden;
+        border: 1px solid color-mix(in srgb, #087c3f 84%, black);
+        border-radius: 14px;
+        background:
+            linear-gradient(180deg, #08bf5c 0%, #06b553 100%);
+        box-shadow:
+            0 14px 26px -20px rgba(2, 44, 23, 0.76),
+            0 1px 0 rgba(255, 255, 255, 0.18) inset;
+        text-align: center;
+    }
+
+    .ac-bot-constructor-node.ac-scenario-builder-node--green.is-selected {
+        border-color: #2563eb;
+        box-shadow:
+            0 14px 26px -20px rgba(2, 44, 23, 0.76),
+            0 0 0 3px #2563eb;
+    }
+
+    .ac-bot-constructor-node.ac-scenario-builder-node--green.is-dragging {
+        transform: none;
+    }
+
+    .ac-bot-constructor-node.ac-scenario-builder-node--green strong {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        color: white;
+        font-size: 1.14rem;
+        font-weight: 850;
+        letter-spacing: 0;
+        line-height: 1.16;
+        text-align: center;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .ac-bot-constructor-node__id {
+        position: absolute;
+        top: 0.38rem;
+        left: 0.5rem;
+        max-width: 4rem;
+        overflow: hidden;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 0.52rem;
+        font-weight: 850;
+        letter-spacing: 0;
+        line-height: 1;
+        text-overflow: ellipsis;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    .ac-bot-constructor-node.is-inactive {
+        filter: saturate(0.88);
+    }
+
     .ac-scenario-builder-inline-meta {
         display: block;
         margin-top: 0.25rem;
