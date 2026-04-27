@@ -12,6 +12,10 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\Scenario;
+use App\Models\ScenarioBuilderBlock;
+use App\Models\ScenarioBuilderCondition;
+use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -103,6 +107,115 @@ class ProcessAutoReplyJobTest extends TestCase
 
         $this->assertSame($rule->display_name, $matchedLog->context['rule_name']);
         $this->assertSame($rule->display_name, $sentLog->context['rule_name']);
+    }
+
+    public function test_job_keeps_draft_scenario_builder_out_of_live_auto_reply_runtime(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9101,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+        $scenario = Scenario::query()->create([
+            'code' => 'local_constructor',
+            'name' => 'Локальный конструктор',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+        $draftVersion = ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_DRAFT,
+            'schema_payload' => [],
+        ]);
+        $builderBlock = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $draftVersion->id,
+            'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
+            'title' => 'Тестовый блок',
+            'position_x' => 120,
+            'position_y' => 140,
+            'settings_payload' => [
+                'condition' => [
+                    'match' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+                    'variable' => ScenarioBuilderCondition::VARIABLE_MESSAGE_PARAMETER,
+                ],
+                'message_text' => 'Ответ из конструктора.',
+            ],
+        ]);
+        $builderBlock->channels()->sync([$channel->id]);
+        ScenarioBuilderCondition::query()->create([
+            'scenario_builder_block_id' => $builderBlock->id,
+            'type' => ScenarioBuilderCondition::TYPE_MESSAGE_PARAMETER,
+            'match_operator' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'variable' => ScenarioBuilderCondition::VARIABLE_MESSAGE_PARAMETER,
+            'value' => 'тест',
+            'sort_order' => 1,
+        ]);
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'keyword' => 'тест',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('тест'),
+            'reply_text' => 'Ответ обычного правила.',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'text' => 'это тестовое сообщение',
+            'external_chat_id' => '300',
+            'external_message_id' => '11',
+            'provider_event_key' => 'telegram-11',
+        ], [
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+                && $request['chat_id'] === '300'
+                && $request['text'] === 'Ответ обычного правила.';
+        });
+
+        $message->refresh();
+        $channel->refresh();
+
+        $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertNotNull($channel->last_reply_sent_at);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'reply_to_message_id' => $message->id,
+            'external_message_id' => '9101',
+            'sent_by_type' => Message::SENT_BY_TYPE_AUTO_REPLY,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
+            'text' => 'Ответ обычного правила.',
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'reply_to_message_id' => $message->id,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_SCENARIO_BUILDER_START_CONDITION,
+            'text' => 'Ответ из конструктора.',
+        ]);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.scenario_builder_start_condition_matched',
+        ]);
     }
 
     public function test_job_sends_max_auto_reply_and_creates_outbound_message(): void

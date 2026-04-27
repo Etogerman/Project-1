@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Validation\ValidationException;
 
 class ScenarioVersion extends Model
@@ -59,6 +60,16 @@ class ScenarioVersion extends Model
     public function scenario(): BelongsTo
     {
         return $this->belongsTo(Scenario::class);
+    }
+
+    public function builderBlocks(): HasMany
+    {
+        return $this->hasMany(ScenarioBuilderBlock::class);
+    }
+
+    public function builderEdges(): HasMany
+    {
+        return $this->hasMany(ScenarioBuilderEdge::class);
     }
 
     public function isDraft(): bool

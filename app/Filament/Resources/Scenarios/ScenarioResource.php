@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Scenarios;
 
 use App\Filament\Resources\Scenarios\Pages\ManageScenarios;
+use App\Models\AutoReplyRule;
 use App\Models\Scenario;
 use App\Models\ScenarioVersion;
 use App\Services\Scenarios\ArchiveScenarioAction;
@@ -17,7 +18,6 @@ use Filament\Actions\Action;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
@@ -37,6 +37,14 @@ use UnitEnum;
 
 class ScenarioResource extends Resource
 {
+    private const START_TRIGGER_TYPE_PARAMETER = 'parameter';
+
+    private const DEFAULT_START_BLOCK_ID = 'welcome';
+
+    private const DEFAULT_END_BLOCK_ID = 'done';
+
+    private const DEFAULT_START_REPLY_TEXT = 'Старт сценария';
+
     protected static ?string $model = Scenario::class;
 
     protected static ?string $recordTitleAttribute = 'name';
@@ -55,11 +63,13 @@ class ScenarioResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->with([
-            'draftVersion',
-            'publishedVersion',
-            'versions' => fn ($query) => $query->orderByDesc('version_number'),
-        ]);
+        return parent::getEloquentQuery()
+            ->where('code', '!=', Scenario::CONSTRUCTOR_WORKSPACE_CODE)
+            ->with([
+                'draftVersion',
+                'publishedVersion',
+                'versions' => fn ($query) => $query->orderByDesc('version_number'),
+            ]);
     }
 
     public static function form(Schema $schema): Schema
@@ -94,7 +104,7 @@ class ScenarioResource extends Resource
                     ])
                     ->columns(2),
                 Section::make('Версии')
-                    ->description('На этом шаге схема сценария хранится как JSON черновика.')
+                    ->description('Черновик можно настроить через визуальный стартовый блок или JSON fallback.')
                     ->extraAttributes(['class' => 'ac-scenario-form-section'])
                     ->hidden(fn (?Scenario $record): bool => $record === null)
                     ->schema([
@@ -108,23 +118,19 @@ class ScenarioResource extends Resource
                             ->label('История версий')
                             ->columnSpanFull()
                             ->content(fn (?Scenario $record): HtmlString => static::buildVersionsOverview($record)),
-                        Textarea::make('draft_schema_payload_json')
-                            ->label('Схема черновика (JSON)')
-                            ->hidden(fn (?Scenario $record): bool => $record?->draftVersion === null)
-                            ->rows(14)
+                        Placeholder::make('draft_start_block_preview')
+                            ->label('Старт сценария')
+                            ->hidden(fn (?Scenario $record): bool => $record?->draftVersion === null
+                                && $record?->publishedVersion === null)
                             ->columnSpanFull()
-                            ->helperText('Редактируется только активный черновик. Опубликованная версия остаётся неизменяемой.')
-                            ->afterStateHydrated(function (Textarea $component, ?Scenario $record): void {
-                                $component->state(
-                                    static::encodeSchemaPayload(
-                                        $record?->draftVersion?->schema_payload ?? [],
-                                    ),
-                                );
-                            }),
+                            ->content(fn (?Scenario $record): HtmlString => static::buildStartBlockPreview($record)),
                         Placeholder::make('no_draft_state')
                             ->hiddenLabel()
                             ->visible(fn (?Scenario $record): bool => $record?->draftVersion === null)
-                            ->content('Активного черновика нет. Сначала создайте новый черновик из опубликованной версии.'),
+                            ->content(new HtmlString(
+                                '<strong>Активного черновика нет.</strong><br>'
+                                .'Стартовое условие выше показано только для просмотра. Чтобы изменить старт сценария, закройте окно и нажмите действие «Создать новый черновик» в строке сценария.',
+                            )),
                     ])
                     ->columns(2),
             ]);
@@ -351,10 +357,32 @@ class ScenarioResource extends Resource
 
             if (
                 $draftVersion instanceof ScenarioVersion
-                && array_key_exists('draft_schema_payload_json', $data)
+                && (
+                    array_key_exists('draft_schema_payload_json', $data)
+                    || static::hasStartBlockEditorData($data)
+                )
             ) {
+                if (
+                    static::hasStartBlockEditorData($data)
+                    && array_key_exists('draft_schema_payload_json', $data)
+                    && static::hasSubmittedSchemaPayloadJsonChanged(
+                        $draftVersion,
+                        (string) $data['draft_schema_payload_json'],
+                    )
+                ) {
+                    $schemaPayload = static::decodeSchemaPayload((string) $data['draft_schema_payload_json']);
+                } elseif (static::hasStartBlockEditorData($data)) {
+                    $schemaPayload = array_key_exists('draft_schema_payload_json', $data)
+                        ? static::decodeSchemaPayloadJsonObject((string) $data['draft_schema_payload_json'])
+                        : (is_array($draftVersion->schema_payload) ? $draftVersion->schema_payload : []);
+
+                    $schemaPayload = static::applyStartBlockEditorData($schemaPayload, $data);
+                } else {
+                    $schemaPayload = static::decodeSchemaPayload((string) $data['draft_schema_payload_json']);
+                }
+
                 $draftVersion->forceFill([
-                    'schema_payload' => static::decodeSchemaPayload((string) $data['draft_schema_payload_json']),
+                    'schema_payload' => $schemaPayload,
                 ])->save();
             }
 
@@ -422,6 +450,48 @@ class ScenarioResource extends Resource
         return new HtmlString($lines);
     }
 
+    protected static function buildStartBlockPreview(?Scenario $record): HtmlString
+    {
+        $schemaPayload = $record?->draftVersion?->schema_payload
+            ?? $record?->publishedVersion?->schema_payload;
+        $isReadonly = $record?->draftVersion === null;
+        $modeSummary = $isReadonly
+            ? 'Опубликованная версия показана только для просмотра. Создайте новый черновик, чтобы изменить старт.'
+            : 'Активный черновик можно редактировать через отдельное действие «Конструктор».';
+
+        if (! is_array($schemaPayload) || $schemaPayload === []) {
+            return new HtmlString(
+                '<div class="ac-scenario-start-preview">'
+                .'<strong>Стартовое условие</strong>'
+                .'<span>'.e($modeSummary).'</span>'
+                .'<span>Черновик пока пустой. Добавьте trigger и выберите первый блок в конструкторе.</span>'
+                .'</div>',
+            );
+        }
+
+        $parameterTriggers = static::extractParameterTriggers($schemaPayload);
+        $unsupportedTriggers = static::extractUnsupportedTriggers($schemaPayload);
+        $startBlockId = is_string($schemaPayload['start_block_id'] ?? null)
+            ? trim((string) $schemaPayload['start_block_id'])
+            : 'не выбран';
+        $triggerSummary = $parameterTriggers === []
+            ? 'trigger-ы не настроены'
+            : implode(', ', array_map(fn (array $trigger): string => e($trigger['value']), $parameterTriggers));
+        $unsupportedSummary = $unsupportedTriggers === []
+            ? ''
+            : '<span class="ac-scenario-start-preview__warning">Есть trigger-ы вне Slice 1; визуальный редактор их не меняет.</span>';
+
+        return new HtmlString(
+            '<div class="ac-scenario-start-preview">'
+            .'<strong>Стартовое условие</strong>'
+            .'<span>'.e($modeSummary).'</span>'
+            .'<span><b>Trigger-ы:</b> '.$triggerSummary.'</span>'
+            .'<span><b>Первый блок:</b> '.e($startBlockId).'</span>'
+            .$unsupportedSummary
+            .'</div>',
+        );
+    }
+
     protected static function translateVersionStatus(string $status): string
     {
         return match ($status) {
@@ -454,6 +524,17 @@ class ScenarioResource extends Resource
      */
     protected static function decodeSchemaPayload(string $schemaPayloadJson): array
     {
+        return app(ValidateScenarioSchemaPayloadAction::class)->handle(
+            static::decodeSchemaPayloadJsonObject($schemaPayloadJson),
+            'draft_schema_payload_json',
+        );
+    }
+
+    /**
+     * @return array<mixed, mixed>
+     */
+    protected static function decodeSchemaPayloadJsonObject(string $schemaPayloadJson): array
+    {
         $trimmedPayload = trim($schemaPayloadJson);
 
         if ($trimmedPayload === '') {
@@ -476,9 +557,252 @@ class ScenarioResource extends Resource
             ]);
         }
 
+        return $decodedPayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected static function hasStartBlockEditorData(array $data): bool
+    {
+        return array_key_exists('draft_start_triggers', $data)
+            || array_key_exists('draft_start_condition_match', $data)
+            || array_key_exists('draft_start_reply_text', $data)
+            || array_key_exists('draft_start_block_id', $data);
+    }
+
+    protected static function hasSubmittedSchemaPayloadJsonChanged(ScenarioVersion $draftVersion, string $schemaPayloadJson): bool
+    {
+        $currentSchemaPayload = is_array($draftVersion->schema_payload)
+            ? $draftVersion->schema_payload
+            : [];
+
+        return trim($schemaPayloadJson) !== trim(static::encodeSchemaPayload($currentSchemaPayload));
+    }
+
+    /**
+     * @param  array<string, mixed>  $schemaPayload
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function applyStartBlockEditorData(array $schemaPayload, array $data): array
+    {
+        if (static::extractUnsupportedTriggers($schemaPayload) !== []) {
+            throw ValidationException::withMessages([
+                'draft_start_triggers' => 'Визуальный старт пока поддерживает только trigger-ы типа message_parameter.',
+            ]);
+        }
+
+        $startBlockId = static::normalizeStartBlockId($data['draft_start_block_id'] ?? null);
+        $conditionMatch = static::normalizeStartConditionMatch($data['draft_start_condition_match'] ?? null);
+        $replyText = static::normalizeStartReplyText(
+            $data['draft_start_reply_text']
+                ?? data_get($schemaPayload, "blocks.{$startBlockId}.text", self::DEFAULT_START_REPLY_TEXT),
+        );
+        $triggers = static::normalizeStartTriggerRows($data['draft_start_triggers'] ?? [], $conditionMatch);
+        $schemaPayload = static::ensureStartEditorSchemaBase($schemaPayload, $startBlockId, $replyText);
+
+        $blocks = $schemaPayload['blocks'] ?? null;
+
+        if (! is_array($blocks) || array_is_list($blocks) || ! array_key_exists($startBlockId, $blocks)) {
+            throw ValidationException::withMessages([
+                'draft_start_block_id' => 'Первый блок сценария должен существовать.',
+            ]);
+        }
+
+        if (! is_array($blocks[$startBlockId]) || ($blocks[$startBlockId]['type'] ?? null) !== 'message') {
+            throw ValidationException::withMessages([
+                'draft_start_reply_text' => 'Текст ответа можно сохранить только в message-блок старта.',
+            ]);
+        }
+
+        $schemaPayload['version'] = (int) ($schemaPayload['version'] ?? 1);
+        $schemaPayload['start_block_id'] = $startBlockId;
+        $schemaPayload['triggers'] = $triggers;
+        $schemaPayload['blocks'][$startBlockId]['text'] = $replyText;
+        $schemaPayload['blocks'][$startBlockId]['text_format'] = $schemaPayload['blocks'][$startBlockId]['text_format'] ?? 'plain_text';
+
         return app(ValidateScenarioSchemaPayloadAction::class)->handle(
-            $decodedPayload,
-            'draft_schema_payload_json',
+            $schemaPayload,
+            'draft_start_triggers',
         );
     }
+
+    /**
+     * @return list<array{type: 'parameter', value?: string, match_scope?: string}>
+     */
+    protected static function normalizeStartTriggerRows(mixed $rows, string $conditionMatch): array
+    {
+        if ($conditionMatch === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+            return [[
+                'type' => self::START_TRIGGER_TYPE_PARAMETER,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            ]];
+        }
+
+        if (! is_array($rows) || $rows === []) {
+            throw ValidationException::withMessages([
+                'draft_start_triggers' => 'Добавьте хотя бы один trigger запуска.',
+            ]);
+        }
+
+        $triggers = [];
+        $seenValues = [];
+
+        foreach (array_values($rows) as $row) {
+            $value = is_array($row) ? trim((string) ($row['value'] ?? '')) : '';
+
+            if ($value === '') {
+                throw ValidationException::withMessages([
+                    'draft_start_triggers' => 'Значение trigger-а не может быть пустым.',
+                ]);
+            }
+
+            $normalizedValue = AutoReplyRule::normalizeKeyword($value);
+
+            if ($normalizedValue === null) {
+                throw ValidationException::withMessages([
+                    'draft_start_triggers' => 'Значение trigger-а не может быть пустым.',
+                ]);
+            }
+
+            if (array_key_exists($normalizedValue, $seenValues)) {
+                throw ValidationException::withMessages([
+                    'draft_start_triggers' => 'Trigger-ы не должны повторяться.',
+                ]);
+            }
+
+            $seenValues[$normalizedValue] = true;
+            $trigger = [
+                'type' => self::START_TRIGGER_TYPE_PARAMETER,
+                'value' => $value,
+            ];
+
+            if ($conditionMatch !== AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER) {
+                $trigger['match_scope'] = $conditionMatch;
+            }
+
+            $triggers[] = $trigger;
+        }
+
+        return $triggers;
+    }
+
+    protected static function normalizeStartConditionMatch(mixed $match): string
+    {
+        $normalizedMatch = is_string($match) ? trim($match) : '';
+
+        return match ($normalizedMatch) {
+            'exact' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'contains' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'starts_with', 'ends_with' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            default => array_key_exists($normalizedMatch, AutoReplyRule::matchScopeOptions())
+                ? $normalizedMatch
+                : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+        };
+    }
+
+    protected static function normalizeStartReplyText(mixed $replyText): string
+    {
+        $normalizedReplyText = is_string($replyText) ? trim($replyText) : '';
+
+        if ($normalizedReplyText === '') {
+            throw ValidationException::withMessages([
+                'draft_start_reply_text' => 'Введите текст ответа.',
+            ]);
+        }
+
+        return $normalizedReplyText;
+    }
+
+    protected static function normalizeStartBlockId(mixed $value): string
+    {
+        $startBlockId = is_string($value) ? trim($value) : '';
+
+        if ($startBlockId === '') {
+            throw ValidationException::withMessages([
+                'draft_start_block_id' => 'Выберите первый блок сценария.',
+            ]);
+        }
+
+        return $startBlockId;
+    }
+
+    /**
+     * @param  array<string, mixed>  $schemaPayload
+     * @return array<string, mixed>
+     */
+    protected static function ensureStartEditorSchemaBase(array $schemaPayload, string $startBlockId, string $replyText): array
+    {
+        if ($schemaPayload !== []) {
+            return $schemaPayload;
+        }
+
+        return [
+            'version' => 1,
+            'start_block_id' => $startBlockId,
+            'triggers' => [],
+            'blocks' => [
+                $startBlockId => [
+                    'type' => 'message',
+                    'text' => $replyText,
+                    'next' => self::DEFAULT_END_BLOCK_ID,
+                ],
+                self::DEFAULT_END_BLOCK_ID => [
+                    'type' => 'complete',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $schemaPayload
+     * @return list<array{type: 'parameter', value: string}>
+     */
+    protected static function extractParameterTriggers(array $schemaPayload): array
+    {
+        $triggers = $schemaPayload['triggers'] ?? null;
+
+        if (! is_array($triggers)) {
+            return [];
+        }
+
+        $parameterTriggers = [];
+
+        foreach ($triggers as $trigger) {
+            if (
+                is_array($trigger)
+                && ($trigger['type'] ?? null) === self::START_TRIGGER_TYPE_PARAMETER
+                && is_string($trigger['value'] ?? null)
+                && trim((string) $trigger['value']) !== ''
+            ) {
+                $parameterTriggers[] = [
+                    'type' => self::START_TRIGGER_TYPE_PARAMETER,
+                    'value' => trim((string) $trigger['value']),
+                ];
+            }
+        }
+
+        return $parameterTriggers;
+    }
+
+    /**
+     * @param  array<string, mixed>  $schemaPayload
+     * @return list<array<string, mixed>>
+     */
+    protected static function extractUnsupportedTriggers(array $schemaPayload): array
+    {
+        $triggers = $schemaPayload['triggers'] ?? null;
+
+        if (! is_array($triggers)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $triggers,
+            fn (mixed $trigger): bool => ! is_array($trigger)
+                || ($trigger['type'] ?? null) !== self::START_TRIGGER_TYPE_PARAMETER,
+        ));
+    }
+
 }
