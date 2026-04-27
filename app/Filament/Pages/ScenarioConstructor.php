@@ -16,6 +16,7 @@ use Filament\Pages\Page;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
 use UnitEnum;
 
@@ -227,46 +228,50 @@ class ScenarioConstructor extends Page
 
         abort_unless(auth()->user()?->can('update', $record) ?? false, 403);
 
-        $draftVersion = $record->draftVersion()->firstOrFail();
-        $selectedBlockId = $this->selectedBuilderBlockId
-            ?? (int) $this->syncScenarioBuilderStartBlockAction()->ensureStartBlock($draftVersion)->id;
-        $selectedBlockIsPrimary = $this->syncScenarioBuilderStartBlockAction()
-            ->isPrimaryStartBlock($draftVersion, $selectedBlockId);
+        [$selectedBlockId, $selectedBlockIsPrimary] = DB::transaction(function () use ($record): array {
+            $draftVersion = $record->draftVersion()->firstOrFail();
+            $selectedBlockId = $this->selectedBuilderBlockId
+                ?? (int) $this->syncScenarioBuilderStartBlockAction()->ensureStartBlock($draftVersion)->id;
+            $selectedBlockIsPrimary = $this->syncScenarioBuilderStartBlockAction()
+                ->isPrimaryStartBlock($draftVersion, $selectedBlockId);
 
-        if ($selectedBlockIsPrimary || $this->showJsonFallback) {
-            $scenarioData = [
-                'name' => $record->name,
-                'is_active' => $record->is_active,
-            ];
+            if ($selectedBlockIsPrimary || $this->showJsonFallback) {
+                $scenarioData = [
+                    'name' => $record->name,
+                    'is_active' => $record->is_active,
+                ];
 
-            if ($selectedBlockIsPrimary) {
-                $scenarioData['draft_start_triggers'] = $this->draftStartTriggers;
-                $scenarioData['draft_start_condition_match'] = $this->draftStartConditionMatch;
-                $scenarioData['draft_start_reply_text'] = $this->draftStartReplyText;
-                $scenarioData['draft_start_block_id'] = $this->draftStartBlockId;
+                if ($selectedBlockIsPrimary) {
+                    $scenarioData['draft_start_triggers'] = $this->draftStartTriggers;
+                    $scenarioData['draft_start_condition_match'] = $this->draftStartConditionMatch;
+                    $scenarioData['draft_start_reply_text'] = $this->draftStartReplyText;
+                    $scenarioData['draft_start_block_id'] = $this->draftStartBlockId;
+                }
+
+                if ($this->showJsonFallback) {
+                    $scenarioData['draft_schema_payload_json'] = $this->draftSchemaPayloadJson;
+                }
+
+                $scenario = ScenarioResource::saveScenario($scenarioData, $record);
+
+                $this->scenarioId = (int) $scenario->id;
+                $draftVersion = $this->getScenarioRecord()->draftVersion()->firstOrFail();
             }
 
-            if ($this->showJsonFallback) {
-                $scenarioData['draft_schema_payload_json'] = $this->draftSchemaPayloadJson;
-            }
+            $this->syncScenarioBuilderStartBlockAction()->saveStartBlock(
+                $draftVersion,
+                $this->draftStartNodeTitle,
+                $this->draftStartChannelIds,
+                $this->draftStartNodePosition,
+                $this->draftStartTriggers,
+                $this->draftStartConditionMatch,
+                $this->draftStartReplyText,
+                $this->draftStartBlockId,
+                $selectedBlockId,
+            );
 
-            $scenario = ScenarioResource::saveScenario($scenarioData, $record);
-
-            $this->scenarioId = (int) $scenario->id;
-            $draftVersion = $this->getScenarioRecord()->draftVersion()->firstOrFail();
-        }
-
-        $this->syncScenarioBuilderStartBlockAction()->saveStartBlock(
-            $draftVersion,
-            $this->draftStartNodeTitle,
-            $this->draftStartChannelIds,
-            $this->draftStartNodePosition,
-            $this->draftStartTriggers,
-            $this->draftStartConditionMatch,
-            $this->draftStartReplyText,
-            $this->draftStartBlockId,
-            $selectedBlockId,
-        );
+            return [$selectedBlockId, $selectedBlockIsPrimary];
+        });
 
         $this->selectedBuilderBlockId = $selectedBlockId;
         $this->hydrateBuilderState();
@@ -304,10 +309,10 @@ class ScenarioConstructor extends Page
             return [];
         }
 
-        $primaryBlockId = (int) $this->syncScenarioBuilderStartBlockAction()->ensureStartBlock($draftVersion)->id;
+        $startBlocks = $this->syncScenarioBuilderStartBlockAction()->startBlocks($draftVersion);
+        $primaryBlockId = (int) ($startBlocks->first()?->id ?? 0);
 
-        return $this->syncScenarioBuilderStartBlockAction()
-            ->startBlocks($draftVersion)
+        return $startBlocks
             ->map(fn (ScenarioBuilderBlock $block): array => [
                 'id' => (int) $block->id,
                 'title' => $this->normalizeStartNodeTitle($block->title),
@@ -463,10 +468,15 @@ class ScenarioConstructor extends Page
                 : null;
 
             if (! $block instanceof ScenarioBuilderBlock) {
-                $block = $this->syncScenarioBuilderStartBlockAction()->ensureStartBlock($draftVersion);
+                $block = $this->syncScenarioBuilderStartBlockAction()->firstStartBlock($draftVersion);
             }
 
-            $this->loadStartBlockState($block);
+            if ($block instanceof ScenarioBuilderBlock) {
+                $this->loadStartBlockState($block);
+            } else {
+                $this->loadSchemaStartState($this->getDraftSchemaPayload());
+            }
+
             $this->draftSchemaPayloadJson = $this->encodeSchemaPayload(
                 $this->syncScenarioBuilderStartBlockAction()->schemaPayloadWithBuilderProjection($draftVersion),
             );
@@ -476,6 +486,15 @@ class ScenarioConstructor extends Page
 
         $schemaPayload = $this->getDraftSchemaPayload();
 
+        $this->loadSchemaStartState($schemaPayload);
+        $this->draftSchemaPayloadJson = $this->encodeSchemaPayload($schemaPayload);
+    }
+
+    /**
+     * @param  array<string, mixed>  $schemaPayload
+     */
+    protected function loadSchemaStartState(array $schemaPayload): void
+    {
         $this->draftStartBuilderBlockId = null;
         $this->selectedBuilderBlockId = null;
         $this->draftStartTriggers = $this->extractParameterTriggerRows($schemaPayload);
@@ -485,7 +504,6 @@ class ScenarioConstructor extends Page
         $this->draftStartBlockId = $this->extractStartBlockId($schemaPayload);
         $this->draftStartNodeTitle = $this->extractStartNodeTitle($schemaPayload);
         $this->draftStartNodePosition = $this->extractStartNodePosition($schemaPayload);
-        $this->draftSchemaPayloadJson = $this->encodeSchemaPayload($schemaPayload);
     }
 
     protected function loadStartBlockState(ScenarioBuilderBlock $block): void

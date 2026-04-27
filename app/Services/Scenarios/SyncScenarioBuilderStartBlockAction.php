@@ -91,7 +91,14 @@ class SyncScenarioBuilderStartBlockAction
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $this->ensureStartBlock($lockedVersion);
+            if (! $lockedVersion->builderBlocks()
+                ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+                ->exists()) {
+                $block = $this->ensureStartBlock($lockedVersion);
+                $this->persistBuilderSchema($lockedVersion);
+
+                return $block->fresh(['channels', 'conditions', 'outgoingEdges']);
+            }
 
             $startBlockCount = $lockedVersion->builderBlocks()
                 ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
@@ -157,13 +164,20 @@ class SyncScenarioBuilderStartBlockAction
      */
     public function startBlocks(ScenarioVersion $version): \Illuminate\Database\Eloquent\Collection
     {
-        $this->ensureStartBlock($version);
-
         return $version->builderBlocks()
             ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
             ->with(['channels', 'conditions', 'outgoingEdges'])
             ->orderBy('id')
             ->get();
+    }
+
+    public function firstStartBlock(ScenarioVersion $version): ?ScenarioBuilderBlock
+    {
+        return $version->builderBlocks()
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->with(['channels', 'conditions', 'outgoingEdges'])
+            ->orderBy('id')
+            ->first();
     }
 
     public function findStartBlock(ScenarioVersion $version, int $blockId): ScenarioBuilderBlock
@@ -177,7 +191,10 @@ class SyncScenarioBuilderStartBlockAction
 
     public function isPrimaryStartBlock(ScenarioVersion $version, int $blockId): bool
     {
-        return (int) $this->ensureStartBlock($version)->id === $blockId;
+        $primaryBlock = $this->firstStartBlock($version);
+
+        return $primaryBlock instanceof ScenarioBuilderBlock
+            && (int) $primaryBlock->id === $blockId;
     }
 
     /**

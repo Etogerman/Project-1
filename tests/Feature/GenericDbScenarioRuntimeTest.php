@@ -14,6 +14,7 @@ use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
+use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
@@ -254,6 +255,195 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertNotNull($runtime);
         $this->assertTrue($runtime->shouldStart($selectedMessage));
         $this->assertFalse($runtime->shouldStart($otherMessage));
+    }
+
+    public function test_empty_published_builder_start_condition_keeps_schema_trigger_fallback(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('builder_empty_fallback', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'legacy_start',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Старый старт работает.',
+                    'next' => 'done',
+                ],
+                'done' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $scenario->publishedVersion?->id,
+            'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
+            'title' => 'Пустой просмотренный блок',
+            'position_x' => 120,
+            'position_y' => 160,
+            'settings_payload' => [
+                'condition' => [
+                    'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+                ],
+            ],
+        ]);
+
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start legacy_start',
+            'message_parameter' => 'legacy_start',
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertTrue($runtime->shouldStart($message));
+    }
+
+    public function test_published_builder_start_condition_starts_its_target_runtime_block(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 7101]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('builder_target_start', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'primary_start',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Основной старт.',
+                    'next' => 'done',
+                ],
+                'alternate' => [
+                    'type' => 'message',
+                    'text' => 'Альтернативный старт.',
+                    'next' => 'done',
+                ],
+                'done' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $primaryBlock = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $scenario->publishedVersion?->id,
+            'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
+            'title' => 'Основной старт',
+            'position_x' => 120,
+            'position_y' => 160,
+            'settings_payload' => [
+                'condition' => [
+                    'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+                ],
+                'start_block_id' => 'welcome',
+            ],
+        ]);
+        $primaryBlock->channels()->sync([$channel->id]);
+        ScenarioBuilderCondition::query()->create([
+            'scenario_builder_block_id' => $primaryBlock->id,
+            'type' => ScenarioBuilderCondition::TYPE_MESSAGE_PARAMETER,
+            'match_operator' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'variable' => ScenarioBuilderCondition::VARIABLE_MESSAGE_PARAMETER,
+            'value' => 'primary_start',
+            'sort_order' => 1,
+        ]);
+        ScenarioBuilderEdge::query()->create([
+            'scenario_version_id' => $scenario->publishedVersion?->id,
+            'from_scenario_builder_block_id' => $primaryBlock->id,
+            'to_scenario_builder_block_id' => null,
+            'to_runtime_block_id' => 'welcome',
+            'condition_payload' => [],
+            'sort_order' => 1,
+        ]);
+
+        $secondaryBlock = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $scenario->publishedVersion?->id,
+            'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
+            'title' => 'Альтернативный старт',
+            'position_x' => 320,
+            'position_y' => 160,
+            'settings_payload' => [
+                'condition' => [
+                    'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+                ],
+                'start_block_id' => 'alternate',
+            ],
+        ]);
+        $secondaryBlock->channels()->sync([$channel->id]);
+        ScenarioBuilderCondition::query()->create([
+            'scenario_builder_block_id' => $secondaryBlock->id,
+            'type' => ScenarioBuilderCondition::TYPE_MESSAGE_PARAMETER,
+            'match_operator' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'variable' => ScenarioBuilderCondition::VARIABLE_MESSAGE_PARAMETER,
+            'value' => 'secondary_start',
+            'sort_order' => 1,
+        ]);
+        ScenarioBuilderEdge::query()->create([
+            'scenario_version_id' => $scenario->publishedVersion?->id,
+            'from_scenario_builder_block_id' => $secondaryBlock->id,
+            'to_scenario_builder_block_id' => null,
+            'to_runtime_block_id' => 'alternate',
+            'condition_payload' => [],
+            'sort_order' => 1,
+        ]);
+
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start secondary_start',
+            'message_parameter' => 'secondary_start',
+        ]);
+
+        (new ProcessScenarioStartJob($message->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $outboundMessage = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertSame('Альтернативный старт.', $outboundMessage->text);
     }
 
     public function test_database_backed_scenario_saves_answers_and_completes_linear_flow(): void
