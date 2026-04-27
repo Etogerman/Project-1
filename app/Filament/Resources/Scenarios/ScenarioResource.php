@@ -2,7 +2,6 @@
 
 namespace App\Filament\Resources\Scenarios;
 
-use App\Filament\Pages\ScenarioConstructor;
 use App\Filament\Resources\Scenarios\Pages\ManageScenarios;
 use App\Models\AutoReplyRule;
 use App\Models\Scenario;
@@ -64,11 +63,13 @@ class ScenarioResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->with([
-            'draftVersion',
-            'publishedVersion',
-            'versions' => fn ($query) => $query->orderByDesc('version_number'),
-        ]);
+        return parent::getEloquentQuery()
+            ->where('code', '!=', Scenario::CONSTRUCTOR_WORKSPACE_CODE)
+            ->with([
+                'draftVersion',
+                'publishedVersion',
+                'versions' => fn ($query) => $query->orderByDesc('version_number'),
+            ]);
     }
 
     public static function form(Schema $schema): Schema
@@ -123,11 +124,6 @@ class ScenarioResource extends Resource
                                 && $record?->publishedVersion === null)
                             ->columnSpanFull()
                             ->content(fn (?Scenario $record): HtmlString => static::buildStartBlockPreview($record)),
-                        Placeholder::make('scenario_builder_entrypoint')
-                            ->hiddenLabel()
-                            ->visible(fn (?Scenario $record): bool => $record?->draftVersion instanceof ScenarioVersion)
-                            ->columnSpanFull()
-                            ->content(fn (?Scenario $record): HtmlString => static::buildScenarioBuilderEntrypoint($record)),
                         Placeholder::make('no_draft_state')
                             ->hiddenLabel()
                             ->visible(fn (?Scenario $record): bool => $record?->draftVersion === null)
@@ -224,16 +220,6 @@ class ScenarioResource extends Resource
             ->emptyStateDescription('Создайте первый глобальный сценарий для будущего конструктора.')
             ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
-                Action::make('builder')
-                    ->label('Открыть в конструкторе')
-                    ->icon(Heroicon::OutlinedAdjustmentsHorizontal)
-                    ->tooltip('Конструктор сценария')
-                    ->color('success')
-                    ->extraAttributes(['class' => 'ac-scenario-builder-table-action'])
-                    ->visible(fn (Scenario $record): bool => ! $record->is_archived
-                        && $record->draftVersion instanceof ScenarioVersion
-                        && (auth()->user()?->can('update', $record) ?? false))
-                    ->url(fn (Scenario $record): string => ScenarioConstructor::getUrl(['scenario' => $record->id])),
                 Action::make('publishDraft')
                     ->icon(Heroicon::OutlinedBolt)
                     ->iconButton()
@@ -502,25 +488,6 @@ class ScenarioResource extends Resource
             .'<span><b>Trigger-ы:</b> '.$triggerSummary.'</span>'
             .'<span><b>Первый блок:</b> '.e($startBlockId).'</span>'
             .$unsupportedSummary
-            .'</div>',
-        );
-    }
-
-    protected static function buildScenarioBuilderEntrypoint(?Scenario $record): HtmlString
-    {
-        if (! $record instanceof Scenario) {
-            return new HtmlString('');
-        }
-
-        $builderUrl = e(ScenarioConstructor::getUrl(['scenario' => $record->id]));
-
-        return new HtmlString(
-            '<div class="ac-scenario-builder-entrypoint">'
-            .'<div>'
-            .'<strong>Визуальное редактирование вынесено в конструктор.</strong>'
-            .'<span>Обычное окно меняет только карточку сценария. Стартовое условие, trigger-ы и JSON fallback редактируются на отдельном холсте.</span>'
-            .'</div>'
-            .'<a href="'.$builderUrl.'" class="ac-button ac-button--primary">Открыть конструктор</a>'
             .'</div>',
         );
     }

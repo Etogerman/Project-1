@@ -14,6 +14,7 @@ use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Scenarios\CreateScenarioAction;
+use App\Services\Scenarios\ScenarioRegistry;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -402,7 +403,7 @@ JSON,
         $this->assertSame($expectedPublishedSchema, $scenario->publishedVersion?->schema_payload);
     }
 
-    public function test_admin_can_use_scenario_constructor_action_for_green_start_block(): void
+    public function test_admin_can_use_constructor_for_green_start_block(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -447,10 +448,6 @@ JSON,
             ],
         ])->save();
 
-        Livewire::actingAs($admin)
-            ->test(ManageScenarios::class)
-            ->assertTableActionVisible('builder', $scenario);
-
         $response = $this->actingAs($admin)
             ->get(ScenarioConstructor::getUrl(['scenario' => $scenario->id]));
 
@@ -471,7 +468,7 @@ JSON,
             ->assertSee('ID: #')
             ->assertSee('Тип блока')
             ->assertSee('Название блока')
-            ->assertSee('Первый блок сценария')
+            ->assertSee('Куда вести после старта')
             ->assertSee('alternate')
             ->assertSee('Канал')
             ->assertSee('Telegram визуальный')
@@ -574,11 +571,16 @@ JSON,
         $this->assertSame('alternate', $builderBlock->outgoingEdges->first()?->to_runtime_block_id);
     }
 
-    public function test_scenario_constructor_requires_explicit_scenario_id(): void
+    public function test_admin_can_open_global_constructor_workspace(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram конструктор',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
         ]);
 
         app(CreateScenarioAction::class)->handle([
@@ -589,7 +591,58 @@ JSON,
 
         $this->actingAs($admin)
             ->get(ScenarioConstructor::getUrl())
-            ->assertNotFound();
+            ->assertOk()
+            ->assertSee('Конструктор')
+            ->assertSee('Полотно конструктора')
+            ->assertDontSee('К списку сценариев');
+
+        $this->assertDatabaseHas('scenarios', [
+            'code' => ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE,
+            'name' => 'Конструктор',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+
+        $workspace = Scenario::query()
+            ->where('code', ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE)
+            ->firstOrFail();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertCanNotSeeTableRecords([$workspace]);
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class)
+            ->set('draftStartTriggers', [
+                ['value' => 'global_builder_start'],
+            ])
+            ->set('draftStartConditionMatch', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT)
+            ->set('draftStartReplyText', 'Ответ из глобального конструктора')
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftStartBlockId', 'welcome')
+            ->set('draftStartNodeTitle', 'Глобальное условие')
+            ->call('saveDraft')
+            ->assertHasNoErrors();
+
+        $workspace->refresh();
+        $workspace->load(['draftVersion', 'publishedVersion']);
+
+        $this->assertInstanceOf(ScenarioVersion::class, $workspace->publishedVersion);
+        $this->assertInstanceOf(ScenarioVersion::class, $workspace->draftVersion);
+        $this->assertSame(
+            'Ответ из глобального конструктора',
+            $workspace->publishedVersion?->schema_payload['blocks']['welcome']['text'] ?? null,
+        );
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE,
+            'is_active' => true,
+        ]);
+        $this->assertNotNull(app(ScenarioRegistry::class)->makeRuntime(ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE));
+        $this->assertNotContains(
+            ScenarioConstructor::CONSTRUCTOR_WORKSPACE_CODE,
+            app(ScenarioRegistry::class)->compatibleScenarioCodesForChannel($channel),
+        );
     }
 
     public function test_admin_can_open_standalone_scenario_constructor(): void
@@ -628,6 +681,9 @@ JSON,
             'platform' => Channel::PLATFORM_TELEGRAM,
             'is_active' => true,
         ]);
+        $tag = Tag::factory()->create([
+            'name' => 'Стартовый тег',
+        ]);
 
         $scenario = app(CreateScenarioAction::class)->handle([
             'code' => 'green_start_multi_builder',
@@ -649,6 +705,18 @@ JSON,
             ->call('addStartBuilderBlock')
             ->assertHasNoErrors();
 
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+        $schemaPayload = $scenario->draftVersion?->schema_payload ?? [];
+        $schemaPayload['blocks']['welcome']['actions'] = [
+            [
+                'type' => 'set_tag',
+                'value' => $tag->slug,
+            ],
+        ];
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => $schemaPayload,
+        ])->save();
         $scenario->refresh();
         $scenario->load('draftVersion');
 
@@ -699,6 +767,12 @@ JSON,
                 'text' => 'Старт сценария',
                 'text_format' => 'plain_text',
                 'next' => 'done',
+                'actions' => [
+                    [
+                        'type' => 'set_tag',
+                        'value' => $tag->slug,
+                    ],
+                ],
             ],
             $scenario->draftVersion?->schema_payload['blocks']['builder_start_'.$secondaryBlock->id] ?? null,
         );
@@ -755,6 +829,21 @@ JSON,
         $this->assertDatabaseHas('scenario_builder_blocks', [
             'id' => $primaryBlock->id,
         ]);
+
+        $scenario->refresh();
+        $scenario->load('draftVersion');
+
+        $this->assertArrayNotHasKey(
+            'builder_start_'.$secondaryBlock->id,
+            $scenario->draftVersion?->schema_payload['blocks'] ?? [],
+        );
+        $this->assertArrayNotHasKey(
+            'builder_start_'.$secondaryBlock->id,
+            Livewire::actingAs($admin)
+                ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+                ->instance()
+                ->startBlockOptions(),
+        );
     }
 
     public function test_start_builder_rejects_normalized_duplicate_triggers_between_blocks(): void

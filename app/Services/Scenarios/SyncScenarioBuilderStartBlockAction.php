@@ -154,6 +154,12 @@ class SyncScenarioBuilderStartBlockAction
                 ]);
             }
 
+            $schemaPayload = $this->schemaPayload($lockedVersion);
+            unset($schemaPayload['blocks']['builder_start_'.$block->id]);
+            $lockedVersion->forceFill([
+                'schema_payload' => $schemaPayload,
+            ])->save();
+
             $block->delete();
             $this->persistBuilderSchema($lockedVersion);
         });
@@ -728,6 +734,10 @@ class SyncScenarioBuilderStartBlockAction
             'text_format' => 'plain_text',
             'next' => $nextBlockId,
         ];
+
+        if (is_array($targetBlock['actions'] ?? null) && ($targetBlock['actions'] ?? []) !== []) {
+            $schemaPayload['blocks'][$runtimeBlockId]['actions'] = array_values($targetBlock['actions']);
+        }
 
         return $runtimeBlockId;
     }

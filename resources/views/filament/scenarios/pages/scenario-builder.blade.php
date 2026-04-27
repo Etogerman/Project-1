@@ -2,8 +2,8 @@
     <form wire:submit.prevent="saveDraft" class="ac-scenario-builder-page">
         @if (! $this->hasDraftVersion())
             <section class="ac-surface ac-scenario-builder-empty-state">
-                <strong>Активного черновика нет.</strong>
-                <span>Создайте новый черновик из опубликованной версии, чтобы открыть визуальное редактирование.</span>
+                <strong>Рабочая версия пока не создана.</strong>
+                <span>Откройте конструктор ещё раз или сохраните первый блок, чтобы создать рабочее полотно.</span>
             </section>
         @endif
 
@@ -21,9 +21,6 @@
                         <p>Основной лист. Добавляйте элементы на поле и нажимайте блок, чтобы открыть его настройки справа.</p>
                     </div>
                     <div class="ac-scenario-builder-workspace__actions">
-                        <a href="{{ \App\Filament\Resources\Scenarios\ScenarioResource::getUrl() }}" class="ac-button ac-button--secondary">
-                            К списку сценариев
-                        </a>
                         <button type="submit" class="ac-button ac-button--primary" @disabled(! $this->hasDraftVersion())>
                             Сохранить
                         </button>
@@ -36,7 +33,7 @@
                         >
                             Добавить стартовое условие
                         </button>
-                        <span class="ac-scenario-builder-workspace__badge">draft v{{ $this->getRecord()->draftVersion?->version_number ?? '—' }}</span>
+                        <span class="ac-scenario-builder-workspace__badge">рабочая версия {{ $this->getRecord()->draftVersion?->version_number ?? '—' }}</span>
                     </div>
                 </div>
 
@@ -274,7 +271,7 @@
                     </div>
 
                     <div class="ac-scenario-builder-fieldset">
-                        <label for="scenario-builder-runtime-start">Первый блок сценария</label>
+                        <label for="scenario-builder-runtime-start">Куда вести после старта</label>
                         <select
                             id="scenario-builder-runtime-start"
                             wire:model.live="draftStartBlockId"
@@ -284,7 +281,7 @@
                                 <option value="{{ $blockId }}">{{ $label }}</option>
                             @endforeach
                         </select>
-                        <p>После срабатывания стартовое условие начнёт сценарий с выбранного блока.</p>
+                        <p>После срабатывания стартовое условие продолжит поток с выбранного блока.</p>
                     </div>
 
                     <div class="ac-scenario-builder-fieldset">

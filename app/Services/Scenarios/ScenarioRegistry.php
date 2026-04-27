@@ -132,6 +132,10 @@ class ScenarioRegistry
         $compatibleScenarioCodes = [];
 
         foreach ($this->definitions() as $scenarioCode => $definition) {
+            if ($scenarioCode === Scenario::CONSTRUCTOR_WORKSPACE_CODE) {
+                continue;
+            }
+
             if ($this->supportsChannel($scenarioCode, $channel)) {
                 $compatibleScenarioCodes[] = $scenarioCode;
             }

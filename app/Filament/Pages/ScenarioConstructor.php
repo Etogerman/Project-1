@@ -7,8 +7,13 @@ use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
+use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioVersion;
 use App\Models\User;
+use App\Services\Scenarios\CreateNextScenarioDraftAction;
+use App\Services\Scenarios\CreateScenarioAction;
+use App\Services\Scenarios\PublishScenarioVersionAction;
+use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\SyncScenarioBuilderStartBlockAction;
 use BackedEnum;
 use Filament\Notifications\Notification;
@@ -22,9 +27,13 @@ use UnitEnum;
 
 class ScenarioConstructor extends Page
 {
+    public const CONSTRUCTOR_WORKSPACE_CODE = Scenario::CONSTRUCTOR_WORKSPACE_CODE;
+
     private const START_TRIGGER_TYPE_PARAMETER = 'parameter';
 
     private const START_BUILDER_BLOCK_TYPE_LABEL = 'Стартовое условие';
+
+    private const CONSTRUCTOR_WORKSPACE_NAME = 'Конструктор';
 
     private const DEFAULT_START_BLOCK_ID = 'welcome';
 
@@ -92,9 +101,9 @@ class ScenarioConstructor extends Page
 
         $scenarioId = $scenario ?: (request()->integer('scenario') ?: null);
 
-        abort_unless($scenarioId !== null, 404);
-
-        $record = $this->resolveScenarioRecord($scenarioId);
+        $record = $scenarioId !== null
+            ? $this->resolveScenarioRecord($scenarioId)
+            : $this->resolveConstructorWorkspaceRecord();
 
         abort_unless($record instanceof Scenario, 404);
         abort_unless(auth()->user()?->can('update', $record) ?? false, 403);
@@ -277,15 +286,32 @@ class ScenarioConstructor extends Page
             return [$selectedBlockId, $selectedBlockIsPrimary];
         });
 
+        $record = $this->getScenarioRecord();
+
+        if ($this->isConstructorWorkspace($record)) {
+            DB::transaction(function () use ($record): void {
+                $publishedVersion = app(PublishScenarioVersionAction::class)
+                    ->handle($record->draftVersion()->firstOrFail());
+
+                $this->syncConstructorWorkspaceBindings($publishedVersion);
+                $record->refresh();
+                app(CreateNextScenarioDraftAction::class)->handle($record);
+            });
+
+            $selectedBlockId = null;
+        }
+
         $this->selectedBuilderBlockId = $selectedBlockId;
         $this->hydrateBuilderState();
 
         Notification::make()
             ->success()
-            ->title('Черновик сохранён')
-            ->body($selectedBlockIsPrimary
-                ? 'Основное стартовое условие и runtime-старт обновлены.'
-                : 'Стартовое условие сохранено в локальном конструкторе.')
+            ->title($this->isConstructorWorkspace($this->getScenarioRecord()) ? 'Конструктор сохранён' : 'Черновик сохранён')
+            ->body($this->isConstructorWorkspace($this->getScenarioRecord())
+                ? 'Стартовые условия применены для выбранных каналов.'
+                : ($selectedBlockIsPrimary
+                    ? 'Основное стартовое условие и runtime-старт обновлены.'
+                    : 'Стартовое условие сохранено в локальном конструкторе.'))
             ->send();
     }
 
@@ -347,11 +373,13 @@ class ScenarioConstructor extends Page
         $options = [];
 
         foreach ($blocks as $blockId => $block) {
-            if (! is_string($blockId) || trim($blockId) === '') {
+            $normalizedBlockId = is_string($blockId) ? trim($blockId) : '';
+
+            if ($normalizedBlockId === '' || $this->isGeneratedRuntimeStartBlockId($normalizedBlockId)) {
                 continue;
             }
 
-            $options[trim($blockId)] = $this->formatBlockOptionLabel(trim($blockId), is_array($block) ? $block : []);
+            $options[$normalizedBlockId] = $this->formatBlockOptionLabel($normalizedBlockId, is_array($block) ? $block : []);
         }
 
         return $options === []
@@ -533,6 +561,47 @@ class ScenarioConstructor extends Page
         return $scenario;
     }
 
+    protected function resolveConstructorWorkspaceRecord(): Scenario
+    {
+        return DB::transaction(function (): Scenario {
+            $existingScenario = Scenario::query()
+                ->where('code', self::CONSTRUCTOR_WORKSPACE_CODE)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $existingScenario instanceof Scenario) {
+                return app(CreateScenarioAction::class)->handle([
+                    'code' => self::CONSTRUCTOR_WORKSPACE_CODE,
+                    'name' => self::CONSTRUCTOR_WORKSPACE_NAME,
+                    'is_active' => true,
+                ]);
+            }
+
+            if ((bool) $existingScenario->is_archived || ! (bool) $existingScenario->is_active) {
+                $existingScenario->forceFill([
+                    'name' => self::CONSTRUCTOR_WORKSPACE_NAME,
+                    'is_active' => true,
+                    'is_archived' => false,
+                ])->save();
+            }
+
+            if (! $existingScenario->draftVersion()->exists()) {
+                $lastVersionNumber = (int) $existingScenario->versions()->max('version_number');
+
+                ScenarioVersion::query()->create([
+                    'scenario_id' => $existingScenario->id,
+                    'version_number' => $lastVersionNumber + 1,
+                    'status' => ScenarioVersion::STATUS_DRAFT,
+                    'schema_payload' => [],
+                ]);
+            }
+
+            app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+            return $existingScenario->fresh(['draftVersion', 'publishedVersion', 'versions']);
+        });
+    }
+
     protected function resolveScenarioRecord(?int $scenarioId): ?Scenario
     {
         $query = Scenario::query()
@@ -544,6 +613,50 @@ class ScenarioConstructor extends Page
         }
 
         return null;
+    }
+
+    protected function isGeneratedRuntimeStartBlockId(string $blockId): bool
+    {
+        return str_starts_with($blockId, 'builder_start_');
+    }
+
+    protected function isConstructorWorkspace(Scenario $scenario): bool
+    {
+        return (string) $scenario->code === self::CONSTRUCTOR_WORKSPACE_CODE;
+    }
+
+    protected function syncConstructorWorkspaceBindings(ScenarioVersion $publishedVersion): void
+    {
+        $channelIds = $publishedVersion->builderBlocks()
+            ->where('type', ScenarioBuilderBlock::TYPE_START_CONDITION)
+            ->with('channels:id')
+            ->get()
+            ->flatMap(fn (ScenarioBuilderBlock $block): array => $block->channels
+                ->pluck('id')
+                ->map(fn (mixed $channelId): int => (int) $channelId)
+                ->all())
+            ->unique()
+            ->values()
+            ->all();
+
+        ScenarioChannelBinding::query()
+            ->where('scenario_code', self::CONSTRUCTOR_WORKSPACE_CODE)
+            ->when($channelIds !== [], fn ($query) => $query->whereNotIn('channel_id', $channelIds))
+            ->update([
+                'is_active' => false,
+            ]);
+
+        foreach ($channelIds as $channelId) {
+            ScenarioChannelBinding::query()->updateOrCreate(
+                [
+                    'channel_id' => $channelId,
+                    'scenario_code' => self::CONSTRUCTOR_WORKSPACE_CODE,
+                ],
+                [
+                    'is_active' => true,
+                ],
+            );
+        }
     }
 
     /**
