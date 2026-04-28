@@ -6,12 +6,17 @@ use App\Services\Bitrix24\HandleBitrix24EventsCallbackAction;
 use App\Services\Bitrix24\HandleBitrix24InstallCallbackAction;
 use App\Services\Bitrix24\HandleBitrix24OpenlinesCallbackAction;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
 class Bitrix24CallbackController extends Controller
 {
-    public function install(Request $request): JsonResponse
+    public function install(Request $request): JsonResponse|RedirectResponse
     {
+        if ($this->isAdminOAuthReturn($request)) {
+            return redirect()->route('admin.bitrix24.oauth.callback', $request->query());
+        }
+
         app(HandleBitrix24InstallCallbackAction::class)->handle($request);
 
         return $this->response('install', $request);
@@ -40,5 +45,12 @@ class Bitrix24CallbackController extends Controller
             'method' => $request->getMethod(),
             'timestamp' => now()->toIso8601String(),
         ]);
+    }
+
+    private function isAdminOAuthReturn(Request $request): bool
+    {
+        return $request->isMethod('GET')
+            && filled($request->query('code'))
+            && filled($request->query('state'));
     }
 }

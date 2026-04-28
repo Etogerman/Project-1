@@ -168,6 +168,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         return User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
+            'role' => User::ROLE_ADMIN,
         ]);
     }
 

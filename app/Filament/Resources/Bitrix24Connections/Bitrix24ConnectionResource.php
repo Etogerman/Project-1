@@ -7,7 +7,13 @@ use App\Filament\Resources\Bitrix24Connections\Pages\ViewBitrix24Connection;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
+use App\Services\Bitrix24\Bitrix24AdminOAuthException;
+use App\Services\Bitrix24\CheckBitrix24ConnectionAction;
+use App\Services\Bitrix24\DisconnectBitrix24ConnectionLocallyAction;
+use App\Services\Bitrix24\ResetBitrix24ConnectionLocallyAction;
 use BackedEnum;
+use Filament\Actions\Action;
+use Filament\Notifications\Notification;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Infolists\Components\ViewEntry;
 use Filament\Resources\Resource;
@@ -17,8 +23,10 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
+use Filament\Tables\Enums\RecordActionsPosition;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
+use Throwable;
 use UnitEnum;
 
 class Bitrix24ConnectionResource extends Resource
@@ -225,7 +233,93 @@ class Bitrix24ConnectionResource extends Resource
             ->recordUrl(fn (Bitrix24Connection $record): string => static::getUrl('view', ['record' => $record]))
             ->defaultSort('id', 'desc')
             ->emptyStateHeading('Подключения Bitrix24 ещё не появились')
-            ->emptyStateDescription('Экран диагностики станет полезен после первого install callback.')
+            ->emptyStateDescription('Главный админ может подключить Bitrix24 кнопкой сверху.')
+            ->recordActionsColumnLabel('Кнопки')
+            ->recordActions([
+                Action::make('checkConnection')
+                    ->label('Проверить подключение')
+                    ->icon(Heroicon::OutlinedArrowPath)
+                    ->color('gray')
+                    ->iconButton()
+                    ->tooltip('Проверить подключение')
+                    ->visible(fn (): bool => (bool) auth()->user()?->isSuperadmin())
+                    ->action(function (Bitrix24Connection $record): void {
+                        try {
+                            app(CheckBitrix24ConnectionAction::class)->handle($record);
+
+                            Notification::make()
+                                ->success()
+                                ->title('Подключение работает')
+                                ->body('Bitrix24 подтвердил доступ.')
+                                ->send();
+                        } catch (Bitrix24AdminOAuthException $exception) {
+                            Notification::make()
+                                ->danger()
+                                ->title('Не удалось проверить подключение')
+                                ->body($exception->getMessage())
+                                ->send();
+                        }
+                    }),
+                Action::make('disconnectLocally')
+                    ->label('Отключить')
+                    ->icon(Heroicon::OutlinedNoSymbol)
+                    ->color('danger')
+                    ->iconButton()
+                    ->tooltip('Отключить локально')
+                    ->requiresConfirmation()
+                    ->modalHeading('Отключить Bitrix24 локально?')
+                    ->modalDescription('Ключи доступа будут очищены в нашем приложении. Доступ на стороне Bitrix24 не отзывается.')
+                    ->modalSubmitActionLabel('Отключить')
+                    ->visible(fn (): bool => (bool) auth()->user()?->isSuperadmin())
+                    ->action(function (Bitrix24Connection $record): void {
+                        try {
+                            app(DisconnectBitrix24ConnectionLocallyAction::class)->handle($record);
+
+                            Notification::make()
+                                ->success()
+                                ->title('Подключение отключено')
+                                ->body('Для работы нужно подключить Bitrix24 заново.')
+                                ->send();
+                        } catch (Throwable $throwable) {
+                            report($throwable);
+
+                            Notification::make()
+                                ->danger()
+                                ->title('Не удалось отключить подключение')
+                                ->body($throwable->getMessage())
+                                ->send();
+                        }
+                    }),
+                Action::make('resetLocally')
+                    ->label('Сбросить')
+                    ->icon(Heroicon::OutlinedTrash)
+                    ->color('danger')
+                    ->tooltip('Сбросить локальную запись')
+                    ->requiresConfirmation()
+                    ->modalHeading('Сбросить локальную запись Bitrix24?')
+                    ->modalDescription('Будет удалена только запись подключения в нашем приложении. Профиль портала и настройки ngrok останутся. Доступ на стороне Bitrix24 не отзывается.')
+                    ->modalSubmitActionLabel('Сбросить')
+                    ->visible(fn (): bool => (bool) auth()->user()?->isSuperadmin())
+                    ->action(function (Bitrix24Connection $record): void {
+                        try {
+                            app(ResetBitrix24ConnectionLocallyAction::class)->handle($record);
+
+                            Notification::make()
+                                ->success()
+                                ->title('Локальная запись сброшена')
+                                ->body('Теперь можно подключить Bitrix24 заново.')
+                                ->send();
+                        } catch (Throwable $throwable) {
+                            report($throwable);
+
+                            Notification::make()
+                                ->danger()
+                                ->title('Не удалось сбросить запись')
+                                ->body($throwable->getMessage())
+                                ->send();
+                        }
+                    }),
+            ], position: RecordActionsPosition::BeforeColumns)
             ->toolbarActions([]);
     }
 
@@ -243,9 +337,9 @@ class Bitrix24ConnectionResource extends Resource
     public static function getConnectionStatusOptions(): array
     {
         return [
-            Bitrix24Connection::STATUS_ACTIVE => 'Активно',
-            Bitrix24Connection::STATUS_INVALID => 'Невалидно',
-            Bitrix24Connection::STATUS_NEEDS_REINSTALL => 'Требуется переустановка',
+            Bitrix24Connection::STATUS_ACTIVE => 'Подключено',
+            Bitrix24Connection::STATUS_INVALID => 'Ошибка подключения',
+            Bitrix24Connection::STATUS_NEEDS_REINSTALL => 'Нужно переподключить',
         ];
     }
 

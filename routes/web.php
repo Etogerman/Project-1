@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Bitrix24CallbackController;
+use App\Http\Controllers\Bitrix24AdminOAuthController;
 use App\Http\Controllers\Bitrix24ProbeController;
 use App\Http\Controllers\BotWebhookController;
 use App\Http\Controllers\TelegramAccountGatewayController;
@@ -34,6 +35,12 @@ Route::middleware('throttle:telegram-account-gateway')
         Route::post('/outgoing-messages/{outgoingMessage}/result', [TelegramAccountGatewayController::class, 'outgoingMessageResult'])
             ->name('internal.telegram-account.outgoing-messages.result');
     });
+
+Route::get('/admin/bitrix24/oauth/start', [Bitrix24AdminOAuthController::class, 'start'])
+    ->name('admin.bitrix24.oauth.start');
+
+Route::get('/admin/bitrix24/oauth/callback', [Bitrix24AdminOAuthController::class, 'callback'])
+    ->name('admin.bitrix24.oauth.callback');
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])
     ->middleware('throttle:bitrix24-install')
