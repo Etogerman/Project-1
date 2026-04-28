@@ -161,6 +161,83 @@ class ProcessAutoReplyJobTest extends TestCase
         ]);
     }
 
+    public function test_job_queues_telegram_account_auto_reply_without_button_until_gateway_supports_buttons(): void
+    {
+        Http::fake();
+
+        $channel = $this->readyTelegramAccountChannel();
+        $tag = Tag::factory()->create();
+
+        $rule = AutoReplyRule::factory()
+            ->forChannel($channel)
+            ->create([
+                'channel_id' => $channel->id,
+                'keyword' => null,
+                'normalized_keyword' => null,
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'reply_text' => 'Ответ с кнопкой через Gateway',
+                'is_active' => true,
+            ]);
+        $rule->channels()->sync([
+            $channel->id => [
+                'button_type' => AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD,
+                'button_text' => 'Открыть форму',
+                'button_url' => 'https://example.com/form',
+            ],
+        ]);
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $rule->id,
+            'tag_id' => $tag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ADD,
+        ]);
+
+        $message = $this->createInboundDialogMessage($channel, [
+            'provider_event_key' => 'telegram-account-auto-reply-button',
+            'text' => 'любой текст',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+
+        $message->refresh();
+
+        $outgoing = TelegramAccountOutgoingMessage::query()->firstOrFail();
+        $outboundMessage = Message::query()
+            ->where('reply_to_message_id', $message->id)
+            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE)
+            ->firstOrFail();
+
+        $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertSame('Ответ с кнопкой через Gateway', $outboundMessage->text);
+        $this->assertSame('telegram_account_gateway', data_get($outboundMessage->raw_payload, 'provider'));
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, data_get($outboundMessage->raw_payload, 'delivery_status'));
+        $this->assertNull(data_get($outboundMessage->raw_payload, 'button_type'));
+        $this->assertSame($outboundMessage->id, $outgoing->message_id);
+        $this->assertSame('Ответ с кнопкой через Gateway', $outgoing->text);
+        $this->assertDatabaseHas('messages', [
+            'reply_to_message_id' => $message->id,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
+        ]);
+        $this->assertDatabaseHas('contact_tag', [
+            'contact_id' => $message->contact_id,
+            'tag_id' => $tag->id,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_gateway_button_omitted',
+            'level' => 'warning',
+        ]);
+
+        $log = $channel->activityLogs()
+            ->where('event', 'bot.reply_gateway_button_omitted')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $log->context['button_type']);
+        $this->assertSame($rule->id, $log->context['rule_id']);
+    }
+
     public function test_job_keeps_draft_scenario_builder_out_of_live_auto_reply_runtime(): void
     {
         Http::fake([
@@ -2177,8 +2254,7 @@ class ProcessAutoReplyJobTest extends TestCase
         array $messageOverrides = [],
         array $identityOverrides = [],
         array $contactOverrides = [],
-    ): Message
-    {
+    ): Message {
         $contact = Contact::factory()->create($contactOverrides);
         $identity = ContactIdentity::factory()->create(array_merge([
             'contact_id' => $contact->id,
