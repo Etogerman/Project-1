@@ -20,6 +20,8 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
     {
         parent::setUp();
 
+        config()->set('app.url', 'http://localhost');
+
         $this->defaultProfile = $this->createProfile(
             profileKey: Bitrix24Profile::PROFILE_KEY_STAGING,
             callbackBaseUrl: 'http://localhost',
@@ -33,7 +35,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
 
         $connection = $this->createActiveConnection('member-1', 'app-token-1');
 
-        $response = $this->postJson('/callbacks/bitrix24/events', $this->eventsPayload(
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             eventName: 'ONCRMCONTACTUPDATE',
@@ -58,14 +60,14 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
 
         $this->createActiveConnection('member-1', 'app-token-1');
 
-        $this->postJson('/callbacks/bitrix24/events', $this->eventsPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             eventName: 'ONCRMCONTACTUPDATE',
             entityId: 101,
         ))->assertOk();
 
-        $response = $this->postJson('/callbacks/bitrix24/events', $this->eventsPayload(
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             eventName: 'ONCRMCONTACTUPDATE',
@@ -85,7 +87,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
 
         $connection = $this->createActiveConnection('member-1', 'app-token-1');
 
-        $response = $this->postJson('/callbacks/bitrix24/openlines', $this->openlinesPayload(
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/openlines', $this->openlinesPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             messageId: 'openlines-101',
@@ -109,13 +111,13 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
 
         $this->createActiveConnection('member-1', 'app-token-1');
 
-        $this->postJson('/callbacks/bitrix24/openlines', $this->openlinesPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/openlines', $this->openlinesPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             messageId: 'openlines-101',
         ))->assertOk();
 
-        $response = $this->postJson('/callbacks/bitrix24/openlines', $this->openlinesPayload(
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/openlines', $this->openlinesPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             messageId: 'openlines-102',
@@ -140,7 +142,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
         );
         $this->createActiveConnection('member-2', 'app-token-2', $secondProfile);
 
-        $this->postJson('/callbacks/bitrix24/events', $this->eventsPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             eventName: 'ONCRMCONTACTUPDATE',
@@ -154,7 +156,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
             entityId: 201,
         ))->assertOk();
 
-        $this->postJson('/callbacks/bitrix24/events', $this->eventsPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             eventName: 'ONCRMCONTACTUPDATE',
@@ -178,7 +180,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
         );
         $this->createActiveConnection('member-2', 'app-token-2', $secondProfile);
 
-        $this->postJson('/callbacks/bitrix24/openlines', $this->openlinesPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/openlines', $this->openlinesPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             messageId: 'openlines-101',
@@ -190,7 +192,7 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
             messageId: 'openlines-201',
         ))->assertOk();
 
-        $this->postJson('/callbacks/bitrix24/openlines', $this->openlinesPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/openlines', $this->openlinesPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             messageId: 'openlines-102',
@@ -205,12 +207,12 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
         Queue::fake();
         config()->set('bitrix24.rate_limits.events.max_per_minute', 1);
 
-        $this->postJson('/callbacks/bitrix24/events', [
+        $this->postJson('http://localhost/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
             'payload' => 'noise-1',
         ])->assertOk();
 
-        $response = $this->postJson('/callbacks/bitrix24/events', [
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
             'payload' => 'noise-2',
         ]);
