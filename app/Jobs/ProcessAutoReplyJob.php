@@ -9,14 +9,15 @@ use App\Models\Message;
 use App\Services\Bots\AutoReplyDispatchException;
 use App\Services\Bots\BotAutoReplyService;
 use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\ProcessBotConstructorBlocksAction;
 use App\Services\Bots\ResolveAutoReplyRuleAction;
-use Illuminate\Support\Collection;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -55,8 +56,8 @@ class ProcessAutoReplyJob implements ShouldQueue
         BotAutoReplyService $botAutoReplyService,
         ChannelActivityLogger $channelActivityLogger,
         ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
-    ): void
-    {
+        ProcessBotConstructorBlocksAction $processBotConstructorBlocksAction,
+    ): void {
         $message = Message::query()
             ->with(['channel', 'contactIdentity', 'contact'])
             ->find($this->inboundMessageId);
@@ -95,11 +96,13 @@ class ProcessAutoReplyJob implements ShouldQueue
                         'message_id' => $message->id,
                         'provider_event_key' => $message->provider_event_key,
                         'external_message_id' => $message->external_message_id,
-                        'auto_reply_mode' => $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                        'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
                         'contact_has_phone' => $contact->phoneNumbers()->exists(),
                         'button_type' => null,
                     ],
                 );
+
+                $processBotConstructorBlocksAction->handle($message);
             } catch (Throwable $throwable) {
                 $this->reportFailedAutoReply(
                     $message,
@@ -214,7 +217,7 @@ class ProcessAutoReplyJob implements ShouldQueue
 
     protected function isAutoReplyOnlyMaxBotStartedEvent(Message $message): bool
     {
-        return $message->channel?->platform === \App\Models\Channel::PLATFORM_MAX
+        return $message->channel?->platform === Channel::PLATFORM_MAX
             && data_get($message->raw_payload, 'update_type') === 'bot_started'
             && filled($message->message_parameter);
     }
@@ -268,7 +271,7 @@ class ProcessAutoReplyJob implements ShouldQueue
                     'message_id' => $message->id,
                     'provider_event_key' => $message->provider_event_key,
                     'external_message_id' => $message->external_message_id,
-                    'auto_reply_mode' => $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                    'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
                     'auto_reply_source' => $autoReplySource,
                     'button_type' => $buttonType,
                     'rule_id' => $failedRule?->id,

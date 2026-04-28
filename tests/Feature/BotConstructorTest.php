@@ -402,6 +402,98 @@ class BotConstructorTest extends TestCase
         ]);
     }
 
+    public function test_constructor_runs_after_partial_auto_reply_retry_completes_remaining_rules(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 101],
+                ])
+                ->push([
+                    'ok' => false,
+                ], 500)
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 102],
+                ])
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 103],
+                ]),
+        ]);
+
+        $channel = $this->readyTelegramChannel();
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'reply_text' => 'Первый автоответ',
+            'priority' => 5,
+            'is_active' => true,
+        ]);
+        $secondRule = AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'keyword' => 'Мульти',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('Мульти'),
+            'reply_text' => 'Второй автоответ',
+            'priority' => 20,
+            'is_active' => true,
+        ]);
+        $block = BotConstructorBlock::factory()->active()->create([
+            'match_type' => BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD,
+            'match_values' => ['мульти'],
+            'response_text' => 'Конструктор после retry',
+        ]);
+        $block->channels()->attach($channel->id);
+
+        $message = $this->createInboundMessage($channel, [
+            'text' => 'мульти',
+            'provider_event_key' => 'constructor-after-partial-retry',
+        ]);
+
+        try {
+            ProcessAutoReplyJob::dispatchSync($message->id);
+            $this->fail('Expected first attempt to fail on the second matched rule.');
+        } catch (\Throwable) {
+        }
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSentCount(4);
+
+        $this->assertSame(
+            ['Первый автоответ', 'Второй автоответ', 'Конструктор после retry'],
+            Message::query()
+                ->where('direction', Message::DIRECTION_OUTBOUND)
+                ->where('reply_to_message_id', $message->id)
+                ->orderBy('id')
+                ->pluck('text')
+                ->all(),
+        );
+        $this->assertDatabaseHas('bot_constructor_block_runs', [
+            'inbound_message_id' => $message->id,
+            'bot_constructor_block_id' => $block->id,
+            'status' => BotConstructorBlockRun::STATUS_SENT,
+        ]);
+
+        $failedLog = $channel->activityLogs()
+            ->where('event', 'bot.reply_failed')
+            ->latest('id')
+            ->firstOrFail();
+        $resumeCompletedLog = $channel->activityLogs()
+            ->where('event', 'bot.reply_resume_completed')
+            ->latest('id')
+            ->firstOrFail();
+
+        $this->assertSame([$secondRule->id], $failedLog->context['remaining_rule_ids']);
+        $this->assertSame($failedLog->id, $resumeCompletedLog->context['resume_failure_log_id']);
+    }
+
     public function test_none_reply_is_recorded_once_and_does_not_send_duplicate_on_retry(): void
     {
         Http::fake();
