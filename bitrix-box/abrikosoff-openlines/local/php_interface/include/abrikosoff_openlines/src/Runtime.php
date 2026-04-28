@@ -506,12 +506,7 @@ final class Runtime
             $status = (int) $client->getStatus();
 
             if ($response === false || $status >= 400) {
-                self::log(sprintf(
-                    'Abrikosoff Open Lines callback forward failed: status=%s url=%s body=%s',
-                    $status,
-                    $url,
-                    $body,
-                ));
+                self::log(self::openLinesCallbackFailureLogMessage($url, $payload, $body, $status));
 
                 throw new \RuntimeException('Abrikosoff Open Lines callback forward failed.');
             }
@@ -540,16 +535,53 @@ final class Runtime
         curl_close($ch);
 
         if ($response === false || $status >= 400) {
-            self::log(sprintf(
-                'Abrikosoff Open Lines callback forward failed: status=%s error=%s url=%s body=%s',
-                $status,
-                $error,
-                $url,
-                $body,
-            ));
+            self::log(self::openLinesCallbackFailureLogMessage($url, $payload, $body, $status, $error));
 
             throw new \RuntimeException('Abrikosoff Open Lines callback forward failed.');
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private static function openLinesCallbackFailureLogMessage(
+        string $url,
+        array $payload,
+        string $body,
+        int $status,
+        string $error = ''
+    ): string {
+        $urlParts = parse_url($url);
+        $urlHost = is_array($urlParts) ? (string) ($urlParts['host'] ?? '') : '';
+        $urlPath = is_array($urlParts) ? (string) ($urlParts['path'] ?? '') : '';
+        $event = is_scalar($payload['event'] ?? null) ? (string) $payload['event'] : '';
+
+        $message = sprintf(
+            'Abrikosoff Open Lines callback forward failed: status=%s url_host=%s url_path=%s event=%s body_size=%s body_sha256=%s',
+            $status,
+            self::safeLogValue($urlHost === '' ? '[unknown]' : $urlHost),
+            self::safeLogValue($urlPath === '' ? '/' : $urlPath),
+            self::safeLogValue($event === '' ? '[unknown]' : $event),
+            strlen($body),
+            hash('sha256', $body),
+        );
+
+        if ($error !== '') {
+            $message .= sprintf(' error=%s', self::safeLogValue($error));
+        }
+
+        return $message;
+    }
+
+    private static function safeLogValue(string $value): string
+    {
+        $value = str_replace(["\r", "\n"], ' ', trim($value));
+
+        if (strlen($value) > 500) {
+            return substr($value, 0, 500).'...';
+        }
+
+        return $value;
     }
 
     private static function log(string $message): void
