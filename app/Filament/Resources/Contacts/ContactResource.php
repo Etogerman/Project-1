@@ -1097,7 +1097,7 @@ class ContactResource extends Resource
      *     mergeTriggerPhone: string
      * }
      */
-    protected static function buildDedupStatusViewData(Contact $record): array
+    public static function buildDedupStatusViewData(Contact $record): array
     {
         $record->loadMissing([
             'mergedInto',
@@ -1156,7 +1156,7 @@ class ContactResource extends Resource
         ];
     }
 
-    protected static function shouldShowDedupStatusSection(Contact $record): bool
+    public static function shouldShowDedupStatusSection(Contact $record): bool
     {
         if ($record->isMerged()) {
             return true;

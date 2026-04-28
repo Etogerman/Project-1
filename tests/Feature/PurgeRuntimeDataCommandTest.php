@@ -213,7 +213,12 @@ class PurgeRuntimeDataCommandTest extends TestCase
 
     public function test_command_logs_summary_event_for_confirmed_production_force(): void
     {
+        $realLogger = Log::getFacadeRoot();
+
         Log::spy();
+        Log::shouldReceive('channel')
+            ->with('deprecations')
+            ->andReturnUsing(fn () => $realLogger->channel('deprecations'));
 
         $this->seedRuntimeFixture();
 

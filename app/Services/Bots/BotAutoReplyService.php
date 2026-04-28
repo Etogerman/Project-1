@@ -60,9 +60,9 @@ class BotAutoReplyService
                 $channel,
                 'bot.reply_skipped_contact_disabled',
                 'Автоответ отключён для этого контакта.',
-                $baseContext + [
+                array_merge($baseContext, [
                     'auto_reply_source' => 'skipped_contact_disabled',
-                ],
+                ]),
             );
 
             return;
@@ -90,13 +90,13 @@ class BotAutoReplyService
                 $channel,
                 'bot.reply_skipped_no_rule',
                 'Автоответ не отправлен: правило не найдено.',
-                $baseContext + [
+                array_merge($baseContext, [
                     'auto_reply_source' => $autoReplySource,
                     'match_scope' => null,
                     'contact_phone_condition' => null,
                     'message_text' => $storedMessage->text,
                     'message_parameter' => $storedMessage->message_parameter,
-                ],
+                ]),
             );
 
             return;
@@ -149,9 +149,9 @@ class BotAutoReplyService
                 $channel,
                 'bot.reply_skipped_contact_disabled',
                 'Автоответ отключён для этого контакта.',
-                $baseContext + [
+                array_merge($baseContext, [
                     'auto_reply_source' => 'skipped_contact_disabled',
-                ],
+                ]),
             );
 
             return;
@@ -309,7 +309,7 @@ class BotAutoReplyService
                 $channel,
                 'bot.reply_rule_matched',
                 'Выбрано правило автоответа.',
-                $baseContext + [
+                array_merge($baseContext, [
                     'auto_reply_source' => $autoReplySource,
                     'button_type' => $buttonType,
                     'rule_id' => $matchedRule->id,
@@ -317,7 +317,7 @@ class BotAutoReplyService
                     'match_scope' => $matchedRule->match_scope,
                     'contact_phone_condition' => $matchedRule->contact_phone_condition,
                     'keyword' => $matchedRule->keyword,
-                ],
+                ]),
             );
 
             Log::info('bot auto reply started', [
@@ -375,7 +375,7 @@ class BotAutoReplyService
                     $channel,
                     'bot.reply_skipped_dialog_not_sendable',
                     'Автоответ не отправлен: диалог сейчас недоступен для отправки.',
-                    $baseContext + [
+                    array_merge($baseContext, [
                         'auto_reply_source' => $autoReplySource,
                         'button_type' => $buttonType,
                         'match_scope' => $matchedRule->match_scope,
@@ -387,7 +387,7 @@ class BotAutoReplyService
                         'external_user_id' => $sendResult->dialog?->currentContactIdentity?->external_user_id ?? $externalUserId,
                         'route_status_code' => $sendResult->routeStatus->code,
                         'blocked_reason' => $sendResult->routeStatus->blockedReason,
-                    ],
+                    ]),
                 );
 
                 return;
@@ -426,7 +426,7 @@ class BotAutoReplyService
                 $channel,
                 'bot.reply_sent',
                 'Автоответ отправлен.',
-                $baseContext + [
+                array_merge($baseContext, [
                     'auto_reply_source' => $autoReplySource,
                     'button_type' => $buttonType,
                     'match_scope' => $matchedRule->match_scope,
@@ -436,7 +436,7 @@ class BotAutoReplyService
                     'outbound_external_message_id' => $deliveryResult->externalMessageId,
                     'rule_id' => $matchedRule->id,
                     'rule_name' => $matchedRule->display_name,
-                ],
+                ]),
             );
         } catch (Throwable $throwable) {
             throw new AutoReplyDispatchException($matchedRule, $buttonType, $throwable);
@@ -545,7 +545,7 @@ class BotAutoReplyService
             $channel,
             'bot.reply_queued',
             'Автоответ поставлен в очередь Gateway.',
-            $baseContext + [
+            array_merge($baseContext, [
                 'auto_reply_source' => $autoReplySource,
                 'button_type' => $buttonType,
                 'match_scope' => $matchedRule->match_scope,
@@ -556,7 +556,7 @@ class BotAutoReplyService
                 'outgoing_message_id' => data_get($outboundMessage->raw_payload, 'outgoing_message_id'),
                 'rule_id' => $matchedRule->id,
                 'rule_name' => $matchedRule->display_name,
-            ],
+            ]),
         );
     }
 
@@ -578,7 +578,7 @@ class BotAutoReplyService
             $channel,
             'bot.reply_gateway_button_omitted',
             'Автоответ отправлен без кнопки: Telegram Account Gateway пока поддерживает только текст.',
-            $baseContext + [
+            array_merge($baseContext, [
                 'auto_reply_source' => $autoReplySource,
                 'button_type' => $buttonType,
                 'match_scope' => $matchedRule->match_scope,
@@ -588,7 +588,7 @@ class BotAutoReplyService
                 'dialog_id' => $routeDialog->id,
                 'external_chat_id' => $routeDialog->external_chat_id ?? $externalChatId,
                 'external_user_id' => $routeDialog->currentContactIdentity?->external_user_id ?? $externalUserId,
-            ],
+            ]),
         );
     }
 
@@ -612,7 +612,7 @@ class BotAutoReplyService
             $channel,
             'bot.reply_skipped_dialog_not_sendable',
             'Автоответ не отправлен: диалог сейчас недоступен для отправки.',
-            $baseContext + [
+            array_merge($baseContext, [
                 'auto_reply_source' => $autoReplySource,
                 'button_type' => $buttonType,
                 'match_scope' => $matchedRule->match_scope,
@@ -624,7 +624,7 @@ class BotAutoReplyService
                 'external_user_id' => $routeDialog?->currentContactIdentity?->external_user_id ?? $externalUserId,
                 'route_status_code' => $routeStatusCode,
                 'blocked_reason' => $blockedReason,
-            ],
+            ]),
         );
     }
 

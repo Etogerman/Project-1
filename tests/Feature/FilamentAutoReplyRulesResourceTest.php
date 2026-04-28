@@ -701,7 +701,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             });
     }
 
-    public function test_normalized_keyword_duplicates_are_allowed_within_channel(): void
+    public function test_normalized_keyword_duplicate_is_rejected_within_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -724,12 +724,13 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 'keyword' => '  тест1  ',
                 'reply_text' => 'Дубликат',
                 'is_active' => true,
-            ]));
+            ]))
+            ->assertHasErrors(['keyword']);
 
-        $this->assertSame(2, AutoReplyRule::query()->count());
+        $this->assertSame(1, AutoReplyRule::query()->count());
     }
 
-    public function test_exact_keyword_duplicate_is_allowed_for_overlapping_selected_channels(): void
+    public function test_exact_keyword_duplicate_is_rejected_for_overlapping_selected_channels(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -760,9 +761,10 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                     'keyword' => ' overlap ',
                     'reply_text' => 'Дубликат',
                 ],
-            ));
+            ))
+            ->assertHasErrors(['keyword']);
 
-        $this->assertSame(2, AutoReplyRule::query()->count());
+        $this->assertSame(1, AutoReplyRule::query()->count());
     }
 
     public function test_admin_can_create_any_inbound_rule_without_keyword(): void
@@ -1118,7 +1120,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame(3, AutoReplyRule::query()->count());
     }
 
-    public function test_exact_text_or_parameter_duplicates_are_allowed_within_same_scope(): void
+    public function test_exact_text_or_parameter_duplicate_is_rejected_within_same_scope(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1142,7 +1144,78 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 'keyword' => ' text_1 ',
                 'reply_text' => 'Duplicate combined',
                 'is_active' => true,
-            ]));
+            ]))
+            ->assertHasErrors(['keyword']);
+
+        $this->assertSame(1, AutoReplyRule::query()->count());
+    }
+
+    public function test_same_keyword_is_allowed_for_mutually_exclusive_phone_conditions(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData($channel, [
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => 'PHONE_BRANCH',
+                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+                'reply_text' => 'Для контакта с телефоном',
+            ]))
+            ->assertHasNoFormErrors();
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData($channel, [
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => ' phone_branch ',
+                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+                'reply_text' => 'Для контакта без телефона',
+            ]))
+            ->assertHasNoFormErrors();
+
+        $this->assertSame(2, AutoReplyRule::query()->count());
+    }
+
+    public function test_same_keyword_is_allowed_for_mutually_exclusive_tag_conditions(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => 'VIP',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData($channel, [
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => 'TAG_BRANCH',
+                'required_tag_ids' => [$tag->id],
+                'reply_text' => 'Для контакта с тегом',
+            ]))
+            ->assertHasNoFormErrors();
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData($channel, [
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => ' tag_branch ',
+                'excluded_tag_ids' => [$tag->id],
+                'reply_text' => 'Для контакта без тега',
+            ]))
+            ->assertHasNoFormErrors();
 
         $this->assertSame(2, AutoReplyRule::query()->count());
     }
@@ -1336,7 +1409,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
                 ->test(ManageAutoReplyRules::class)
                 ->set('workbookImportPreviewToken', $token)
                 ->callAction('applyWorkbookImport')
-                ->assertHasActionErrors(['workbook_0']);
+                ->assertHasErrors(['workbook_0']);
 
             $this->assertSame(1, AutoReplyRule::query()->count());
         } finally {

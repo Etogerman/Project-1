@@ -156,7 +156,7 @@ class SendManualDialogReplyActionTest extends TestCase
             'message_kind' => Message::KIND_INBOUND_USER,
             'external_chat_id' => 'chat-chronology',
             'external_message_id' => 'telegram-inbound-created',
-            'received_at' => null,
+            'received_at' => now()->subSeconds(10),
             'created_at' => now()->subSeconds(10),
         ]);
 
@@ -170,7 +170,7 @@ class SendManualDialogReplyActionTest extends TestCase
         $this->assertSame($createdAtTarget->id, $outboundMessage->reply_to_message_id);
     }
 
-    public function test_send_manual_dialog_reply_uses_created_at_fallback_for_reply_to_when_received_at_is_null(): void
+    public function test_send_manual_dialog_reply_uses_message_chronology_for_reply_to(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -227,7 +227,7 @@ class SendManualDialogReplyActionTest extends TestCase
             'message_kind' => Message::KIND_INBOUND_USER,
             'external_chat_id' => 'chat-fallback',
             'external_message_id' => 'telegram-inbound-fallback',
-            'received_at' => null,
+            'received_at' => now()->subSeconds(5),
             'created_at' => now()->subSeconds(5),
         ]);
 

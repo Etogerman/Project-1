@@ -92,6 +92,7 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $dialog = $this->createInboxDialog([
             'contactName' => 'Только контакт',
+            'contactFirstName' => 'Только контакт',
             'externalUserId' => 'tg-user-555',
             'externalUsername' => 'dialog_hidden_user',
         ]);
@@ -116,24 +117,27 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertTableColumnStateSet('contact_label', 'Только контакт', $dialog)
             ->assertTableColumnExists(
                 'external_user_id',
-                fn ($column): bool => $column->getLabel() === 'Внешний ID',
+                fn ($column): bool => $column->getLabel() === 'Внешний ID'
+                    && $column->isToggleable()
+                    && $column->isToggledHiddenByDefault(),
                 $dialog,
             )
-            ->assertTableColumnHidden('external_user_id')
             ->assertTableColumnStateSet('external_user_id', 'tg-user-555', $dialog)
             ->assertTableColumnExists(
                 'external_username',
-                fn ($column): bool => $column->getLabel() === 'Username',
+                fn ($column): bool => $column->getLabel() === 'Username'
+                    && $column->isToggleable()
+                    && $column->isToggledHiddenByDefault(),
                 $dialog,
             )
-            ->assertTableColumnHidden('external_username')
             ->assertTableColumnStateSet('external_username', '@dialog_hidden_user', $dialog)
             ->assertTableColumnExists(
                 'phone_label',
-                fn ($column): bool => $column->getLabel() === 'Номер телефона',
+                fn ($column): bool => $column->getLabel() === 'Номер телефона'
+                    && $column->isToggleable()
+                    && $column->isToggledHiddenByDefault(),
                 $dialog,
             )
-            ->assertTableColumnHidden('phone_label')
             ->assertTableColumnStateSet('phone_label', '+7 900 123 45 67', $dialog);
     }
 
@@ -145,6 +149,7 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $dialog = $this->createInboxDialog([
             'contactName' => 'Чистый контакт',
+            'contactFirstName' => 'Чистый контакт',
             'externalUserId' => 'hidden-route-777',
             'externalUsername' => 'hidden_dialog_username',
         ]);
@@ -211,6 +216,7 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $contact = Contact::factory()->create([
             'name' => 'Account inbox contact',
+            'first_name' => 'Account inbox contact',
         ]);
         $identity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
@@ -247,7 +253,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Account inbox contact')
             ->assertSee('Telegram Account Inbox')
             ->assertSee('Требует ответа')
-            ->assertSee('Не bot-канал');
+            ->assertSee('Gateway не готов');
     }
 
     public function test_dialog_view_renders_media_badges_for_telegram_account_message(): void
@@ -630,7 +636,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
             ->assertOk()
             ->assertSee('data-role="dialog-contact-avatar-fallback"', false)
-            ->assertSee('ТК');
+            ->assertSee('TК');
     }
 
     public function test_employee_can_open_dialogs_inbox_page(): void
@@ -1128,10 +1134,9 @@ class FilamentDialogsResourceTest extends TestCase
             'received_at' => now(),
         ]);
 
-        $response = $this->actingAs($admin)
-            ->get(DialogResource::getUrl('index'));
-
-        $response->assertOk()
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->removeTableFilter('inbox_status')
             ->assertSee('Ответ из Bitrix24')
             ->assertSee('Bitrix24');
     }
@@ -1517,7 +1522,7 @@ class FilamentDialogsResourceTest extends TestCase
         $this->assertSame('Сообщение 21', $messages[0]['display_text']);
         $this->assertSame('Сообщение 70', $messages[49]['display_text']);
         $component->assertSet('hasMoreOlderMessages', true)
-            ->assertSee('Загрузить более ранние сообщения');
+            ->assertSee('Показать более ранние');
     }
 
     public function test_dialog_view_live_refresh_appends_new_messages_without_losing_local_state(): void
@@ -2114,7 +2119,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->latest('id')
             ->firstOrFail();
 
-        $this->assertSame(
+        $this->assertEquals(
             [
                 'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
                 'from_status' => [

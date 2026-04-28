@@ -384,7 +384,7 @@ class FilamentChannelsResourceTest extends TestCase
             ->where('id', $channel->id)
             ->update([
                 'credentials' => (new Encrypter(random_bytes(32), config('app.cipher')))
-                    ->encrypt(['token' => 'old-unreadable-token'], false),
+                    ->encrypt(['token' => 'old-unreadable-token']),
             ]);
 
         Livewire::actingAs($admin)
@@ -399,7 +399,7 @@ class FilamentChannelsResourceTest extends TestCase
                 ],
                 'is_active' => true,
             ])
-            ->callMountedTableAction([
+            ->setTableActionData([
                 'name' => 'Fixed Local Bot',
                 'platform' => Channel::PLATFORM_TELEGRAM,
                 'connection_type' => Channel::CONNECTION_TYPE_BOT,
@@ -409,6 +409,7 @@ class FilamentChannelsResourceTest extends TestCase
                 ],
                 'is_active' => true,
             ])
+            ->callMountedTableAction()
             ->assertHasNoTableActionErrors();
 
         $channel->refresh();

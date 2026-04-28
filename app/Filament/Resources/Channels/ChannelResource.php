@@ -781,6 +781,12 @@ class ChannelResource extends Resource
         $feed = static::resolveMessageFeedSummary($message);
 
         if (is_array($feed) && filled($feed['display_text'] ?? null)) {
+            $mediaBadge = static::resolveFirstMediaBadge($message, $feed);
+
+            if ($mediaBadge !== null) {
+                return $mediaBadge;
+            }
+
             return (string) $feed['display_text'];
         }
 
@@ -832,6 +838,14 @@ class ChannelResource extends Resource
             }
 
             $feed = static::resolveMessageFeedSummary($message);
+
+            foreach ($feed['media_badges'] ?? [] as $badge) {
+                if (! is_string($badge) || ! filled($badge)) {
+                    continue;
+                }
+
+                $badges[] = static::renderFeedBadge($badge);
+            }
 
             foreach ($feed['media_state_badges'] ?? [] as $badge) {
                 if (! is_array($badge) || ! filled($badge['label'] ?? null)) {
@@ -1115,10 +1129,40 @@ class ChannelResource extends Resource
         $feed = static::resolveMessageFeedSummary($message);
 
         if (is_array($feed) && filled($feed['display_text'] ?? null)) {
+            $mediaBadge = static::resolveFirstMediaBadge($message, $feed);
+
+            if ($mediaBadge !== null) {
+                return $mediaBadge;
+            }
+
             return (string) $feed['display_text'];
         }
 
         return filled($message->text) ? (string) $message->text : '—';
+    }
+
+    /**
+     * @param  array<string, mixed>  $feed
+     */
+    protected static function resolveFirstMediaBadge(Message $message, array $feed): ?string
+    {
+        if (filled($message->text)) {
+            return null;
+        }
+
+        $mediaBadges = $feed['media_badges'] ?? null;
+
+        if (! is_array($mediaBadges)) {
+            return null;
+        }
+
+        foreach ($mediaBadges as $badge) {
+            if (is_string($badge) && filled($badge)) {
+                return $badge;
+            }
+        }
+
+        return null;
     }
 
     protected static function getMessageDirectionBadgeClasses(?string $direction): string

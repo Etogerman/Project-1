@@ -852,6 +852,8 @@ class AutoReplyRuleResource extends Resource
             $record,
         );
 
+        static::validateUniqueRuleSignature($ruleData, $channelIds, $tagConditions, $record);
+
         /** @var AutoReplyRule $rule */
         $rule = DB::transaction(function () use ($record, $ruleData, $tagEffects, $tagConditions, $channelSettings): AutoReplyRule {
             if ($record instanceof AutoReplyRule) {
@@ -878,6 +880,94 @@ class AutoReplyRuleResource extends Resource
         });
 
         return $rule->fresh(['channel', 'channels', 'tagEffects.tag', 'tagConditions.tag']) ?? $rule;
+    }
+
+    /**
+     * @param  array<string, mixed>  $ruleData
+     * @param  list<int>  $channelIds
+     * @param  array{requiredTagIds:list<int>, excludedTagIds:list<int>}  $tagConditions
+     */
+    protected static function validateUniqueRuleSignature(
+        array $ruleData,
+        array $channelIds,
+        array $tagConditions,
+        ?AutoReplyRule $record = null,
+    ): void
+    {
+        $matchScope = filled($ruleData['match_scope'] ?? null)
+            ? (string) $ruleData['match_scope']
+            : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
+        $normalizedKeyword = filled($ruleData['normalized_keyword'] ?? null)
+            ? (string) $ruleData['normalized_keyword']
+            : null;
+        $contactPhoneCondition = filled($ruleData['contact_phone_condition'] ?? null)
+            ? (string) $ruleData['contact_phone_condition']
+            : null;
+
+        if ($channelIds === [] || ! static::usesKeywordScope($matchScope) || $normalizedKeyword === null) {
+            return;
+        }
+
+        $conflictingRules = AutoReplyRule::query()
+            ->with('tagConditions')
+            ->where('match_scope', $matchScope)
+            ->where('normalized_keyword', $normalizedKeyword)
+            ->whereHas('channels', function (Builder $query) use ($channelIds): void {
+                $query->whereIn('channels.id', $channelIds);
+            })
+            ->when(
+                $contactPhoneCondition !== null,
+                fn (Builder $query): Builder => $query->where(function (Builder $phoneQuery) use ($contactPhoneCondition): void {
+                    $phoneQuery->whereNull('contact_phone_condition')
+                        ->orWhere('contact_phone_condition', $contactPhoneCondition);
+                }),
+            );
+
+        if ($record instanceof AutoReplyRule && $record->exists) {
+            $conflictingRules->whereKeyNot($record->getKey());
+        }
+
+        $hasConflict = $conflictingRules
+            ->get()
+            ->contains(fn (AutoReplyRule $existingRule): bool => static::tagConditionsCanOverlap(
+                $tagConditions['requiredTagIds'],
+                $tagConditions['excludedTagIds'],
+                $existingRule,
+            ));
+
+        if (! $hasConflict) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'keyword' => 'В выбранных каналах уже есть правило с таким текстом, областью срабатывания и совместимыми условиями.',
+        ]);
+    }
+
+    /**
+     * @param  list<int>  $requiredTagIds
+     * @param  list<int>  $excludedTagIds
+     */
+    protected static function tagConditionsCanOverlap(
+        array $requiredTagIds,
+        array $excludedTagIds,
+        AutoReplyRule $existingRule,
+    ): bool {
+        $existingRule->loadMissing('tagConditions');
+
+        $existingRequiredTagIds = $existingRule->tagConditions
+            ->where('condition', AutoReplyRuleTagCondition::CONDITION_REQUIRED)
+            ->pluck('tag_id')
+            ->map(fn (mixed $tagId): int => (int) $tagId)
+            ->all();
+        $existingExcludedTagIds = $existingRule->tagConditions
+            ->where('condition', AutoReplyRuleTagCondition::CONDITION_EXCLUDED)
+            ->pluck('tag_id')
+            ->map(fn (mixed $tagId): int => (int) $tagId)
+            ->all();
+
+        return array_intersect($requiredTagIds, $existingExcludedTagIds) === []
+            && array_intersect($excludedTagIds, $existingRequiredTagIds) === [];
     }
 
     public static function notifyValidationFailure(\Illuminate\Validation\ValidationException $exception): void
