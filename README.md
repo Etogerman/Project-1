@@ -145,9 +145,7 @@ composer test:ci          # CI-агрегированный прогон
   - `composer test:feature:bitrix`
   - `composer test:feature:collector`
   - `composer test:feature:domain`
-- текущий GitHub Actions Bitrix-only shard: `composer test:feature:bitrix`
-  - это не заменяет полный локальный `composer test:ci`
-- агрегирующий локальный прогон: `composer test:ci`
+- агрегирующий прогон для CI: `composer test:ci`
 - локальный полный dev-runtime: `composer dev`
 
 ## Справка по framework

@@ -64,5 +64,5 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
-      - name: Run Bitrix feature shard
-        run: composer test:feature:bitrix
+      - name: Run CI test suite
+        run: composer test:ci
