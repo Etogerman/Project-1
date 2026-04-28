@@ -3,9 +3,13 @@
 namespace App\Services\Bots;
 
 use App\Models\AutoReplyRule;
+use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Dialogs\ResolveDialogRouteSourceAction;
+use App\Services\Dialogs\ResolveDialogRouteStatusAction;
+use App\Services\TelegramAccount\QueueTelegramAccountSystemReplyAction;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -18,6 +22,11 @@ class BotAutoReplyService
         protected ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
         protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
+        protected ProcessBotConstructorBlocksAction $processBotConstructorBlocksAction,
+        protected ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
+        protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
+        protected QueueTelegramAccountSystemReplyAction $queueTelegramAccountSystemReplyAction,
+        protected ApplyAutoReplyRuleTagEffectsAction $applyAutoReplyRuleTagEffectsAction,
     ) {}
 
     public function handle(Message $storedMessage): void
@@ -31,7 +40,7 @@ class BotAutoReplyService
             throw new InvalidArgumentException("Inbound message [{$storedMessage->id}] does not have a channel.");
         }
 
-        $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY;
+        $autoReplyMode = $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY;
         $buttonType = null;
         $contactHasPhone = $contact instanceof Contact
             ? $contact->phoneNumbers()->exists()
@@ -69,6 +78,12 @@ class BotAutoReplyService
             : collect();
 
         if ($matchedRules->isEmpty()) {
+            $constructorHandled = $this->processBotConstructorBlocksAction->handle($storedMessage);
+
+            if ($constructorHandled) {
+                return;
+            }
+
             $autoReplySource = 'skipped_no_rule';
 
             $this->channelActivityLogger->info(
@@ -94,6 +109,8 @@ class BotAutoReplyService
             $contact,
             $baseContext,
         );
+
+        $this->processBotConstructorBlocksAction->handle($storedMessage);
     }
 
     public function handleResolvedRule(
@@ -115,7 +132,7 @@ class BotAutoReplyService
             throw new InvalidArgumentException("Inbound message [{$storedMessage->id}] does not have a contact.");
         }
 
-        $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY;
+        $autoReplyMode = $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY;
         $contactHasPhone = $contact->phoneNumbers()->exists();
         $baseContext = [
             'platform' => $channel->platform,
@@ -150,7 +167,7 @@ class BotAutoReplyService
     public function handleResolvedRules(
         Message $storedMessage,
         Collection $matchedRules,
-        \App\Models\Channel $channel,
+        Channel $channel,
         Contact $contact,
         array $baseContext,
         ?Dialog $routeDialog = null,
@@ -177,7 +194,7 @@ class BotAutoReplyService
     /**
      * @return array<string, mixed>|null
      */
-    protected function buildTelegramReplyMarkup(AutoReplyRule $matchedRule, \App\Models\Channel $channel): ?array
+    protected function buildTelegramReplyMarkup(AutoReplyRule $matchedRule, Channel $channel): ?array
     {
         $buttonType = $matchedRule->getButtonTypeForChannel($channel);
 
@@ -222,7 +239,7 @@ class BotAutoReplyService
     /**
      * @return array<int, array<string, mixed>>|null
      */
-    protected function buildMaxAttachments(AutoReplyRule $matchedRule, \App\Models\Channel $channel): ?array
+    protected function buildMaxAttachments(AutoReplyRule $matchedRule, Channel $channel): ?array
     {
         $buttonType = $matchedRule->getButtonTypeForChannel($channel);
 
@@ -261,7 +278,7 @@ class BotAutoReplyService
         ]];
     }
 
-    protected function resolveButtonType(AutoReplyRule $matchedRule, \App\Models\Channel $channel): ?string
+    protected function resolveButtonType(AutoReplyRule $matchedRule, Channel $channel): ?string
     {
         return $matchedRule->getButtonTypeForChannel($channel);
     }
@@ -272,7 +289,7 @@ class BotAutoReplyService
     protected function dispatchResolvedRule(
         Message $storedMessage,
         AutoReplyRule $matchedRule,
-        \App\Models\Channel $channel,
+        Channel $channel,
         Contact $contact,
         array $baseContext,
         ?Dialog $routeDialog = null,
@@ -284,7 +301,7 @@ class BotAutoReplyService
         $buttonType = $this->resolveButtonType($matchedRule, $channel);
         $externalChatId = $routeDialog?->external_chat_id ?? $storedMessage->external_chat_id;
         $externalUserId = $routeDialog?->currentContactIdentity?->external_user_id ?? $storedMessage->contactIdentity?->external_user_id;
-        $autoReplyMode = $channel->auto_reply_mode ?? \App\Models\Channel::AUTO_REPLY_MODE_RULES_ONLY;
+        $autoReplyMode = $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY;
         $contactHasPhone = $contact->phoneNumbers()->exists();
 
         try {
@@ -318,6 +335,26 @@ class BotAutoReplyService
                 'contact_phone_condition' => $matchedRule->contact_phone_condition,
                 'contact_has_phone' => $contactHasPhone,
             ]);
+
+            if ($this->shouldQueueThroughTelegramAccountGateway($channel)) {
+                $this->queueTelegramAccountAutoReply(
+                    $storedMessage,
+                    $matchedRule,
+                    $channel,
+                    $contact,
+                    $baseContext,
+                    $routeDialog,
+                    $replyText,
+                    $buttonType,
+                    $autoReplySource,
+                    $externalChatId,
+                    $externalUserId,
+                    $autoReplyMode,
+                    $contactHasPhone,
+                );
+
+                return;
+            }
 
             $sendResult = $routeDialog instanceof Dialog
                 ? $this->sendBotDialogTextAction->handleDialog(
@@ -404,5 +441,219 @@ class BotAutoReplyService
         } catch (Throwable $throwable) {
             throw new AutoReplyDispatchException($matchedRule, $buttonType, $throwable);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $baseContext
+     */
+    private function queueTelegramAccountAutoReply(
+        Message $storedMessage,
+        AutoReplyRule $matchedRule,
+        Channel $channel,
+        Contact $contact,
+        array $baseContext,
+        ?Dialog $preferredDialog,
+        string $replyText,
+        ?string $buttonType,
+        string $autoReplySource,
+        ?string $externalChatId,
+        ?string $externalUserId,
+        string $autoReplyMode,
+        bool $contactHasPhone,
+    ): void {
+        $routeDialog = $this->resolveReplyDialog($storedMessage, $preferredDialog);
+
+        if (! $routeDialog instanceof Dialog) {
+            $this->logAutoReplyRouteSkipped(
+                $channel,
+                $storedMessage,
+                $matchedRule,
+                $baseContext,
+                $buttonType,
+                $autoReplySource,
+                $externalChatId,
+                $externalUserId,
+                null,
+                null,
+            );
+
+            return;
+        }
+
+        $routeStatus = $this->resolveDialogRouteStatusAction->handle($routeDialog);
+
+        if (! $routeStatus->isSendable) {
+            $this->logAutoReplyRouteSkipped(
+                $channel,
+                $storedMessage,
+                $matchedRule,
+                $baseContext,
+                $buttonType,
+                $autoReplySource,
+                $externalChatId,
+                $externalUserId,
+                $routeStatus->code,
+                $routeStatus->blockedReason,
+                $routeDialog,
+            );
+
+            return;
+        }
+
+        if (filled($buttonType)) {
+            $this->logTelegramAccountButtonOmitted(
+                $channel,
+                $storedMessage,
+                $matchedRule,
+                $baseContext,
+                $buttonType,
+                $autoReplySource,
+                $externalChatId,
+                $externalUserId,
+                $routeDialog,
+            );
+        }
+
+        $outboundMessage = $this->queueTelegramAccountSystemReplyAction->handle(
+            $routeDialog,
+            $replyText,
+            $storedMessage,
+            Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
+        );
+
+        $this->applyAutoReplyRuleTagEffectsAction->handle($contact, $matchedRule);
+
+        Log::info('bot auto reply queued for telegram account gateway', [
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'message_id' => $storedMessage->id,
+            'external_chat_id' => $routeDialog->external_chat_id ?? $externalChatId,
+            'external_user_id' => $routeDialog->currentContactIdentity?->external_user_id ?? $externalUserId,
+            'auto_reply_mode' => $autoReplyMode,
+            'auto_reply_source' => $autoReplySource,
+            'button_type' => $buttonType,
+            'match_scope' => $matchedRule->match_scope,
+            'contact_phone_condition' => $matchedRule->contact_phone_condition,
+            'contact_has_phone' => $contactHasPhone,
+            'outbound_message_id' => $outboundMessage->id,
+            'outgoing_message_id' => data_get($outboundMessage->raw_payload, 'outgoing_message_id'),
+            'rule_id' => $matchedRule->id,
+            'rule_name' => $matchedRule->display_name,
+        ]);
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'bot.reply_queued',
+            'Автоответ поставлен в очередь Gateway.',
+            $baseContext + [
+                'auto_reply_source' => $autoReplySource,
+                'button_type' => $buttonType,
+                'match_scope' => $matchedRule->match_scope,
+                'contact_phone_condition' => $matchedRule->contact_phone_condition,
+                'external_chat_id' => $routeDialog->external_chat_id ?? $externalChatId,
+                'external_user_id' => $routeDialog->currentContactIdentity?->external_user_id ?? $externalUserId,
+                'outbound_message_id' => $outboundMessage->id,
+                'outgoing_message_id' => data_get($outboundMessage->raw_payload, 'outgoing_message_id'),
+                'rule_id' => $matchedRule->id,
+                'rule_name' => $matchedRule->display_name,
+            ],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $baseContext
+     */
+    private function logTelegramAccountButtonOmitted(
+        Channel $channel,
+        Message $storedMessage,
+        AutoReplyRule $matchedRule,
+        array $baseContext,
+        string $buttonType,
+        string $autoReplySource,
+        ?string $externalChatId,
+        ?string $externalUserId,
+        Dialog $routeDialog,
+    ): void {
+        $this->channelActivityLogger->warning(
+            $channel,
+            'bot.reply_gateway_button_omitted',
+            'Автоответ отправлен без кнопки: Telegram Account Gateway пока поддерживает только текст.',
+            $baseContext + [
+                'auto_reply_source' => $autoReplySource,
+                'button_type' => $buttonType,
+                'match_scope' => $matchedRule->match_scope,
+                'contact_phone_condition' => $matchedRule->contact_phone_condition,
+                'rule_id' => $matchedRule->id,
+                'rule_name' => $matchedRule->display_name,
+                'dialog_id' => $routeDialog->id,
+                'external_chat_id' => $routeDialog->external_chat_id ?? $externalChatId,
+                'external_user_id' => $routeDialog->currentContactIdentity?->external_user_id ?? $externalUserId,
+            ],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $baseContext
+     */
+    private function logAutoReplyRouteSkipped(
+        Channel $channel,
+        Message $storedMessage,
+        AutoReplyRule $matchedRule,
+        array $baseContext,
+        ?string $buttonType,
+        string $autoReplySource,
+        ?string $externalChatId,
+        ?string $externalUserId,
+        ?string $routeStatusCode,
+        ?string $blockedReason,
+        ?Dialog $routeDialog = null,
+    ): void {
+        $this->channelActivityLogger->info(
+            $channel,
+            'bot.reply_skipped_dialog_not_sendable',
+            'Автоответ не отправлен: диалог сейчас недоступен для отправки.',
+            $baseContext + [
+                'auto_reply_source' => $autoReplySource,
+                'button_type' => $buttonType,
+                'match_scope' => $matchedRule->match_scope,
+                'contact_phone_condition' => $matchedRule->contact_phone_condition,
+                'rule_id' => $matchedRule->id,
+                'rule_name' => $matchedRule->display_name,
+                'dialog_id' => $routeDialog?->id ?? $storedMessage->dialog_id,
+                'external_chat_id' => $routeDialog?->external_chat_id ?? $externalChatId,
+                'external_user_id' => $routeDialog?->currentContactIdentity?->external_user_id ?? $externalUserId,
+                'route_status_code' => $routeStatusCode,
+                'blocked_reason' => $blockedReason,
+            ],
+        );
+    }
+
+    private function resolveReplyDialog(Message $message, ?Dialog $preferredDialog = null): ?Dialog
+    {
+        if ($preferredDialog instanceof Dialog) {
+            return $preferredDialog;
+        }
+
+        $sendableDialog = $this->resolveDialogRouteSourceAction->forMessage($message);
+
+        if ($sendableDialog instanceof Dialog) {
+            return $sendableDialog;
+        }
+
+        $fallbackDialog = $this->resolveDialogRouteSourceAction->fallbackFromLegacyMessage($message);
+
+        if ($fallbackDialog instanceof Dialog) {
+            return $fallbackDialog;
+        }
+
+        $message->loadMissing(['dialog.channel', 'dialog.currentContactIdentity']);
+
+        return $message->dialog instanceof Dialog ? $message->dialog : null;
+    }
+
+    private function shouldQueueThroughTelegramAccountGateway(Channel $channel): bool
+    {
+        return $channel->isAccountConnection()
+            && $channel->platform === Channel::PLATFORM_TELEGRAM;
     }
 }

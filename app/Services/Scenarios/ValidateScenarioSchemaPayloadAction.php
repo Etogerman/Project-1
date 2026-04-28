@@ -2,6 +2,7 @@
 
 namespace App\Services\Scenarios;
 
+use App\Models\AutoReplyRule;
 use App\Models\Tag;
 use App\Models\Message;
 use Illuminate\Validation\ValidationException;
@@ -13,7 +14,7 @@ class ValidateScenarioSchemaPayloadAction
      * @return array{
      *     version: int,
      *     start_block_id: string,
-     *     triggers: list<array{type: 'parameter', value: string}>,
+     *     triggers: list<array{type: 'parameter', value?: string, match_scope?: string}>,
      *     blocks: array<string, array<string, mixed>>,
      * }
      */
@@ -58,16 +59,35 @@ class ValidateScenarioSchemaPayloadAction
                 $this->fail($errorKey, 'В текущем DB-runtime поддерживаются только triggers типа parameter.');
             }
 
+            $triggerMatchScope = $this->normalizeTriggerMatchScope(
+                $trigger['match_scope'] ?? ($trigger['match'] ?? null),
+                $errorKey,
+                $triggerIndex,
+            );
+            $normalizedTrigger = [
+                'type' => 'parameter',
+            ];
+
+            if ($triggerMatchScope === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+                $normalizedTrigger['match_scope'] = $triggerMatchScope;
+                $normalizedTriggers[] = $normalizedTrigger;
+
+                continue;
+            }
+
             $triggerValue = $this->normalizeRequiredString(
                 $trigger['value'] ?? null,
                 $errorKey,
                 "Trigger #{$triggerIndex} должен содержать value.",
             );
 
-            $normalizedTriggers[] = [
-                'type' => 'parameter',
-                'value' => $triggerValue,
-            ];
+            $normalizedTrigger['value'] = $triggerValue;
+
+            if ($triggerMatchScope !== AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER) {
+                $normalizedTrigger['match_scope'] = $triggerMatchScope;
+            }
+
+            $normalizedTriggers[] = $normalizedTrigger;
         }
 
         $blocks = $schemaPayload['blocks'] ?? null;
@@ -124,6 +144,26 @@ class ValidateScenarioSchemaPayloadAction
             'triggers' => $normalizedTriggers,
             'blocks' => $normalizedBlocks,
         ];
+    }
+
+    private function normalizeTriggerMatchScope(mixed $matchScope, string $errorKey, int|string $triggerIndex): string
+    {
+        $normalizedMatchScope = is_string($matchScope) && trim($matchScope) !== ''
+            ? trim($matchScope)
+            : AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER;
+
+        $normalizedMatchScope = match ($normalizedMatchScope) {
+            'exact' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'contains' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+            'starts_with', 'ends_with' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            default => $normalizedMatchScope,
+        };
+
+        if (! array_key_exists($normalizedMatchScope, AutoReplyRule::matchScopeOptions())) {
+            $this->fail($errorKey, "Trigger #{$triggerIndex} использует неподдерживаемую область срабатывания {$normalizedMatchScope}.");
+        }
+
+        return $normalizedMatchScope;
     }
 
     /**

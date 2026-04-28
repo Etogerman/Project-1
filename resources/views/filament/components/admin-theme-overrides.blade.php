@@ -761,29 +761,29 @@
         gap: 0.8rem;
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section) {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section, .ac-scenario-form-section) {
         border: 1px solid color-mix(in srgb, var(--ac-border-strong) 86%, white 14%);
         border-radius: 22px;
         overflow: hidden;
         box-shadow: 0 16px 34px -28px rgba(15, 23, 42, 0.24);
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section) .fi-section-header {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section, .ac-scenario-form-section) .fi-section-header {
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 95%, white 5%) 0%, color-mix(in srgb, var(--ac-surface-strong) 98%, white 2%) 100%);
         border-bottom: 1px solid color-mix(in srgb, var(--ac-border) 92%, transparent);
         padding-bottom: 1rem;
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section) .fi-section-header-description {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section, .ac-scenario-form-section) .fi-section-header-description {
         max-width: 34rem;
         color: var(--ac-text-soft);
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section) .fi-section-content-ctn {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section, .ac-scenario-form-section) .fi-section-content-ctn {
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-strong) 95%, white 5%) 0%, var(--ac-surface) 100%);
     }
 
-    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section) .fi-section-content {
+    :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section, .ac-scenario-form-section) .fi-section-content {
         background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-strong) 95%, white 5%) 0%, var(--ac-surface) 100%);
     }
 
@@ -793,6 +793,809 @@
             color-mix(in srgb, var(--ac-surface-strong) 86%, var(--ac-page-bg-alt) 14%) 0%,
             color-mix(in srgb, var(--ac-surface-muted) 90%, white 10%) 100%
         );
+    }
+
+    .ac-scenario-builder-table-action.fi-btn {
+        min-width: 8.5rem;
+        justify-content: center;
+        font-weight: 750;
+    }
+
+    .ac-scenario-start-preview {
+        display: grid;
+        gap: 0.45rem;
+        border: 1px solid color-mix(in srgb, var(--ac-success) 42%, var(--ac-border));
+        border-radius: 16px;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-success-soft) 74%, var(--ac-surface-strong)) 0%, var(--ac-surface-strong) 100%);
+        color: var(--ac-text);
+        padding: 0.95rem 1rem;
+    }
+
+    .ac-scenario-start-preview strong {
+        color: color-mix(in srgb, var(--ac-success) 72%, var(--ac-text));
+        font-size: 1rem;
+        letter-spacing: -0.02em;
+    }
+
+    .ac-scenario-start-preview span {
+        color: var(--ac-text-muted);
+        font-size: 0.88rem;
+        line-height: 1.45;
+    }
+
+    .ac-scenario-start-preview b {
+        color: var(--ac-text);
+    }
+
+    .ac-scenario-start-preview__warning {
+        color: color-mix(in srgb, var(--ac-warning) 78%, var(--ac-text)) !important;
+        font-weight: 700;
+    }
+
+    .ac-scenario-builder-entrypoint {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        border: 1px solid color-mix(in srgb, var(--ac-success) 36%, var(--ac-border));
+        border-radius: 18px;
+        background:
+            radial-gradient(circle at top right, color-mix(in srgb, var(--ac-success-soft) 76%, transparent), transparent 48%),
+            var(--ac-surface-strong);
+        padding: 1rem;
+    }
+
+    .ac-scenario-builder-entrypoint strong,
+    .ac-scenario-builder-entrypoint span {
+        display: block;
+    }
+
+    .ac-scenario-builder-entrypoint strong {
+        color: var(--ac-text);
+        font-weight: 850;
+        letter-spacing: -0.02em;
+    }
+
+    .ac-scenario-builder-entrypoint span {
+        max-width: 42rem;
+        margin-top: 0.25rem;
+        color: var(--ac-text-muted);
+        font-size: 0.88rem;
+        line-height: 1.45;
+    }
+
+    .ac-scenario-builder-page {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .ac-scenario-builder-hero,
+    .ac-scenario-builder-shell,
+    .ac-scenario-builder-empty-state {
+        border: 1px solid var(--ac-border);
+        border-radius: 26px;
+        background: var(--ac-surface-strong);
+        box-shadow: var(--ac-shadow-sm);
+    }
+
+    .ac-scenario-builder-hero {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1.2rem;
+    }
+
+    .ac-scenario-builder-hero__eyebrow,
+    .ac-scenario-builder-panel__header span,
+    .ac-scenario-builder-workspace__topbar span,
+    .ac-scenario-builder-node__top span,
+    .ac-scenario-builder-fieldset label {
+        color: var(--ac-text-soft);
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .ac-scenario-builder-hero h2 {
+        margin: 0.2rem 0 0;
+        color: var(--ac-text);
+        font-size: clamp(1.45rem, 2vw, 2rem);
+        font-weight: 850;
+        letter-spacing: -0.04em;
+    }
+
+    .ac-scenario-builder-hero p {
+        max-width: 48rem;
+        margin: 0.45rem 0 0;
+        color: var(--ac-text-muted);
+        line-height: 1.5;
+    }
+
+    .ac-scenario-builder-hero__actions {
+        display: flex;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .ac-scenario-builder-shell {
+        display: grid;
+        grid-template-columns: minmax(42rem, 1fr) minmax(22rem, 24rem);
+        min-height: 40rem;
+        overflow: hidden;
+    }
+
+    .ac-scenario-builder-palette {
+        display: grid;
+        align-content: start;
+        gap: 0.9rem;
+        padding: 1rem;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-muted) 92%, transparent) 0%, color-mix(in srgb, var(--ac-surface-strong) 100%, transparent) 100%);
+    }
+
+    .ac-scenario-builder-palette {
+        border-left: 1px solid var(--ac-border);
+    }
+
+    .ac-scenario-builder-settings,
+    .ac-scenario-builder-palette > div {
+        display: grid;
+        gap: 0.9rem;
+    }
+
+    .ac-scenario-builder-panel__header--with-action {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.7rem;
+    }
+
+    .ac-scenario-builder-panel__header--with-action button {
+        border: 1px solid var(--ac-border);
+        border-radius: 999px;
+        background: var(--ac-surface-strong);
+        color: var(--ac-text-muted);
+        cursor: pointer;
+        font-size: 0.78rem;
+        font-weight: 750;
+        padding: 0.38rem 0.68rem;
+    }
+
+    .ac-scenario-builder-panel__header strong,
+    .ac-scenario-builder-workspace__topbar strong,
+    .ac-scenario-builder-node__top strong {
+        display: block;
+        margin-top: 0.16rem;
+        color: var(--ac-text);
+        font-weight: 850;
+        letter-spacing: -0.02em;
+    }
+
+    .ac-scenario-builder-palette__item,
+    .ac-scenario-builder-fieldset,
+    .ac-scenario-builder-trigger-row {
+        border: 1px solid var(--ac-border);
+        border-radius: 18px;
+        background: var(--ac-surface-strong);
+        box-shadow: 0 14px 34px -30px rgba(15, 23, 42, 0.5);
+    }
+
+    .ac-scenario-builder-palette__item {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 0.75rem;
+        padding: 0.85rem;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+    }
+
+    .ac-scenario-builder-palette__item--green {
+        border-color: color-mix(in srgb, var(--ac-success) 46%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-success-soft) 70%, var(--ac-surface-strong));
+        cursor: pointer;
+        width: 100%;
+    }
+
+    .ac-scenario-builder-palette__item--locked {
+        opacity: 0.62;
+    }
+
+    .ac-scenario-builder-palette__dot {
+        width: 0.8rem;
+        height: 0.8rem;
+        border-radius: 999px;
+        margin-top: 0.25rem;
+        background: var(--ac-neutral-soft);
+    }
+
+    .ac-scenario-builder-palette__item--green .ac-scenario-builder-palette__dot {
+        background: var(--ac-success);
+        box-shadow: 0 0 0 5px var(--ac-success-soft);
+    }
+
+    .ac-scenario-builder-palette__item strong {
+        color: var(--ac-text);
+        font-weight: 800;
+    }
+
+    .ac-scenario-builder-palette__item p,
+    .ac-scenario-builder-fieldset p {
+        margin: 0.25rem 0 0;
+        color: var(--ac-text-soft);
+        font-size: 0.82rem;
+        line-height: 1.45;
+    }
+
+    .ac-scenario-builder-element-list {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .ac-scenario-builder-element-list__item {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 0.75rem;
+        width: 100%;
+        border: 1px solid var(--ac-border);
+        border-radius: 16px;
+        background: var(--ac-surface-strong);
+        color: inherit;
+        font: inherit;
+        padding: 0.72rem 0.8rem;
+        text-align: left;
+    }
+
+    .ac-scenario-builder-element-list__item--green {
+        border-color: color-mix(in srgb, var(--ac-success) 42%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-success-soft) 66%, var(--ac-surface-strong));
+        cursor: pointer;
+    }
+
+    .ac-scenario-builder-element-list__item.is-disabled {
+        opacity: 0.58;
+    }
+
+    .ac-scenario-builder-element-list__icon {
+        display: grid;
+        place-items: center;
+        width: 2rem;
+        height: 2rem;
+        border: 2px solid color-mix(in srgb, var(--ac-primary) 52%, var(--ac-border));
+        border-radius: 9px;
+        color: color-mix(in srgb, var(--ac-primary) 76%, var(--ac-text));
+        font-weight: 900;
+        line-height: 1;
+    }
+
+    .ac-scenario-builder-element-list__item--green .ac-scenario-builder-element-list__icon {
+        border-color: var(--ac-success);
+        color: var(--ac-success);
+    }
+
+    .ac-scenario-builder-element-list__icon--danger {
+        border-color: var(--ac-danger);
+        color: var(--ac-danger);
+    }
+
+    .ac-scenario-builder-element-list__item strong {
+        color: var(--ac-text);
+        font-size: 0.95rem;
+        font-weight: 790;
+        line-height: 1.2;
+    }
+
+    .ac-scenario-builder-block-list {
+        display: grid;
+        gap: 0.5rem;
+        margin-top: 0.2rem;
+    }
+
+    .ac-scenario-builder-block-list > span {
+        color: var(--ac-text-soft);
+        font-size: 0.68rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .ac-scenario-builder-block-list__item {
+        border: 1px solid var(--ac-border);
+        border-radius: 15px;
+        background: var(--ac-surface-strong);
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        padding: 0.68rem 0.75rem;
+        text-align: left;
+    }
+
+    .ac-scenario-builder-block-list__item.is-selected {
+        border-color: color-mix(in srgb, var(--ac-success) 54%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-success-soft) 68%, var(--ac-surface-strong));
+    }
+
+    .ac-scenario-builder-block-list__item strong,
+    .ac-scenario-builder-block-list__item small {
+        display: block;
+    }
+
+    .ac-scenario-builder-block-list__item strong {
+        color: var(--ac-text);
+        font-size: 0.9rem;
+        font-weight: 830;
+    }
+
+    .ac-scenario-builder-block-list__item small {
+        margin-top: 0.12rem;
+        color: var(--ac-text-soft);
+        font-size: 0.72rem;
+        font-weight: 750;
+    }
+
+    .ac-scenario-builder-block-type-selector {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .ac-scenario-builder-block-type-selector > span {
+        color: var(--ac-text-soft);
+        font-size: 0.68rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .ac-scenario-builder-block-type-option {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 0.7rem;
+        border: 1px solid var(--ac-border);
+        border-radius: 16px;
+        background: var(--ac-surface-strong);
+        color: inherit;
+        font: inherit;
+        padding: 0.72rem 0.8rem;
+        text-align: left;
+    }
+
+    .ac-scenario-builder-block-type-option.is-active {
+        border-color: color-mix(in srgb, var(--ac-success) 54%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-success-soft) 72%, var(--ac-surface-strong));
+    }
+
+    .ac-scenario-builder-block-type-option.is-disabled {
+        opacity: 0.55;
+    }
+
+    .ac-scenario-builder-block-type-option__icon {
+        display: grid;
+        place-items: center;
+        width: 2.2rem;
+        height: 2.2rem;
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--ac-success) 88%, #064e3b);
+        color: white;
+        font-size: 1.08rem;
+        font-weight: 900;
+    }
+
+    .ac-scenario-builder-block-type-option.is-disabled .ac-scenario-builder-block-type-option__icon {
+        background: var(--ac-neutral-soft);
+        color: var(--ac-text-soft);
+    }
+
+    .ac-scenario-builder-block-type-option strong,
+    .ac-scenario-builder-block-type-option small {
+        display: block;
+    }
+
+    .ac-scenario-builder-block-type-option strong {
+        color: var(--ac-text);
+        font-weight: 850;
+        line-height: 1.2;
+    }
+
+    .ac-scenario-builder-block-type-option small {
+        margin-top: 0.1rem;
+        color: var(--ac-text-soft);
+        font-size: 0.74rem;
+        font-weight: 760;
+    }
+
+    .ac-scenario-builder-readonly-value {
+        display: block;
+        width: 100%;
+        border: 1px solid var(--ac-border-strong);
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--ac-surface-muted) 74%, var(--ac-surface-strong));
+        color: var(--ac-text);
+        font-size: 1rem;
+        font-weight: 850;
+        padding: 0.7rem 0.8rem;
+        overflow-wrap: anywhere;
+    }
+
+    .ac-scenario-builder-meta-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem;
+    }
+
+    .ac-scenario-builder-condition-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0.7rem;
+    }
+
+    .ac-scenario-builder-condition-grid div {
+        display: grid;
+        gap: 0.45rem;
+    }
+
+    .ac-scenario-builder-section-badge {
+        border: 1px solid color-mix(in srgb, var(--ac-success) 34%, var(--ac-border));
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-success-soft) 76%, var(--ac-surface-strong));
+        color: color-mix(in srgb, var(--ac-success) 76%, var(--ac-text));
+        font-size: 0.7rem;
+        font-weight: 850;
+        padding: 0.26rem 0.52rem;
+    }
+
+    .ac-scenario-builder-sale-bot-sections {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .ac-scenario-builder-sale-bot-sections div {
+        border: 1px dashed var(--ac-border-strong);
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--ac-surface-muted) 62%, var(--ac-surface-strong));
+        padding: 0.68rem 0.75rem;
+    }
+
+    .ac-scenario-builder-sale-bot-sections strong,
+    .ac-scenario-builder-sale-bot-sections span {
+        display: block;
+    }
+
+    .ac-scenario-builder-sale-bot-sections strong {
+        color: var(--ac-text);
+        font-size: 0.86rem;
+        font-weight: 830;
+    }
+
+    .ac-scenario-builder-sale-bot-sections span {
+        margin-top: 0.12rem;
+        color: var(--ac-text-soft);
+        font-size: 0.74rem;
+        line-height: 1.35;
+    }
+
+    .ac-scenario-builder-workspace {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-width: 0;
+        background:
+            linear-gradient(135deg, color-mix(in srgb, var(--ac-page-bg-alt) 92%, transparent) 0%, color-mix(in srgb, var(--ac-page-bg) 96%, transparent) 100%);
+    }
+
+    .ac-scenario-builder-workspace__topbar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1rem 1.15rem;
+        border-bottom: 1px solid var(--ac-border);
+        background: color-mix(in srgb, var(--ac-surface-strong) 84%, transparent);
+    }
+
+    .ac-scenario-builder-workspace__topbar p {
+        margin: 0.35rem 0 0;
+        color: var(--ac-text-soft);
+        font-size: 0.82rem;
+        line-height: 1.35;
+    }
+
+    .ac-scenario-builder-workspace__actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+    }
+
+    .ac-scenario-builder-workspace__badge {
+        align-self: center;
+        border: 1px solid color-mix(in srgb, var(--ac-warning) 42%, var(--ac-border));
+        border-radius: 999px;
+        background: var(--ac-warning-soft);
+        color: color-mix(in srgb, var(--ac-warning) 80%, var(--ac-text));
+        font-size: 0.78rem;
+        font-weight: 800;
+        padding: 0.35rem 0.7rem;
+    }
+
+    .ac-scenario-builder-canvas {
+        position: relative;
+        min-height: clamp(44rem, 76vh, 64rem);
+        overflow: auto;
+    }
+
+    .ac-scenario-builder-canvas__surface {
+        position: relative;
+        min-width: 96rem;
+        min-height: 80rem;
+        background-image:
+            radial-gradient(circle, color-mix(in srgb, var(--ac-text-soft) 46%, transparent) 0 1.35px, transparent 1.45px 100%);
+        background-position: 0 0;
+        background-size: 18px 18px;
+    }
+
+    .ac-scenario-builder-node {
+        position: absolute;
+        width: 14rem;
+        border: 1px solid var(--ac-border);
+        border-radius: 18px;
+        background: var(--ac-surface-strong);
+        box-shadow: 0 28px 70px -42px rgba(15, 23, 42, 0.72);
+        padding: 1rem;
+    }
+
+    .ac-scenario-builder-node--green {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 5.5rem;
+        border-color: color-mix(in srgb, var(--ac-success) 72%, var(--ac-border));
+        background:
+            radial-gradient(circle at top left, color-mix(in srgb, white 24%, transparent) 0%, transparent 34%),
+            linear-gradient(135deg, color-mix(in srgb, var(--ac-success) 88%, #064e3b) 0%, color-mix(in srgb, var(--ac-success) 76%, #22c55e) 100%);
+        color: white;
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
+        z-index: 2;
+        transition: box-shadow 0.16s ease, transform 0.16s ease;
+    }
+
+    .ac-scenario-builder-node--green.is-dragging {
+        cursor: grabbing;
+        transform: scale(1.015);
+        box-shadow:
+            0 34px 90px -40px rgba(15, 23, 42, 0.8),
+            0 0 0 4px color-mix(in srgb, var(--ac-success-soft) 76%, transparent);
+    }
+
+    .ac-scenario-builder-node--green.is-selected {
+        box-shadow:
+            0 30px 80px -38px rgba(15, 23, 42, 0.82),
+            0 0 0 5px color-mix(in srgb, var(--ac-success-soft) 72%, transparent);
+    }
+
+    .ac-scenario-builder-node--green strong {
+        color: white;
+        font-size: 1.05rem;
+        font-weight: 850;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        text-align: center;
+    }
+
+    .ac-scenario-builder-node p {
+        margin: 0.7rem 0 0;
+        color: var(--ac-text-muted);
+        line-height: 1.45;
+    }
+
+    .ac-scenario-builder-node__facts {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem;
+        margin-top: 0.95rem;
+    }
+
+    .ac-scenario-builder-node__facts div {
+        border: 1px solid color-mix(in srgb, var(--ac-success) 28%, var(--ac-border));
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--ac-success-soft) 52%, var(--ac-surface-strong));
+        padding: 0.65rem;
+    }
+
+    .ac-scenario-builder-node__facts span {
+        display: block;
+        color: var(--ac-text-soft);
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+
+    .ac-scenario-builder-node__facts strong {
+        display: block;
+        margin-top: 0.15rem;
+        color: var(--ac-text);
+        font-size: 0.95rem;
+    }
+
+    .ac-scenario-builder-node__chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.9rem;
+    }
+
+    .ac-scenario-builder-node__chips span {
+        border: 1px solid color-mix(in srgb, var(--ac-success) 34%, var(--ac-border));
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-success-soft) 76%, var(--ac-surface-strong));
+        color: color-mix(in srgb, var(--ac-success) 76%, var(--ac-text));
+        font-size: 0.76rem;
+        font-weight: 750;
+        padding: 0.3rem 0.58rem;
+    }
+
+    .ac-bot-constructor-node.ac-scenario-builder-node--green {
+        display: grid;
+        place-items: center;
+        width: 14rem;
+        height: 5.2rem;
+        min-height: 5.2rem;
+        padding: 0.7rem 1rem;
+        overflow: hidden;
+        border: 1px solid color-mix(in srgb, #087c3f 84%, black);
+        border-radius: 14px;
+        background:
+            linear-gradient(180deg, #08bf5c 0%, #06b553 100%);
+        box-shadow:
+            0 14px 26px -20px rgba(2, 44, 23, 0.76),
+            0 1px 0 rgba(255, 255, 255, 0.18) inset;
+        text-align: center;
+    }
+
+    .ac-bot-constructor-node.ac-scenario-builder-node--green.is-selected {
+        border-color: #2563eb;
+        box-shadow:
+            0 14px 26px -20px rgba(2, 44, 23, 0.76),
+            0 0 0 3px #2563eb;
+    }
+
+    .ac-bot-constructor-node.ac-scenario-builder-node--green.is-dragging {
+        transform: none;
+    }
+
+    .ac-bot-constructor-node.ac-scenario-builder-node--green strong {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        color: white;
+        font-size: 1.14rem;
+        font-weight: 850;
+        letter-spacing: 0;
+        line-height: 1.16;
+        text-align: center;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .ac-bot-constructor-node__id {
+        position: absolute;
+        top: 0.38rem;
+        left: 0.5rem;
+        max-width: 4rem;
+        overflow: hidden;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 0.52rem;
+        font-weight: 850;
+        letter-spacing: 0;
+        line-height: 1;
+        text-overflow: ellipsis;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    .ac-bot-constructor-node.is-inactive {
+        filter: saturate(0.88);
+    }
+
+    .ac-scenario-builder-inline-meta {
+        display: block;
+        margin-top: 0.25rem;
+        color: var(--ac-text-soft);
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0;
+        line-height: 1.35;
+        text-transform: none;
+    }
+
+    .ac-scenario-builder-fieldset {
+        display: grid;
+        gap: 0.7rem;
+        padding: 0.85rem;
+    }
+
+    .ac-scenario-builder-fieldset__title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+    }
+
+    .ac-scenario-builder-fieldset select,
+    .ac-scenario-builder-fieldset input,
+    .ac-scenario-builder-fieldset textarea {
+        width: 100%;
+        border: 1px solid var(--ac-border-strong);
+        border-radius: 14px;
+        background: var(--ac-input-surface);
+        color: var(--ac-text);
+        padding: 0.7rem 0.8rem;
+    }
+
+    .ac-scenario-builder-triggers {
+        display: grid;
+        gap: 0.7rem;
+    }
+
+    .ac-scenario-builder-trigger-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.55rem;
+        padding: 0.65rem;
+    }
+
+    .ac-scenario-builder-trigger-row button {
+        border: 1px solid color-mix(in srgb, var(--ac-danger) 44%, var(--ac-border));
+        border-radius: 12px;
+        background: var(--ac-danger-soft);
+        color: color-mix(in srgb, var(--ac-danger) 78%, var(--ac-text));
+        font-weight: 750;
+        padding: 0 0.65rem;
+    }
+
+    .ac-scenario-builder-json-toggle label {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        color: var(--ac-text-muted);
+        font-size: 0.86rem;
+        font-weight: 700;
+    }
+
+    .ac-scenario-builder-empty-state {
+        display: grid;
+        gap: 0.25rem;
+        padding: 1rem;
+    }
+
+    @media (max-width: 1180px) {
+        .ac-scenario-builder-shell {
+            grid-template-columns: 1fr;
+        }
+
+        .ac-scenario-builder-palette {
+            border: 0;
+            border-top: 1px solid var(--ac-border);
+        }
+
+        .ac-scenario-builder-canvas {
+            min-height: 30rem;
+        }
+
+        .ac-scenario-builder-canvas__surface {
+            min-width: 48rem;
+            min-height: 32rem;
+        }
+
+        .ac-scenario-builder-meta-grid {
+            grid-template-columns: 1fr;
+        }
     }
 
     :is(.ac-user-form-toggle, .ac-channel-form-toggle, .ac-tag-form-toggle, .ac-auto-reply-form-toggle) {
