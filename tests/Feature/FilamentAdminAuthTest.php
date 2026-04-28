@@ -84,7 +84,7 @@ class FilamentAdminAuthTest extends TestCase
             ->assertOk()
             ->assertSee('Контакты')
             ->assertSee('Диалоги')
-            ->assertDontSee('Теги')
+            ->assertSee('Теги')
             ->assertDontSee('Каналы связи')
             ->assertDontSee('Правила автоответа')
             ->assertDontSee('Bitrix24')
