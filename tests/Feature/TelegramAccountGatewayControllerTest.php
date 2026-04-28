@@ -55,7 +55,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->assertStatus(429);
     }
 
-    public function test_gateway_stores_private_live_event_and_updates_read_model_without_bot_dispatch(): void
+    public function test_gateway_stores_private_live_event_updates_read_model_and_queues_auto_reply(): void
     {
         Queue::fake();
         config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
@@ -106,11 +106,42 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertSame(ChannelRuntimeState::SYNC_STATUS_LIVE, $runtimeState->sync_status);
         $this->assertNotNull($runtimeState->last_gateway_heartbeat_at);
 
-        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($message): bool {
+            return $job->inboundMessageId === $message->id;
+        });
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
         Queue::assertNotPushed(ProcessDataCollectionQuestionJob::class);
         Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
         Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
         Queue::assertNotPushed(SyncContactIdentityAvatarJob::class);
+    }
+
+    public function test_gateway_stores_private_backfill_event_without_auto_reply_dispatch(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Backfill',
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700012',
+                externalUserId: 'tg-account-user-12',
+                externalMessageId: '900012',
+                text: 'Старое сообщение из account gateway',
+                historySource: 'backfill',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $this->assertDatabaseCount('messages', 1);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
     }
 
     public function test_gateway_persists_pending_media_download_placeholder_for_account_message(): void
@@ -371,6 +402,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertDatabaseCount('messages', 1);
         $this->assertDatabaseCount('dialogs', 1);
         $this->assertDatabaseCount('channel_peer_sync_states', 1);
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
     }
 
     public function test_gateway_tracks_backfill_cursor_and_switches_runtime_state_to_live_after_live_event(): void

@@ -4,7 +4,9 @@ namespace App\Services\TelegramAccount;
 
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Data\TelegramAccount\NormalizedInboundMessageEvent;
+use App\Jobs\ProcessAutoReplyJob;
 use App\Models\Channel;
+use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\StoreInboundMessageAction;
 use Illuminate\Support\Facades\DB;
@@ -59,7 +61,55 @@ class StoreTelegramAccountInboundEventAction
                 return null;
             }
 
-            return $this->storeInboundMessageAction->handle($channel, $event->toIncomingBotMessage());
+            $result = $this->storeInboundMessageAction->handle($channel, $event->toIncomingBotMessage());
+
+            $this->queueAutoReplyIfNeeded($channel, $event, $result);
+
+            return $result;
         });
+    }
+
+    private function queueAutoReplyIfNeeded(
+        Channel $channel,
+        NormalizedInboundMessageEvent $event,
+        ?StoredInboundMessageResult $result,
+    ): void {
+        if ($event->historySource !== NormalizedInboundMessageEvent::HISTORY_SOURCE_LIVE) {
+            return;
+        }
+
+        if (! $result instanceof StoredInboundMessageResult) {
+            return;
+        }
+
+        $message = $result->message;
+
+        if (! $message->wasRecentlyCreated) {
+            return;
+        }
+
+        if ($message->direction !== Message::DIRECTION_INBOUND) {
+            return;
+        }
+
+        if ($message->message_kind !== Message::KIND_INBOUND_USER) {
+            return;
+        }
+
+        ProcessAutoReplyJob::dispatch($message->id)->afterCommit();
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'bot.reply_queued',
+            'Автоответ поставлен в очередь.',
+            [
+                'platform' => $channel->platform,
+                'connection_type' => $channel->connection_type,
+                'message_id' => $message->id,
+                'provider_event_key' => $message->provider_event_key,
+                'external_message_id' => $message->external_message_id,
+                'history_source' => $event->historySource,
+            ],
+        );
     }
 }
