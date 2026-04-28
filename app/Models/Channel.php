@@ -336,11 +336,33 @@ class Channel extends Model
             return false;
         }
 
-        if (! $this->isBotConnection() || ! $this->hasBotTokenConfigured()) {
+        if ($this->isAccountConnection()) {
+            return $this->hasReadyTelegramAccountGatewayOutgoingReplies();
+        }
+
+        return $this->isBotConnection()
+            && $this->hasBotTokenConfigured()
+            && in_array($this->getHealthStatusColor(), ['success', 'info'], true);
+    }
+
+    public function hasReadyTelegramAccountGatewayOutgoingReplies(): bool
+    {
+        if (! $this->exists || ! $this->is_active || ! $this->isAccountConnection() || $this->platform !== self::PLATFORM_TELEGRAM) {
             return false;
         }
 
-        return in_array($this->getHealthStatusColor(), ['success', 'info'], true);
+        $this->loadMissing('runtimeState');
+
+        $runtimeState = $this->runtimeState;
+
+        if (! $runtimeState instanceof ChannelRuntimeState) {
+            return false;
+        }
+
+        return $runtimeState->auth_status === ChannelRuntimeState::AUTH_STATUS_AUTHORIZED
+            && $runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY
+            && $runtimeState->sync_status === ChannelRuntimeState::SYNC_STATUS_LIVE
+            && data_get($runtimeState->runtime_payload, 'gateway_capabilities.outgoing_replies') === true;
     }
 
     protected function getAccountHealthStatusLabel(): string

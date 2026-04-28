@@ -71,7 +71,7 @@ class ChannelBotTokenPresenceTest extends TestCase
         $this->assertTrue($channel->isReadyForConstructorAutoReplies());
     }
 
-    public function test_ready_account_channel_is_not_ready_for_constructor_auto_replies_without_gateway_delivery(): void
+    public function test_ready_account_channel_is_ready_for_constructor_auto_replies_when_gateway_supports_outgoing_replies(): void
     {
         $channel = Channel::factory()->account()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -93,7 +93,28 @@ class ChannelBotTokenPresenceTest extends TestCase
 
         $this->assertSame('Работает', $channel->getHealthStatusLabel());
         $this->assertSame('success', $channel->getHealthStatusColor());
-        $this->assertFalse($channel->isReadyForConstructorAutoReplies());
+        $this->assertTrue($channel->isReadyForConstructorAutoReplies());
+    }
+
+    public function test_account_channel_without_gateway_outgoing_replies_is_not_ready_for_constructor_auto_replies(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => false,
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($channel->fresh('runtimeState')->isReadyForConstructorAutoReplies());
     }
 
     public function test_bot_channel_without_token_is_not_ready_for_constructor_auto_replies(): void

@@ -7,6 +7,9 @@ use App\Models\BotConstructorBlockRun;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Dialogs\ResolveDialogRouteSourceAction;
+use App\Services\Dialogs\ResolveDialogRouteStatusAction;
+use App\Services\TelegramAccount\QueueTelegramAccountSystemReplyAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Throwable;
@@ -19,6 +22,9 @@ class ProcessBotConstructorBlocksAction
         private readonly ChannelActivityLogger $channelActivityLogger,
         private readonly SendBotDialogTextAction $sendBotDialogTextAction,
         private readonly StoreOutboundBotConstructorBlockMessageAction $storeOutboundBotConstructorBlockMessageAction,
+        private readonly ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
+        private readonly ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
+        private readonly QueueTelegramAccountSystemReplyAction $queueTelegramAccountSystemReplyAction,
     ) {}
 
     public function handle(Message $message): bool
@@ -129,6 +135,12 @@ class ProcessBotConstructorBlocksAction
         }
 
         try {
+            if ($this->shouldQueueThroughTelegramAccountGateway($channel)) {
+                $this->queueTelegramAccountGatewayReply($message, $channel, $block, $run, $replyText);
+
+                return;
+            }
+
             $sendResult = $this->sendBotDialogTextAction->handleMessage($message, $replyText);
 
             if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
@@ -191,6 +203,103 @@ class ProcessBotConstructorBlocksAction
                 ],
             );
         }
+    }
+
+    private function queueTelegramAccountGatewayReply(
+        Message $message,
+        Channel $channel,
+        BotConstructorBlock $block,
+        BotConstructorBlockRun $run,
+        string $replyText,
+    ): void {
+        $routeDialog = $this->resolveReplyDialog($message);
+
+        if (! $routeDialog instanceof Dialog) {
+            $this->markFailed($run, 'Маршрут ответа недоступен.');
+
+            $this->channelActivityLogger->info(
+                $channel,
+                'bot.constructor_block_failed',
+                'Стартовое условие сработало, но ответ не отправлен.',
+                $this->logContext($message, $block) + [
+                    'route_status_code' => null,
+                    'blocked_reason' => 'Маршрут ответа недоступен.',
+                ],
+            );
+
+            return;
+        }
+
+        $routeStatus = $this->resolveDialogRouteStatusAction->handle($routeDialog);
+
+        if (! $routeStatus->isSendable) {
+            $this->markFailed(
+                $run,
+                $this->safeErrorMessage($routeStatus->blockedReason
+                    ?? $routeStatus->label
+                    ?? 'Маршрут ответа недоступен.', $channel),
+            );
+
+            $this->channelActivityLogger->info(
+                $channel,
+                'bot.constructor_block_failed',
+                'Стартовое условие сработало, но ответ не отправлен.',
+                $this->logContext($message, $block) + [
+                    'route_status_code' => $routeStatus->code,
+                    'blocked_reason' => $routeStatus->blockedReason,
+                ],
+            );
+
+            return;
+        }
+
+        $outboundMessage = $this->queueTelegramAccountSystemReplyAction->handle(
+            $routeDialog,
+            $replyText,
+            $message,
+            Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
+        );
+
+        $run->forceFill([
+            'outbound_message_id' => $outboundMessage->id,
+            'status' => BotConstructorBlockRun::STATUS_SENT,
+            'error_message' => null,
+        ])->save();
+
+        $this->channelActivityLogger->info(
+            $channel,
+            'bot.constructor_block_queued',
+            'Стартовое условие поставило ответ в очередь Gateway.',
+            $this->logContext($message, $block) + [
+                'outbound_message_id' => $outboundMessage->id,
+                'outgoing_message_id' => data_get($outboundMessage->raw_payload, 'outgoing_message_id'),
+            ],
+        );
+    }
+
+    private function resolveReplyDialog(Message $message): ?Dialog
+    {
+        $sendableDialog = $this->resolveDialogRouteSourceAction->forMessage($message);
+
+        if ($sendableDialog instanceof Dialog) {
+            return $sendableDialog;
+        }
+
+        $fallbackDialog = $this->resolveDialogRouteSourceAction->fallbackFromLegacyMessage($message);
+
+        if ($fallbackDialog instanceof Dialog) {
+            return $fallbackDialog;
+        }
+
+        $message->loadMissing(['dialog.channel', 'dialog.currentContactIdentity']);
+
+        return $message->dialog instanceof Dialog ? $message->dialog : null;
+    }
+
+    private function shouldQueueThroughTelegramAccountGateway(Channel $channel): bool
+    {
+        return $channel->isAccountConnection()
+            && $channel->platform === Channel::PLATFORM_TELEGRAM;
     }
 
     private function markFailed(BotConstructorBlockRun $run, string $message): void
