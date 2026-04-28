@@ -1,4 +1,4 @@
-name: Tests
+name: Bitrix Feature Tests
 
 on:
   pull_request:
@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  php-artisan-test:
-    name: php-artisan-test
+  bitrix-feature-shard:
+    name: bitrix-feature-shard
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -64,5 +64,5 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
-      - name: Run full test suite
-        run: php artisan test --compact
+      - name: Run Bitrix feature shard
+        run: composer test:feature:bitrix

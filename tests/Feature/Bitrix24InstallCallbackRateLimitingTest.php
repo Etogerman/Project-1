@@ -21,6 +21,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
     {
         parent::setUp();
 
+        config()->set('app.url', 'http://localhost');
         config()->set('bitrix24.portal_domain', 'install.example.test');
         config()->set('bitrix24.application.code', 'local.app.code');
         config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
@@ -46,7 +47,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         Queue::fake();
         config()->set('bitrix24.rate_limits.install.max_per_minute', 5);
 
-        $response = $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/install', $this->installPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             accessToken: 'access-token-1',
@@ -79,7 +80,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         Queue::fake();
         config()->set('bitrix24.rate_limits.install.max_per_minute', 1);
 
-        $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/install', $this->installPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             accessToken: 'access-token-1',
@@ -88,7 +89,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             scope: ['crm', 'tasks'],
         ))->assertOk();
 
-        $response = $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/install', $this->installPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             accessToken: 'access-token-2',
@@ -108,7 +109,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         Queue::fake();
         config()->set('bitrix24.rate_limits.install.max_per_minute', 1);
 
-        $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/install', $this->installPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             accessToken: 'access-token-1',
@@ -126,7 +127,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             'last_install_callback_at' => $connection->last_install_callback_at?->toIso8601String(),
         ];
 
-        $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/install', $this->installPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             accessToken: 'access-token-2',
@@ -152,7 +153,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         Queue::fake();
         config()->set('bitrix24.rate_limits.install.max_per_minute', 1);
 
-        $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/install', $this->installPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             accessToken: 'access-token-1',
@@ -175,7 +176,7 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
             scope: ['crm', 'task'],
         ))->assertOk();
 
-        $this->postJson('/callbacks/bitrix24/install', $this->installPayload(
+        $this->postJson('http://localhost/callbacks/bitrix24/install', $this->installPayload(
             memberId: 'member-1',
             applicationToken: 'app-token-1',
             accessToken: 'access-token-3',
@@ -194,12 +195,12 @@ class Bitrix24InstallCallbackRateLimitingTest extends TestCase
         Queue::fake();
         config()->set('bitrix24.rate_limits.install.max_per_minute', 1);
 
-        $this->postJson('/callbacks/bitrix24/install', [
+        $this->postJson('http://localhost/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'payload' => 'noise-1',
         ])->assertOk();
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'payload' => 'noise-2',
         ]);
