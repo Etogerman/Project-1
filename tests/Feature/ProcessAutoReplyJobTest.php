@@ -7,6 +7,7 @@ use App\Models\AutoReplyRule;
 use App\Models\AutoReplyRuleTagCondition;
 use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
+use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
@@ -17,6 +18,7 @@ use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
+use App\Models\TelegramAccountOutgoingMessage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -107,6 +109,56 @@ class ProcessAutoReplyJobTest extends TestCase
 
         $this->assertSame($rule->display_name, $matchedLog->context['rule_name']);
         $this->assertSame($rule->display_name, $sentLog->context['rule_name']);
+    }
+
+    public function test_job_queues_telegram_account_auto_reply_for_gateway(): void
+    {
+        Http::fake();
+
+        $channel = $this->readyTelegramAccountChannel();
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Ответ через Gateway',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundDialogMessage($channel, [
+            'provider_event_key' => 'telegram-account-auto-reply',
+            'text' => 'любой текст',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+
+        $message->refresh();
+        $channel->refresh();
+
+        $outgoing = TelegramAccountOutgoingMessage::query()->firstOrFail();
+        $outboundMessage = Message::query()
+            ->where('reply_to_message_id', $message->id)
+            ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE)
+            ->firstOrFail();
+
+        $this->assertNotNull($message->auto_reply_sent_at);
+        $this->assertNull($channel->last_reply_sent_at);
+        $this->assertSame(Message::KIND_OUTBOUND_AUTO_REPLY, $outboundMessage->message_kind);
+        $this->assertSame(Message::SENT_BY_TYPE_AUTO_REPLY, $outboundMessage->sent_by_type);
+        $this->assertSame('Ответ через Gateway', $outboundMessage->text);
+        $this->assertSame('telegram_account_gateway', data_get($outboundMessage->raw_payload, 'provider'));
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, data_get($outboundMessage->raw_payload, 'delivery_status'));
+        $this->assertSame($outboundMessage->id, $outgoing->message_id);
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, $outgoing->status);
+        $this->assertSame('Ответ через Gateway', $outgoing->text);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_queued',
+            'level' => 'info',
+        ]);
     }
 
     public function test_job_keeps_draft_scenario_builder_out_of_live_auto_reply_runtime(): void
@@ -2137,6 +2189,66 @@ class ProcessAutoReplyJobTest extends TestCase
         ], $identityOverrides));
 
         return Message::factory()->create(array_merge([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'reply_to_message_id' => null,
+            'provider_event_key' => 'provider-event-key',
+            'external_chat_id' => '300',
+            'external_message_id' => '10',
+            'text' => 'hello',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+            'auto_reply_sent_at' => null,
+        ], $messageOverrides));
+    }
+
+    protected function readyTelegramAccountChannel(): Channel
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => true,
+                ],
+            ],
+        ]);
+
+        return $channel->fresh('runtimeState') ?? $channel;
+    }
+
+    /**
+     * @param  array<string, mixed>  $messageOverrides
+     */
+    protected function createInboundDialogMessage(Channel $channel, array $messageOverrides = []): Message
+    {
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '300',
+        ]);
+
+        return Message::factory()->create(array_merge([
+            'dialog_id' => $dialog->id,
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
