@@ -50,7 +50,7 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
         parse_str((string) parse_url($location, PHP_URL_QUERY), $query);
 
         $this->assertSame($profile->client_id, $query['client_id'] ?? null);
-        $this->assertSame(route('admin.bitrix24.oauth.callback'), $query['redirect_uri'] ?? null);
+        $this->assertSame($profile->adminOAuthCallbackUrl(), $query['redirect_uri'] ?? null);
         $this->assertNotEmpty($query['state'] ?? null);
         $this->assertTrue(Cache::has(BuildBitrix24AdminOAuthAuthorizeUrlAction::cacheKey((string) $query['state'])));
 
@@ -167,23 +167,20 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
     {
         $this->makeRuntimeProfile();
 
-        $response = $this->get('/callbacks/bitrix24/install?'.http_build_query([
+        $query = [
             'code' => 'auth-code',
             'state' => 'state-1',
             'domain' => 'crm.alexlesley.biz',
             'member_id' => 'member-1',
             'scope' => 'crm im',
             'server_domain' => 'oauth.bitrix.info',
-        ]));
+        ];
 
-        $response->assertRedirect(route('admin.bitrix24.oauth.callback', [
-            'code' => 'auth-code',
-            'state' => 'state-1',
-            'domain' => 'crm.alexlesley.biz',
-            'member_id' => 'member-1',
-            'scope' => 'crm im',
-            'server_domain' => 'oauth.bitrix.info',
-        ]));
+        $queryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+
+        $response = $this->get('https://project.example.com/callbacks/bitrix24/install?'.$queryString);
+
+        $response->assertRedirect('https://project.example.com/admin/bitrix24/oauth/callback?'.$queryString);
 
         $this->assertSame(0, Bitrix24WebhookEvent::query()->count());
     }
@@ -273,6 +270,37 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
             'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
                 'result' => [
                     'CODE' => 'other.app.code',
+                ],
+            ]),
+        ]);
+
+        $this->actingAs($superadmin)
+            ->get(route('admin.bitrix24.oauth.callback', [
+                'code' => 'auth-code',
+                'state' => 'state-1',
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'server_domain' => 'oauth.bitrix.info',
+            ]))
+            ->assertRedirect(route('filament.admin.resources.bitrix24-connections.index'));
+
+        $this->assertSame(0, Bitrix24Connection::query()->count());
+    }
+
+    public function test_oauth_callback_rejects_explicitly_uninstalled_app_without_saving_connection(): void
+    {
+        config()->set('bitrix24.install_validation.allow_uninstalled_app_probe', false);
+
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeRuntimeProfile();
+        $this->putOAuthState('state-1', $superadmin, $profile);
+
+        Http::fake([
+            'https://oauth.bitrix.info/oauth/token/' => Http::response($this->tokenPayload('member-1')),
+            'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
+                'result' => [
+                    'CODE' => 'local.app.code',
+                    'INSTALLED' => false,
                 ],
             ]),
         ]);

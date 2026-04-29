@@ -22,6 +22,8 @@ class Bitrix24Profile extends Model
 
     public const OPENLINES_CALLBACK_PATH = '/callbacks/bitrix24/openlines';
 
+    public const ADMIN_OAUTH_CALLBACK_PATH = '/admin/bitrix24/oauth/callback';
+
     /**
      * @var list<string>
      */
@@ -78,6 +80,11 @@ class Bitrix24Profile extends Model
     public function openlinesCallbackUrl(): string
     {
         return $this->buildCallbackUrl(self::OPENLINES_CALLBACK_PATH);
+    }
+
+    public function adminOAuthCallbackUrl(): string
+    {
+        return $this->buildCallbackUrl(self::ADMIN_OAUTH_CALLBACK_PATH);
     }
 
     public function allowsCallbackType(string $callbackType): bool

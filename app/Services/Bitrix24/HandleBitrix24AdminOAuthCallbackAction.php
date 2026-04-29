@@ -274,6 +274,10 @@ class HandleBitrix24AdminOAuthCallbackAction
         if ($returnedCode === null || $returnedCode !== $profile->application_code) {
             throw new Bitrix24AdminOAuthException('Bitrix24 не подтвердил приложение.');
         }
+
+        if ($this->isExplicitlyUninstalled($result['INSTALLED'] ?? null) && ! $this->allowsUninstalledAppProbe()) {
+            throw new Bitrix24AdminOAuthException('Bitrix24 сообщил, что приложение не установлено.');
+        }
     }
 
     private function resolveClientEndpoint(Bitrix24Profile $profile, array $tokenPayload): string
@@ -415,6 +419,28 @@ class HandleBitrix24AdminOAuthCallbackAction
             && is_string($host)
             && mb_strtolower($scheme) === 'https'
             && trim($host) !== '';
+    }
+
+    private function isExplicitlyUninstalled(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value === false;
+        }
+
+        if (is_int($value)) {
+            return $value === 0;
+        }
+
+        if (is_string($value)) {
+            return in_array(mb_strtolower(trim($value)), ['0', 'false', 'n', 'no'], true);
+        }
+
+        return false;
+    }
+
+    private function allowsUninstalledAppProbe(): bool
+    {
+        return (bool) config('bitrix24.install_validation.allow_uninstalled_app_probe', false);
     }
 
     private function nullableString(mixed $value): ?string
