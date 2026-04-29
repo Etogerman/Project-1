@@ -406,6 +406,31 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
         $this->assertNull(Bitrix24SyncLog::query()->latest('id')->first()?->request_payload['params']['auth'] ?? null);
     }
 
+    public function test_check_connection_button_keeps_active_status_on_probe_failure(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $connection = $this->makeConnectionWithProfile([
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        Http::fake([
+            'https://crm.alexlesley.biz/rest/profile.json' => Http::response([
+                'error' => 'QUERY_LIMIT_EXCEEDED',
+                'error_description' => 'Temporary Bitrix24 failure.',
+            ], 503),
+        ]);
+
+        Livewire::actingAs($superadmin)
+            ->test(ListBitrix24Connections::class)
+            ->assertTableActionVisible('checkConnection', $connection)
+            ->callTableAction('checkConnection', $connection);
+
+        $connection->refresh();
+        $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
+        $this->assertNotNull($connection->last_error_at);
+        $this->assertSame('Temporary Bitrix24 failure.', $connection->last_error_message);
+    }
+
     public function test_disconnect_button_clears_tokens_and_marks_connection_for_reinstall(): void
     {
         $superadmin = $this->makeSuperadmin();

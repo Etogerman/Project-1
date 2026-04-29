@@ -38,7 +38,6 @@ class CheckBitrix24ConnectionAction
     private function markFailed(Bitrix24Connection $connection, string $message): void
     {
         $connection->forceFill([
-            'status' => Bitrix24Connection::STATUS_NEEDS_REINSTALL,
             'last_error_at' => now(),
             'last_error_message' => $message,
         ])->save();

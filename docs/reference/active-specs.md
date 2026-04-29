@@ -24,7 +24,12 @@
 
 ## Текущее состояние
 
+- `[scenario-builder-green-start-blocks-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-scenario-builder-green-start-blocks-v1.md`; Spec revision: `c3644a389aa8fae7508f9a518c7fae3c436a7e39`; status: `opened`; opened-at: `2026-04-26`
 - `[bitrix24-admin-oauth-connect-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-admin-oauth-connect-v1.md`; Spec revision: `4b3f4891e3f5511ff15136f76db94b1bc4b5037a`; status: `opened`; opened-at: `2026-04-26`
+- `[telegram-account-gateway-deployment-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-gateway-deployment-v1.md`; Spec revision: `82af0ac9da1dba04ba4938e131e4c08536f5db62`; status: `opened`; opened-at: `2026-04-26`
+- `[telegram-account-outgoing-replies-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-outgoing-replies-v1.md`; Spec revision: `e846c9ff32377cc062317de6ca5ce81dc0537d0c`; status: `opened`; opened-at: `2026-04-27`
+- `[telegram-account-automated-replies-via-gateway-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-automated-replies-via-gateway-v1.md`; Spec revision: `892c2f783e38383efc63e107c17fcbb1fc63eb92`; status: `opened`; opened-at: `2026-04-28`
+- `[salebot-green-start-conditions-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `salebot/tz-green-start-conditions-v1.md`; Spec revision: `e6c219ee5609677daa3e45bbbe64cbf5b5eaf0a5`; status: `opened`; opened-at: `2026-04-28`
 
 ## Связанные документы
 
