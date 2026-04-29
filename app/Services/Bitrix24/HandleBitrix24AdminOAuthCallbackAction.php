@@ -219,11 +219,15 @@ class HandleBitrix24AdminOAuthCallbackAction
     {
         $trustedPortal = $this->normalizePortalDomain($profile->portal_domain);
         $domain = $this->nullableString($tokenPayload['domain'] ?? null);
+        $normalizedDomain = $domain === null ? null : $this->normalizePortalDomain($domain);
 
-        if ($domain !== null && $this->normalizePortalDomain($domain) !== $trustedPortal) {
+        if ($normalizedDomain !== null
+            && $normalizedDomain !== $trustedPortal
+            && ! $this->isTrustedOAuthServerHost($normalizedDomain)
+        ) {
             throw new Bitrix24AdminOAuthException(sprintf(
                 'Bitrix24 выдал ключи для портала `%s`, а в настройках указан `%s`.',
-                $this->normalizePortalDomain($domain),
+                $normalizedDomain,
                 $trustedPortal,
             ));
         }
@@ -367,6 +371,14 @@ class HandleBitrix24AdminOAuthCallbackAction
 
         return mb_strtolower($endpointScheme) === mb_strtolower($trustedScheme)
             && mb_strtolower($endpointHost) === mb_strtolower($trustedHost);
+    }
+
+    private function isTrustedOAuthServerHost(string $host): bool
+    {
+        $trustedHost = parse_url($this->trustedOAuthServerUrl(), PHP_URL_HOST);
+
+        return is_string($trustedHost)
+            && mb_strtolower($host) === mb_strtolower($trustedHost);
     }
 
     private function trustedTokenUrl(): string

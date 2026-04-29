@@ -198,6 +198,7 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
             'https://oauth.bitrix.info/oauth/token/' => Http::response(array_merge(
                 $this->tokenPayload('member-1'),
                 [
+                    'domain' => 'oauth.bitrix.info',
                     'client_endpoint' => 'https://oauth.bitrix.info/rest/',
                     'server_endpoint' => 'https://oauth.bitrix.info/rest/',
                 ],
