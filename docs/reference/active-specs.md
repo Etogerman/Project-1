@@ -24,7 +24,7 @@
 
 ## Текущее состояние
 
-- `[bitrix24-admin-oauth-connect-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-admin-oauth-connect-v1.md`; Spec revision: `cfc86eeed655167762e7bf96b8b2a17be44631fe`; status: `opened`; opened-at: `2026-04-26`
+- `[bitrix24-admin-oauth-connect-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-admin-oauth-connect-v1.md`; Spec revision: `4b3f4891e3f5511ff15136f76db94b1bc4b5037a`; status: `opened`; opened-at: `2026-04-26`
 
 ## Связанные документы
 

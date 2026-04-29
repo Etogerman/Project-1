@@ -163,6 +163,61 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
         $this->assertSame(hash('sha256', 'install-callback-token'), $connection->application_token_hash);
     }
 
+    public function test_oauth_callback_completes_without_admin_session_on_public_ingress(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeRuntimeProfile();
+        $this->putOAuthState('state-1', $superadmin, $profile);
+
+        Http::fake([
+            'https://oauth.bitrix.info/oauth/token/' => Http::response($this->tokenPayload('member-1')),
+            'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
+                'result' => [
+                    'CODE' => 'local.app.code',
+                ],
+            ]),
+        ]);
+
+        $this->get('https://project.example.com/admin/bitrix24/oauth/callback?'.http_build_query([
+            'code' => 'auth-code',
+            'state' => 'state-1',
+            'domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'scope' => 'crm im',
+            'server_domain' => 'oauth.bitrix.info',
+        ], '', '&', PHP_QUERY_RFC3986))
+            ->assertRedirect(route('filament.admin.auth.login'));
+
+        $connection = Bitrix24Connection::query()->sole();
+
+        $this->assertSame($profile->id, $connection->profile_id);
+        $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
+        $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
+        $this->assertSame('access-token', $connection->access_token_encrypted);
+        $this->assertSame('refresh-token', $connection->refresh_token_encrypted);
+    }
+
+    public function test_oauth_callback_rejects_state_started_by_different_logged_in_admin(): void
+    {
+        $owner = $this->makeSuperadmin();
+        $otherAdmin = $this->makeSuperadmin();
+        $profile = $this->makeRuntimeProfile();
+        $this->putOAuthState('state-1', $owner, $profile);
+
+        $this->actingAs($otherAdmin)
+            ->get(route('admin.bitrix24.oauth.callback', [
+                'code' => 'auth-code',
+                'state' => 'state-1',
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'scope' => 'crm im',
+                'server_domain' => 'oauth.bitrix.info',
+            ]))
+            ->assertRedirect(route('filament.admin.resources.bitrix24-connections.index'));
+
+        $this->assertSame(0, Bitrix24Connection::query()->count());
+    }
+
     public function test_oauth_return_to_install_callback_path_redirects_to_admin_oauth_callback(): void
     {
         $this->makeRuntimeProfile();
