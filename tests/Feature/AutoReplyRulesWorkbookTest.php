@@ -289,6 +289,171 @@ class AutoReplyRulesWorkbookTest extends TestCase
         $this->assertStringContainsString('Строка конфликтует со строкой 2', $preview->errors[0]->message);
     }
 
+    public function test_parse_preview_allows_same_rule_key_for_mutually_exclusive_phone_conditions(): void
+    {
+        $channel = Channel::factory()->create();
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Правило для контакта с телефоном',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+                'Ответ для контакта с телефоном',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+            [
+                '',
+                'Правило для контакта без телефона',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+                'Ответ для контакта без телефона',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertFalse($preview->hasErrors());
+        $this->assertSame(2, $preview->createCount());
+        $this->assertSame(0, $preview->updateCount());
+    }
+
+    public function test_parse_preview_allows_same_rule_key_for_mutually_exclusive_tag_conditions(): void
+    {
+        $channel = Channel::factory()->create();
+        $vipTag = Tag::factory()->create(['name' => 'VIP']);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Правило с VIP',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Ответ для VIP',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                $vipTag->name,
+                '',
+                '',
+                '',
+            ],
+            [
+                '',
+                'Правило без VIP',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Ответ без VIP',
+                'none',
+                '',
+                '',
+                (string) $channel->id,
+                '',
+                $vipTag->name,
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertFalse($preview->hasErrors());
+        $this->assertSame(2, $preview->createCount());
+        $this->assertSame(0, $preview->updateCount());
+    }
+
+    public function test_parse_preview_reports_duplicate_rule_key_for_overlapping_channel_sets(): void
+    {
+        $firstChannel = Channel::factory()->create();
+        $secondChannel = Channel::factory()->create();
+        $thirdChannel = Channel::factory()->create();
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Первое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Первый ответ',
+                'none',
+                '',
+                '',
+                $firstChannel->id.';'.$secondChannel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+            [
+                '',
+                'Второе правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Второй ответ',
+                'none',
+                '',
+                '',
+                $secondChannel->id.';'.$thirdChannel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertSame(1, $preview->createCount());
+        $this->assertSame(0, $preview->updateCount());
+        $this->assertSame(1, $preview->errorCount());
+        $this->assertSame(3, $preview->errors[0]->rowNumber);
+        $this->assertSame('keyword', $preview->errors[0]->column);
+        $this->assertStringContainsString('Строка конфликтует со строкой 2', $preview->errors[0]->message);
+    }
+
     public function test_parse_preview_allows_duplicate_updates_of_same_rule_with_same_future_key(): void
     {
         $channel = Channel::factory()->create();
@@ -643,6 +808,55 @@ class AutoReplyRulesWorkbookTest extends TestCase
         $this->assertStringContainsString('Укажите id для обновления', $preview->errors[0]->message);
     }
 
+    public function test_parse_preview_reports_existing_multichannel_rule_conflict_for_overlapping_channel_set(): void
+    {
+        $firstChannel = Channel::factory()->create();
+        $secondChannel = Channel::factory()->create();
+        $thirdChannel = Channel::factory()->create();
+
+        AutoReplyRule::factory()
+            ->forChannels([$firstChannel, $secondChannel])
+            ->create([
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => 'ONASA01',
+                'normalized_keyword' => AutoReplyRule::normalizeKeyword('ONASA01'),
+                'reply_text' => 'Existing reply',
+                'is_active' => true,
+                'priority' => 10,
+            ]);
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Новое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'ONASA01',
+                '',
+                'Импортируемый ответ',
+                'none',
+                '',
+                '',
+                $secondChannel->id.';'.$thirdChannel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertSame(0, $preview->createCount());
+        $this->assertSame(0, $preview->updateCount());
+        $this->assertSame(1, $preview->errorCount());
+        $this->assertSame('id', $preview->errors[0]->column);
+        $this->assertStringContainsString('Укажите id для обновления', $preview->errors[0]->message);
+    }
+
     public function test_import_round_trip_preserves_normalized_rule_state(): void
     {
         $category = AutoReplyCategory::factory()->create(['name' => 'Fallback']);
@@ -660,14 +874,14 @@ class AutoReplyRulesWorkbookTest extends TestCase
             ->create([
                 'name' => 'Fallback rule',
                 'auto_reply_category_id' => $category->id,
-                'channel_id' => $maxChannel->id,
+                'channel_id' => $telegramChannel->id,
                 'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
                 'keyword' => null,
                 'normalized_keyword' => null,
                 'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
                 'reply_text' => 'Напишите оператору',
-                'telegram_button_type' => null,
-                'max_button_type' => AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE,
+                'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
+                'max_button_type' => null,
                 'priority' => 20,
             ]);
 
@@ -700,6 +914,57 @@ class AutoReplyRulesWorkbookTest extends TestCase
         app(ApplyAutoReplyRulesWorkbookImportAction::class)->handle($preview);
 
         $after = $this->snapshotRule($rule->fresh(['category', 'channels', 'tagConditions', 'tagEffects']));
+
+        $this->assertSame($before, $after);
+    }
+
+    public function test_import_round_trip_preserves_conditional_rules_with_same_rule_key(): void
+    {
+        $channel = Channel::factory()->create();
+        $hasPhoneRule = AutoReplyRule::factory()
+            ->forChannel($channel)
+            ->create([
+                'name' => 'Контакт с телефоном',
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => 'ONASA01',
+                'normalized_keyword' => AutoReplyRule::normalizeKeyword('ONASA01'),
+                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+                'reply_text' => 'Ответ для контакта с телефоном',
+                'is_active' => true,
+                'priority' => 10,
+            ]);
+        $missingPhoneRule = AutoReplyRule::factory()
+            ->forChannel($channel)
+            ->create([
+                'name' => 'Контакт без телефона',
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => 'ONASA01',
+                'normalized_keyword' => AutoReplyRule::normalizeKeyword('ONASA01'),
+                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+                'reply_text' => 'Ответ для контакта без телефона',
+                'is_active' => true,
+                'priority' => 20,
+            ]);
+
+        $before = [
+            $hasPhoneRule->id => $this->snapshotRule($hasPhoneRule->fresh(['category', 'channels', 'tagConditions', 'tagEffects'])),
+            $missingPhoneRule->id => $this->snapshotRule($missingPhoneRule->fresh(['category', 'channels', 'tagConditions', 'tagEffects'])),
+        ];
+
+        $spreadsheet = app(ExportAutoReplyRulesWorkbookAction::class)->handle();
+        $path = $this->storeWorkbookFromSpreadsheet($spreadsheet);
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+
+        $this->assertFalse($preview->hasErrors());
+        $this->assertSame(0, $preview->createCount());
+        $this->assertSame(2, $preview->updateCount());
+
+        app(ApplyAutoReplyRulesWorkbookImportAction::class)->handle($preview);
+
+        $after = [
+            $hasPhoneRule->id => $this->snapshotRule($hasPhoneRule->fresh(['category', 'channels', 'tagConditions', 'tagEffects'])),
+            $missingPhoneRule->id => $this->snapshotRule($missingPhoneRule->fresh(['category', 'channels', 'tagConditions', 'tagEffects'])),
+        ];
 
         $this->assertSame($before, $after);
     }
