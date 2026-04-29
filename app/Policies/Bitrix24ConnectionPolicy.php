@@ -24,7 +24,7 @@ class Bitrix24ConnectionPolicy
 
     public function update(User $user, Bitrix24Connection $connection): bool
     {
-        return false;
+        return $user->hasRolePermission('bitrix24.edit');
     }
 
     public function delete(User $user, Bitrix24Connection $connection): bool

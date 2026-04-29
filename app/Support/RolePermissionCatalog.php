@@ -190,6 +190,15 @@ class RolePermissionCatalog
                         'preparatoryLabel' => null,
                         'preparatoryDescription' => null,
                     ],
+                    [
+                        'code' => 'bitrix24.edit',
+                        'label' => 'Настройка маршрутов',
+                        'description' => 'Создание, изменение и отключение маршрутов открытых линий Bitrix24.',
+                        'isRuntimeActive' => true,
+                        'isPreparatory' => false,
+                        'preparatoryLabel' => null,
+                        'preparatoryDescription' => null,
+                    ],
                 ],
             ],
             [

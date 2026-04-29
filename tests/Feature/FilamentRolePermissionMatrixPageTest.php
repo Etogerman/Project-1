@@ -47,6 +47,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->assertSee('Администратор')
             ->assertSee('Сотрудник')
             ->assertSee('Создание и редактирование')
+            ->assertSee('Настройка маршрутов')
             ->assertSee('Создание, редактирование и архивация')
             ->assertSee('Сохранить')
             ->assertSee('Отмена')

@@ -8,5 +8,8 @@ final readonly class Bitrix24OpenLinesRouteData
         public string $platform,
         public string $connectorCode,
         public string $lineId,
+        public ?int $routeId = null,
+        public ?string $status = null,
+        public ?string $channelType = null,
     ) {}
 }

@@ -5,10 +5,13 @@ namespace App\Services\Dialogs;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Models\Channel;
 use App\Models\Dialog;
+use App\Services\Bots\CheckChannelConnectionAction;
 
 class ResolveDialogRouteStatusAction
 {
     private const GENERIC_BLOCKED_REASON = 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.';
+
+    private const CHANNEL_NOT_CONNECTED_FALLBACK_REASON = 'Канал не прошёл проверку подключения';
 
     private const TELEGRAM_BLOCKED_BY_USER_REASON = 'Клиент заблокировал бота в Telegram. Новые сообщения в этот диалог сейчас отправлять нельзя.';
 
@@ -16,6 +19,7 @@ class ResolveDialogRouteStatusAction
 
     public function __construct(
         private readonly DialogRoutePredicate $dialogRoutePredicate,
+        private readonly CheckChannelConnectionAction $checkChannelConnectionAction,
     ) {}
 
     public function handle(Dialog $dialog): DialogRouteStatusData
@@ -104,6 +108,25 @@ class ResolveDialogRouteStatusAction
             );
         }
 
+        if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
+            $channelState = $this->checkChannelConnectionAction->resolveEffectiveState($channel);
+
+            if (
+                ($channelState['connection_status'] ?? null) !== Channel::CONNECTION_STATUS_CONNECTED
+                || ($channelState['webhook_status'] ?? null) !== Channel::WEBHOOK_STATUS_INSTALLED
+            ) {
+                return $this->make(
+                    DialogRouteStatusData::CODE_CHANNEL_NOT_CONNECTED,
+                    'Канал не подключен',
+                    'danger',
+                    false,
+                    filled($channelState['connection_error_message'] ?? null)
+                        ? (string) $channelState['connection_error_message']
+                        : self::CHANNEL_NOT_CONNECTED_FALLBACK_REASON,
+                );
+            }
+        }
+
         return match ($channel->platform) {
             Channel::PLATFORM_TELEGRAM => $this->dialogRoutePredicate->hasTelegramRouteSource($dialog)
                 ? $this->make(DialogRouteStatusData::CODE_READY, 'Маршрут готов', 'success', true)
@@ -115,14 +138,19 @@ class ResolveDialogRouteStatusAction
         };
     }
 
-    private function make(string $code, string $label, string $tone, bool $isSendable): DialogRouteStatusData
-    {
+    private function make(
+        string $code,
+        string $label,
+        string $tone,
+        bool $isSendable,
+        ?string $blockedReason = null,
+    ): DialogRouteStatusData {
         return new DialogRouteStatusData(
             code: $code,
             label: $label,
             tone: $tone,
             isSendable: $isSendable,
-            blockedReason: $isSendable ? null : self::GENERIC_BLOCKED_REASON,
+            blockedReason: $isSendable ? null : ($blockedReason ?? self::GENERIC_BLOCKED_REASON),
         );
     }
 

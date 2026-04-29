@@ -76,6 +76,7 @@ class ExportMessageToBitrix24OpenLinesAction
                     bitrix24ContactId: $bitrix24ContactId,
                     connectorCode: $route->connectorCode,
                     lineId: $route->lineId,
+                    routeId: $route->routeId,
                     retryAfterSync: $retryAfterSync,
                     chatKey: $this->fakeLiveChatKey($dialog),
                     operation: 'openlines_live_exported_fake',
@@ -104,6 +105,7 @@ class ExportMessageToBitrix24OpenLinesAction
                         bitrix24ContactId: (string) $rootContact->bitrix24_contact_id,
                         connectorCode: $route->connectorCode,
                         lineId: $route->lineId,
+                        routeId: $route->routeId,
                         retryAfterSync: $retryAfterSync,
                         chatKey: filled($dialog->bitrix24_live_chat_id)
                             ? (string) $dialog->bitrix24_live_chat_id
@@ -135,6 +137,7 @@ class ExportMessageToBitrix24OpenLinesAction
                             bitrix24ContactId: $bitrix24ContactId,
                             connectorCode: $route->connectorCode,
                             lineId: $route->lineId,
+                            routeId: $route->routeId,
                             retryAfterSync: $retryAfterSync,
                             operation: 'openlines_manual_reply_exported_legacy_fallback',
                             connection: $manualReplyConnection,
@@ -157,6 +160,7 @@ class ExportMessageToBitrix24OpenLinesAction
                 bitrix24ContactId: $bitrix24ContactId,
                 connectorCode: $route->connectorCode,
                 lineId: $route->lineId,
+                routeId: $route->routeId,
                 retryAfterSync: $retryAfterSync,
                 operation: 'openlines_live_exported',
                 applyLegacyFallbackSignature: $this->shouldApplyLegacyFallbackSignature($message),
@@ -338,6 +342,7 @@ class ExportMessageToBitrix24OpenLinesAction
         string $bitrix24ContactId,
         string $connectorCode,
         string $lineId,
+        ?int $routeId,
         bool $retryAfterSync,
         string $chatKey,
         string $operation,
@@ -363,11 +368,17 @@ class ExportMessageToBitrix24OpenLinesAction
             $resolvedCrmEntityId,
         );
 
-        $dialog->forceFill([
+        $dialogUpdates = [
             'bitrix24_live_chat_id' => $chatKey,
             'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_ACTIVE,
             'bitrix24_live_last_exported_at' => now(),
-        ])->save();
+        ];
+
+        if ($dialog->bitrix24_open_line_route_id === null && $routeId !== null) {
+            $dialogUpdates['bitrix24_open_line_route_id'] = $routeId;
+        }
+
+        $dialog->forceFill($dialogUpdates)->save();
 
         $this->logBitrix24ApiCallAction->handle(
             direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
@@ -491,6 +502,7 @@ class ExportMessageToBitrix24OpenLinesAction
         string $bitrix24ContactId,
         string $connectorCode,
         string $lineId,
+        ?int $routeId,
         bool $retryAfterSync,
         string $operation,
         ?Bitrix24Connection $connection = null,
@@ -501,6 +513,7 @@ class ExportMessageToBitrix24OpenLinesAction
             platform: $dialog->channel()->firstOrFail()->platform,
             connectorCode: $connectorCode,
             lineId: $lineId,
+            routeId: $routeId,
         ), $retryAfterSync, $applyLegacyFallbackSignature);
 
         try {
@@ -534,6 +547,7 @@ class ExportMessageToBitrix24OpenLinesAction
             bitrix24ContactId: $bitrix24ContactId,
             connectorCode: $connectorCode,
             lineId: $lineId,
+            routeId: $routeId,
             retryAfterSync: $retryAfterSync,
             chatKey: $this->resolveBitrix24LiveChatKeyAction->handle($dialog),
             operation: $operation,

@@ -35,6 +35,12 @@ class ChannelFactory extends Factory
             'last_error_at' => null,
             'last_error_message' => null,
             'is_active' => true,
+            'connection_status' => Channel::CONNECTION_STATUS_NOT_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_NOT_INSTALLED,
+            'connection_checked_at' => null,
+            'connection_error_message' => Channel::CONNECTION_ERROR_NOT_CHECKED,
+            'provider_webhook_url' => null,
+            'expected_webhook_url' => null,
         ];
     }
 
@@ -53,6 +59,12 @@ class ChannelFactory extends Factory
             'last_reply_sent_at' => null,
             'last_error_at' => null,
             'last_error_message' => null,
+            'connection_status' => Channel::CONNECTION_STATUS_UNSUPPORTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_UNSUPPORTED,
+            'connection_checked_at' => null,
+            'connection_error_message' => Channel::CONNECTION_ERROR_UNSUPPORTED,
+            'provider_webhook_url' => null,
+            'expected_webhook_url' => null,
         ]);
     }
 }

@@ -10,6 +10,8 @@ use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\LogBitrix24RawContactPhoneSnapshotJob;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
+use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -19,12 +21,15 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Bitrix24\Bitrix24ApiException;
+use App\Services\Bitrix24\Bitrix24ConnectionStateException;
 use App\Services\Bitrix24\Bitrix24OpenLinesManualReplyExportException;
 use App\Services\Bitrix24\BuildBitrix24OpenLinesMessagePayloadAction;
 use App\Services\Bitrix24\DedupeBitrix24ContactPhonesAction;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
 use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
+use App\Services\Bitrix24\ResolveCurrentBitrix24ProfileAction;
+use App\Services\Bots\ChannelWebhookUrlGenerator;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
@@ -764,12 +769,12 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'bitrix_remote_message_id' => 'remote-message-200',
         ]);
 
-        Http::assertSent(function (Request $request): bool {
+        Http::assertSent(function (Request $request) use ($dialog): bool {
             if ($request->url() !== 'https://client-endpoint.example/rest/imopenlines.session.open.json') {
                 return false;
             }
 
-            return $request['USER_CODE'] === 'abrikosoff_max|line-max|max-chat-100|max-user-100';
+            return $request['USER_CODE'] === $this->expectedManualReplyUserCode($dialog, 'abrikosoff_max', 'line-max');
         });
     }
 
@@ -1447,7 +1452,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertSame('trusted-telegram-chat-704', $crmMessageAddRequests[1]['CHAT_ID']);
 
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
-            && $request['USER_CODE'] === 'abrikosoff_telegram|line-telegram|telegram-chat-100|telegram-user-100');
+            && $request['USER_CODE'] === $this->expectedManualReplyUserCode($dialog, 'abrikosoff_telegram', 'line-telegram'));
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
@@ -1995,7 +2000,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
 
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
-            && $request['USER_CODE'] === 'abrikosoff_telegram|line-telegram|telegram-chat-100|telegram-user-100');
+            && $request['USER_CODE'] === $this->expectedManualReplyUserCode($dialog, 'abrikosoff_telegram', 'line-telegram'));
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/im.dialog.get.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
@@ -2067,7 +2072,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
 
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
-            && $request['USER_CODE'] === 'abrikosoff_max|line-max|max-chat-100|max-user-100');
+            && $request['USER_CODE'] === $this->expectedManualReplyUserCode($dialog, 'abrikosoff_max', 'line-max'));
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/im.dialog.get.json'
             && $request['DIALOG_ID'] === 'chatcurrent-max-chat-710x');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
@@ -2236,6 +2241,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
                 && ($payload['LINE'] ?? null) === 'line-telegram'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $this->expectedOpenLinesExternalUserId($dialog)
                 && ($payload['MESSAGES'][0]['user']['name'] ?? null) === 'Герман Германов'
                 && ($payload['MESSAGES'][0]['user']['last_name'] ?? null) === 'Германов'
                 && ($payload['MESSAGES'][0]['user']['phone'] ?? null) === '+79263527111'
@@ -2324,6 +2330,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ),
         );
 
+        $this->assertSame(
+            $this->expectedOpenLinesExternalUserId($dialog),
+            $payload['MESSAGES'][0]['user']['id'] ?? null,
+        );
         $this->assertSame('Live Contact', $payload['MESSAGES'][0]['user']['name'] ?? null);
         $this->assertArrayNotHasKey('last_name', $payload['MESSAGES'][0]['user']);
         $this->assertArrayNotHasKey('phone', $payload['MESSAGES'][0]['user']);
@@ -2587,6 +2597,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ),
         );
 
+        $this->assertSame(
+            $this->expectedOpenLinesExternalUserId($dialog),
+            $payload['MESSAGES'][0]['user']['id'] ?? null,
+        );
         $this->assertSame('Клиент запустил MAX-бота', $payload['MESSAGES'][0]['message']['text'] ?? null);
     }
 
@@ -2705,7 +2719,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ],
         );
 
-        $dialog = $this->createLiveReadyDialog();
+        $dialog = $this->createLiveReadyDialog(createOpenLineRoute: false);
         $message = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
@@ -3355,11 +3369,19 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     }
 
     private function createLiveReadyDialog(
-        string $platform = Channel::PLATFORM_TELEGRAM,
+        string|array $platform = Channel::PLATFORM_TELEGRAM,
         array $contactAttributes = [],
         array $channelAttributes = [],
         array $dialogAttributes = [],
+        bool $createOpenLineRoute = true,
     ): Dialog {
+        if (is_array($platform)) {
+            $dialogAttributes = $platform + $dialogAttributes;
+            $platform = Channel::PLATFORM_TELEGRAM;
+        }
+
+        [$connectorCode, $lineId] = $this->routeConnectorAndLineForPlatform($platform);
+        $profile = $createOpenLineRoute ? $this->currentRuntimeBitrix24Profile() : null;
         $contact = Contact::factory()->create(array_merge([
             'name' => 'Live Contact',
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
@@ -3367,23 +3389,177 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
             'bitrix24_sync_pending' => false,
         ], $contactAttributes));
-        $channel = Channel::factory()->create(array_merge([
-            'platform' => $platform,
-        ], $channelAttributes));
+        $channel = $profile instanceof Bitrix24Profile
+            ? $this->findChannelByOpenLineRoute($profile, $connectorCode, $lineId)
+            : null;
+
+        if ($channel instanceof Channel && $channelAttributes !== []) {
+            $channel->forceFill($channelAttributes)->save();
+        }
+
+        if (! $channel instanceof Channel) {
+            $channel = Channel::factory()->create(array_merge([
+                'platform' => $platform,
+            ], $channelAttributes));
+        }
+
+        $this->markTelegramChannelConnected($channel);
+
         $identity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
             'platform' => $platform,
-            'external_user_id' => $platform.'-user-100',
-            'external_username' => $platform.'_user_100',
+            'external_user_id' => $platform.'-user-'.$contact->id,
+            'external_username' => $platform.'_user_'.$contact->id,
         ]);
 
-        return Dialog::factory()->create(array_merge([
+        $dialog = Dialog::factory()->create(array_merge([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
             'current_contact_identity_id' => $identity->id,
             'external_chat_id' => $platform.'-chat-100',
         ], $dialogAttributes));
+
+        if ($profile instanceof Bitrix24Profile) {
+            $this->pinDialogOpenLineRoute($dialog, $profile, $connectorCode, $lineId);
+        }
+
+        return $dialog->fresh(['contact', 'channel', 'currentContactIdentity']);
+    }
+
+    /**
+     * @return array{0: string, 1: string}
+     */
+    private function routeConnectorAndLineForPlatform(string $platform): array
+    {
+        return match ($platform) {
+            Channel::PLATFORM_MAX => ['abrikosoff_max', 'line-max'],
+            default => ['abrikosoff_telegram', 'line-telegram'],
+        };
+    }
+
+    private function currentRuntimeBitrix24Profile(): Bitrix24Profile
+    {
+        try {
+            return app(ResolveCurrentBitrix24ProfileAction::class)->handle();
+        } catch (Bitrix24ConnectionStateException) {
+            $profile = Bitrix24Profile::query()->updateOrCreate(
+                [
+                    'portal_domain' => 'crm.alexlesley.biz',
+                    'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+                ],
+                [
+                    'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+                    'display_name' => 'Staging',
+                    'client_id' => 'local.app',
+                    'application_code' => 'local.app.code',
+                    'callback_base_url' => 'https://project.example.com',
+                    'telegram_source_id' => 'ABRIKOSOFF_TELEGRAM',
+                    'max_source_id' => 'ABRIKOSOFF_MAX',
+                    'telegram_connector_code' => 'abrikosoff_telegram',
+                    'max_connector_code' => 'abrikosoff_max',
+                    'telegram_line_id' => 'line-telegram',
+                    'max_line_id' => 'line-max',
+                ],
+            );
+
+            $this->configureCurrentBitrix24RuntimeProfile($profile);
+
+            return $profile;
+        }
+    }
+
+    private function findChannelByOpenLineRoute(
+        Bitrix24Profile $profile,
+        string $connectorCode,
+        string $lineId,
+    ): ?Channel {
+        $route = Bitrix24OpenLineRoute::query()
+            ->with('channel')
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('connector_code', $connectorCode)
+            ->where('line_id', $lineId)
+            ->where('status', Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->first();
+
+        return $route instanceof Bitrix24OpenLineRoute
+            ? $route->channel
+            : null;
+    }
+
+    private function markTelegramChannelConnected(Channel $channel): void
+    {
+        if (! $channel->supportsConnectionCheck()) {
+            return;
+        }
+
+        $webhookUrl = app(ChannelWebhookUrlGenerator::class)->for($channel);
+
+        $channel->forceFill([
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now(),
+            'connection_error_message' => null,
+            'provider_webhook_url' => $webhookUrl,
+            'expected_webhook_url' => $webhookUrl,
+        ])->saveQuietly();
+    }
+
+    private function pinDialogOpenLineRoute(
+        Dialog $dialog,
+        Bitrix24Profile $profile,
+        string $connectorCode,
+        string $lineId,
+    ): Bitrix24OpenLineRoute {
+        $dialog->loadMissing('channel');
+
+        $route = Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('channel_id', $dialog->channel_id)
+            ->first();
+
+        if (! $route instanceof Bitrix24OpenLineRoute) {
+            $route = Bitrix24OpenLineRoute::query()->create([
+                'bitrix24_profile_id' => $profile->id,
+                'channel_id' => $dialog->channel_id,
+                'portal_domain' => $profile->portal_domain,
+                'profile_key' => $profile->profile_key,
+                'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($dialog->channel),
+                'connector_code' => $connectorCode,
+                'line_id' => $lineId,
+                'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            ]);
+        }
+
+        $dialog->forceFill([
+            'bitrix24_open_line_route_id' => $route->id,
+        ])->save();
+
+        return $route;
+    }
+
+    private function expectedOpenLinesExternalUserId(Dialog $dialog): string
+    {
+        $dialog->loadMissing(['channel', 'currentContactIdentity']);
+
+        return sprintf(
+            '%s:channel:%d:user:%s',
+            Bitrix24OpenLineRoute::channelTypeForChannel($dialog->channel),
+            $dialog->channel_id,
+            $dialog->currentContactIdentity?->external_user_id,
+        );
+    }
+
+    private function expectedManualReplyUserCode(Dialog $dialog, string $connectorCode, string $lineId): string
+    {
+        $dialog->loadMissing('currentContactIdentity');
+
+        return implode('|', [
+            $connectorCode,
+            $lineId,
+            $dialog->external_chat_id,
+            $dialog->currentContactIdentity?->external_user_id,
+        ]);
     }
 
     private function seedSuccessfulManualReplyTransportExport(

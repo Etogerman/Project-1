@@ -1,0 +1,191 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Channel;
+use App\Services\Bots\CheckChannelConnectionAction;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Http;
+use Tests\TestCase;
+
+class ChannelConnectionCheckTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('app.url', 'https://connector.example');
+    }
+
+    public function test_telegram_bot_is_connected_when_webhook_matches_current_admin(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*/getWebhookInfo' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'url' => 'https://connector.example/webhooks/telegram/1',
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => true,
+        ]);
+
+        app(CheckChannelConnectionAction::class)->handle($channel);
+
+        $channel->refresh();
+
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $channel->webhook_status);
+        $this->assertNull($channel->connection_error_message);
+        $this->assertSame("https://connector.example/webhooks/telegram/{$channel->id}", $channel->expected_webhook_url);
+        $this->assertSame("https://connector.example/webhooks/telegram/{$channel->id}", $channel->provider_webhook_url);
+        $this->assertNotNull($channel->connection_checked_at);
+    }
+
+    public function test_telegram_bot_is_not_connected_when_webhook_points_elsewhere(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*/getWebhookInfo' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'url' => 'https://other-local.example/webhooks/telegram/1',
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => true,
+        ]);
+
+        app(CheckChannelConnectionAction::class)->handle($channel);
+
+        $channel->refresh();
+
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_NOT_INSTALLED, $channel->webhook_status);
+        $this->assertSame('Webhook установлен не на эту админку', $channel->connection_error_message);
+        $this->assertSame('https://other-local.example/webhooks/telegram/1', $channel->provider_webhook_url);
+    }
+
+    public function test_disabled_channel_is_marked_not_connected_without_calling_telegram(): void
+    {
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => false,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+        ]);
+
+        app(CheckChannelConnectionAction::class)->handle($channel);
+
+        $channel->refresh();
+
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_NOT_INSTALLED, $channel->webhook_status);
+        $this->assertSame(Channel::CONNECTION_ERROR_DISABLED, $channel->connection_error_message);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_effective_state_treats_stale_connection_as_not_connected(): void
+    {
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => true,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now()->subMinutes(3),
+            'expected_webhook_url' => 'https://connector.example/webhooks/telegram/1',
+            'provider_webhook_url' => 'https://connector.example/webhooks/telegram/1',
+        ]);
+
+        $state = app(CheckChannelConnectionAction::class)->resolveEffectiveState($channel);
+
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $state['connection_status']);
+        $this->assertSame(Channel::WEBHOOK_STATUS_NOT_INSTALLED, $state['webhook_status']);
+        $this->assertSame(Channel::CONNECTION_ERROR_STALE, $state['connection_error_message']);
+    }
+
+    public function test_effective_state_treats_changed_expected_url_as_not_connected(): void
+    {
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => true,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now(),
+            'expected_webhook_url' => 'https://old-admin.example/webhooks/telegram/1',
+            'provider_webhook_url' => 'https://old-admin.example/webhooks/telegram/1',
+        ]);
+
+        $state = app(CheckChannelConnectionAction::class)->resolveEffectiveState($channel);
+
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $state['connection_status']);
+        $this->assertSame(Channel::CONNECTION_ERROR_EXPECTED_URL_CHANGED, $state['connection_error_message']);
+    }
+
+    public function test_console_command_updates_local_failure_statuses_without_telegram_api(): void
+    {
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => [],
+            'bot_token_present' => false,
+            'is_active' => true,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+        ]);
+
+        $exitCode = Artisan::call('channels:check-connections', ['--channel' => $channel->id]);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->fresh()->connection_status);
+        $this->assertSame(Channel::CONNECTION_ERROR_NO_TOKEN, $channel->fresh()->connection_error_message);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_reenabled_channel_is_marked_unchecked_until_next_connection_check(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => false,
+        ]);
+
+        $channel->update(['is_active' => true]);
+
+        $channel->refresh();
+
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_NOT_INSTALLED, $channel->webhook_status);
+        $this->assertSame(Channel::CONNECTION_ERROR_NOT_CHECKED, $channel->connection_error_message);
+        $this->assertNull($channel->connection_checked_at);
+    }
+}

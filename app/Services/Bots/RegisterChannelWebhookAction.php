@@ -15,6 +15,7 @@ class RegisterChannelWebhookAction
         protected TelegramBotApiService $telegramBotApiService,
         protected MaxBotApiService $maxBotApiService,
         protected SyncChannelBotMetadataAction $syncChannelBotMetadataAction,
+        protected CheckChannelConnectionAction $checkChannelConnectionAction,
     ) {}
 
     public function handle(Channel $channel): void
@@ -47,6 +48,12 @@ class RegisterChannelWebhookAction
             };
 
             $this->syncChannelBotMetadataAction->handle($channel);
+            if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
+                $this->checkChannelConnectionAction->handle(
+                    $channel->fresh() ?? $channel,
+                    'Webhook не подтверждён Telegram после регистрации',
+                );
+            }
             $channel->clearOperationalError();
 
             Log::info('bot webhook registration completed', [

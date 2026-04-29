@@ -455,7 +455,7 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame('Работает', $channel->fresh('runtimeState')->getHealthStatusLabel());
     }
 
-    public function test_account_channel_view_modal_shows_runtime_state_block(): void
+    public function test_account_channel_view_modal_shows_unsupported_connection_status(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -480,15 +480,10 @@ class FilamentChannelsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->mountTableAction('view', $channel)
-            ->assertMountedActionModalSee('Авторизация')
-            ->assertMountedActionModalSee('Авторизован')
-            ->assertMountedActionModalSee('Шаг авторизации')
-            ->assertMountedActionModalSee('Готов')
-            ->assertMountedActionModalSee('Синхронизация')
-            ->assertMountedActionModalSee('Загрузка истории')
-            ->assertMountedActionModalSee('Последний heartbeat gateway')
-            ->assertMountedActionModalSee('Текст ошибки')
-            ->assertMountedActionModalSee('Временная деградация отсутствует.');
+            ->assertMountedActionModalSee('Состояние')
+            ->assertMountedActionModalSee('Не поддерживается')
+            ->assertMountedActionModalSee('Webhook')
+            ->assertMountedActionModalSee('Проверка подключения для этого типа канала пока не поддерживается');
     }
 
     public function test_account_channel_hides_bot_only_edit_and_manage_scenarios_actions(): void

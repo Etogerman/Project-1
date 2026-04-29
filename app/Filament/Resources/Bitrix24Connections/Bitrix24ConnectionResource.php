@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Bitrix24Connections;
 use App\Filament\Resources\Bitrix24Connections\Pages\ListBitrix24Connections;
 use App\Filament\Resources\Bitrix24Connections\Pages\ViewBitrix24Connection;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Services\Bitrix24\Bitrix24AdminOAuthException;
@@ -13,8 +14,8 @@ use App\Services\Bitrix24\DisconnectBitrix24ConnectionLocallyAction;
 use App\Services\Bitrix24\ResetBitrix24ConnectionLocallyAction;
 use BackedEnum;
 use Filament\Actions\Action;
-use Filament\Notifications\Notification;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Infolists\Components\ViewEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
@@ -60,63 +61,22 @@ class Bitrix24ConnectionResource extends Resource
             ->components([
                 Section::make('Подключение')
                     ->schema([
-                        TextEntry::make('id')
-                            ->label('ID')
-                            ->copyable(),
-                        TextEntry::make('portal_domain')
-                            ->label('Портал')
-                            ->placeholder('—'),
-                        TextEntry::make('application_name')
-                            ->label('Приложение')
-                            ->placeholder('—'),
-                        TextEntry::make('client_id')
-                            ->label('Client ID')
-                            ->placeholder('—')
-                            ->copyable(),
-                        TextEntry::make('member_id')
-                            ->label('Member ID')
-                            ->placeholder('—')
-                            ->copyable(),
-                        TextEntry::make('status')
-                            ->label('Статус')
-                            ->badge()
-                            ->formatStateUsing(fn (?string $state): string => static::formatConnectionStatus($state))
-                            ->color(fn (?string $state): string => static::getConnectionStatusColor($state)),
-                        TextEntry::make('installed_at')
-                            ->label('Установлено')
-                            ->placeholder('—')
-                            ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('access_token_expires_at')
-                            ->label('Токен истекает')
-                            ->placeholder('—')
-                            ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('last_refreshed_at')
-                            ->label('Последний refresh')
-                            ->placeholder('—')
-                            ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('last_install_callback_at')
-                            ->label('Последний install callback')
-                            ->placeholder('—')
-                            ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('last_events_callback_at')
-                            ->label('Последний events callback')
-                            ->placeholder('—')
-                            ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('last_openlines_callback_at')
-                            ->label('Последний openlines callback')
-                            ->placeholder('—')
-                            ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('last_error_at')
-                            ->label('Последняя ошибка')
-                            ->placeholder('Ошибок не было')
-                            ->dateTime('d.m.Y H:i:s'),
-                        TextEntry::make('last_error_message')
-                            ->label('Текст ошибки')
-                            ->state(fn (Bitrix24Connection $record): string => filled($record->last_error_message) ? (string) $record->last_error_message : 'Ошибок не было')
-                            ->columnSpanFull()
-                            ->wrap(),
+                        ViewEntry::make('connection_overview')
+                            ->hiddenLabel()
+                            ->view('filament.bitrix24-connections.partials.connection-overview')
+                            ->columnSpanFull(),
                     ])
-                    ->columns(4)
+                    ->columnSpanFull(),
+                Section::make('Маршруты открытых линий')
+                    ->schema([
+                        ViewEntry::make('open_line_routes')
+                            ->hiddenLabel()
+                            ->view('filament.bitrix24-connections.partials.open-line-routes')
+                            ->viewData(fn (): array => [
+                                'statusOptions' => static::getOpenLineRouteStatusOptions(),
+                            ])
+                            ->columnSpanFull(),
+                    ])
                     ->columnSpanFull(),
                 Section::make('Последние callback-и')
                     ->schema([
@@ -437,6 +397,47 @@ class Bitrix24ConnectionResource extends Resource
             Bitrix24SyncLog::STATUS_FAILED => 'danger',
             Bitrix24SyncLog::STATUS_SKIPPED => 'warning',
             default => 'gray',
+        };
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function getOpenLineRouteStatusOptions(): array
+    {
+        return [
+            Bitrix24OpenLineRoute::STATUS_ACTIVE => 'Активен',
+            Bitrix24OpenLineRoute::STATUS_LEGACY => 'Старая совместимость',
+            Bitrix24OpenLineRoute::STATUS_INACTIVE => 'Отключен',
+            Bitrix24OpenLineRoute::STATUS_MISCONFIGURED => 'Ошибка настройки',
+            Bitrix24OpenLineRoute::STATUS_UNSUPPORTED => 'Не поддержан',
+        ];
+    }
+
+    public static function formatOpenLineRouteStatus(?string $status): string
+    {
+        return static::getOpenLineRouteStatusOptions()[$status] ?? ($status ?: 'Не настроен');
+    }
+
+    public static function getOpenLineRouteStatusTone(?string $status): string
+    {
+        return match ($status) {
+            Bitrix24OpenLineRoute::STATUS_ACTIVE => 'success',
+            Bitrix24OpenLineRoute::STATUS_LEGACY => 'warning',
+            Bitrix24OpenLineRoute::STATUS_MISCONFIGURED => 'danger',
+            Bitrix24OpenLineRoute::STATUS_UNSUPPORTED,
+            Bitrix24OpenLineRoute::STATUS_INACTIVE => 'gray',
+            default => 'warning',
+        };
+    }
+
+    public static function formatOpenLineRouteChannelType(?string $channelType): string
+    {
+        return match ($channelType) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => 'Telegram bot',
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => 'Telegram account',
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX',
+            default => $channelType ?: '—',
         };
     }
 }

@@ -18,7 +18,7 @@ class ManageChannels extends ManageRecords
         return [
             CreateAction::make()
                 ->label('Добавить канал связи')
-                ->modalWidth(Width::FourExtraLarge)
+                ->modalWidth(Width::SevenExtraLarge)
                 ->modalFooterActionsAlignment(Alignment::End)
                 ->extraModalWindowAttributes(['class' => 'ac-channel-form-modal'])
                 ->using(fn (array $data): Channel => Channel::query()->create(

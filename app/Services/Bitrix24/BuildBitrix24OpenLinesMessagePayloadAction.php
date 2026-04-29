@@ -17,6 +17,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         private readonly CollectBitrix24ContactPhonesAction $collectBitrix24ContactPhonesAction,
         private readonly ResolveBitrix24LiveChatKeyAction $resolveBitrix24LiveChatKeyAction,
         private readonly MessageChronology $messageChronology,
+        private readonly BuildBitrix24OpenLinesExternalUserIdAction $buildExternalUserIdAction,
     ) {}
 
     /**
@@ -44,7 +45,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $timestamp = $this->messageChronology->resolveSortAt($message);
         $text = $this->resolveMessageText($message, $channel, $applyLegacyFallbackSignature);
         $chatKey = $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
-        $userId = $this->resolveUserId($channel, $identity?->external_user_id, $rootContact->id);
+        $userId = $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 
@@ -154,15 +155,6 @@ class BuildBitrix24OpenLinesMessagePayloadAction
             && $message->direction === Message::DIRECTION_INBOUND
             && $message->message_kind === Message::KIND_INBOUND_USER
             && data_get($message->raw_payload, 'update_type') === 'bot_started';
-    }
-
-    private function resolveUserId(Channel $channel, ?string $externalUserId, int $rootContactId): string
-    {
-        if (filled($externalUserId)) {
-            return $channel->platform.':'.$externalUserId;
-        }
-
-        return 'contact:'.$rootContactId;
     }
 
     /**

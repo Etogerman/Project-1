@@ -6,8 +6,11 @@ use App\Filament\Resources\Bitrix24Connections\Bitrix24ConnectionResource;
 use App\Filament\Resources\Bitrix24Connections\Pages\ListBitrix24Connections;
 use App\Filament\Resources\Bitrix24Connections\Pages\ViewBitrix24Connection;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
+use App\Models\Channel;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -89,6 +92,11 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertFalse(Gate::forUser($employee)->allows('create', Bitrix24Connection::class));
         $this->assertFalse(Gate::forUser($employee)->allows('update', $connection));
         $this->assertFalse(Gate::forUser($employee)->allows('delete', $connection));
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', true);
+        $employee = $employee->fresh();
+
+        $this->assertTrue(Gate::forUser($employee)->allows('update', $connection));
     }
 
     public function test_admin_can_open_bitrix24_connection_view_and_see_diagnostics(): void
@@ -163,6 +171,199 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->assertDontSee('sync.success');
     }
 
+    public function test_view_page_shows_open_line_routes_and_channels_without_route(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile();
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $firstChannel = Channel::factory()->create([
+            'name' => 'Первый Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        Channel::factory()->create([
+            'name' => 'Второй Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $firstChannel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($firstChannel),
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => 'line-one',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(Bitrix24ConnectionResource::getUrl('view', ['record' => $connection]))
+            ->assertOk()
+            ->assertSee('Маршруты открытых линий')
+            ->assertSee('Первый Telegram')
+            ->assertSee('Второй Telegram')
+            ->assertSee('line-one')
+            ->assertSee('Требует настройки')
+            ->assertSee('Сохранить');
+    }
+
+    public function test_employee_with_view_only_can_see_open_line_routes_but_cannot_edit_them(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.view-only.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+
+        Channel::factory()->create([
+            'name' => 'View only channel',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', false);
+
+        Livewire::actingAs($employee)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee('View only channel')
+            ->assertSee('Для изменения маршрутов нужно право bitrix24.edit.')
+            ->assertDontSee('Сохранить маршрут');
+    }
+
+    public function test_employee_with_edit_permission_can_create_open_line_route(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.edit.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Editable Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', true);
+
+        Livewire::actingAs($employee)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abrikosoff_telegram')
+            ->set("openLineRouteForms.{$channel->id}.line_id", 'line-editable')
+            ->set("openLineRouteForms.{$channel->id}.source_id", 'source-editable')
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', null);
+
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => 'crm.edit.test',
+            'profile_key' => 'staging',
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => 'line-editable',
+            'line_owner_key' => 'crm.edit.test#line-editable',
+            'source_id' => 'source-editable',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'created_by_user_id' => $employee->id,
+            'updated_by_user_id' => $employee->id,
+        ]);
+    }
+
+    public function test_open_line_route_save_blocks_active_line_conflict(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.conflict.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $firstChannel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($firstChannel),
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => 'shared-line',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$secondChannel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->set("openLineRouteForms.{$secondChannel->id}.connector_code", 'abrikosoff_max')
+            ->set("openLineRouteForms.{$secondChannel->id}.line_id", 'shared-line')
+            ->call('saveOpenLineRoute', $secondChannel->id)
+            ->assertSet('openLineRouteErrorMessage', 'Открытая линия уже занята другим рабочим маршрутом.');
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'channel_id' => $secondChannel->id,
+            'line_owner_key' => 'crm.conflict.test#shared-line',
+        ]);
+    }
+
+    public function test_telegram_account_route_cannot_be_saved_as_active_in_first_slice(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.account.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abrikosoff_telegram_account')
+            ->set("openLineRouteForms.{$channel->id}.line_id", 'account-line')
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', 'Telegram account пока нельзя сделать рабочим маршрутом открытых линий.');
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'channel_id' => $channel->id,
+            'line_id' => 'account-line',
+        ]);
+    }
+
     private function makeAdmin(): User
     {
         return User::factory()->create([
@@ -197,6 +398,20 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'last_openlines_callback_at' => now()->subMinutes(5),
             'last_error_at' => now()->subMinute(),
             'last_error_message' => 'Connection error.',
+        ], $overrides));
+    }
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     */
+    private function makeProfile(array $overrides = []): Bitrix24Profile
+    {
+        return Bitrix24Profile::query()->create(array_merge([
+            'portal_domain' => 'crm.default.test',
+            'profile_key' => 'staging',
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'callback_base_url' => 'https://project.example.test/'.str()->uuid(),
         ], $overrides));
     }
 

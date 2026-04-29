@@ -18,7 +18,7 @@ class AbrikosoffImconnectorTelegramComponent extends CBitrixComponent
 
         $this->arResult = [
             'LINE_ID' => $lineId,
-            'LINE_NAME' => Runtime::lineName('abrikosoff_telegram'),
+            'LINE_NAME' => Runtime::lineName('abrikosoff_telegram', $lineId),
             'CALLBACK_URL' => Runtime::laravelOpenlinesCallbackUrl(),
             'CONNECTOR_CODE' => 'abrikosoff_telegram',
         ];

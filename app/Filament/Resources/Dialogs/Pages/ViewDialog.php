@@ -432,6 +432,7 @@ class ViewDialog extends ViewRecord
      *     external_chat_id_label:string,
      *     route_status_label:string,
      *     route_status_tone:string,
+     *     route_status_reason:?string,
      *     phone_label:string
      * }
      */
@@ -452,6 +453,7 @@ class ViewDialog extends ViewRecord
             'external_chat_id_label' => $dialog->external_chat_id ?: 'Не задан',
             'route_status_label' => $routeStatus->label,
             'route_status_tone' => $routeStatus->tone,
+            'route_status_reason' => $routeStatus->blockedReason,
             'phone_label' => $this->formatDialogPhoneLabel($dialog),
         ];
     }
