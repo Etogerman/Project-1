@@ -19,12 +19,8 @@ class HandleBitrix24AdminOAuthCallbackAction
         private readonly SanitizeBitrix24LogPayloadAction $sanitizePayload,
     ) {}
 
-    public function handle(Request $request, User $user): Bitrix24Connection
+    public function handle(Request $request, ?User $sessionUser = null): Bitrix24Connection
     {
-        if (! $user->is_active || ! $user->isSuperadmin()) {
-            throw new Bitrix24AdminOAuthException('Подключать Bitrix24 может только главный админ.');
-        }
-
         $state = $this->nullableString($request->query('state'));
         $code = $this->nullableString($request->query('code'));
 
@@ -35,12 +31,18 @@ class HandleBitrix24AdminOAuthCallbackAction
         /** @var array{user_id?: int, profile_id?: int}|null $statePayload */
         $statePayload = Cache::pull(BuildBitrix24AdminOAuthAuthorizeUrlAction::cacheKey($state));
 
-        if (! is_array($statePayload)
-            || (int) ($statePayload['user_id'] ?? 0) !== $user->id
-            || (int) ($statePayload['profile_id'] ?? 0) <= 0
-        ) {
+        if (! is_array($statePayload)) {
             throw new Bitrix24AdminOAuthException('Подключение устарело, начните заново.');
         }
+
+        $stateUserId = (int) ($statePayload['user_id'] ?? 0);
+        $stateProfileId = (int) ($statePayload['profile_id'] ?? 0);
+
+        if ($stateUserId <= 0 || $stateProfileId <= 0) {
+            throw new Bitrix24AdminOAuthException('Подключение устарело, начните заново.');
+        }
+
+        $this->assertStateUserCanCompleteCallback($stateUserId, $sessionUser);
 
         if ($code === null) {
             throw new Bitrix24AdminOAuthException('Bitrix24 не вернул код авторизации.');
@@ -61,7 +63,7 @@ class HandleBitrix24AdminOAuthCallbackAction
             }
         }
 
-        if ($profile->id !== (int) $statePayload['profile_id']) {
+        if ($profile->id !== $stateProfileId) {
             throw new Bitrix24AdminOAuthException('Подключение устарело, начните заново.');
         }
 
@@ -116,6 +118,19 @@ class HandleBitrix24AdminOAuthCallbackAction
         $connection->save();
 
         return $connection->refresh();
+    }
+
+    private function assertStateUserCanCompleteCallback(int $stateUserId, ?User $sessionUser): void
+    {
+        if ($sessionUser !== null && $sessionUser->id !== $stateUserId) {
+            throw new Bitrix24AdminOAuthException('Подключение устарело, начните заново.');
+        }
+
+        $user = $sessionUser ?? User::query()->find($stateUserId);
+
+        if (! $user instanceof User || ! $user->is_active || ! $user->isSuperadmin()) {
+            throw new Bitrix24AdminOAuthException('Подключать Bitrix24 может только главный админ.');
+        }
     }
 
     private function assertProfileReady(Bitrix24Profile $profile): void
