@@ -15,7 +15,9 @@ use App\Services\AutoReplyRules\ExportAutoReplyRulesWorkbookAction;
 use App\Services\AutoReplyRules\ParseAutoReplyRulesWorkbookAction;
 use App\Services\Bots\SyncAutoReplyRuleTagConditionsAction;
 use App\Services\Bots\SyncAutoReplyRuleTagEffectsAction;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
@@ -452,6 +454,92 @@ class AutoReplyRulesWorkbookTest extends TestCase
         $this->assertSame(3, $preview->errors[0]->rowNumber);
         $this->assertSame('keyword', $preview->errors[0]->column);
         $this->assertStringContainsString('Строка конфликтует со строкой 2', $preview->errors[0]->message);
+    }
+
+    public function test_apply_import_locks_all_workbook_channels_in_one_stable_batch(): void
+    {
+        if (DB::connection()->getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('PostgreSQL renders FOR UPDATE in query SQL for this lock assertion.');
+        }
+
+        $firstChannel = Channel::factory()->create();
+        $secondChannel = Channel::factory()->create();
+        $thirdChannel = Channel::factory()->create();
+
+        $path = $this->storeWorkbook([
+            AutoReplyRuleWorkbookFormat::rulesColumns(),
+            [
+                '',
+                'Первое правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'BATCH_LOCK_1',
+                '',
+                'Первый ответ',
+                'none',
+                '',
+                '',
+                $secondChannel->id.';'.$firstChannel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+            [
+                '',
+                'Второе правило',
+                '',
+                '1',
+                '10',
+                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'BATCH_LOCK_2',
+                '',
+                'Второй ответ',
+                'none',
+                '',
+                '',
+                $thirdChannel->id.';'.$secondChannel->id,
+                '',
+                '',
+                '',
+                '',
+            ],
+        ]);
+        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
+        $lockQueries = [];
+
+        $this->assertFalse($preview->hasErrors());
+
+        DB::listen(function (QueryExecuted $query) use (&$lockQueries): void {
+            $sql = strtolower($query->sql);
+
+            if (str_contains($sql, 'from "channels"') && str_contains($sql, 'for update')) {
+                $lockQueries[] = [
+                    'sql' => $sql,
+                    'bindings' => array_map(fn (mixed $binding): int => (int) $binding, $query->bindings),
+                ];
+            }
+        });
+
+        app(ApplyAutoReplyRulesWorkbookImportAction::class)->handle($preview);
+
+        $this->assertNotEmpty($lockQueries);
+
+        $firstLock = $lockQueries[0];
+        $expectedIds = [$firstChannel->id, $secondChannel->id, $thirdChannel->id];
+
+        if ($firstLock['bindings'] !== []) {
+            $this->assertSame($expectedIds, $firstLock['bindings']);
+        } else {
+            $this->assertStringContainsString(
+                sprintf('in (%d, %d, %d)', ...$expectedIds),
+                preg_replace('/\s+/', ' ', $firstLock['sql']),
+            );
+        }
+
+        $this->assertSame(2, AutoReplyRule::query()->count());
     }
 
     public function test_parse_preview_allows_duplicate_updates_of_same_rule_with_same_future_key(): void

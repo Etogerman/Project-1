@@ -7,6 +7,7 @@ use App\Data\AutoReplyRules\AutoReplyRuleWorkbookRowData;
 use App\Data\AutoReplyRules\AutoReplyRuleWorkbookRowErrorData;
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Models\AutoReplyRule;
+use App\Models\Channel;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -32,6 +33,14 @@ class ApplyAutoReplyRulesWorkbookImportAction
         usort($rows, fn (AutoReplyRuleWorkbookRowData $left, AutoReplyRuleWorkbookRowData $right): int => $left->rowNumber <=> $right->rowNumber);
 
         DB::transaction(function () use ($rows): void {
+            $this->lockRowsChannelsForUpdate($rows);
+
+            $uniquenessErrors = app(ValidateAutoReplyRulesWorkbookUniquenessAction::class)->handle($rows);
+
+            if ($uniquenessErrors !== []) {
+                throw ValidationException::withMessages($this->buildUniquenessValidationMessages($uniquenessErrors));
+            }
+
             foreach ($rows as $row) {
                 $record = $row->id !== null
                     ? AutoReplyRule::query()->find($row->id)
@@ -52,6 +61,37 @@ class ApplyAutoReplyRulesWorkbookImportAction
                 }
             }
         });
+    }
+
+    /**
+     * @param  list<AutoReplyRuleWorkbookRowData>  $rows
+     */
+    protected function lockRowsChannelsForUpdate(array $rows): void
+    {
+        $channelIds = array_values(array_unique(array_merge(
+            [],
+            ...array_map(
+                fn (AutoReplyRuleWorkbookRowData $row): array => $row->channelIds,
+                $rows,
+            ),
+        )));
+
+        $lockIds = array_values(array_filter(
+            array_map(fn (mixed $channelId): int => (int) $channelId, $channelIds),
+            fn (int $channelId): bool => $channelId > 0,
+        ));
+
+        sort($lockIds);
+
+        if ($lockIds === []) {
+            return;
+        }
+
+        Channel::query()
+            ->whereKey($lockIds)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get(['id']);
     }
 
     /**
