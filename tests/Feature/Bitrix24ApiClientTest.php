@@ -98,9 +98,11 @@ class Bitrix24ApiClientTest extends TestCase
 
     public function test_expired_token_triggers_refresh_before_rest_call(): void
     {
+        config()->set('bitrix24.application.client_id', 'stale-global-client');
         config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
 
         $connection = $this->makeActiveConnection([
+            'client_id' => 'connection-client',
             'client_endpoint' => 'https://client-endpoint.example/rest/',
             'server_endpoint' => 'https://server-endpoint.example/rest/',
             'access_token_encrypted' => 'expired-access-token',
@@ -109,11 +111,15 @@ class Bitrix24ApiClientTest extends TestCase
         ]);
 
         Http::fake([
-            'https://oauth.example/oauth/token/' => Http::response([
-                'access_token' => 'new-access-token',
-                'refresh_token' => 'new-refresh-token',
-                'expires_in' => 3600,
-            ]),
+            'https://oauth.example/oauth/token/' => function ($request) {
+                $this->assertSame('connection-client', $request['client_id']);
+
+                return Http::response([
+                    'access_token' => 'new-access-token',
+                    'refresh_token' => 'new-refresh-token',
+                    'expires_in' => 3600,
+                ]);
+            },
             'https://client-endpoint.example/rest/profile.json' => Http::response([
                 'result' => ['ID' => 7],
             ]),

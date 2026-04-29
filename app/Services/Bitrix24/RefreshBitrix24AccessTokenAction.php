@@ -17,7 +17,7 @@ class RefreshBitrix24AccessTokenAction
 
     public function handle(Bitrix24Connection $connection): Bitrix24Connection
     {
-        $clientId = (string) config('bitrix24.application.client_id');
+        $clientId = $this->resolveClientId($connection);
         $clientSecret = (string) config('bitrix24.application.client_secret');
         $refreshToken = (string) $connection->refresh_token_encrypted;
         $authServerUrl = $this->resolveAuthServerUrl($connection);
@@ -162,6 +162,23 @@ class RefreshBitrix24AccessTokenAction
         }
 
         return null;
+    }
+
+    private function resolveClientId(Bitrix24Connection $connection): string
+    {
+        $connectionClientId = trim((string) $connection->client_id);
+
+        if ($connectionClientId !== '') {
+            return $connectionClientId;
+        }
+
+        $profileClientId = trim((string) ($connection->profile?->client_id ?? ''));
+
+        if ($profileClientId !== '') {
+            return $profileClientId;
+        }
+
+        return trim((string) config('bitrix24.application.client_id'));
     }
 
     /**
