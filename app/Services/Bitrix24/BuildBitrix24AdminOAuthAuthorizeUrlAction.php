@@ -91,7 +91,7 @@ class BuildBitrix24AdminOAuthAuthorizeUrlAction
     {
         return 'https://'.$this->normalizePortalDomain($profile->portal_domain).'/oauth/authorize/?'.http_build_query([
             'client_id' => (string) $profile->client_id,
-            'redirect_uri' => route('admin.bitrix24.oauth.callback'),
+            'redirect_uri' => $profile->adminOAuthCallbackUrl(),
             'state' => $state,
         ], '', '&', PHP_QUERY_RFC3986);
     }
