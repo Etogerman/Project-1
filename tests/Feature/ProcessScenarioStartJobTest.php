@@ -277,6 +277,16 @@ class ProcessScenarioStartJobTest extends TestCase
                     throw new \RuntimeException('Scenario start should not be called when active run already exists.');
                 }
 
+                public function supportsContactShareContinuation(ScenarioRun $run): bool
+                {
+                    return false;
+                }
+
+                public function supportsTelegramCallbackContinuation(ScenarioRun $run, string $callbackData): bool
+                {
+                    return false;
+                }
+
                 public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
                 {
                     return new ScenarioInboundResult(

@@ -25,6 +25,7 @@
 ## Текущее состояние
 
 - `[dialog-stage-remove-review-stage]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-dialog-stage-remove-review-stage.md`; Spec revision: `dd811e41dab8b4653e3634140fd678435f332c8f`; status: `opened`; opened-at: `2026-04-25`
+- `[bitrix24-admin-oauth-connect-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-admin-oauth-connect-v1.md`; Spec revision: `4b3f4891e3f5511ff15136f76db94b1bc4b5037a`; status: `opened`; opened-at: `2026-04-26`
 - `[telegram-account-outgoing-replies-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-outgoing-replies-v1.md`; Spec revision: `e846c9ff32377cc062317de6ca5ce81dc0537d0c`; status: `opened`; opened-at: `2026-04-27`
 - `[telegram-account-automated-replies-via-gateway-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-automated-replies-via-gateway-v1.md`; Spec revision: `892c2f783e38383efc63e107c17fcbb1fc63eb92`; status: `opened`; opened-at: `2026-04-28`
 - `[scenario-builder-green-start-blocks-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-scenario-builder-green-start-blocks-v1.md`; Spec revision: `c3644a389aa8fae7508f9a518c7fae3c436a7e39`; status: `opened`; opened-at: `2026-04-27`
