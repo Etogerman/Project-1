@@ -71,7 +71,7 @@ class BackfillDialogsCommandTest extends TestCase
             ->count());
     }
 
-    public function test_apply_uses_created_at_fallback_for_dialog_chronology_and_route_source(): void
+    public function test_apply_uses_received_at_for_dialog_chronology_and_route_source(): void
     {
         $identity = ContactIdentity::factory()->create();
 
@@ -89,7 +89,7 @@ class BackfillDialogsCommandTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $identity->channel_id,
             'external_chat_id' => 'chat-created',
-            'received_at' => null,
+            'received_at' => now()->subMinute(),
             'created_at' => now()->subMinute(),
         ]);
 
@@ -99,11 +99,11 @@ class BackfillDialogsCommandTest extends TestCase
 
         $this->assertSame('chat-created', $dialog->external_chat_id);
         $this->assertSame(
-            $fallbackChronologyMessage->created_at?->format('Y-m-d H:i:s'),
+            $fallbackChronologyMessage->received_at?->format('Y-m-d H:i:s'),
             $dialog->last_message_at?->format('Y-m-d H:i:s'),
         );
         $this->assertSame(
-            $fallbackChronologyMessage->created_at?->format('Y-m-d H:i:s'),
+            $fallbackChronologyMessage->received_at?->format('Y-m-d H:i:s'),
             $dialog->last_inbound_at?->format('Y-m-d H:i:s'),
         );
     }

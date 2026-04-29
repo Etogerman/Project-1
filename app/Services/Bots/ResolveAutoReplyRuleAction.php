@@ -32,39 +32,44 @@ class ResolveAutoReplyRuleAction
         $normalizedText = AutoReplyRule::normalizeKeyword($messageText);
         $normalizedParameter = AutoReplyRule::normalizeKeyword($messageParameter);
         $matchedRules = collect();
+        $parameterMatchedRules = collect();
 
         if (filled($normalizedParameter)) {
-            $matchedRules = $matchedRules->concat($this->resolveExactRules(
+            $parameterMatchedRules = $parameterMatchedRules->concat($this->resolveExactRules(
                 $channel,
                 $contactHasPhone,
                 $rootContactTagIds,
                 $normalizedParameter,
                 AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
             ));
-            $matchedRules = $matchedRules->concat($this->resolveExactRules(
+            $parameterMatchedRules = $parameterMatchedRules->concat($this->resolveExactRules(
                 $channel,
                 $contactHasPhone,
                 $rootContactTagIds,
                 $normalizedParameter,
                 AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
             ));
+
+            $matchedRules = $matchedRules->concat($parameterMatchedRules);
         }
 
         if (filled($normalizedText)) {
-            $matchedRules = $matchedRules->concat($this->resolveExactRules(
-                $channel,
-                $contactHasPhone,
-                $rootContactTagIds,
-                $normalizedText,
-                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-            ));
-            $matchedRules = $matchedRules->concat($this->resolveExactRules(
-                $channel,
-                $contactHasPhone,
-                $rootContactTagIds,
-                $normalizedText,
-                AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
-            ));
+            if ($parameterMatchedRules->isEmpty()) {
+                $matchedRules = $matchedRules->concat($this->resolveExactRules(
+                    $channel,
+                    $contactHasPhone,
+                    $rootContactTagIds,
+                    $normalizedText,
+                    AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                ));
+                $matchedRules = $matchedRules->concat($this->resolveExactRules(
+                    $channel,
+                    $contactHasPhone,
+                    $rootContactTagIds,
+                    $normalizedText,
+                    AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+                ));
+            }
 
             $matchedRules = $matchedRules->concat(
                 AutoReplyRule::query()

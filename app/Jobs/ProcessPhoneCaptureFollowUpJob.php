@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
@@ -88,6 +89,10 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         if (! $routeDialog) {
             $routeDialog = $resolveDialogRouteSourceAction->fallbackFromLegacyMessage($message);
             $fallbackUsed = $routeDialog !== null;
+        }
+
+        if (! $routeDialog && $message->dialog instanceof Dialog && $message->dialog->isBotBlockedByUser()) {
+            $routeDialog = $message->dialog;
         }
 
         $channel = $routeDialog?->channel ?? $sourceChannel;

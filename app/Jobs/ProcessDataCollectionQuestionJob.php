@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\SendBotDialogTextAction;
@@ -86,6 +87,10 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         if (! $routeDialog) {
             $routeDialog = $resolveDialogRouteSourceAction->fallbackFromLegacyMessage($message);
             $fallbackUsed = $routeDialog !== null;
+        }
+
+        if (! $routeDialog && $message->dialog instanceof Dialog && $message->dialog->isBotBlockedByUser()) {
+            $routeDialog = $message->dialog;
         }
 
         $channel = $routeDialog?->channel ?? $sourceChannel;

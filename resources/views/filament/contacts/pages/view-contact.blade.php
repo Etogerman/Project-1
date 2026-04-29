@@ -60,6 +60,18 @@
         @endif
 
         @if ($activeTab === 'general')
+            @if (is_array($dedupStatusViewData ?? null))
+                <div data-role="contact-dedup-section" class="ac-contact-page__full-width">
+                    <div class="ac-surface__header ac-surface__header--centered">
+                        <div class="ac-surface__title-group">
+                            <h3 class="ac-surface__title">Дедупликация</h3>
+                        </div>
+                    </div>
+
+                    @include('filament.contacts.partials.contact-dedup-status', $dedupStatusViewData)
+                </div>
+            @endif
+
             <div data-role="contact-general-layout" class="ac-contact-page__layout">
                 <div class="ac-contact-page__column">
                     @include('filament.contacts.partials.contact-flat-section', [

@@ -159,6 +159,7 @@ class ViewContact extends ViewRecord
         $collectorStatus = ContactResource::buildCollectorStatusViewData($record);
         $tagsViewData = ContactResource::buildTagsViewData($record);
         $phoneNumbersViewData = ContactResource::buildPhoneNumbersViewData($record);
+        $showDedupStatus = ContactResource::shouldShowDedupStatusSection($record);
         $diagnosticsViewData = $this->activeTab === self::TAB_DIAGNOSTICS
             ? ContactResource::buildDiagnosticsViewData($record)
             : null;
@@ -177,6 +178,9 @@ class ViewContact extends ViewRecord
             'profileViewData' => $profileViewData,
             'ownershipControls' => $ownershipControls,
             'collectorStatus' => $collectorStatus,
+            'dedupStatusViewData' => $showDedupStatus
+                ? ContactResource::buildDedupStatusViewData($record)
+                : null,
             'diagnosticsViewData' => $diagnosticsViewData,
             'questionnaireAction' => $collectorStatus['canResume'] && $collectorStatus['canResumeAction']
                 ? $this->makeAction(

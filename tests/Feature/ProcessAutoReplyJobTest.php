@@ -188,7 +188,7 @@ class ProcessAutoReplyJobTest extends TestCase
         AutoReplyRuleTagEffect::query()->create([
             'auto_reply_rule_id' => $rule->id,
             'tag_id' => $tag->id,
-            'effect' => AutoReplyRuleTagEffect::EFFECT_ADD,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
         ]);
 
         $message = $this->createInboundDialogMessage($channel, [
@@ -1156,7 +1156,7 @@ class ProcessAutoReplyJobTest extends TestCase
 
         $thirdRule = AutoReplyRule::factory()->create([
             'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
             'keyword' => 'Мульти',
             'normalized_keyword' => AutoReplyRule::normalizeKeyword('Мульти'),
             'reply_text' => 'Третий ответ',
@@ -1367,7 +1367,7 @@ class ProcessAutoReplyJobTest extends TestCase
         ]);
     }
 
-    public function test_job_keeps_completion_marker_after_partial_success_failure_to_block_duplicate_rerun(): void
+    public function test_job_keeps_resume_marker_after_partial_success_failure_to_block_duplicate_rerun(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -1379,7 +1379,13 @@ class ProcessAutoReplyJobTest extends TestCase
                 ])
                 ->push([
                     'ok' => false,
-                ], 500),
+                ], 500)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 9206,
+                    ],
+                ]),
         ]);
 
         $channel = Channel::factory()->create([
@@ -1396,7 +1402,7 @@ class ProcessAutoReplyJobTest extends TestCase
             'normalized_keyword' => null,
             'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
             'reply_text' => 'Первый успешный ответ.',
-            'sort_order' => 10,
+            'priority' => 10,
             'is_active' => true,
         ]);
 
@@ -1406,7 +1412,7 @@ class ProcessAutoReplyJobTest extends TestCase
             'normalized_keyword' => null,
             'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
             'reply_text' => 'Второй ответ падает.',
-            'sort_order' => 20,
+            'priority' => 20,
             'is_active' => true,
         ]);
 
@@ -1422,14 +1428,20 @@ class ProcessAutoReplyJobTest extends TestCase
 
         $message->refresh();
         ProcessAutoReplyJob::dispatchSync($message->id);
+        ProcessAutoReplyJob::dispatchSync($message->id);
 
-        Http::assertSentCount(2);
+        Http::assertSentCount(3);
         $this->assertNotNull($message->auto_reply_sent_at);
-        $this->assertDatabaseCount('messages', 2);
+        $this->assertDatabaseCount('messages', 3);
         $this->assertDatabaseHas('messages', [
             'direction' => Message::DIRECTION_OUTBOUND,
             'reply_to_message_id' => $message->id,
             'text' => 'Первый успешный ответ.',
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Второй ответ падает.',
         ]);
     }
 

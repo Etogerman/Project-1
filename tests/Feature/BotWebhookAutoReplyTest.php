@@ -143,6 +143,8 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_my_chat_member_webhook_stores_system_event_and_queues_live_export_for_ready_dialog(): void
     {
+        config()->set('bitrix24.features.openlines_enabled', true);
+
         Queue::fake();
         Http::fake();
 
@@ -562,9 +564,30 @@ class BotWebhookAutoReplyTest extends TestCase
             'is_active' => true,
         ]);
 
+        $otherScenario = $this->createPublishedScenario('other_flow', [
+            'version' => 1,
+            'start_block_id' => 'welcome',
+            'triggers' => [
+                [
+                    'type' => 'parameter',
+                    'value' => 'other_flow',
+                ],
+            ],
+            'blocks' => [
+                'welcome' => [
+                    'type' => 'message',
+                    'text' => 'Добро пожаловать',
+                    'next' => 'end',
+                ],
+                'end' => [
+                    'type' => 'complete',
+                ],
+            ],
+        ]);
+
         $run = ScenarioRun::query()->create([
             'dialog_id' => $dialog->id,
-            'scenario_code' => 'other_flow',
+            'scenario_code' => $otherScenario->code,
             'status' => ScenarioRun::STATUS_ACTIVE,
             'current_step' => 'awaiting_topic',
             'state_payload' => [],
@@ -583,7 +606,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $run->refresh();
 
         $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
-        $this->assertSame('other_flow', $run->scenario_code);
+        $this->assertSame($otherScenario->code, $run->scenario_code);
 
         Http::assertSentCount(1);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
@@ -898,12 +921,14 @@ class BotWebhookAutoReplyTest extends TestCase
 
         Queue::assertPushed(ProcessAutoReplyJob::class);
         $this->assertDatabaseHas('contacts', [
-            'name' => 'German Abrikosov',
+            'first_name' => 'German Abrikosov',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
         ]);
         $this->assertDatabaseHas('contact_identities', [
             'channel_id' => $channel->id,
             'external_user_id' => '228532008',
             'external_username' => null,
+            'display_name' => 'German Abrikosov',
         ]);
         $this->assertDatabaseHas('messages', [
             'channel_id' => $channel->id,
@@ -980,6 +1005,10 @@ class BotWebhookAutoReplyTest extends TestCase
             'https://api.telegram.org/*' => Http::sequence()
                 ->push([
                     'ok' => true,
+                    'result' => [],
+                ])
+                ->push([
+                    'ok' => true,
                     'result' => [
                         'message_id' => 9921,
                     ],
@@ -1016,7 +1045,7 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        Http::assertSentCount(2);
+        Http::assertSentCount(3);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === '300'
             && $request['text'] === 'Спасибо, номер получили.'
@@ -1082,7 +1111,10 @@ class BotWebhookAutoReplyTest extends TestCase
 
         Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
-        $this->assertDatabaseCount('messages', 1);
+        $this->assertSame(1, $this->inboundMessages()->count());
+        $this->assertDatabaseMissing('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+        ]);
     }
 
     public function test_active_scenario_run_has_priority_over_active_data_collection_for_inbound_user(): void
@@ -2204,7 +2236,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $payload = $this->telegramCallbackPayload(
             callbackId: 'callback-95',
-            callbackData: "scenario:{$run->id}:start_selection",
+            callbackData: "scenario:warmup:{$run->id}:positive",
             messageId: 92,
         );
 
@@ -2224,7 +2256,7 @@ class BotWebhookAutoReplyTest extends TestCase
         });
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
 
-        $this->assertSame('scenario:start_selection', $storedMessage->text);
+        $this->assertSame('warmup:positive', $storedMessage->text);
     }
 
     public function test_max_contact_share_webhook_saves_phone_and_queues_confirmation_follow_up(): void
@@ -2389,7 +2421,9 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Http::assertNothingSent();
         $this->assertDatabaseCount('messages', 0);
         $this->assertDatabaseHas('channel_activity_logs', [
@@ -2890,7 +2924,9 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Http::assertNothingSent();
 
         $storedMessage = $this->inboundMessages()->firstOrFail();
@@ -3127,7 +3163,9 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Http::assertNothingSent();
         $this->assertDatabaseCount('contact_phone_numbers', 0);
         $this->assertDatabaseHas('channel_activity_logs', [

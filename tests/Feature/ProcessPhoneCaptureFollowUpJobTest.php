@@ -1026,7 +1026,7 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
 
     public function test_job_starts_collector_even_when_confirmation_is_skipped_for_blocked_dialog(): void
     {
-        Queue::fake();
+        Queue::fake([ProcessDataCollectionQuestionJob::class]);
         Http::fake();
 
         config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
@@ -1092,7 +1092,7 @@ class ProcessPhoneCaptureFollowUpJobTest extends TestCase
 
     public function test_job_continues_active_collector_after_merge_even_when_confirmation_is_skipped_for_blocked_dialog(): void
     {
-        Queue::fake();
+        Queue::fake([ProcessDataCollectionQuestionJob::class]);
         Http::fake();
 
         config()->set('bots.phone_capture_recognition_continue_text', 'Спасибо! Мы вас узнали, {name}. У нас осталось несколько вопросов.');

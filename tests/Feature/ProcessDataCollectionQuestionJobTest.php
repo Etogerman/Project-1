@@ -176,7 +176,16 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
 
         $channel = $this->createTelegramChannel();
         $message = $this->createInboundUserMessage($channel);
-        $dialog = $message->dialog()->firstOrFail();
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $message->contact_id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $message->contact_identity_id,
+            'external_chat_id' => $message->external_chat_id,
+        ]);
+
+        $message->forceFill([
+            'dialog_id' => $dialog->id,
+        ])->save();
 
         $dialog->forceFill([
             'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
@@ -372,6 +381,7 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
 
         $channelA = $this->createTelegramChannel();
         $channelB = $this->createTelegramChannel();
+        $currentFieldStartedAt = now()->subMinutes(2);
         $contact = Contact::factory()->create([
             'country' => 'Казахстан',
             'city' => null,
@@ -379,7 +389,7 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
             'data_collection_last_prompted_field' => null,
             'data_collection_started_at' => now()->subMinutes(5),
-            'data_collection_current_field_started_at' => now()->subMinutes(2),
+            'data_collection_current_field_started_at' => $currentFieldStartedAt,
         ]);
 
         $identityA = ContactIdentity::factory()->create([
@@ -465,7 +475,7 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
         ]);
         $this->assertNotNull($contact->data_collection_current_field_started_at);
         $this->assertSame(
-            $citySourceMessage->received_at?->toDateTimeString(),
+            $currentFieldStartedAt->toDateTimeString(),
             $contact->data_collection_current_field_started_at?->toDateTimeString(),
         );
     }
@@ -624,6 +634,8 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
             'received_at' => now()->subMinutes(2),
         ]);
 
+        $loggedAt = now()->subMinutes(2);
+
         ChannelActivityLog::query()->create([
             'channel_id' => $channel->id,
             'level' => 'info',
@@ -635,7 +647,7 @@ class ProcessDataCollectionQuestionJobTest extends TestCase
                 'message_id' => $cityQuestionSourceMessage->id,
                 'current_field' => Contact::DATA_COLLECTION_FIELD_CITY,
             ],
-            'created_at' => now()->subMinutes(2),
+            'created_at' => $loggedAt,
         ]);
 
         $duplicateCitySourceMessage = Message::factory()->create([

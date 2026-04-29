@@ -190,7 +190,7 @@ class DialogMetadataSyncTest extends TestCase
         $this->assertSame('2026-03-31 12:30:00', $dialog->last_inbound_at?->format('Y-m-d H:i:s'));
     }
 
-    public function test_inbound_sync_uses_created_at_when_received_at_is_missing(): void
+    public function test_inbound_sync_uses_received_at_for_message_chronology(): void
     {
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -216,7 +216,7 @@ class DialogMetadataSyncTest extends TestCase
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
             'external_chat_id' => 'created-chat',
-            'received_at' => null,
+            'received_at' => Carbon::parse('2026-03-31 12:35:00'),
             'created_at' => Carbon::parse('2026-03-31 12:35:00'),
             'sent_by_type' => null,
         ]);
@@ -240,7 +240,7 @@ class DialogMetadataSyncTest extends TestCase
         $this->assertSame('created-chat', $dialog->external_chat_id);
     }
 
-    public function test_outbound_sync_uses_created_at_when_received_at_is_missing(): void
+    public function test_outbound_sync_uses_received_at_for_message_chronology(): void
     {
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -267,7 +267,7 @@ class DialogMetadataSyncTest extends TestCase
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'external_chat_id' => '500',
-            'received_at' => null,
+            'received_at' => Carbon::parse('2026-03-31 12:25:00'),
             'created_at' => Carbon::parse('2026-03-31 12:25:00'),
             'sent_by_type' => null,
         ]);

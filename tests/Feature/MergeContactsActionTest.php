@@ -402,7 +402,11 @@ class MergeContactsActionTest extends TestCase
             'external_user_id' => 'secondary-user',
         ]);
 
-        $result = app(MergeContactsAction::class)->handle($primary, $secondary);
+        $result = app(MergeContactsAction::class)->handle(
+            $primary,
+            $secondary,
+            forcedPrimaryContactId: $primary->id,
+        );
 
         $primary->refresh();
         $secondary->refresh();
@@ -462,7 +466,11 @@ class MergeContactsActionTest extends TestCase
             'pending_auto_reply_source_message_id' => $secondaryPendingSource->id,
         ])->save();
 
-        app(MergeContactsAction::class)->handle($primary, $secondary);
+        app(MergeContactsAction::class)->handle(
+            $primary,
+            $secondary,
+            forcedPrimaryContactId: $primary->id,
+        );
 
         $primary->refresh();
         $secondary->refresh();

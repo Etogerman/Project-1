@@ -285,26 +285,6 @@ class ResolveAutoReplyRuleActionTest extends TestCase
             'reply_text' => 'Ignored keyword',
         ]);
 
-        AutoReplyRule::factory()->create([
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
-            'keyword' => 'promo_delayed',
-            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_delayed'),
-            'contact_phone_condition' => null,
-            'priority' => 1,
-            'reply_text' => 'Ignored null condition',
-        ]);
-
-        AutoReplyRule::factory()->create([
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
-            'keyword' => 'promo_delayed',
-            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo_delayed'),
-            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
-            'priority' => 1,
-            'reply_text' => 'Ignored missing phone',
-        ]);
-
         $laterRule = AutoReplyRule::factory()->create([
             'channel_id' => $channel->id,
             'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,

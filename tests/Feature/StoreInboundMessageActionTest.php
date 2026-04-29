@@ -80,6 +80,7 @@ class StoreInboundMessageActionTest extends TestCase
                 sharedContactUserId: null,
                 rawPayload: ['message' => ['text' => '/start TEXT_1']],
                 receivedAt: Carbon::parse('2026-04-03 14:00:00'),
+                messageParameter: 'TEXT_1',
             ),
         );
 
@@ -255,6 +256,7 @@ class StoreInboundMessageActionTest extends TestCase
             sharedContactUserId: null,
             rawPayload: ['message' => ['text' => '/start TEXT_1']],
             receivedAt: Carbon::parse('2026-04-03 14:20:00'),
+            messageParameter: 'TEXT_1',
         );
 
         $firstResult = app(StoreInboundMessageAction::class)->handle($channel, $payloadMessage);
@@ -1553,7 +1555,7 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertNull($otherRoot->fresh()->merged_into_contact_id);
         $this->assertDatabaseCount('contact_merge_logs', 0);
         $this->assertDatabaseCount('contact_duplicate_reviews', 1);
-        $this->assertSame($storedResult->message->id, $review->trigger_message_id);
+        $this->assertNull($review->trigger_message_id);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'event' => 'contact.phone_merge_blocked_by_cross_channel_identity_review',
@@ -2282,8 +2284,16 @@ class StoreInboundMessageActionTest extends TestCase
         ]);
         $brokenContact = Contact::factory()->create([
             'name' => 'Broken contact',
-            'merged_into_contact_id' => 999999,
         ]);
+        $cycleContact = Contact::factory()->create([
+            'name' => 'Cycle contact',
+            'merged_into_contact_id' => $brokenContact->id,
+            'merged_at' => now(),
+        ]);
+        $brokenContact->forceFill([
+            'merged_into_contact_id' => $cycleContact->id,
+            'merged_at' => now(),
+        ])->save();
         ContactIdentity::factory()->create([
             'contact_id' => $brokenContact->id,
             'channel_id' => $firstChannel->id,
@@ -2313,7 +2323,8 @@ class StoreInboundMessageActionTest extends TestCase
         );
 
         $this->assertNotSame($brokenContact->id, $storedResult->message->contact_id);
-        $this->assertDatabaseCount('contacts', 2);
+        $this->assertNotSame($cycleContact->id, $storedResult->message->contact_id);
+        $this->assertDatabaseCount('contacts', 3);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $secondChannel->id,
             'event' => 'contact.cross_channel_identity_broken_merge_chain',

@@ -64,5 +64,5 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
-      - name: Run full test suite
-        run: php artisan test --compact
+      - name: Run CI test suite
+        run: composer test:ci

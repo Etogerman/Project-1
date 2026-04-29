@@ -7,6 +7,7 @@ use App\Models\Channel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 use Tests\TestCase;
 
 class AutoReplyRuleMultichannelStageOneTest extends TestCase
@@ -177,5 +178,39 @@ class AutoReplyRuleMultichannelStageOneTest extends TestCase
             'channel_id' => $maxChannel->id,
             'button_type' => 'share_contact',
         ]);
+    }
+
+    public function test_relaxed_keyword_uniqueness_migration_down_stops_before_restoring_unique_constraint_with_duplicates(): void
+    {
+        $channel = Channel::factory()->create([
+            'is_active' => true,
+        ]);
+
+        AutoReplyRule::factory()
+            ->forChannel($channel)
+            ->create([
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => 'ROLLBACK_KEY',
+                'normalized_keyword' => AutoReplyRule::normalizeKeyword('ROLLBACK_KEY'),
+                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+                'reply_text' => 'Ответ для контакта с телефоном',
+            ]);
+
+        AutoReplyRule::factory()
+            ->forChannel($channel)
+            ->create([
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => 'rollback_key',
+                'normalized_keyword' => AutoReplyRule::normalizeKeyword('rollback_key'),
+                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+                'reply_text' => 'Ответ для контакта без телефона',
+            ]);
+
+        $migration = require database_path('migrations/2026_04_29_000001_relax_auto_reply_rule_keyword_uniqueness.php');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Cannot restore auto_reply_rules_channel_scope_keyword_unique');
+
+        $migration->down();
     }
 }

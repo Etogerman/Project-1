@@ -9,6 +9,7 @@ use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -2103,10 +2104,14 @@ class ProcessDataCollectionResponseJobTest extends TestCase
             'country' => 'Россия',
             'city' => 'Москва',
         ]);
+        $contact = $message->contact()->firstOrFail();
+        ContactPhoneNumber::factory()->for($contact)->create([
+            'is_primary' => true,
+        ]);
 
         ProcessDataCollectionResponseJob::dispatchSync($message->id);
 
-        $contact = $message->contact()->firstOrFail()->fresh();
+        $contact = $contact->fresh();
         $completionMessage = Message::query()
             ->where('reply_to_message_id', $message->id)
             ->where('message_kind', Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION)
@@ -2401,6 +2406,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
     {
         config()->set('bots.gemini.api_key', 'gemini-key');
         config()->set('bots.data_collection.residence_city.question', 'В каком городе вы живёте?');
+
+        Queue::fake([InferContactGenderFromFirstNameJob::class]);
 
         Http::fake();
 
