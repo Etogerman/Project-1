@@ -55,6 +55,7 @@
             "@php -r \"file_exists('database/database.sqlite') || touch('database/database.sqlite');\"",
             "@php artisan migrate --graceful --ansi"
         ],
+        "test:unit": "@php artisan test tests/Unit",
         "test:feature:ui": "@php artisan test tests/Feature/FilamentAdminAuthTest.php tests/Feature/FilamentAutoReplyRulesResourceTest.php tests/Feature/AutoReplyRulesWorkbookTest.php tests/Feature/AutoReplyRuleMultichannelStageOneTest.php tests/Feature/FilamentChannelsResourceTest.php tests/Feature/FilamentContactsResourceTest.php tests/Feature/FilamentDialogsResourceTest.php tests/Feature/FilamentUsersResourceTest.php",
         "test:feature:bots": "@php artisan test tests/Feature/BotIncomingMessageNormalizerTest.php tests/Feature/BotWebhookAutoReplyTest.php tests/Feature/ChannelWebhookRegistrationTest.php tests/Feature/ResolveAutoReplyRuleActionTest.php tests/Feature/StoreInboundMessageActionTest.php tests/Feature/ProcessAutoReplyJobTest.php tests/Feature/ProcessPhoneCaptureFollowUpJobTest.php tests/Feature/SendManualDialogReplyActionTest.php tests/Feature/DialogSchemaTest.php tests/Feature/DialogMetadataSyncTest.php tests/Feature/DialogConfirmedPhoneSyncTest.php tests/Feature/BackfillDialogsCommandTest.php tests/Feature/RepairMergedContactDialogsCommandTest.php tests/Feature/WebhookRateLimitingTest.php",
         "test:feature:bitrix": "@php artisan test tests/Feature/Bitrix24CallbackRateLimitingTest.php tests/Feature/Bitrix24InstallCallbackRateLimitingTest.php tests/Feature/FilamentBitrix24ConnectionsResourceTest.php",
@@ -62,6 +63,7 @@
         "test:feature:domain": "@php artisan test tests/Feature/AddContactPhoneActionTest.php tests/Feature/AppVersionTest.php tests/Feature/CanonicalizeContactPhoneNumbersCommandTest.php tests/Feature/ContactDuplicateReviewTest.php tests/Feature/ContactMergeLogTest.php tests/Feature/ContactRootResolutionActionsTest.php tests/Feature/CreateContactDuplicateReviewActionTest.php tests/Feature/DatabaseConfigTest.php tests/Feature/FindDuplicateContactRootsByPhoneActionTest.php tests/Feature/MergeContactsActionTest.php tests/Feature/MergedContactGuardActionsTest.php tests/Feature/NormalizePhoneNumberActionTest.php tests/Feature/PurgeRuntimeDataCommandTest.php tests/Feature/ResolveRootContactActionTest.php tests/Feature/SelectPrimaryContactForMergeActionTest.php tests/Feature/UpdateContactProfileActionTest.php",
         "test:ci": [
             "Composer\\Config::disableProcessTimeout",
+            "@composer test:unit",
             "@composer test:feature:ui",
             "@composer test:feature:bots",
             "@composer test:feature:bitrix",

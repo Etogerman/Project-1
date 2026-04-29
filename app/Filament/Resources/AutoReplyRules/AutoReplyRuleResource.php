@@ -852,10 +852,11 @@ class AutoReplyRuleResource extends Resource
             $record,
         );
 
-        static::validateUniqueRuleSignature($ruleData, $channelIds, $tagConditions, $record);
-
         /** @var AutoReplyRule $rule */
-        $rule = DB::transaction(function () use ($record, $ruleData, $tagEffects, $tagConditions, $channelSettings): AutoReplyRule {
+        $rule = DB::transaction(function () use ($record, $ruleData, $channelIds, $tagEffects, $tagConditions, $channelSettings): AutoReplyRule {
+            static::lockRuleChannelsForUpdate($channelIds);
+            static::validateUniqueRuleSignature($ruleData, $channelIds, $tagConditions, $record);
+
             if ($record instanceof AutoReplyRule) {
                 $record->update($ruleData);
                 $rule = $record;
@@ -880,6 +881,30 @@ class AutoReplyRuleResource extends Resource
         });
 
         return $rule->fresh(['channel', 'channels', 'tagEffects.tag', 'tagConditions.tag']) ?? $rule;
+    }
+
+    /**
+     * @param  list<int>  $channelIds
+     */
+    protected static function lockRuleChannelsForUpdate(array $channelIds): void
+    {
+        $lockIds = collect($channelIds)
+            ->map(fn (mixed $channelId): int => (int) $channelId)
+            ->filter(fn (int $channelId): bool => $channelId > 0)
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        if ($lockIds === []) {
+            return;
+        }
+
+        Channel::query()
+            ->whereKey($lockIds)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get(['id']);
     }
 
     /**

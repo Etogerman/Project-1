@@ -15,6 +15,7 @@ use App\Models\Tag;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -764,6 +765,37 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ))
             ->assertHasErrors(['keyword']);
 
+        $this->assertSame(1, AutoReplyRule::query()->count());
+    }
+
+    public function test_auto_reply_rule_save_locks_selected_channels_before_duplicate_validation(): void
+    {
+        if (DB::connection()->getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('PostgreSQL renders FOR UPDATE in query SQL for this lock assertion.');
+        }
+
+        $firstChannel = Channel::factory()->create(['is_active' => true]);
+        $secondChannel = Channel::factory()->create(['is_active' => true]);
+        $queries = [];
+
+        DB::listen(function (QueryExecuted $query) use (&$queries): void {
+            $sql = strtolower($query->sql);
+
+            if (str_contains($sql, 'from "channels"') && str_contains($sql, 'for update')) {
+                $queries[] = $query->sql;
+            }
+        });
+
+        AutoReplyRuleResource::saveAutoReplyRule($this->buildRuleFormData(
+            [$secondChannel, $firstChannel],
+            [
+                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                'keyword' => 'LOCK_ME',
+                'reply_text' => 'Правило с блокировкой каналов',
+            ],
+        ));
+
+        $this->assertNotEmpty($queries, 'Expected selected channels to be locked before saving an auto-reply rule.');
         $this->assertSame(1, AutoReplyRule::query()->count());
     }
 

@@ -1618,6 +1618,10 @@ class FilamentDialogsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $dialog = $this->createDialogWithMessages(3);
+        $secondMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('text', 'Сообщение 2')
+            ->firstOrFail();
 
         $component = Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()]);
@@ -1629,7 +1633,7 @@ class FilamentDialogsResourceTest extends TestCase
             'channel_id' => $dialog->channel_id,
             'message_kind' => Message::KIND_INBOUND_USER,
             'text' => 'Поздно дошедшее сообщение',
-            'received_at' => now()->subSeconds(1),
+            'received_at' => $secondMessage->received_at,
             'external_message_id' => 'live-refresh-late-001',
             'provider_event_key' => 'live-refresh-late-event-001',
         ]);
@@ -1656,6 +1660,10 @@ class FilamentDialogsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $dialog = $this->createDialogWithMessages(70);
+        $twentiethMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('text', 'Сообщение 20')
+            ->firstOrFail();
 
         $lateMessage = Message::factory()->create([
             'dialog_id' => $dialog->id,
@@ -1664,7 +1672,7 @@ class FilamentDialogsResourceTest extends TestCase
             'channel_id' => $dialog->channel_id,
             'message_kind' => Message::KIND_INBOUND_USER,
             'text' => 'Поздно дошедшее сообщение',
-            'received_at' => now()->subSeconds(50),
+            'received_at' => $twentiethMessage->received_at,
             'external_message_id' => 'live-refresh-late-older-001',
             'provider_event_key' => 'live-refresh-late-older-event-001',
         ]);
