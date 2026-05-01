@@ -6,10 +6,12 @@ use App\Filament\Resources\Bitrix24Connections\Bitrix24ConnectionResource;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
-use App\Models\Channel;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
+use App\Models\Channel;
 use App\Models\User;
+use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
+use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Contracts\Support\Htmlable;
@@ -126,6 +128,15 @@ class ViewBitrix24Connection extends ViewRecord
             && $user->can('update', $this->getRecord());
     }
 
+    public function canAutoSetupOpenLineRoutes(): bool
+    {
+        $user = auth()->user();
+
+        return $user instanceof User
+            && $user->isSuperadmin()
+            && $this->getRecord() instanceof Bitrix24Connection;
+    }
+
     /**
      * @return list<array<string, mixed>>
      */
@@ -148,8 +159,9 @@ class ViewBitrix24Connection extends ViewRecord
                 /** @var Bitrix24OpenLineRoute|null $route */
                 $route = $routes->get($channel->id);
                 $channelType = Bitrix24OpenLineRoute::channelTypeForChannel($channel);
-                $form = $this->openLineRouteForms[$channel->id] ?? $this->defaultOpenLineRouteForm($channel, $route);
+                $form = $this->openLineRouteForms[$channel->id] ?? $this->defaultOpenLineRouteForm($profile, $channel, $route);
                 $status = (string) ($route?->status ?? '');
+                $autoSetup = $this->resolveOpenLineAutoSetupState($profile, $channel, $route);
 
                 return [
                     'channel_id' => $channel->id,
@@ -172,6 +184,9 @@ class ViewBitrix24Connection extends ViewRecord
                     'source_id' => filled($route?->source_id) ? (string) $route?->source_id : '—',
                     'line_owner_label' => $this->resolveLineOwnerLabel($profile, $channel, $route, $form),
                     'last_error_message' => filled($route?->last_error_message) ? (string) $route?->last_error_message : 'Ошибок не было',
+                    'auto_setup_enabled' => $autoSetup['enabled'],
+                    'auto_setup_label' => $autoSetup['label'],
+                    'auto_setup_reason' => $autoSetup['reason'],
                 ];
             })
             ->values()
@@ -244,6 +259,43 @@ class ViewBitrix24Connection extends ViewRecord
             ->send();
     }
 
+    public function setupOpenLineRoute(int|string $channelId): void
+    {
+        abort_unless($this->canAutoSetupOpenLineRoutes(), 403);
+
+        $record = $this->getRecord();
+        $profile = $this->getBitrix24Profile();
+        $channel = Channel::query()->find($channelId);
+
+        if (! $record instanceof Bitrix24Connection || ! $profile instanceof Bitrix24Profile) {
+            $this->failOpenLineRouteSave('У подключения Bitrix24 нет профиля. Сначала выровняйте профиль подключения.');
+
+            return;
+        }
+
+        if (! $channel instanceof Channel) {
+            $this->failOpenLineRouteSave('Канал не найден.');
+
+            return;
+        }
+
+        try {
+            app(AutoSetupBitrix24OpenLineRouteAction::class)->handle($record, $channel, auth()->user());
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $this->failOpenLineRouteSave($exception->getMessage());
+
+            return;
+        }
+
+        $this->openLineRouteErrorMessage = null;
+        $this->reloadOpenLineRouteForms();
+
+        Notification::make()
+            ->success()
+            ->title('Открытая линия настроена')
+            ->send();
+    }
+
     public function reloadOpenLineRouteForms(): void
     {
         $profile = $this->getBitrix24Profile();
@@ -261,7 +313,7 @@ class ViewBitrix24Connection extends ViewRecord
 
         $this->openLineRouteForms = $this->getOpenLineRouteChannels()
             ->mapWithKeys(fn (Channel $channel): array => [
-                $channel->id => $this->defaultOpenLineRouteForm($channel, $routes->get($channel->id)),
+                $channel->id => $this->defaultOpenLineRouteForm($profile, $channel, $routes->get($channel->id)),
             ])
             ->all();
     }
@@ -304,13 +356,13 @@ class ViewBitrix24Connection extends ViewRecord
     /**
      * @return array{status:string,connector_code:string,line_id:string,source_id:string}
      */
-    protected function defaultOpenLineRouteForm(Channel $channel, ?Bitrix24OpenLineRoute $route): array
+    protected function defaultOpenLineRouteForm(Bitrix24Profile $profile, Channel $channel, ?Bitrix24OpenLineRoute $route): array
     {
         return [
             'status' => (string) ($route?->status ?? $this->defaultStatusForChannel($channel)),
-            'connector_code' => (string) ($route?->connector_code ?? $this->defaultConnectorCodeForChannel($channel)),
+            'connector_code' => (string) ($route?->connector_code ?? $this->defaultConnectorCodeForChannel($profile, $channel)),
             'line_id' => (string) ($route?->line_id ?? ''),
-            'source_id' => (string) ($route?->source_id ?? ''),
+            'source_id' => (string) ($route?->source_id ?? $this->defaultSourceIdForChannel($profile, $channel)),
         ];
     }
 
@@ -321,12 +373,21 @@ class ViewBitrix24Connection extends ViewRecord
             : Bitrix24OpenLineRoute::STATUS_INACTIVE;
     }
 
-    protected function defaultConnectorCodeForChannel(Channel $channel): string
+    protected function defaultConnectorCodeForChannel(Bitrix24Profile $profile, Channel $channel): string
     {
         return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => 'abrikosoff_telegram',
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => (string) ($profile->openLinesConnectorCodeForPlatform(Channel::PLATFORM_TELEGRAM) ?? ''),
             Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => 'abrikosoff_telegram_account',
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'abrikosoff_max',
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => (string) ($profile->openLinesConnectorCodeForPlatform(Channel::PLATFORM_MAX) ?? ''),
+            default => '',
+        };
+    }
+
+    protected function defaultSourceIdForChannel(Bitrix24Profile $profile, Channel $channel): string
+    {
+        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => (string) ($profile->sourceIdForPlatform(Channel::PLATFORM_TELEGRAM) ?? ''),
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => (string) ($profile->sourceIdForPlatform(Channel::PLATFORM_MAX) ?? ''),
             default => '',
         };
     }
@@ -440,5 +501,74 @@ class ViewBitrix24Connection extends ViewRecord
             ->danger()
             ->title($message)
             ->send();
+    }
+
+    /**
+     * @return array{enabled: bool, label: string, reason: string}
+     */
+    protected function resolveOpenLineAutoSetupState(
+        Bitrix24Profile $profile,
+        Channel $channel,
+        ?Bitrix24OpenLineRoute $route,
+    ): array {
+        $default = [
+            'enabled' => false,
+            'label' => $route instanceof Bitrix24OpenLineRoute && $route->status === Bitrix24OpenLineRoute::STATUS_ACTIVE
+                ? 'Проверить ОЛ'
+                : 'Настроить ОЛ',
+            'reason' => '',
+        ];
+
+        if (! $this->canAutoSetupOpenLineRoutes()) {
+            return [...$default, 'reason' => 'Доступно только суперадминистратору'];
+        }
+
+        $record = $this->getRecord();
+
+        if (! $record instanceof Bitrix24Connection || $record->status !== Bitrix24Connection::STATUS_ACTIVE) {
+            return [...$default, 'reason' => 'Bitrix24-подключение не активно'];
+        }
+
+        if ($profile->portal_domain !== AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN) {
+            return [...$default, 'reason' => 'Доступно только для stagecrm.fvds.ru'];
+        }
+
+        if (Bitrix24OpenLineRoute::channelTypeForChannel($channel) !== Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT) {
+            return [...$default, 'reason' => 'Доступно только для Telegram bot'];
+        }
+
+        if (! $channel->is_active) {
+            return [...$default, 'reason' => 'Канал выключен'];
+        }
+
+        if (! $channel->hasBotTokenConfigured()) {
+            return [...$default, 'reason' => 'Нет токена'];
+        }
+
+        if (! filled($profile->telegram_connector_code)) {
+            return [...$default, 'reason' => 'Не заполнен Telegram connector_code'];
+        }
+
+        if (! filled($profile->telegram_source_id)) {
+            return [...$default, 'reason' => 'Не заполнен Telegram source_id'];
+        }
+
+        $actualScopes = collect($record->scope ?? [])
+            ->map(fn (mixed $scope): string => mb_strtolower(trim((string) $scope)))
+            ->filter()
+            ->values()
+            ->all();
+
+        if (in_array('app', $actualScopes, true)) {
+            return [...$default, 'enabled' => true, 'reason' => ''];
+        }
+
+        $missingScopes = array_values(array_diff(AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES, $actualScopes));
+
+        if ($missingScopes !== []) {
+            return [...$default, 'reason' => 'Не хватает прав приложения Bitrix24'];
+        }
+
+        return [...$default, 'enabled' => true, 'reason' => ''];
     }
 }

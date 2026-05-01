@@ -561,13 +561,31 @@ class Channel extends Model
         return false;
     }
 
-    public function markWebhookReceived(): static
+    public function markWebhookReceived(?string $currentWebhookUrl = null): static
     {
-        $this->persistOperationalState([
+        $state = [
             'last_webhook_received_at' => now(),
             'last_error_at' => null,
             'last_error_message' => null,
-        ]);
+        ];
+
+        if (
+            $currentWebhookUrl !== null
+            && $this->supportsConnectionCheck()
+            && $this->is_active
+            && $this->hasBotTokenConfigured()
+        ) {
+            $state = array_merge($state, [
+                'connection_status' => self::CONNECTION_STATUS_CONNECTED,
+                'webhook_status' => self::WEBHOOK_STATUS_INSTALLED,
+                'connection_checked_at' => now(),
+                'connection_error_message' => null,
+                'provider_webhook_url' => $currentWebhookUrl,
+                'expected_webhook_url' => $currentWebhookUrl,
+            ]);
+        }
+
+        $this->persistOperationalState($state);
 
         return $this;
     }

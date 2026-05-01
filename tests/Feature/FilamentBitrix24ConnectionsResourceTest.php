@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bitrix24\Bitrix24RestResponseData;
 use App\Filament\Resources\Bitrix24Connections\Bitrix24ConnectionResource;
 use App\Filament\Resources\Bitrix24Connections\Pages\ListBitrix24Connections;
 use App\Filament\Resources\Bitrix24Connections\Pages\ViewBitrix24Connection;
@@ -12,6 +13,7 @@ use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Channel;
 use App\Models\User;
+use App\Services\Bitrix24\Bitrix24ApiClient;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -364,6 +366,300 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
     }
 
+    public function test_superadmin_can_auto_setup_telegram_bot_open_line_route(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'dev-german-main',
+            'telegram_connector_code' => 'abc_telegram_dev_german_main',
+            'telegram_source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'application_name' => 'Герман-4',
+            'scope' => ['crm', 'im', 'imopenlines', 'imconnector'],
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Локальный бот',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection, $channel): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.add'
+                    && $usedConnection->is($connection)
+                    && data_get($params, 'PARAMS.LINE_NAME') === sprintf('Abrikosoff / dev-german-main / #%d Локальный бот', $channel->id)
+                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_TELEGRAM_DEV_GERMAN_MAIN')
+                ->andReturn($this->bitrixResponse(true, 'line-777'));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
+                    && $usedConnection->is($connection)
+                    && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
+                    && ($params['NAME'] ?? null) === 'Герман-4 ABC Telegram bot'
+                    && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC Telegram bot')
+                ->andReturn($this->bitrixResponse(true, ['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
+                    && ($params['LINE'] ?? null) === 'line-777'
+                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id
+                    && data_get($params, 'DATA.NAME') === 'Локальный бот')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.activate'
+                    && $usedConnection->is($connection)
+                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
+                    && ($params['LINE'] ?? null) === 'line-777'
+                    && ($params['ACTIVE'] ?? null) === '1')
+                ->andReturn($this->bitrixResponse(true, true));
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('setupOpenLineRoute', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', null);
+
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'dev-german-main',
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abc_telegram_dev_german_main',
+            'line_id' => 'line-777',
+            'line_owner_key' => 'stagecrm.fvds.ru#line-777',
+            'source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'last_error_message' => null,
+            'created_by_user_id' => $superadmin->id,
+            'updated_by_user_id' => $superadmin->id,
+        ]);
+    }
+
+    public function test_auto_setup_stores_misconfigured_route_when_connector_registration_fails(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'dev-german-main',
+            'telegram_connector_code' => 'abc_telegram_dev_german_main',
+            'telegram_source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'scope' => ['crm', 'im', 'imopenlines', 'imconnector'],
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imopenlines.config.add')
+                ->andReturn($this->bitrixResponse(true, 'line-partial'));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andReturn($this->bitrixResponse(true, [
+                    'result' => false,
+                    'error_description' => 'Connector rejected',
+                ]));
+
+            $mock->shouldReceive('call')
+                ->withAnyArgs()
+                ->zeroOrMoreTimes()
+                ->andReturn($this->bitrixResponse(false, null, 'unexpected', 'Unexpected call.'));
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('setupOpenLineRoute', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', 'Connector rejected');
+
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'line_id' => 'line-partial',
+            'line_owner_key' => null,
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            'last_error_message' => 'Connector rejected',
+        ]);
+    }
+
+    public function test_auto_setup_reuses_existing_misconfigured_line_id(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'dev-german-main',
+            'telegram_connector_code' => 'abc_telegram_dev_german_main',
+            'telegram_source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'scope' => ['crm', 'im', 'imopenlines', 'imconnector'],
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram_dev_german_main',
+            'line_id' => 'line-existing',
+            'source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
+            $mock->shouldReceive('call')
+                ->never()
+                ->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andReturn($this->bitrixResponse(true, ['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && ($params['LINE'] ?? null) === 'line-existing')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.activate'
+                    && ($params['LINE'] ?? null) === 'line-existing')
+                ->andReturn($this->bitrixResponse(true, true));
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('setupOpenLineRoute', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', null);
+
+        $this->assertSame(1, Bitrix24OpenLineRoute::query()->count());
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'channel_id' => $channel->id,
+            'line_id' => 'line-existing',
+            'line_owner_key' => 'stagecrm.fvds.ru#line-existing',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+    }
+
+    public function test_auto_setup_is_blocked_for_non_stagecrm_portal(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'other.example.test',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'scope' => ['crm', 'im', 'imopenlines', 'imconnector'],
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldReceive('call')->never();
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('setupOpenLineRoute', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', 'Автонастройка ОЛ в первом срезе доступна только для stagecrm.fvds.ru.');
+    }
+
+    public function test_auto_setup_button_is_disabled_when_bitrix24_scopes_are_missing(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'scope' => ['crm'],
+        ]);
+        Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        $cards = Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->instance()
+            ->getOpenLineRouteCards();
+
+        $this->assertFalse($cards[0]['auto_setup_enabled']);
+        $this->assertSame('Не хватает прав приложения Bitrix24', $cards[0]['auto_setup_reason']);
+    }
+
+    public function test_auto_setup_button_accepts_local_bitrix24_app_scope(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'scope' => ['app'],
+        ]);
+        Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        $cards = Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->instance()
+            ->getOpenLineRouteCards();
+
+        $this->assertTrue($cards[0]['auto_setup_enabled']);
+        $this->assertSame('', $cards[0]['auto_setup_reason']);
+    }
+
     private function makeAdmin(): User
     {
         return User::factory()->create([
@@ -371,6 +667,38 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'is_admin' => true,
             'role' => User::ROLE_ADMIN,
         ]);
+    }
+
+    private function makeSuperadmin(): User
+    {
+        return User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+    }
+
+    private function bitrixResponse(
+        bool $successful,
+        mixed $result,
+        ?string $errorCode = null,
+        ?string $errorMessage = null,
+    ): Bitrix24RestResponseData {
+        return new Bitrix24RestResponseData(
+            successful: $successful,
+            httpStatus: $successful ? 200 : 400,
+            result: $result,
+            errorCode: $errorCode,
+            errorMessage: $errorMessage,
+            raw: [
+                'result' => $result,
+                'error' => $errorCode,
+                'error_description' => $errorMessage,
+            ],
+            requestMethod: 'POST',
+            restMethod: 'test.method',
+            attemptedRefresh: false,
+        );
     }
 
     /**

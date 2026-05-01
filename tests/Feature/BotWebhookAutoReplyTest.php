@@ -4,12 +4,13 @@ namespace Tests\Feature;
 
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
-use App\Jobs\ProcessDataCollectionResponseJob;
-use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessAutoReplyJob;
+use App\Jobs\ProcessDataCollectionQuestionJob;
+use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
@@ -38,6 +39,7 @@ class BotWebhookAutoReplyTest extends TestCase
     {
         Queue::fake();
         Http::fake();
+        config()->set('app.url', 'https://connector.example');
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -45,6 +47,12 @@ class BotWebhookAutoReplyTest extends TestCase
                 'token' => 'telegram-token',
                 'webhook_secret' => 'telegram-secret',
             ],
+            'connection_status' => Channel::CONNECTION_STATUS_NOT_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_NOT_INSTALLED,
+            'connection_checked_at' => now()->subMinutes(5),
+            'connection_error_message' => Channel::CONNECTION_ERROR_STALE,
+            'provider_webhook_url' => 'https://old-admin.example/webhooks/telegram/1',
+            'expected_webhook_url' => 'https://old-admin.example/webhooks/telegram/1',
         ]);
 
         $response = $this->withHeaders([
@@ -66,6 +74,12 @@ class BotWebhookAutoReplyTest extends TestCase
         $channel->refresh();
 
         $this->assertNotNull($channel->last_webhook_received_at);
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $channel->webhook_status);
+        $this->assertNull($channel->connection_error_message);
+        $this->assertNotNull($channel->connection_checked_at);
+        $this->assertSame("https://connector.example/webhooks/telegram/{$channel->id}", $channel->expected_webhook_url);
+        $this->assertSame("https://connector.example/webhooks/telegram/{$channel->id}", $channel->provider_webhook_url);
         $this->assertNull($channel->last_reply_sent_at);
         $this->assertNull($channel->last_error_at);
         $this->assertDatabaseHas('channel_activity_logs', [
@@ -219,8 +233,8 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $storedMessage->id,
             'contact_id' => $contact->id,
-            'export_mode' => \App\Models\Bitrix24MessageExport::MODE_LIVE,
-            'export_status' => \App\Models\Bitrix24MessageExport::STATUS_PENDING,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
         ]);
     }
 

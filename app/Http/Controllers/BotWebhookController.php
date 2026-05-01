@@ -3,19 +3,21 @@
 namespace App\Http\Controllers;
 
 use App\Models\Channel;
+use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ScenarioRun;
-use App\Services\Bots\BotWebhookRateLimiter;
 use App\Services\Bots\BotIncomingMessageNormalizer;
+use App\Services\Bots\BotWebhookRateLimiter;
 use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\ChannelWebhookUrlGenerator;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\TelegramBotApiService;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 
 class BotWebhookController extends Controller
 {
@@ -27,6 +29,7 @@ class BotWebhookController extends Controller
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
+        ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
         TelegramBotApiService $telegramBotApiService,
     ): JsonResponse {
         return $this->handle(
@@ -38,6 +41,7 @@ class BotWebhookController extends Controller
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
+            channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
             telegramBotApiService: $telegramBotApiService,
         );
     }
@@ -50,6 +54,7 @@ class BotWebhookController extends Controller
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
+        ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
     ): JsonResponse {
         return $this->handle(
             request: $request,
@@ -60,6 +65,7 @@ class BotWebhookController extends Controller
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
+            channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
         );
     }
 
@@ -72,6 +78,7 @@ class BotWebhookController extends Controller
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
+        ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
         ?TelegramBotApiService $telegramBotApiService = null,
     ): JsonResponse {
         abort_unless(
@@ -132,7 +139,7 @@ class BotWebhookController extends Controller
             ],
         );
 
-        $channel->markWebhookReceived();
+        $channel->markWebhookReceived($this->resolveCurrentWebhookUrl($channel, $channelWebhookUrlGenerator));
 
         if ($expectedPlatform === Channel::PLATFORM_TELEGRAM && isset($payload['callback_query'])) {
             return $this->handleTelegramCallbackQuery(
@@ -188,6 +195,19 @@ class BotWebhookController extends Controller
         return response()->json([
             'ok' => true,
         ]);
+    }
+
+    protected function resolveCurrentWebhookUrl(Channel $channel, ChannelWebhookUrlGenerator $channelWebhookUrlGenerator): ?string
+    {
+        if (! $channel->supportsConnectionCheck()) {
+            return null;
+        }
+
+        try {
+            return $channelWebhookUrlGenerator->for($channel);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**
@@ -369,8 +389,8 @@ class BotWebhookController extends Controller
         $data = trim((string) data_get($payload, 'callback_query.data', ''));
 
         foreach ([
-            'age_range:' => \App\Models\Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
-            'russian_region_confirm:' => \App\Models\Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
+            'age_range:' => Contact::DATA_COLLECTION_FIELD_AGE_RANGE,
+            'russian_region_confirm:' => Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM,
         ] as $prefix => $field) {
             if (! str_starts_with($data, $prefix)) {
                 continue;

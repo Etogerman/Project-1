@@ -2700,6 +2700,14 @@
         text-align: right;
     }
 
+    .ac-bitrix-action-stack {
+        display: inline-flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        align-items: flex-end;
+        max-width: 100%;
+    }
+
     .ac-bitrix-readonly-note {
         margin: 0;
         color: var(--ac-text-soft);

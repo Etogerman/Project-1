@@ -359,7 +359,7 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $this->createActiveConnection('member-1', 'app-token');
 
-        $response = $this->postJson('/callbacks/bitrix24/openlines', [
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/openlines', [
             'EVENT' => 'OnImConnectorMessageAdd',
             'AUTH' => [
                 'DOMAIN' => 'crm.alexlesley.biz',
@@ -385,6 +385,43 @@ class Bitrix24CallbackControllerTest extends TestCase
         $this->assertSame(Bitrix24WebhookEvent::TYPE_OPENLINES, $event->callback_type);
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status);
         $this->assertSame('OnImConnectorMessageAdd', $event->event_name);
+        $this->assertSame($connection->id, $event->connection_id);
+
+        Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
+    }
+
+    public function test_openlines_callback_accepts_configured_runtime_token_hash(): void
+    {
+        Queue::fake();
+
+        config()->set('bitrix24.openlines.runtime_application_token_hashes', [
+            hash('sha256', 'box-runtime-token'),
+        ]);
+
+        $connection = $this->createActiveConnection('member-1', 'install-token');
+
+        $response = $this->postJson('http://localhost/callbacks/bitrix24/openlines', [
+            'event' => 'OnImConnectorMessageAdd',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'box-runtime-token',
+            ],
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'MESSAGES' => [
+                    ['ID' => 'm-1'],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'openlines')
+            ->assertJsonPath('method', 'POST');
+
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status, (string) $event->failure_reason);
         $this->assertSame($connection->id, $event->connection_id);
 
         Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);

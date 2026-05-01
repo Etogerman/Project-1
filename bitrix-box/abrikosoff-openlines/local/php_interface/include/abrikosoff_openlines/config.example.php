@@ -8,7 +8,7 @@ return [
     ],
 
     'auth' => [
-        'portal_domain' => 'crm.alexlesley.biz',
+        'portal_domain' => 'stagecrm.fvds.ru',
         'member_id' => 'paste-active-member-id-from-bitrix24_connections',
         'application_token' => 'paste-active-application-token-from-bitrix24_connections',
         'client_endpoint' => '',

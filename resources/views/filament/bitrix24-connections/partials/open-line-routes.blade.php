@@ -123,13 +123,31 @@
                             </td>
                             <td class="ac-bitrix-action-cell">
                                 @if ($canEdit)
-                                    <x-filament::button
-                                        type="button"
-                                        size="sm"
-                                        wire:click="saveOpenLineRoute({{ $item['channel_id'] }})"
-                                    >
-                                        Сохранить
-                                    </x-filament::button>
+                                    <div class="ac-bitrix-action-stack">
+                                        <x-filament::button
+                                            type="button"
+                                            size="sm"
+                                            wire:click="saveOpenLineRoute({{ $item['channel_id'] }})"
+                                        >
+                                            Сохранить
+                                        </x-filament::button>
+
+                                        <x-filament::button
+                                            type="button"
+                                            size="sm"
+                                            color="warning"
+                                            wire:click="setupOpenLineRoute({{ $item['channel_id'] }})"
+                                            :disabled="! $item['auto_setup_enabled']"
+                                        >
+                                            {{ $item['auto_setup_label'] }}
+                                        </x-filament::button>
+
+                                        @if (! $item['auto_setup_enabled'] && filled($item['auto_setup_reason']))
+                                            <p class="ac-bitrix-readonly-note">
+                                                {{ $item['auto_setup_reason'] }}
+                                            </p>
+                                        @endif
+                                    </div>
                                 @else
                                     <p class="ac-bitrix-readonly-note">
                                         Для изменения маршрутов нужно право bitrix24.edit.

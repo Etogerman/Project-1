@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Channel;
+use App\Services\Bots\ChannelWebhookUrlGenerator;
 use App\Services\Bots\CheckChannelConnectionAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -49,6 +51,63 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertSame("https://connector.example/webhooks/telegram/{$channel->id}", $channel->expected_webhook_url);
         $this->assertSame("https://connector.example/webhooks/telegram/{$channel->id}", $channel->provider_webhook_url);
         $this->assertNotNull($channel->connection_checked_at);
+    }
+
+    public function test_webhook_url_uses_current_public_https_request_over_stale_app_url(): void
+    {
+        config()->set('app.url', 'https://old-admin.example');
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        $this->bindRequest('https://fresh-admin.example/admin/channels');
+
+        $this->assertSame(
+            "https://fresh-admin.example/webhooks/telegram/{$channel->id}",
+            app(ChannelWebhookUrlGenerator::class)->for($channel),
+        );
+    }
+
+    public function test_webhook_url_uses_forwarded_public_https_host_from_tunnel(): void
+    {
+        config()->set('app.url', 'https://old-admin.example');
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        $this->bindRequest('http://127.0.0.1:8002/admin/channels', [
+            'HTTP_X_FORWARDED_PROTO' => 'https',
+            'HTTP_X_FORWARDED_HOST' => 'fresh-tunnel.trycloudflare.com',
+        ]);
+
+        $this->assertSame(
+            "https://fresh-tunnel.trycloudflare.com/webhooks/telegram/{$channel->id}",
+            app(ChannelWebhookUrlGenerator::class)->for($channel),
+        );
+    }
+
+    public function test_webhook_url_ignores_local_admin_request_and_keeps_configured_app_url(): void
+    {
+        config()->set('app.url', 'https://connector.example');
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        $this->bindRequest('http://127.0.0.1:8002/admin/channels');
+
+        $this->assertSame(
+            "https://connector.example/webhooks/telegram/{$channel->id}",
+            app(ChannelWebhookUrlGenerator::class)->for($channel),
+        );
     }
 
     public function test_telegram_bot_is_not_connected_when_webhook_points_elsewhere(): void
@@ -147,6 +206,33 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertSame(Channel::CONNECTION_ERROR_EXPECTED_URL_CHANGED, $state['connection_error_message']);
     }
 
+    public function test_effective_state_treats_saved_old_tunnel_as_not_connected_on_current_tunnel(): void
+    {
+        config()->set('app.url', 'https://old-admin.example');
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'is_active' => true,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now(),
+            'expected_webhook_url' => 'https://old-admin.example/webhooks/telegram/1',
+            'provider_webhook_url' => 'https://old-admin.example/webhooks/telegram/1',
+        ]);
+
+        $this->bindRequest('https://fresh-admin.example/admin/channels');
+
+        $state = app(CheckChannelConnectionAction::class)->resolveEffectiveState($channel);
+
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $state['connection_status']);
+        $this->assertSame(Channel::CONNECTION_ERROR_EXPECTED_URL_CHANGED, $state['connection_error_message']);
+        $this->assertSame('https://fresh-admin.example/webhooks/telegram/1', $state['expected_webhook_url']);
+        $this->assertSame('https://old-admin.example/webhooks/telegram/1', $state['provider_webhook_url']);
+    }
+
     public function test_console_command_updates_local_failure_statuses_without_telegram_api(): void
     {
         Http::fake();
@@ -187,5 +273,13 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertSame(Channel::WEBHOOK_STATUS_NOT_INSTALLED, $channel->webhook_status);
         $this->assertSame(Channel::CONNECTION_ERROR_NOT_CHECKED, $channel->connection_error_message);
         $this->assertNull($channel->connection_checked_at);
+    }
+
+    /**
+     * @param  array<string, string>  $server
+     */
+    protected function bindRequest(string $url, array $server = []): void
+    {
+        $this->app->instance('request', Request::create($url, 'GET', [], [], [], $server));
     }
 }
