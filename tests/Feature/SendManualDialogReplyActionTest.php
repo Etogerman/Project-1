@@ -40,12 +40,10 @@ class SendManualDialogReplyActionTest extends TestCase
             'assigned_user_id' => $employee->id,
         ]);
         $targetChannel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => ['token' => 'telegram-target-token'],
+            ...$this->connectedTelegramChannelAttributes('telegram-target-token'),
         ]);
         $otherChannel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => ['token' => 'telegram-other-token'],
+            ...$this->connectedTelegramChannelAttributes('telegram-other-token'),
         ]);
         $targetIdentity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
@@ -189,8 +187,7 @@ class SendManualDialogReplyActionTest extends TestCase
             'assigned_user_id' => $employee->id,
         ]);
         $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => ['token' => 'telegram-fallback-token'],
+            ...$this->connectedTelegramChannelAttributes('telegram-fallback-token'),
         ]);
         $identity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
@@ -527,14 +524,47 @@ class SendManualDialogReplyActionTest extends TestCase
         );
     }
 
+    public function test_send_manual_dialog_reply_blocks_disconnected_telegram_channel_before_transport(): void
+    {
+        Http::fake();
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createTelegramDialog(assignedUserId: $employee->id, externalChatId: 'chat-disconnected');
+
+        $dialog->channel->forceFill([
+            'connection_status' => Channel::CONNECTION_STATUS_NOT_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_NOT_INSTALLED,
+            'connection_checked_at' => now(),
+            'connection_error_message' => 'Webhook установлен не на эту админку',
+            'provider_webhook_url' => null,
+            'expected_webhook_url' => null,
+        ])->saveQuietly();
+
+        try {
+            app(SendManualDialogReplyAction::class)->handle(
+                $dialog->fresh(['channel', 'currentContactIdentity', 'contact.assignedUser']),
+                $employee,
+                'Не должен уйти',
+            );
+
+            $this->fail('Ожидалось, что ручной ответ будет заблокирован.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('Webhook установлен не на эту админку', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
     protected function createTelegramDialog(?int $assignedUserId, ?string $externalChatId): Dialog
     {
         $contact = Contact::factory()->create([
             'assigned_user_id' => $assignedUserId,
         ]);
         $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => ['token' => 'telegram-token'],
+            ...$this->connectedTelegramChannelAttributes('telegram-token'),
         ]);
         $identity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
@@ -562,6 +592,25 @@ class SendManualDialogReplyActionTest extends TestCase
         ]);
 
         return $dialog->fresh(['contact.assignedUser', 'channel', 'currentContactIdentity']);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function connectedTelegramChannelAttributes(string $token): array
+    {
+        return [
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => $token],
+            'is_active' => true,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now(),
+            'connection_error_message' => null,
+            'provider_webhook_url' => null,
+            'expected_webhook_url' => null,
+        ];
     }
 
     protected function createTelegramAccountDialog(?int $assignedUserId, string $externalChatId): Dialog

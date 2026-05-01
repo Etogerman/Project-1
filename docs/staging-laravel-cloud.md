@@ -66,11 +66,11 @@ Database host, port, database, username, and password should come from the attac
 Bitrix24 integration target:
 
 - `YANDEX_GEOCODER_API_KEY=<real key>`
-- `BITRIX24_PORTAL_DOMAIN=crm.alexlesley.biz`
+- `BITRIX24_PORTAL_DOMAIN=stagecrm.fvds.ru`
 - `BITRIX24_CLIENT_ID=<real client id>`
 - `BITRIX24_CLIENT_SECRET=<real client secret>`
 - `BITRIX24_APP_CODE=<real Bitrix24 application code>`
-- `BITRIX24_AUTH_SERVER_URL=<real trusted OAuth host>`
+- `BITRIX24_AUTH_SERVER_URL=https://oauth.bitrix.info`
 - `BITRIX24_INSTALL_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/install`
 - `BITRIX24_EVENTS_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/events`
 - `BITRIX24_OPENLINES_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/openlines`

@@ -14,7 +14,7 @@
 
 | Key | Value |
 | --- | --- |
-| `portal_domain` | `crm.alexlesley.biz` |
+| `portal_domain` | `stagecrm.fvds.ru` |
 | `default_assigned_user_id` | `1` |
 | `default_deal_category_id` | `22` |
 | `default_deal_stage_id` | `C22:NEW` |
@@ -52,7 +52,7 @@ setup-runbook на staging или другом real integration target:
 | `BITRIX24_CLIENT_ID` | set in local `.env`, do not commit |
 | `BITRIX24_CLIENT_SECRET` | set in local `.env`, do not commit |
 | `BITRIX24_APP_CODE` | set in local `.env`, do not commit |
-| `BITRIX24_AUTH_SERVER_URL` | set in local `.env`, do not commit |
+| `BITRIX24_AUTH_SERVER_URL` | `https://oauth.bitrix.info` |
 | `BITRIX24_INSTALL_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/install` |
 | `BITRIX24_EVENTS_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/events` |
 | `BITRIX24_OPENLINES_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/openlines` |

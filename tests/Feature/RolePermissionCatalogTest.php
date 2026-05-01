@@ -33,6 +33,7 @@ class RolePermissionCatalogTest extends TestCase
             'auto_reply_rules.edit',
             'auto_reply_rules.delete',
             'bitrix24.view',
+            'bitrix24.edit',
             'scenarios.view',
             'scenarios.edit',
             'users.view',
@@ -56,7 +57,6 @@ class RolePermissionCatalogTest extends TestCase
         $this->assertNotContains('dialogs.delete', $codes);
         $this->assertNotContains('users.delete', $codes);
         $this->assertNotContains('channels.delete', $codes);
-        $this->assertNotContains('bitrix24.edit', $codes);
         $this->assertNotContains('bitrix24.delete', $codes);
         $this->assertNotContains('scenarios.archive', $codes);
         $this->assertNotContains('scenarios.delete', $codes);
@@ -104,6 +104,7 @@ class RolePermissionCatalogTest extends TestCase
             'auto_reply_rules.edit',
             'auto_reply_rules.delete',
             'bitrix24.view',
+            'bitrix24.edit',
             'scenarios.view',
             'scenarios.edit',
             'users.view',

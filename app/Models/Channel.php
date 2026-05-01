@@ -34,6 +34,30 @@ class Channel extends Model
 
     public const AUTO_REPLY_MODE_RULES_ONLY = 'rules_only';
 
+    public const CONNECTION_STATUS_CONNECTED = 'connected';
+
+    public const CONNECTION_STATUS_NOT_CONNECTED = 'not_connected';
+
+    public const CONNECTION_STATUS_UNSUPPORTED = 'unsupported';
+
+    public const WEBHOOK_STATUS_INSTALLED = 'installed';
+
+    public const WEBHOOK_STATUS_NOT_INSTALLED = 'not_installed';
+
+    public const WEBHOOK_STATUS_UNSUPPORTED = 'unsupported';
+
+    public const CONNECTION_ERROR_NOT_CHECKED = 'Проверка ещё не выполнялась';
+
+    public const CONNECTION_ERROR_UNSUPPORTED = 'Проверка подключения для этого типа канала пока не поддерживается';
+
+    public const CONNECTION_ERROR_DISABLED = 'Канал выключен в админке';
+
+    public const CONNECTION_ERROR_NO_TOKEN = 'Нет токена';
+
+    public const CONNECTION_ERROR_STALE = 'Данные проверки устарели';
+
+    public const CONNECTION_ERROR_EXPECTED_URL_CHANGED = 'Ожидаемый webhook URL изменился. Нужно выполнить проверку или переустановить webhook.';
+
     /**
      * @var list<string>
      */
@@ -53,6 +77,12 @@ class Channel extends Model
         'last_error_at',
         'last_error_message',
         'is_active',
+        'connection_status',
+        'webhook_status',
+        'connection_checked_at',
+        'connection_error_message',
+        'provider_webhook_url',
+        'expected_webhook_url',
     ];
 
     /**
@@ -65,12 +95,14 @@ class Channel extends Model
         'last_webhook_received_at' => 'datetime',
         'last_reply_sent_at' => 'datetime',
         'last_error_at' => 'datetime',
+        'connection_checked_at' => 'datetime',
     ];
 
     protected static function booted(): void
     {
         static::saving(function (Channel $channel): void {
             $channel->syncTokenPresenceFromCredentials();
+            $channel->syncConnectionStatusFromLocalState();
         });
     }
 
@@ -250,6 +282,109 @@ class Channel extends Model
         return filled($this->getWebhookSecret()) ? 'Настроен' : 'Не настроен';
     }
 
+    public function supportsConnectionCheck(): bool
+    {
+        return $this->platform === self::PLATFORM_TELEGRAM
+            && $this->connection_type === self::CONNECTION_TYPE_BOT;
+    }
+
+    public function getConnectionStatusLabel(?string $status = null): string
+    {
+        return match ($status ?? $this->connection_status) {
+            self::CONNECTION_STATUS_CONNECTED => 'Подключен',
+            self::CONNECTION_STATUS_UNSUPPORTED => 'Не поддерживается',
+            default => 'Не подключен',
+        };
+    }
+
+    public function getConnectionStatusColor(?string $status = null): string
+    {
+        return match ($status ?? $this->connection_status) {
+            self::CONNECTION_STATUS_CONNECTED => 'success',
+            self::CONNECTION_STATUS_UNSUPPORTED => 'gray',
+            default => 'danger',
+        };
+    }
+
+    public function getLiveWebhookStatusLabel(?string $status = null): string
+    {
+        return match ($status ?? $this->webhook_status) {
+            self::WEBHOOK_STATUS_INSTALLED => 'Установлен',
+            self::WEBHOOK_STATUS_UNSUPPORTED => 'Не поддерживается',
+            default => 'Не установлен',
+        };
+    }
+
+    public function getLiveWebhookStatusColor(?string $status = null): string
+    {
+        return match ($status ?? $this->webhook_status) {
+            self::WEBHOOK_STATUS_INSTALLED => 'success',
+            self::WEBHOOK_STATUS_UNSUPPORTED => 'gray',
+            default => 'danger',
+        };
+    }
+
+    public function syncConnectionStatusFromLocalState(): void
+    {
+        if (! $this->supportsConnectionCheck()) {
+            $this->forceFill([
+                'connection_status' => self::CONNECTION_STATUS_UNSUPPORTED,
+                'webhook_status' => self::WEBHOOK_STATUS_UNSUPPORTED,
+                'connection_checked_at' => null,
+                'connection_error_message' => self::CONNECTION_ERROR_UNSUPPORTED,
+                'provider_webhook_url' => null,
+                'expected_webhook_url' => null,
+            ]);
+
+            return;
+        }
+
+        if (! $this->is_active) {
+            $this->forceFill([
+                'connection_status' => self::CONNECTION_STATUS_NOT_CONNECTED,
+                'webhook_status' => self::WEBHOOK_STATUS_NOT_INSTALLED,
+                'connection_checked_at' => null,
+                'connection_error_message' => self::CONNECTION_ERROR_DISABLED,
+                'provider_webhook_url' => null,
+                'expected_webhook_url' => null,
+            ]);
+
+            return;
+        }
+
+        if (! $this->bot_token_present) {
+            $this->forceFill([
+                'connection_status' => self::CONNECTION_STATUS_NOT_CONNECTED,
+                'webhook_status' => self::WEBHOOK_STATUS_NOT_INSTALLED,
+                'connection_checked_at' => null,
+                'connection_error_message' => self::CONNECTION_ERROR_NO_TOKEN,
+                'provider_webhook_url' => null,
+                'expected_webhook_url' => null,
+            ]);
+
+            return;
+        }
+
+        if ($this->exists && $this->connectionAffectingFieldsChanged()) {
+            $this->forceFill([
+                'connection_status' => self::CONNECTION_STATUS_NOT_CONNECTED,
+                'webhook_status' => self::WEBHOOK_STATUS_NOT_INSTALLED,
+                'connection_checked_at' => null,
+                'connection_error_message' => self::CONNECTION_ERROR_NOT_CHECKED,
+                'provider_webhook_url' => null,
+                'expected_webhook_url' => null,
+            ]);
+        }
+    }
+
+    protected function connectionAffectingFieldsChanged(): bool
+    {
+        return $this->isDirty('platform')
+            || $this->isDirty('connection_type')
+            || $this->isDirty('is_active')
+            || $this->isDirty('credentials');
+    }
+
     public function runtimeState(): HasOne
     {
         return $this->hasOne(ChannelRuntimeState::class);
@@ -426,13 +561,31 @@ class Channel extends Model
         return false;
     }
 
-    public function markWebhookReceived(): static
+    public function markWebhookReceived(?string $currentWebhookUrl = null): static
     {
-        $this->persistOperationalState([
+        $state = [
             'last_webhook_received_at' => now(),
             'last_error_at' => null,
             'last_error_message' => null,
-        ]);
+        ];
+
+        if (
+            $currentWebhookUrl !== null
+            && $this->supportsConnectionCheck()
+            && $this->is_active
+            && $this->hasBotTokenConfigured()
+        ) {
+            $state = array_merge($state, [
+                'connection_status' => self::CONNECTION_STATUS_CONNECTED,
+                'webhook_status' => self::WEBHOOK_STATUS_INSTALLED,
+                'connection_checked_at' => now(),
+                'connection_error_message' => null,
+                'provider_webhook_url' => $currentWebhookUrl,
+                'expected_webhook_url' => $currentWebhookUrl,
+            ]);
+        }
+
+        $this->persistOperationalState($state);
 
         return $this;
     }
@@ -515,6 +668,11 @@ class Channel extends Model
     public function dialogs(): HasMany
     {
         return $this->hasMany(Dialog::class);
+    }
+
+    public function bitrix24OpenLineRoutes(): HasMany
+    {
+        return $this->hasMany(Bitrix24OpenLineRoute::class);
     }
 
     public function autoReplyRules(): BelongsToMany

@@ -71,7 +71,7 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
 
         Log::shouldHaveReceived('critical')
             ->once()
-            ->withArgs(function (string $messageText, array $context) use ($message): bool {
+            ->withArgs(function (string $messageText, array $context) use ($message, $liveBatchUuid): bool {
                 return $messageText === 'Bitrix24 Open Lines live export job failed.'
                     && $context['job'] === ExportMessageToBitrix24OpenLinesJob::class
                     && $context['message_id'] === $message->id
@@ -94,13 +94,11 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
 
         $syncLog = Bitrix24SyncLog::query()->latest('id')->firstOrFail();
 
-        $this->assertSame([
-            'message_id' => $message->id,
-            'dialog_id' => $message->dialog_id,
-            'contact_id' => $message->contact_id,
-            'retry_after_sync' => true,
-            'live_batch_uuid' => $liveBatchUuid,
-        ], $syncLog->request_payload);
+        $this->assertSame($message->id, $syncLog->request_payload['message_id'] ?? null);
+        $this->assertSame($message->dialog_id, $syncLog->request_payload['dialog_id'] ?? null);
+        $this->assertSame($message->contact_id, $syncLog->request_payload['contact_id'] ?? null);
+        $this->assertTrue($syncLog->request_payload['retry_after_sync'] ?? false);
+        $this->assertSame($liveBatchUuid, $syncLog->request_payload['live_batch_uuid'] ?? null);
     }
 
     private function makeMessage(): Message

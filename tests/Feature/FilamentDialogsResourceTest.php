@@ -865,9 +865,8 @@ class FilamentDialogsResourceTest extends TestCase
             'name' => 'Один контакт',
         ]);
         $telegram = Channel::factory()->create([
+            ...$this->connectedTelegramChannelAttributes('telegram-token'),
             'name' => 'Telegram Support',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => ['token' => 'telegram-token'],
         ]);
         $max = Channel::factory()->create([
             'name' => 'MAX Support',
@@ -1450,8 +1449,8 @@ class FilamentDialogsResourceTest extends TestCase
             'name' => 'Герман',
         ]);
         $telegram = Channel::factory()->create([
+            ...$this->connectedTelegramChannelAttributes('telegram-token'),
             'name' => 'Telegram Support',
-            'platform' => Channel::PLATFORM_TELEGRAM,
         ]);
         $max = Channel::factory()->create([
             'name' => 'MAX Support',
@@ -1846,12 +1845,8 @@ class FilamentDialogsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $channel = Channel::factory()->create([
+            ...$this->connectedTelegramChannelAttributes('telegram-token'),
             'name' => 'Продакшен',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => [
-                'token' => 'telegram-token',
-            ],
-            'is_active' => true,
         ]);
         $contact = Contact::factory()->create([
             'name' => 'Герман Абрикосов',
@@ -1896,12 +1891,8 @@ class FilamentDialogsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $channel = Channel::factory()->create([
+            ...$this->connectedTelegramChannelAttributes('telegram-token'),
             'name' => 'Продакшен',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => [
-                'token' => 'telegram-token',
-            ],
-            'is_active' => true,
         ]);
         $contact = Contact::factory()->create([
             'name' => 'Герман Абрикосов',
@@ -2279,11 +2270,8 @@ class FilamentDialogsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $channel = Channel::factory()->create([
+            ...$this->connectedTelegramChannelAttributes('telegram-token'),
             'name' => 'Telegram Support',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => [
-                'token' => 'telegram-token',
-            ],
         ]);
         $contact = Contact::factory()->create([
             'assigned_user_id' => $admin->id,
@@ -2381,10 +2369,8 @@ class FilamentDialogsResourceTest extends TestCase
             'last_name' => null,
         ]);
         $telegramChannel = Channel::factory()->create([
+            ...$this->connectedTelegramChannelAttributes('telegram-token'),
             'name' => 'Telegram Support',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => ['token' => 'telegram-token'],
-            'is_active' => true,
         ]);
         $maxChannel = Channel::factory()->create([
             'name' => 'MAX Support',
@@ -2460,12 +2446,21 @@ class FilamentDialogsResourceTest extends TestCase
     {
         $platform = $attributes['platform'] ?? Channel::PLATFORM_MAX;
         $hasToken = $attributes['hasToken'] ?? true;
-        $channel = Channel::factory()->create([
+        $channelAttributes = [
             'name' => $attributes['channelName'] ?? ($platform === Channel::PLATFORM_TELEGRAM ? 'Telegram Support' : 'MAX Support'),
             'platform' => $platform,
             'credentials' => $hasToken ? ['token' => $platform.'-token'] : [],
             'is_active' => true,
-        ]);
+        ];
+
+        if ($platform === Channel::PLATFORM_TELEGRAM && $hasToken) {
+            $channelAttributes = array_merge(
+                $this->connectedTelegramChannelAttributes($platform.'-token'),
+                $channelAttributes,
+            );
+        }
+
+        $channel = Channel::factory()->create($channelAttributes);
         $contact = Contact::factory()->create([
             'name' => $attributes['contactName'] ?? 'Inbox contact',
             'first_name' => $attributes['contactFirstName'] ?? null,
@@ -2534,5 +2529,24 @@ class FilamentDialogsResourceTest extends TestCase
         ])->save();
 
         return $message;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function connectedTelegramChannelAttributes(string $token): array
+    {
+        return [
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => $token],
+            'is_active' => true,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now(),
+            'connection_error_message' => null,
+            'provider_webhook_url' => null,
+            'expected_webhook_url' => null,
+        ];
     }
 }

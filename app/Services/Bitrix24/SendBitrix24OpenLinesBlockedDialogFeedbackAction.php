@@ -15,6 +15,7 @@ class SendBitrix24OpenLinesBlockedDialogFeedbackAction
         private readonly ResolveBitrix24OpenLinesRouteAction $resolveBitrix24OpenLinesRouteAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ResolveContactDisplayNameAction $resolveContactDisplayNameAction,
+        private readonly BuildBitrix24OpenLinesExternalUserIdAction $buildExternalUserIdAction,
     ) {}
 
     public function handle(
@@ -35,9 +36,7 @@ class SendBitrix24OpenLinesBlockedDialogFeedbackAction
         $rootContact = $this->resolveRootContactAction->handle($dialog->contact()->firstOrFail());
         $identity = $dialog->currentContactIdentity;
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
-        $userId = filled($identity?->external_user_id)
-            ? $channel->platform.':'.$identity->external_user_id
-            : 'contact:'.$rootContact->id;
+        $userId = $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
 
         $response = $this->bitrix24ApiClient->call('imconnector.send.messages', [
             'CONNECTOR' => $route->connectorCode,

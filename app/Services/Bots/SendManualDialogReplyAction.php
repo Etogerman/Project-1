@@ -61,6 +61,12 @@ class SendManualDialogReplyAction
             throw new InvalidArgumentException('У этого диалога сейчас нет рабочего маршрута для отправки ответа.');
         }
 
+        $routeStatus = $this->resolveDialogRouteStatusAction->handle($dialog);
+
+        if (! $routeStatus->isSendable) {
+            throw new InvalidArgumentException($routeStatus->blockedReason ?? 'У этого диалога сейчас нет рабочего маршрута для отправки ответа.');
+        }
+
         $replyToMessage = $this->resolveReplyToMessage($dialog);
 
         if ($channel->isAccountConnection()) {

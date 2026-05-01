@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
-use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -39,7 +38,7 @@ class AutoReplyRuleUniquenessTest extends TestCase
         $this->assertDatabaseCount('auto_reply_rules', 2);
     }
 
-    public function test_same_normalized_keyword_is_rejected_within_same_match_scope(): void
+    public function test_same_normalized_keyword_is_allowed_within_same_match_scope(): void
     {
         $channel = Channel::factory()->create([
             'is_active' => true,
@@ -54,8 +53,6 @@ class AutoReplyRuleUniquenessTest extends TestCase
             'is_active' => true,
         ]);
 
-        $this->expectException(QueryException::class);
-
         AutoReplyRule::query()->create([
             'channel_id' => $channel->id,
             'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
@@ -64,5 +61,7 @@ class AutoReplyRuleUniquenessTest extends TestCase
             'reply_text' => 'Duplicate parameter match',
             'is_active' => true,
         ]);
+
+        $this->assertDatabaseCount('auto_reply_rules', 2);
     }
 }

@@ -82,6 +82,7 @@ class Dialog extends Model
         'external_chat_id',
         'bitrix24_live_chat_id',
         'bitrix24_live_status',
+        'bitrix24_open_line_route_id',
         'bitrix24_live_last_exported_at',
         'bitrix24_live_last_imported_at',
         'confirmed_phone_raw',
@@ -254,6 +255,11 @@ class Dialog extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    public function bitrix24OpenLineRoute(): BelongsTo
+    {
+        return $this->belongsTo(Bitrix24OpenLineRoute::class);
     }
 
     public function currentContactIdentity(): BelongsTo

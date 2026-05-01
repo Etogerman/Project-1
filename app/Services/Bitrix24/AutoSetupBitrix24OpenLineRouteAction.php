@@ -1,0 +1,460 @@
+<?php
+
+namespace App\Services\Bitrix24;
+
+use App\Data\Bitrix24\Bitrix24RestResponseData;
+use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
+use App\Models\Channel;
+use App\Models\User;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
+
+class AutoSetupBitrix24OpenLineRouteAction
+{
+    public const SUPPORTED_PORTAL_DOMAIN = 'stagecrm.fvds.ru';
+
+    /**
+     * @var list<string>
+     */
+    public const REQUIRED_SCOPES = [
+        'crm',
+        'im',
+        'imopenlines',
+        'imconnector',
+    ];
+
+    public function __construct(
+        private readonly Bitrix24ApiClient $apiClient,
+    ) {}
+
+    public function handle(Bitrix24Connection $connection, Channel $channel, ?User $user = null): Bitrix24OpenLineRoute
+    {
+        $connection->loadMissing('profile');
+        $profile = $connection->profile;
+
+        if (! $profile instanceof Bitrix24Profile) {
+            throw new Bitrix24OpenLineAutoSetupException('У подключения Bitrix24 нет профиля.');
+        }
+
+        $this->assertCanAutoSetup($connection, $profile, $channel);
+
+        $lock = Cache::lock($this->lockKey($profile, $channel), 30);
+
+        if (! $lock->get()) {
+            throw new Bitrix24OpenLineAutoSetupException('Настройка уже выполняется. Подождите несколько секунд и обновите страницу.');
+        }
+
+        try {
+            return $this->setupRoute($connection, $profile, $channel, $user);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function setupRoute(
+        Bitrix24Connection $connection,
+        Bitrix24Profile $profile,
+        Channel $channel,
+        ?User $user,
+    ): Bitrix24OpenLineRoute {
+        $connectorCode = $this->requiredProfileValue($profile->telegram_connector_code, 'В профиле Bitrix24 не заполнен Telegram connector_code.');
+        $sourceId = $this->requiredProfileValue($profile->telegram_source_id, 'В профиле Bitrix24 не заполнен Telegram source_id.');
+        $route = $this->findRoute($profile, $channel);
+        $lineId = $this->normalizedRouteLineId($route);
+
+        if ($lineId !== null) {
+            $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, $lineId);
+        } else {
+            $lineId = $this->createOpenLine($connection, $profile, $channel, $sourceId);
+            $route = $this->saveRoute(
+                route: $route,
+                profile: $profile,
+                channel: $channel,
+                connectorCode: $connectorCode,
+                lineId: $lineId,
+                sourceId: $sourceId,
+                status: Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+                errorMessage: 'Открытая линия создана, настройка соединителя ещё не завершена.',
+                user: $user,
+            );
+        }
+
+        try {
+            $this->registerConnector($connection, $profile, $connectorCode, $sourceId);
+            $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId);
+            $this->activateConnector($connection, $connectorCode, $lineId);
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $this->saveRoute(
+                route: $route,
+                profile: $profile,
+                channel: $channel,
+                connectorCode: $connectorCode,
+                lineId: $lineId,
+                sourceId: $sourceId,
+                status: Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+                errorMessage: $exception->getMessage(),
+                user: $user,
+            );
+
+            throw $exception;
+        }
+
+        return $this->saveRoute(
+            route: $route,
+            profile: $profile,
+            channel: $channel,
+            connectorCode: $connectorCode,
+            lineId: $lineId,
+            sourceId: $sourceId,
+            status: Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            errorMessage: null,
+            user: $user,
+        );
+    }
+
+    private function assertCanAutoSetup(Bitrix24Connection $connection, Bitrix24Profile $profile, Channel $channel): void
+    {
+        if ($connection->status !== Bitrix24Connection::STATUS_ACTIVE) {
+            throw new Bitrix24OpenLineAutoSetupException('Bitrix24-подключение не активно.');
+        }
+
+        if ($profile->portal_domain !== self::SUPPORTED_PORTAL_DOMAIN) {
+            throw new Bitrix24OpenLineAutoSetupException('Автонастройка ОЛ в первом срезе доступна только для stagecrm.fvds.ru.');
+        }
+
+        if (Bitrix24OpenLineRoute::channelTypeForChannel($channel) !== Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT) {
+            throw new Bitrix24OpenLineAutoSetupException('Автонастройка ОЛ сейчас доступна только для Telegram bot каналов.');
+        }
+
+        if (! $channel->is_active) {
+            throw new Bitrix24OpenLineAutoSetupException('Канал выключен в нашей админке.');
+        }
+
+        if (! $channel->hasBotTokenConfigured()) {
+            throw new Bitrix24OpenLineAutoSetupException('У канала нет токена Telegram bot.');
+        }
+
+        $this->requiredProfileValue($profile->telegram_connector_code, 'В профиле Bitrix24 не заполнен Telegram connector_code.');
+        $this->requiredProfileValue($profile->telegram_source_id, 'В профиле Bitrix24 не заполнен Telegram source_id.');
+        $this->assertRequiredScopes($connection);
+    }
+
+    private function assertRequiredScopes(Bitrix24Connection $connection): void
+    {
+        $actualScopes = collect($connection->scope ?? [])
+            ->map(fn (mixed $scope): string => mb_strtolower(trim((string) $scope)))
+            ->filter()
+            ->values()
+            ->all();
+
+        if (in_array('app', $actualScopes, true)) {
+            return;
+        }
+
+        $missing = array_values(array_diff(self::REQUIRED_SCOPES, $actualScopes));
+
+        if ($missing === []) {
+            return;
+        }
+
+        throw new Bitrix24OpenLineAutoSetupException(
+            'Bitrix24 отклонил настройку. Проверьте права приложения: CRM, чат, открытые линии и коннекторы.',
+        );
+    }
+
+    private function createOpenLine(
+        Bitrix24Connection $connection,
+        Bitrix24Profile $profile,
+        Channel $channel,
+        string $sourceId,
+    ): string {
+        $response = $this->apiClient->call('imopenlines.config.add', [
+            'PARAMS' => [
+                'LINE_NAME' => $this->buildLineName($profile, $channel),
+                'ACTIVE' => 'Y',
+                'CRM' => 'Y',
+                'CRM_CREATE' => 'deal',
+                'CRM_SOURCE' => $sourceId,
+            ],
+        ], $connection);
+
+        $this->assertSuccessfulResponse($response, 'Не удалось создать открытую линию в Bitrix24.');
+
+        if (! is_scalar($response->result) || trim((string) $response->result) === '') {
+            throw new Bitrix24OpenLineAutoSetupException('Bitrix24 не вернул ID созданной открытой линии.');
+        }
+
+        return trim((string) $response->result);
+    }
+
+    private function registerConnector(
+        Bitrix24Connection $connection,
+        Bitrix24Profile $profile,
+        string $connectorCode,
+        string $sourceId,
+    ): void {
+        $connectorName = $this->buildConnectorName($connection, $sourceId);
+
+        $response = $this->apiClient->call('imconnector.register', [
+            'ID' => $connectorCode,
+            'NAME' => $connectorName,
+            'ICON' => [
+                'DATA_IMAGE' => $this->telegramIconDataUri(),
+                'COLOR' => '#2AABEE',
+                'SIZE' => '90%',
+                'POSITION' => 'center',
+            ],
+            'ICON_DISABLED' => [
+                'DATA_IMAGE' => $this->telegramIconDataUri(),
+                'COLOR' => '#99ADB3',
+                'SIZE' => '90%',
+                'POSITION' => 'center',
+            ],
+            'PLACEMENT_HANDLER' => $this->settingsUrl($profile, $connection),
+            'DEL_EXTERNAL_MESSAGES' => true,
+            'EDIT_INTERNAL_MESSAGES' => true,
+            'DEL_INTERNAL_MESSAGES' => true,
+            'NEWSLETTER' => true,
+            'NEED_SYSTEM_MESSAGES' => true,
+            'NEED_SIGNATURE' => true,
+            'CHAT_GROUP' => false,
+            'COMMENT' => 'Настройки канала '.$connectorName,
+        ], $connection);
+
+        $this->assertSuccessfulNestedResult($response, 'Не удалось зарегистрировать соединитель Bitrix24.');
+    }
+
+    private function setConnectorData(
+        Bitrix24Connection $connection,
+        Bitrix24Profile $profile,
+        Channel $channel,
+        string $connectorCode,
+        string $lineId,
+    ): void {
+        $channelUrl = $this->settingsUrl($profile, $connection);
+
+        $response = $this->apiClient->call('imconnector.connector.data.set', [
+            'CONNECTOR' => $connectorCode,
+            'LINE' => $lineId,
+            'DATA' => [
+                'ID' => 'channel:'.$channel->id,
+                'URL' => $channelUrl,
+                'URL_IM' => $channelUrl,
+                'NAME' => $channel->name,
+            ],
+        ], $connection);
+
+        $this->assertSuccessfulBooleanResult($response, 'Не удалось сохранить настройки соединителя Bitrix24.');
+    }
+
+    private function activateConnector(Bitrix24Connection $connection, string $connectorCode, string $lineId): void
+    {
+        $response = $this->apiClient->call('imconnector.activate', [
+            'CONNECTOR' => $connectorCode,
+            'LINE' => $lineId,
+            'ACTIVE' => '1',
+        ], $connection);
+
+        $this->assertSuccessfulBooleanResult($response, 'Не удалось активировать соединитель Bitrix24.');
+    }
+
+    private function saveRoute(
+        ?Bitrix24OpenLineRoute $route,
+        Bitrix24Profile $profile,
+        Channel $channel,
+        string $connectorCode,
+        string $lineId,
+        string $sourceId,
+        string $status,
+        ?string $errorMessage,
+        ?User $user,
+    ): Bitrix24OpenLineRoute {
+        $route ??= new Bitrix24OpenLineRoute([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'created_by_user_id' => $user?->id,
+        ]);
+
+        $route->fill([
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => $connectorCode,
+            'line_id' => $lineId,
+            'source_id' => $sourceId,
+            'status' => $status,
+            'last_error_message' => $this->sanitizeErrorMessage($errorMessage),
+            'last_error_at' => $errorMessage === null ? null : now(),
+            'updated_by_user_id' => $user?->id,
+        ]);
+
+        $route->save();
+
+        return $route;
+    }
+
+    private function findRoute(Bitrix24Profile $profile, Channel $channel): ?Bitrix24OpenLineRoute
+    {
+        return Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('channel_id', $channel->id)
+            ->first();
+    }
+
+    private function normalizedRouteLineId(?Bitrix24OpenLineRoute $route): ?string
+    {
+        if (! $route instanceof Bitrix24OpenLineRoute || ! filled($route->line_id)) {
+            return null;
+        }
+
+        return trim((string) $route->line_id);
+    }
+
+    private function assertLineIsNotUsedByAnotherRoute(Bitrix24Profile $profile, Channel $channel, string $lineId): void
+    {
+        $hasConflict = Bitrix24OpenLineRoute::query()
+            ->where('portal_domain', $profile->portal_domain)
+            ->where('line_id', $lineId)
+            ->where('channel_id', '!=', $channel->id)
+            ->whereIn('status', [
+                Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                Bitrix24OpenLineRoute::STATUS_LEGACY,
+                Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            ])
+            ->exists();
+
+        if ($hasConflict) {
+            throw new Bitrix24OpenLineAutoSetupException('Открытая линия уже занята другим маршрутом.');
+        }
+    }
+
+    private function assertSuccessfulResponse(Bitrix24RestResponseData $response, string $message): void
+    {
+        if ($response->successful) {
+            return;
+        }
+
+        throw new Bitrix24OpenLineAutoSetupException($this->buildApiErrorMessage($message, $response));
+    }
+
+    private function assertSuccessfulBooleanResult(Bitrix24RestResponseData $response, string $message): void
+    {
+        $this->assertSuccessfulResponse($response, $message);
+
+        if ($response->result === true || $response->result === 1 || $response->result === '1') {
+            return;
+        }
+
+        throw new Bitrix24OpenLineAutoSetupException($message);
+    }
+
+    private function assertSuccessfulNestedResult(Bitrix24RestResponseData $response, string $message): void
+    {
+        $this->assertSuccessfulResponse($response, $message);
+
+        $result = $response->result;
+
+        if (is_array($result) && ($result['result'] ?? null) === true) {
+            return;
+        }
+
+        $nestedError = is_array($result)
+            ? $this->sanitizeErrorMessage($result['error_description'] ?? $result['error'] ?? null)
+            : null;
+
+        throw new Bitrix24OpenLineAutoSetupException($nestedError ?: $message);
+    }
+
+    private function buildApiErrorMessage(string $message, Bitrix24RestResponseData $response): string
+    {
+        $errorMessage = $this->sanitizeErrorMessage($response->errorMessage ?? $response->errorCode);
+
+        return $errorMessage === null ? $message : $message.' '.$errorMessage;
+    }
+
+    private function requiredProfileValue(mixed $value, string $message): string
+    {
+        if (! is_scalar($value) || trim((string) $value) === '') {
+            throw new Bitrix24OpenLineAutoSetupException($message);
+        }
+
+        return trim((string) $value);
+    }
+
+    private function buildLineName(Bitrix24Profile $profile, Channel $channel): string
+    {
+        $prefix = sprintf('Abrikosoff / %s / #%d ', $profile->profile_key, $channel->id);
+        $maxLength = 120;
+        $suffix = Str::limit($channel->name, max(10, $maxLength - mb_strlen($prefix)), '');
+
+        return $prefix.$suffix;
+    }
+
+    private function buildConnectorName(Bitrix24Connection $connection, string $sourceId): string
+    {
+        $applicationName = $this->displayName($connection->application_name)
+            ?? $this->displayName(config('bitrix24.application.name'))
+            ?? 'Abrikosoff';
+
+        $sourceName = $this->sourceShortName($sourceId);
+        $parts = array_values(array_filter([$applicationName, $sourceName, 'Telegram bot']));
+
+        return Str::limit(implode(' ', $parts), 120, '');
+    }
+
+    private function displayName(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $name = trim((string) $value);
+
+        return $name === '' ? null : $name;
+    }
+
+    private function sourceShortName(string $sourceId): ?string
+    {
+        if (preg_match('/^([a-z0-9]+)[_-]telegram(?:[_-]|$)/i', trim($sourceId), $matches) !== 1) {
+            return null;
+        }
+
+        return mb_strtoupper($matches[1]);
+    }
+
+    private function settingsUrl(Bitrix24Profile $profile, Bitrix24Connection $connection): string
+    {
+        return rtrim($profile->callback_base_url, '/').'/admin/bitrix24-connections/'.$connection->id;
+    }
+
+    private function telegramIconDataUri(): string
+    {
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path fill="white" d="M27.7 5.3 4.9 14.1c-1.6.6-1.6 1.5-.3 1.9l5.9 1.8 2.2 6.8c.3.8.1 1.1 1 .4l3.1-3 6.4 4.7c1.2.7 2 .3 2.3-1.1L29.6 7c.4-1.4-.5-2.1-1.9-1.7ZM11.4 17.4 24.7 9c.7-.4 1.3-.2.8.3L14.1 19.6l-.4 4.1-2.3-6.3Z"/></svg>';
+
+        return 'data:image/svg+xml,'.rawurlencode($svg);
+    }
+
+    private function sanitizeErrorMessage(mixed $message): ?string
+    {
+        if (! is_scalar($message)) {
+            return null;
+        }
+
+        $normalized = trim((string) $message);
+
+        if ($normalized === '') {
+            return null;
+        }
+
+        $normalized = preg_replace('/(access_token|refresh_token|auth|client_secret|token)=\S+/i', '$1=***', $normalized) ?? $normalized;
+
+        return Str::limit($normalized, 500, '');
+    }
+
+    private function lockKey(Bitrix24Profile $profile, Channel $channel): string
+    {
+        return sprintf('bitrix24-openline-autosetup:%d:%d', $profile->id, $channel->id);
+    }
+}

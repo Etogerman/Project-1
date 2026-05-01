@@ -366,7 +366,7 @@ class Bitrix24HistoryExportTriggerTest extends TestCase
             'platform' => Channel::PLATFORM_TELEGRAM,
             'name' => 'Telegram Sales',
             'bot_name' => 'Abrikosoff TG',
-            'bot_code' => 'abrikosoff_tg',
+            'bot_username' => 'abrikosoff_tg',
         ]);
     }
 }

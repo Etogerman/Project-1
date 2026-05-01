@@ -18,7 +18,7 @@ class AbrikosoffImconnectorMaxComponent extends CBitrixComponent
 
         $this->arResult = [
             'LINE_ID' => $lineId,
-            'LINE_NAME' => Runtime::lineName('abrikosoff_max'),
+            'LINE_NAME' => Runtime::lineName('abrikosoff_max', $lineId),
             'CALLBACK_URL' => Runtime::laravelOpenlinesCallbackUrl(),
             'CONNECTOR_CODE' => 'abrikosoff_max',
         ];

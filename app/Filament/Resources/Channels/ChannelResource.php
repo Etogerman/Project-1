@@ -6,6 +6,7 @@ use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Message;
+use App\Services\Bots\CheckChannelConnectionAction;
 use App\Services\Bots\RegisterChannelWebhookAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
@@ -20,7 +21,6 @@ use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
@@ -35,6 +35,7 @@ use Filament\Tables\Enums\RecordActionsPosition;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
@@ -72,20 +73,19 @@ class ChannelResource extends Resource
         return $schema
             ->components([
                 Section::make('Основное')
-                    ->description('Название, платформа и тип подключения этого канала.')
                     ->extraAttributes(['class' => 'ac-channel-form-section ac-channel-form-section--profile'])
                     ->schema([
                         TextInput::make('name')
                             ->label('Название')
                             ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
                             ->required()
-                            ->maxLength(255)
-                            ->columnSpanFull(),
+                            ->maxLength(255),
                         Select::make('platform')
                             ->label('Платформа')
                             ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
                             ->options(Channel::platformOptions())
                             ->required()
+                            ->selectablePlaceholder(false)
                             ->native(false),
                         Select::make('connection_type')
                             ->label('Тип')
@@ -93,11 +93,12 @@ class ChannelResource extends Resource
                             ->options(Channel::connectionTypeOptions())
                             ->default(Channel::CONNECTION_TYPE_BOT)
                             ->required()
+                            ->selectablePlaceholder(false)
                             ->native(false),
                     ])
+                    ->columnSpanFull()
                     ->columns(2),
                 Section::make('Доступ и режим')
-                    ->description('Управление активностью канала и режимом обработки входящих сообщений.')
                     ->extraAttributes(['class' => 'ac-channel-form-section ac-channel-form-section--access'])
                     ->schema([
                         Select::make('auto_reply_mode')
@@ -106,17 +107,24 @@ class ChannelResource extends Resource
                             ->options(Channel::autoReplyModeOptions())
                             ->default(Channel::AUTO_REPLY_MODE_RULES_ONLY)
                             ->required()
+                            ->selectablePlaceholder(false)
                             ->native(false),
-                        Toggle::make('is_active')
-                            ->label('Активен')
-                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-toggle'])
-                            ->default(true)
-                            ->helperText('Отключённый канал не будет использоваться для приёма и отправки сообщений.')
-                            ->inline(false),
+                        Select::make('is_active')
+                            ->label('Активность')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
+                            ->options([
+                                '1' => 'Активен',
+                                '0' => 'Отключён',
+                            ])
+                            ->default('1')
+                            ->required()
+                            ->selectablePlaceholder(false)
+                            ->native(false)
+                            ->dehydrateStateUsing(fn (string|int|bool|null $state): bool => (string) $state === '1'),
                     ])
+                    ->columnSpanFull()
                     ->columns(2),
                 Section::make('Токен')
-                    ->description('При редактировании можно оставить поле пустым. Webhook и секрет регистрируются отдельным действием после сохранения канала.')
                     ->extraAttributes(['class' => 'ac-channel-form-section ac-channel-form-section--token'])
                     ->schema([
                         TextInput::make('credentials.token')
@@ -132,7 +140,6 @@ class ChannelResource extends Resource
                             })
                             ->dehydrateStateUsing(fn (?string $state): ?string => filled($state) ? trim($state) : null)
                             ->dehydrated(fn (?string $state, string $operation): bool => $operation === 'create' || filled($state))
-                            ->helperText('Оставьте пустым, чтобы сохранить текущий токен.')
                             ->maxLength(65535)
                             ->columnSpanFull(),
                     ])
@@ -146,6 +153,7 @@ class ChannelResource extends Resource
         return $schema
             ->components([
                 Section::make('Сводка канала')
+                    ->extraAttributes(['class' => 'ac-channel-view-section ac-channel-view-section--summary'])
                     ->schema([
                         TextEntry::make('id')
                             ->label('ID')
@@ -267,6 +275,7 @@ class ChannelResource extends Resource
                     ->columns(4)
                     ->columnSpanFull(),
                 Section::make('Последнее входящее событие')
+                    ->extraAttributes(['class' => 'ac-channel-view-section ac-channel-view-section--latest-message'])
                     ->schema([
                         TextEntry::make('latest_message_saved_at')
                             ->label('Сохранено в системе')
@@ -324,6 +333,7 @@ class ChannelResource extends Resource
                     ->columns(4)
                     ->columnSpanFull(),
                 Section::make('Лента сообщений')
+                    ->extraAttributes(['class' => 'ac-channel-view-section ac-channel-view-section--feed'])
                     ->schema([
                         TextEntry::make('recent_messages_feed')
                             ->label('Последние сохранённые сообщения')
@@ -333,6 +343,7 @@ class ChannelResource extends Resource
                     ])
                     ->columnSpanFull(),
                 Section::make('Техжурнал')
+                    ->extraAttributes(['class' => 'ac-channel-view-section ac-channel-view-section--feed'])
                     ->schema([
                         TextEntry::make('recent_activity_feed')
                             ->label('Последние события канала')
@@ -376,10 +387,14 @@ class ChannelResource extends Resource
                     ->toggleable(),
                 TextColumn::make('health_status')
                     ->label('Состояние')
-                    ->state(fn (Channel $record): string => $record->getHealthStatusLabel())
+                    ->state(fn (Channel $record): string => $record->getConnectionStatusLabel(
+                        static::resolveConnectionState($record)['connection_status'],
+                    ))
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->color(fn (Channel $record): string => $record->getHealthStatusColor())
+                    ->color(fn (Channel $record): string => $record->getConnectionStatusColor(
+                        static::resolveConnectionState($record)['connection_status'],
+                    ))
                     ->toggleable(),
                 TextColumn::make('platform')
                     ->label('Платформа')
@@ -427,19 +442,35 @@ class ChannelResource extends Resource
                     ->sortable()
                     ->toggleable(),
                 TextColumn::make('is_active')
-                    ->label('Активен')
+                    ->label('Включён')
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->formatStateUsing(fn (bool $state): string => $state ? 'Активен' : 'Отключен')
+                    ->formatStateUsing(fn (bool $state): string => $state ? 'Да' : 'Нет')
                     ->color(fn (bool $state): string => $state ? 'success' : 'gray')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('webhook_secret_status')
                     ->label('Webhook')
-                    ->state(fn (Channel $record): string => $record->isBotConnection() ? $record->getWebhookStatusLabel() : '—')
+                    ->state(fn (Channel $record): string => $record->getLiveWebhookStatusLabel(
+                        static::resolveConnectionState($record)['webhook_status'],
+                    ))
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->color(fn (Channel $record): string => $record->isBotConnection() ? $record->getWebhookStatusColor() : 'gray')
+                    ->color(fn (Channel $record): string => $record->getLiveWebhookStatusColor(
+                        static::resolveConnectionState($record)['webhook_status'],
+                    ))
+                    ->toggleable(),
+                TextColumn::make('connection_checked_at')
+                    ->label('Последняя проверка')
+                    ->state(fn (Channel $record) => static::resolveConnectionState($record)['connection_checked_at'])
+                    ->dateTime('d.m.Y H:i')
+                    ->sortable()
+                    ->toggleable(),
+                TextColumn::make('connection_error_message')
+                    ->label('Ошибка')
+                    ->state(fn (Channel $record): ?string => static::resolveConnectionState($record)['connection_error_message'])
+                    ->limit(60)
+                    ->wrap()
                     ->toggleable(),
                 TextColumn::make('bot_external_id')
                     ->label('Внешний ID')
@@ -518,6 +549,17 @@ class ChannelResource extends Resource
                     ->action(function (Channel $record): void {
                         try {
                             app(RegisterChannelWebhookAction::class)->handle($record);
+                            $record->refresh();
+
+                            if ($record->connection_status !== Channel::CONNECTION_STATUS_CONNECTED) {
+                                Notification::make()
+                                    ->warning()
+                                    ->title('Webhook зарегистрирован, но подключение не подтверждено')
+                                    ->body($record->connection_error_message ?? 'Проверьте подключение канала.')
+                                    ->send();
+
+                                return;
+                            }
 
                             Notification::make()
                                 ->success()
@@ -535,6 +577,33 @@ class ChannelResource extends Resource
 
                             throw $throwable;
                         }
+                    }),
+                Action::make('checkConnection')
+                    ->label('Проверить подключение')
+                    ->icon(Heroicon::OutlinedSignal)
+                    ->color('gray')
+                    ->iconButton()
+                    ->extraAttributes(['class' => 'ac-channel-table-operation'])
+                    ->tooltip('Проверить подключение')
+                    ->visible(fn (Channel $record): bool => (bool) auth()->user()?->can('update', $record))
+                    ->action(function (Channel $record): void {
+                        $state = app(CheckChannelConnectionAction::class)->handle($record);
+
+                        if ($state['connection_status'] === Channel::CONNECTION_STATUS_CONNECTED) {
+                            Notification::make()
+                                ->success()
+                                ->title('Канал подключен')
+                                ->body('Telegram подтвердил webhook этой админки.')
+                                ->send();
+
+                            return;
+                        }
+
+                        Notification::make()
+                            ->danger()
+                            ->title('Канал не подключен')
+                            ->body($state['connection_error_message'] ?? 'Проверьте настройки канала.')
+                            ->send();
                     }),
                 Action::make('syncBotMetadata')
                     ->label('Обновить данные бота')
@@ -619,9 +688,15 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->color('gray')
                     ->extraAttributes(['class' => 'ac-channel-table-action'])
+                    ->extraModalWindowAttributes(['class' => 'ac-channel-view-modal'])
+                    ->modalContent(fn (Channel $record): ViewContract => view(
+                        'filament.channels.partials.channel-view-overview',
+                        static::buildChannelViewModalData($record),
+                    ))
+                    ->infolist([])
                     ->tooltip('Просмотр'),
                 EditAction::make()
-                    ->modalWidth(Width::FourExtraLarge)
+                    ->modalWidth(Width::SevenExtraLarge)
                     ->icon(Heroicon::OutlinedPencilSquare)
                     ->iconButton()
                     ->color('gray')
@@ -638,7 +713,7 @@ class ChannelResource extends Resource
                         'credentials' => [
                             'token' => null,
                         ],
-                        'is_active' => $record->is_active,
+                        'is_active' => $record->is_active ? '1' : '0',
                     ])
                     ->using(function (array $data, Channel $record): void {
                         static::updateChannelRecord($record, static::mutateChannelData($data, $record));
@@ -669,12 +744,6 @@ class ChannelResource extends Resource
 
         if ($token !== '') {
             Arr::set($credentials, Channel::CREDENTIAL_TOKEN, $token);
-            Arr::set($data, 'credentials', $credentials);
-
-            return $data;
-        }
-
-        if ($credentials !== []) {
             Arr::set($data, 'credentials', $credentials);
 
             return $data;
@@ -1028,6 +1097,101 @@ class ChannelResource extends Resource
         }
 
         return 'Токен ещё не настроен';
+    }
+
+    /**
+     * @return array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}
+     */
+    protected static function resolveConnectionState(Channel $record): array
+    {
+        return app(CheckChannelConnectionAction::class)->resolveEffectiveState($record);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public static function buildChannelViewModalData(Channel $record): array
+    {
+        $record->loadMissing('runtimeState');
+
+        $formatDate = static fn (mixed $value): string => $value instanceof \DateTimeInterface
+            ? $value->format('d.m.Y H:i:s')
+            : '—';
+        $formatText = static fn (mixed $value, string $empty = '—'): string => filled($value)
+            ? (string) $value
+            : $empty;
+        $latestMessage = static::resolveLatestSavedMessage($record);
+        $connectionState = static::resolveConnectionState($record);
+        $lastErrorAt = $record->isAccountConnection()
+            ? $record->runtimeState?->last_error_at
+            : $record->last_error_at;
+        $lastErrorMessage = $record->isAccountConnection()
+            ? $record->runtimeState?->last_error_message
+            : $record->last_error_message;
+
+        return [
+            'record' => $record,
+            'summaryTables' => [
+                [
+                    ['label' => 'ID', 'value' => $formatText($record->id)],
+                    ['label' => 'Автоответ', 'value' => $record->getAutoReplyModeLabel(), 'tone' => static::getAutoReplyModeColor($record->auto_reply_mode)],
+                    ['label' => 'Внешний ID', 'value' => $record->isBotConnection() ? $formatText($record->bot_external_id, 'Не загружен') : '—'],
+                    ['label' => 'Последний ответ', 'value' => $formatDate($record->last_reply_sent_at)],
+                    ['label' => 'Текст ошибки', 'value' => $formatText($lastErrorMessage, 'Ошибок не было')],
+                    ['label' => 'Создан', 'value' => $formatDate($record->created_at)],
+                ],
+                [
+                    ['label' => 'Название', 'value' => $formatText($record->name)],
+                    ['label' => 'Состояние', 'value' => $record->getConnectionStatusLabel($connectionState['connection_status']), 'tone' => $record->getConnectionStatusColor($connectionState['connection_status'])],
+                    ['label' => 'Включён', 'value' => $record->is_active ? 'Да' : 'Нет', 'tone' => $record->is_active ? 'success' : 'gray'],
+                    ['label' => 'Последняя проверка', 'value' => $formatDate($connectionState['connection_checked_at'])],
+                    ['label' => 'Ошибка подключения', 'value' => $formatText($connectionState['connection_error_message'], 'Ошибок не было')],
+                    ['label' => 'Обновлён', 'value' => $formatDate($record->updated_at)],
+                ],
+                [
+                    ['label' => 'Платформа', 'value' => Channel::platformOptions()[$record->platform] ?? $record->platform, 'tone' => 'info'],
+                    ['label' => 'Имя бота', 'value' => $record->isBotConnection() ? $formatText($record->bot_name, 'Не загружено') : '—'],
+                    ['label' => 'Webhook', 'value' => $record->getLiveWebhookStatusLabel($connectionState['webhook_status']), 'tone' => $record->getLiveWebhookStatusColor($connectionState['webhook_status'])],
+                    ['label' => 'Ожидаемый URL', 'value' => $formatText($connectionState['expected_webhook_url'])],
+                ],
+                [
+                    ['label' => 'Тип', 'value' => $record->getConnectionTypeLabel(), 'tone' => 'warning'],
+                    ['label' => 'Username', 'value' => $record->isBotConnection() ? ($record->getBotUsernameLabel() ?? 'Не загружен') : '—'],
+                    ['label' => 'Последний webhook', 'value' => $formatDate($record->last_webhook_received_at)],
+                    ['label' => 'URL в Telegram', 'value' => $formatText($connectionState['provider_webhook_url'])],
+                ],
+            ],
+            'latestMessageTables' => [
+                [
+                    ['label' => 'Сохранено в системе', 'value' => $formatDate($latestMessage?->created_at)],
+                    ['label' => 'Provider event key', 'value' => $formatText($latestMessage?->provider_event_key)],
+                    ['label' => 'Сохранено сообщений', 'value' => (string) $record->messages()->count()],
+                    ['label' => 'Текст', 'value' => $formatText(static::resolveLatestSavedMessageDisplayText($record))],
+                ],
+                [
+                    ['label' => 'Получено', 'value' => $formatDate($latestMessage?->received_at)],
+                    [
+                        'label' => 'Направление',
+                        'value' => $latestMessage instanceof Message ? static::formatMessageDirection($latestMessage->direction) : '—',
+                        'tone' => $latestMessage instanceof Message ? static::getMessageDirectionColor($latestMessage->direction) : null,
+                    ],
+                ],
+                [
+                    ['label' => 'Внешний пользователь', 'value' => $formatText($latestMessage?->contactIdentity?->external_user_id)],
+                    ['label' => 'Автоответ отправлен', 'value' => $formatDate($latestMessage?->auto_reply_sent_at)],
+                ],
+                [
+                    ['label' => 'Внешний message ID', 'value' => $formatText($latestMessage?->external_message_id)],
+                    [
+                        'label' => 'Статус автоответа',
+                        'value' => $formatText(static::resolveLatestSavedMessageReplyStatus($record), 'Сообщений ещё не было'),
+                        'tone' => static::getLatestSavedMessageReplyStatusColor($record),
+                    ],
+                ],
+            ],
+            'recentMessagesFeed' => static::renderRecentSavedMessages($record),
+            'recentActivityFeed' => static::renderRecentActivityLogs($record),
+        ];
     }
 
     protected static function resolveLatestSavedMessageReplyStatus(Channel $record): ?string

@@ -123,6 +123,31 @@ class DialogRoutePredicateParityTest extends TestCase
             $this->createDialog(
                 channelAttributes: [
                     'platform' => Channel::PLATFORM_TELEGRAM,
+                    'credentials' => ['token' => 'telegram-disconnected-token'],
+                    'connection_status' => Channel::CONNECTION_STATUS_NOT_CONNECTED,
+                    'webhook_status' => Channel::WEBHOOK_STATUS_NOT_INSTALLED,
+                    'connection_checked_at' => now(),
+                    'connection_error_message' => 'Webhook установлен не на эту админку',
+                ],
+                dialogAttributes: [
+                    'external_chat_id' => 'telegram-disconnected-chat',
+                ],
+            ),
+            $this->createDialog(
+                channelAttributes: [
+                    'platform' => Channel::PLATFORM_TELEGRAM,
+                    'credentials' => ['token' => 'telegram-stale-token'],
+                    'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+                    'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+                    'connection_checked_at' => now()->subMinutes(3),
+                ],
+                dialogAttributes: [
+                    'external_chat_id' => 'telegram-stale-chat',
+                ],
+            ),
+            $this->createDialog(
+                channelAttributes: [
+                    'platform' => Channel::PLATFORM_TELEGRAM,
                     'credentials' => [],
                 ],
                 dialogAttributes: [

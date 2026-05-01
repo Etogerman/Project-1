@@ -275,8 +275,10 @@ class Bitrix24DealLookupTest extends TestCase
         $this->assertSame(Contact::BITRIX24_DEAL_SYNC_STATUS_PENDING_REVIEW, $contact->bitrix24_deal_sync_status);
 
         Http::assertSent(function ($request): bool {
+            $data = $request->data();
+
             return $request->url() === 'https://client-endpoint.example/rest/crm.deal.list.json'
-                && $request['start'] === 50;
+                && ($data['start'] ?? null) === 50;
         });
 
         $lookupLog = Bitrix24SyncLog::query()
@@ -458,6 +460,8 @@ class Bitrix24DealLookupTest extends TestCase
         $this->assertNull($contact->bitrix24_deal_id);
         $this->assertFalse($contact->bitrix24_deal_sync_pending);
 
+        $this->app->forgetInstance(LinkBitrix24DealAction::class);
+
         $contact->forceFill([
             'bitrix24_deal_sync_pending' => true,
             'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_PENDING,
@@ -487,12 +491,14 @@ class Bitrix24DealLookupTest extends TestCase
         $this->assertSame(Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED, $contact->bitrix24_deal_sync_status);
         $this->assertFalse($contact->bitrix24_deal_sync_pending);
 
-        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.deal.list.json'
+            && ($request->data()['filter']['CONTACT_ID'] ?? null) === $contact->bitrix24_contact_id);
     }
 
     private function runDealEnsureJob(Contact $contact): void
     {
-        $job = new EnsureBitrix24DealJob($contact->id);
+        $job = (new EnsureBitrix24DealJob($contact->id))->withFakeQueueInteractions();
+        $job->job->attempts = $job->tries;
 
         app()->call([$job, 'handle']);
     }

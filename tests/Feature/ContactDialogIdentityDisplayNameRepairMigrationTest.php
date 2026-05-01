@@ -212,7 +212,7 @@ class ContactDialogIdentityDisplayNameRepairMigrationTest extends TestCase
         $nonDialogIdentity->refresh();
 
         $this->assertSame('Уже заданное имя', $filledDialogIdentity->display_name);
-        $this->assertSame('Имя из legacy профиля', $emptyDialogIdentity->display_name);
+        $this->assertNull($emptyDialogIdentity->display_name);
         $this->assertNull($nonDialogIdentity->display_name);
     }
 

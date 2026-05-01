@@ -32,7 +32,7 @@ class AdminUserSeederTest extends TestCase
         $this->app['env'] = 'production';
 
         try {
-            $this->seed(AdminUserSeeder::class);
+            (new AdminUserSeeder())->run();
         } finally {
             $this->app['env'] = $originalEnvironment;
         }

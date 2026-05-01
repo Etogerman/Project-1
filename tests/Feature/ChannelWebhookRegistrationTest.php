@@ -28,6 +28,17 @@ class ChannelWebhookRegistrationTest extends TestCase
 
     public function test_admin_can_register_telegram_webhook_from_filament_resource(): void
     {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
                 ->push([
@@ -41,18 +52,13 @@ class ChannelWebhookRegistrationTest extends TestCase
                         'first_name' => 'Staging Bot',
                         'username' => 'stagin_g_1_bot',
                     ],
+                ], 200)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'url' => "https://connector.example/webhooks/telegram/{$channel->id}",
+                    ],
                 ], 200),
-        ]);
-
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => [
-                'token' => 'telegram-token',
-            ],
         ]);
 
         Livewire::actingAs($admin)
@@ -67,6 +73,8 @@ class ChannelWebhookRegistrationTest extends TestCase
         $this->assertSame('stagin_g_1_bot', $channel->bot_username);
         $this->assertSame('Staging Bot', $channel->bot_name);
         $this->assertSame('https://t.me/stagin_g_1_bot', $channel->getBotProfileUrl());
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $channel->webhook_status);
 
         Http::assertSent(function ($request) use ($channel): bool {
             return $request->url() === 'https://api.telegram.org/bottelegram-token/setWebhook'
@@ -76,6 +84,7 @@ class ChannelWebhookRegistrationTest extends TestCase
         });
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getMe');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getWebhookInfo');
 
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,

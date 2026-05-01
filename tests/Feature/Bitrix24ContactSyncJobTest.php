@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bitrix24\Bitrix24DealSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24HistoryExportQueueResultData;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\Bitrix24MessageExport;
@@ -353,13 +355,14 @@ class Bitrix24ContactSyncJobTest extends TestCase
         $secondaryChannel = Channel::factory()->create([
             'name' => 'Telegram Secondary',
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
             'bot_username' => 'secondary_tg',
             'bot_name' => 'Secondary TG',
         ]);
         $this->attachChannelIdentity($contact, $secondaryChannel);
 
         $notReadyDialog = $this->makeDialog($contact, $secondaryChannel, [
-            'external_chat_id' => null,
+            'external_chat_id' => 'secondary-chat-'.$contact->id,
         ]);
         $latestNotReadyMessage = $this->makeMessage($notReadyDialog, [
             'direction' => Message::DIRECTION_INBOUND,
@@ -613,7 +616,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
                 && $fields['UF_CRM_ABRIKOSOFF_BOT_CODE'] === 'abrikosoff_tg'
                 && $fields['UF_CRM_ABRIKOSOFF_BOT_NAME'] === 'Abrikosoff TG'
                 && $fields['PHONE'][0]['VALUE'] === '+79991234567'
-                && $fields['PHONE'][0]['VALUE_TYPE'] === 'MOBILE'
+                && $fields['PHONE'][0]['VALUE_TYPE'] === 'WORK'
                 && $fields['PHONE'][1]['VALUE'] === '+79995555555'
                 && $fields['PHONE'][1]['VALUE_TYPE'] === 'OTHER';
         });
@@ -956,7 +959,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             return is_array($fields)
                 && ($fields['NAME'] ?? null) === 'Герман'
                 && ($fields['LAST_NAME'] ?? null) === 'Абрикосов'
-                && ($fields['UF_CRM_64D7457E4DC07'] ?? null) === (int) config('bitrix24.values.name_source.automatic_information_id');
+                && ($fields['UF_CRM_64D7457E4DC07'] ?? null) === (int) config('bitrix24.values.name_source.self_reported_id');
         });
     }
 
@@ -985,16 +988,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
         $this->runSyncJob($contact);
 
-        Http::assertSent(function ($request): bool {
-            if ($request->url() !== 'https://client-endpoint.example/rest/crm.contact.update.json') {
-                return false;
-            }
-
-            $fields = $request['fields'];
-
-            return is_array($fields)
-                && ! array_key_exists('UF_CRM_5EEB7355C13B1', $fields);
-        });
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.contact.update.json');
 
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'contact_sync_gender_preserved',
@@ -1041,7 +1035,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
         });
     }
 
-    public function test_update_preserves_matching_remote_mobile_phone_and_preserves_remote_only_phone(): void
+    public function test_update_normalizes_matching_local_phone_and_preserves_remote_only_phone(): void
     {
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
@@ -1079,7 +1073,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             return is_array($phones)
                 && count($phones) === 2
                 && $phones[0]['VALUE'] === '+79991234567'
-                && $phones[0]['VALUE_TYPE'] === 'MOBILE'
+                && $phones[0]['VALUE_TYPE'] === 'WORK'
                 && $phones[1]['VALUE'] === '+7 900 000 00 00'
                 && $phones[1]['VALUE_TYPE'] === 'WORK';
         });
@@ -1153,13 +1147,14 @@ class Bitrix24ContactSyncJobTest extends TestCase
             ], 400),
         ]);
 
-        $this->runSyncJob($contact);
+        $job = $this->runFinalSyncJob($contact);
 
         $contact->refresh();
 
         $this->assertSame('999', $contact->bitrix24_contact_id);
         $this->assertSame(Contact::BITRIX24_SYNC_STATUS_FAILED, $contact->bitrix24_sync_status);
         $this->assertFalse($contact->bitrix24_sync_pending);
+        $job->assertFailed();
     }
 
     public function test_unique_match_is_linked_and_safely_updated_when_remote_diff_exists(): void
@@ -1256,19 +1251,26 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_job_marks_contact_failed_when_duplicate_search_cannot_run(): void
     {
+        $this->makeActiveConnection();
         $contact = $this->createSyncReadyContact([
             'bitrix24_sync_pending' => true,
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
         ]);
 
-        Http::fake();
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'error' => 'DUPLICATE_SEARCH_FAILED',
+                'error_description' => 'Duplicate search failed',
+            ], 400),
+        ]);
 
-        $this->runSyncJob($contact);
+        $job = $this->runFinalSyncJob($contact);
 
         $contact->refresh();
 
         $this->assertSame(Contact::BITRIX24_SYNC_STATUS_FAILED, $contact->bitrix24_sync_status);
         $this->assertFalse($contact->bitrix24_sync_pending);
+        $job->assertFailed();
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'contact_sync_failed',
             'status' => Bitrix24SyncLog::STATUS_FAILED,
@@ -1324,13 +1326,25 @@ class Bitrix24ContactSyncJobTest extends TestCase
         $dealAction = Mockery::mock(QueueBitrix24DealSyncAction::class);
         $dealAction->shouldReceive('handle')
             ->once()
-            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id);
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id)
+            ->andReturn(new Bitrix24DealSyncQueueResultData(
+                queued: true,
+                alreadyPending: false,
+                ready: true,
+                rootContactId: $contact->id,
+            ));
         $this->app->instance(QueueBitrix24DealSyncAction::class, $dealAction);
 
         $historyAction = Mockery::mock(QueueBitrix24HistoryExportAction::class);
         $historyAction->shouldReceive('handle')
             ->once()
-            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id);
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id)
+            ->andReturn(new Bitrix24HistoryExportQueueResultData(
+                queued: true,
+                alreadyPending: false,
+                ready: true,
+                rootContactId: $contact->id,
+            ));
         $this->app->instance(QueueBitrix24HistoryExportAction::class, $historyAction);
 
         $this->runSyncJob($contact);
@@ -1551,7 +1565,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
                 ->get()
                 ->map(fn (ContactPhoneNumber $phone): array => [
                     'VALUE' => $phone->phone_normalized,
-                    'VALUE_TYPE' => $phone->is_primary ? 'MOBILE' : 'OTHER',
+                    'VALUE_TYPE' => $phone->is_primary ? 'WORK' : 'OTHER',
                 ])
                 ->values()
                 ->all(),
@@ -1631,5 +1645,15 @@ class Bitrix24ContactSyncJobTest extends TestCase
         $job = new SyncContactToBitrix24Job($contact->id);
 
         app()->call([$job, 'handle']);
+    }
+
+    private function runFinalSyncJob(Contact $contact): SyncContactToBitrix24Job
+    {
+        $job = (new SyncContactToBitrix24Job($contact->id))->withFakeQueueInteractions();
+        $job->job->attempts = $job->tries;
+
+        app()->call([$job, 'handle']);
+
+        return $job;
     }
 }

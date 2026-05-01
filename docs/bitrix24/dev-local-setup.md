@@ -21,7 +21,7 @@ Bitrix24 staging-порталу через отдельный `dev-*` profile.
 
 По умолчанию staging-портал проекта:
 
-- `portal_domain`: `crm.alexlesley.biz`
+- `portal_domain`: `stagecrm.fvds.ru`
 
 ## Важные правила
 
@@ -59,7 +59,8 @@ Bitrix24 staging-порталу через отдельный `dev-*` profile.
 сохраните:
 
 1. `client_id`
-2. `application_code`
+2. `client_secret`
+3. `application_code`
 
 Не переиспользуйте приложение от `staging` или другого разработчика.
 
@@ -72,6 +73,13 @@ Bitrix24 staging-порталу через отдельный `dev-*` profile.
 php artisan bitrix24:dev-profile-bootstrap dev-german-main https://german-main.trycloudflare.com \
   --client-id=ВАШ_CLIENT_ID \
   --application-code=ВАШ_APPLICATION_CODE
+```
+
+В локальном `.env` для OAuth также должен быть задан:
+
+```env
+BITRIX24_CLIENT_SECRET=ВАШ_CLIENT_SECRET
+BITRIX24_AUTH_SERVER_URL=https://oauth.bitrix.info
 ```
 
 Команда напечатает:

@@ -256,9 +256,13 @@ class ProcessBitrix24OpenLinesWebhookAction
         Dialog $dialog,
         Bitrix24OpenLinesOperatorMessageData $messageData,
     ): void {
-        $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
+        $route = $this->resolveBitrix24OpenLinesRouteAction->handleIncomingCallback(
+            $dialog,
+            $messageData->connectorCode,
+            $messageData->lineId,
+        );
 
-        if ($messageData->connectorCode !== '' && $messageData->connectorCode !== $route->connectorCode) {
+        if ($messageData->connectorCode !== $route->connectorCode) {
             throw new Bitrix24OpenLinesRouteMismatchException(sprintf(
                 'Bitrix24 Open Lines callback connector `%s` does not match current runtime route `%s` for dialog #%d.',
                 $messageData->connectorCode,
@@ -267,7 +271,7 @@ class ProcessBitrix24OpenLinesWebhookAction
             ));
         }
 
-        if ($messageData->lineId !== '' && $messageData->lineId !== $route->lineId) {
+        if ($messageData->lineId !== $route->lineId) {
             throw new Bitrix24OpenLinesRouteMismatchException(sprintf(
                 'Bitrix24 Open Lines callback line `%s` does not match current runtime route `%s` for dialog #%d.',
                 $messageData->lineId,

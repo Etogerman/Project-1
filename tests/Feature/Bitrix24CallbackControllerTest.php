@@ -11,6 +11,7 @@ use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
 class Bitrix24CallbackControllerTest extends TestCase
@@ -18,6 +19,13 @@ class Bitrix24CallbackControllerTest extends TestCase
     use RefreshDatabase;
 
     private Bitrix24Profile $defaultProfile;
+
+    /**
+     * @var array<string, mixed>
+     */
+    private array $appInfoProbeResponse = [];
+
+    private int $appInfoProbeStatus = 200;
 
     protected function setUp(): void
     {
@@ -39,13 +47,17 @@ class Bitrix24CallbackControllerTest extends TestCase
         ]);
 
         Http::preventStrayRequests();
+        $this->fakeBitrixAppInfoResponse([
+            'result' => [
+                'CODE' => 'local.app.code',
+                'INSTALLED' => true,
+            ],
+        ]);
         Http::fake([
-            'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
-                'result' => [
-                    'CODE' => 'local.app.code',
-                    'INSTALLED' => true,
-                ],
-            ]),
+            'https://crm.alexlesley.biz/rest/app.info.json' => fn () => Http::response(
+                $this->appInfoProbeResponse,
+                $this->appInfoProbeStatus,
+            ),
         ]);
     }
 
@@ -53,7 +65,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -121,7 +133,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -157,7 +169,7 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::fake();
         config()->set('bitrix24.oauth.server_url', null);
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -188,7 +200,7 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $connection = $this->createActiveConnection('member-1', 'app-token');
 
-        $response = $this->postJson('/callbacks/bitrix24/events', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
             'data' => [
                 'FIELDS' => [
@@ -255,8 +267,8 @@ class Bitrix24CallbackControllerTest extends TestCase
             ],
         ];
 
-        $firstResponse = $this->postJson('/callbacks/bitrix24/openlines', $payload);
-        $secondResponse = $this->postJson('/callbacks/bitrix24/openlines', $payload);
+        $firstResponse = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', $payload);
+        $secondResponse = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', $payload);
 
         $firstResponse->assertOk();
         $secondResponse->assertOk();
@@ -302,8 +314,8 @@ class Bitrix24CallbackControllerTest extends TestCase
             ],
         ];
 
-        $firstResponse = $this->postJson('/callbacks/bitrix24/openlines', $payloadWithLowercaseData);
-        $secondResponse = $this->postJson('/callbacks/bitrix24/openlines', $payloadWithUppercaseData);
+        $firstResponse = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', $payloadWithLowercaseData);
+        $secondResponse = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', $payloadWithUppercaseData);
 
         $firstResponse->assertOk();
         $secondResponse->assertOk();
@@ -343,8 +355,8 @@ class Bitrix24CallbackControllerTest extends TestCase
             ],
         ];
 
-        $firstResponse = $this->postJson('/callbacks/bitrix24/openlines', $payloadWithConflictingCaseKeys);
-        $secondResponse = $this->postJson('/callbacks/bitrix24/openlines', $payloadWithSingleLowercaseKey);
+        $firstResponse = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', $payloadWithConflictingCaseKeys);
+        $secondResponse = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', $payloadWithSingleLowercaseKey);
 
         $firstResponse->assertOk();
         $secondResponse->assertOk();
@@ -359,7 +371,7 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $this->createActiveConnection('member-1', 'app-token');
 
-        $response = $this->postJson('/callbacks/bitrix24/openlines', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', [
             'EVENT' => 'OnImConnectorMessageAdd',
             'AUTH' => [
                 'DOMAIN' => 'crm.alexlesley.biz',
@@ -390,11 +402,48 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
     }
 
+    public function test_openlines_callback_accepts_configured_runtime_token_hash(): void
+    {
+        Queue::fake();
+
+        config()->set('bitrix24.openlines.runtime_application_token_hashes', [
+            hash('sha256', 'box-runtime-token'),
+        ]);
+
+        $connection = $this->createActiveConnection('member-1', 'install-token');
+
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', [
+            'event' => 'OnImConnectorMessageAdd',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-1',
+                'application_token' => 'box-runtime-token',
+            ],
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'MESSAGES' => [
+                    ['ID' => 'm-1'],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'openlines')
+            ->assertJsonPath('method', 'POST');
+
+        $event = Bitrix24WebhookEvent::query()->firstOrFail();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PENDING, $event->processing_status, (string) $event->failure_reason);
+        $this->assertSame($connection->id, $event->connection_id);
+
+        Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
+    }
+
     public function test_install_callback_with_case_insensitive_keys_is_accepted_and_dispatches_job(): void
     {
         Queue::fake();
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'EVENT' => 'ONAPPINSTALL',
             'AUTH' => [
                 'DOMAIN' => 'crm.alexlesley.biz',
@@ -432,7 +481,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $response = $this->postJson('/callbacks/bitrix24/install?APP_SID=query-app-token', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install?APP_SID=query-app-token', [
             'DOMAIN' => 'crm.alexlesley.biz',
             'status' => 'L',
             'APP_SID' => 'flat-app-token',
@@ -526,7 +575,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'foreign.example.test',
@@ -555,14 +604,12 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Http::fake([
-            'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
-                'error' => 'ACCESS_DENIED',
-                'error_description' => 'Application context is not available.',
-            ], 401),
-        ]);
+        $this->fakeBitrixAppInfoResponse([
+            'error' => 'ACCESS_DENIED',
+            'error_description' => 'Application context is not available.',
+        ], 401);
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -591,16 +638,14 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Http::fake([
-            'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
-                'result' => [
-                    'CODE' => 'local.app.code',
-                    'INSTALLED' => false,
-                ],
-            ]),
+        $this->fakeBitrixAppInfoResponse([
+            'result' => [
+                'CODE' => 'local.app.code',
+                'INSTALLED' => false,
+            ],
         ]);
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -631,16 +676,14 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::fake();
         config()->set('bitrix24.install_validation.allow_uninstalled_app_probe', true);
 
-        Http::fake([
-            'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
-                'result' => [
-                    'CODE' => 'local.app.code',
-                    'INSTALLED' => false,
-                ],
-            ]),
+        $this->fakeBitrixAppInfoResponse([
+            'result' => [
+                'CODE' => 'local.app.code',
+                'INSTALLED' => false,
+            ],
         ]);
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -670,16 +713,14 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        Http::fake([
-            'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
-                'result' => [
-                    'CODE' => 'foreign.app.code',
-                    'INSTALLED' => true,
-                ],
-            ]),
+        $this->fakeBitrixAppInfoResponse([
+            'result' => [
+                'CODE' => 'foreign.app.code',
+                'INSTALLED' => true,
+            ],
         ]);
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -711,7 +752,7 @@ class Bitrix24CallbackControllerTest extends TestCase
             'application_code' => null,
         ])->save();
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -740,7 +781,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $response = $this->postJson('/callbacks/bitrix24/install', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
             'event' => 'ONAPPINSTALL',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -835,7 +876,7 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $this->createActiveConnection('member-1', 'expected-token');
 
-        $response = $this->postJson('/callbacks/bitrix24/events', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -863,7 +904,7 @@ class Bitrix24CallbackControllerTest extends TestCase
         $foreignConnection = $this->createActiveConnection('member-foreign', 'wrong-token', 'crm.foreign.biz');
         $expectedConnection = $this->createActiveConnection('member-1', 'expected-token');
 
-        $response = $this->postJson('/callbacks/bitrix24/events', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
             'auth' => [
                 'domain' => 'crm.alexlesley.biz',
@@ -894,7 +935,7 @@ class Bitrix24CallbackControllerTest extends TestCase
     {
         Queue::fake();
 
-        $response = $this->postJson('/callbacks/bitrix24/openlines', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/openlines', [
             'payload' => 'noise',
         ]);
 
@@ -958,7 +999,7 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $connection = $this->createActiveConnection('member-1', 'app-token');
 
-        $response = $this->postJson('/callbacks/bitrix24/events', [
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/events', [
             'event' => 'ONCRMCONTACTUPDATE',
             'auth' => [
                 'domain' => '5crm-plus.ru',
@@ -1010,7 +1051,7 @@ class Bitrix24CallbackControllerTest extends TestCase
             ],
         ];
 
-        $this->postJson('/callbacks/bitrix24/events', $payload)->assertOk();
+        $this->postLocalBitrixCallback('/callbacks/bitrix24/events', $payload)->assertOk();
         $this->postJson('http://second.example.test/callbacks/bitrix24/events', $payload)->assertOk();
 
         $events = Bitrix24WebhookEvent::query()->orderBy('id')->get();
@@ -1030,8 +1071,19 @@ class Bitrix24CallbackControllerTest extends TestCase
         string $applicationToken,
         string $portalDomain = 'crm.alexlesley.biz',
     ): Bitrix24Connection {
+        $profile = $this->defaultProfile;
+
+        if ($portalDomain !== $this->defaultProfile->portal_domain) {
+            $profile = $this->createProfile(
+                profileKey: 'dev-'.str_replace('.', '-', $portalDomain),
+                profileType: Bitrix24Profile::TYPE_FULL_LIVE,
+                callbackBaseUrl: 'http://'.$portalDomain,
+                portalDomain: $portalDomain,
+            );
+        }
+
         return Bitrix24Connection::query()->forceCreate([
-            'profile_id' => $this->defaultProfile->id,
+            'profile_id' => $profile->id,
             'portal_domain' => $portalDomain,
             'member_id' => $memberId,
             'application_token' => $applicationToken,
@@ -1043,9 +1095,10 @@ class Bitrix24CallbackControllerTest extends TestCase
         string $profileKey,
         string $profileType,
         string $callbackBaseUrl,
+        string $portalDomain = 'crm.alexlesley.biz',
     ): Bitrix24Profile {
         return Bitrix24Profile::query()->create([
-            'portal_domain' => 'crm.alexlesley.biz',
+            'portal_domain' => $portalDomain,
             'profile_key' => $profileKey,
             'profile_type' => $profileType,
             'display_name' => $profileKey,
@@ -1053,5 +1106,19 @@ class Bitrix24CallbackControllerTest extends TestCase
             'application_code' => 'local.app.code',
             'callback_base_url' => $callbackBaseUrl,
         ]);
+    }
+
+    private function postLocalBitrixCallback(string $path, array $payload): TestResponse
+    {
+        return $this->postJson('http://localhost'.$path, $payload);
+    }
+
+    /**
+     * @param  array<string, mixed>  $response
+     */
+    private function fakeBitrixAppInfoResponse(array $response, int $status = 200): void
+    {
+        $this->appInfoProbeResponse = $response;
+        $this->appInfoProbeStatus = $status;
     }
 }

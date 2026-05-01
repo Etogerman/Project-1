@@ -65,15 +65,15 @@ class RolePermissionMatrixDatabaseTest extends TestCase
         $matrix = app(RolePermissionMatrix::class)->build();
 
         $runtimeActiveAction = $this->actionFor($matrix, 'users.view');
-        $configOnlyAction = $this->actionFor($matrix, 'contacts.view');
+        $contactsAction = $this->actionFor($matrix, 'contacts.view');
 
         $this->assertTrue($runtimeActiveAction['isRuntimeActive']);
         $this->assertSame('runtime-active', $runtimeActiveAction['runtimeStatus']);
         $this->assertSame('Уже влияет на доступ', $runtimeActiveAction['runtimeLabel']);
 
-        $this->assertFalse($configOnlyAction['isRuntimeActive']);
-        $this->assertSame('config-only', $configOnlyAction['runtimeStatus']);
-        $this->assertSame('Пока только конфигурация', $configOnlyAction['runtimeLabel']);
+        $this->assertTrue($contactsAction['isRuntimeActive']);
+        $this->assertSame('runtime-active', $contactsAction['runtimeStatus']);
+        $this->assertSame('Уже влияет на доступ', $contactsAction['runtimeLabel']);
     }
 
     public function test_matrix_marks_missing_database_rows_as_configuration_issue(): void

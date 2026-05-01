@@ -4,8 +4,6 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Filament\Resources\AutoReplyRules\Pages\ManageAutoReplyRules;
-use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
-use App\Services\AutoReplyRules\ParseAutoReplyRulesWorkbookAction;
 use App\Models\AutoReplyCategory;
 use App\Models\AutoReplyRule;
 use App\Models\AutoReplyRuleTagCondition;
@@ -13,6 +11,8 @@ use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
+use App\Services\AutoReplyRules\ParseAutoReplyRulesWorkbookAction;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Events\QueryExecuted;
@@ -675,6 +675,108 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertSame('https://example.com/shared-form', $rule->getButtonUrlForChannel($maxChannel));
     }
 
+    public function test_admin_can_create_telegram_account_rule_as_text_only(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $accountChannel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Gateway',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData(
+                $accountChannel,
+                [
+                    'keyword' => 'Gateway',
+                    'reply_text' => 'Текст для Gateway',
+                ],
+            ))
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
+
+        $this->assertSame('Текст для Gateway', $rule->reply_text);
+        $this->assertNull($rule->getButtonTypeForChannel($accountChannel));
+        $this->assertNull($rule->getButtonTextForChannel($accountChannel));
+        $this->assertNull($rule->getButtonUrlForChannel($accountChannel));
+    }
+
+    public function test_telegram_account_rule_persistence_drops_submitted_button_config(): void
+    {
+        $accountChannel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Gateway',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $rule = AutoReplyRuleResource::saveAutoReplyRule($this->buildRuleFormData(
+            $accountChannel,
+            [
+                'keyword' => 'Gateway direct',
+                'reply_text' => 'Текст для Gateway',
+            ],
+            [
+                'button_kind' => 'link',
+                'button_text' => 'Открыть форму',
+                'button_url' => 'https://example.com/form',
+            ],
+        ))->load('channels');
+
+        $this->assertSame('Текст для Gateway', $rule->reply_text);
+        $this->assertNull($rule->getButtonTypeForChannel($accountChannel));
+        $this->assertNull($rule->getButtonTextForChannel($accountChannel));
+        $this->assertNull($rule->getButtonUrlForChannel($accountChannel));
+    }
+
+    public function test_admin_can_create_mixed_bot_and_account_rule_with_button_only_for_bot(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $botChannel = Channel::factory()->create([
+            'name' => 'Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+        ]);
+        $accountChannel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Gateway',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageAutoReplyRules::class)
+            ->callAction('create', $this->buildRuleFormData(
+                [$botChannel, $accountChannel],
+                [
+                    'keyword' => 'Смешанное правило',
+                    'reply_text' => 'Один текст для двух каналов',
+                ],
+                [
+                    'button_kind' => 'link',
+                    'button_text' => 'Открыть заявку',
+                    'button_url' => 'https://example.com/request',
+                ],
+            ))
+            ->assertHasNoFormErrors();
+
+        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
+
+        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($botChannel));
+        $this->assertSame('Открыть заявку', $rule->getButtonTextForChannel($botChannel));
+        $this->assertSame('https://example.com/request', $rule->getButtonUrlForChannel($botChannel));
+        $this->assertNull($rule->getButtonTypeForChannel($accountChannel));
+        $this->assertNull($rule->getButtonTextForChannel($accountChannel));
+        $this->assertNull($rule->getButtonUrlForChannel($accountChannel));
+    }
+
     public function test_auto_reply_rules_table_uses_live_column_manager_and_icon_only_edit_action(): void
     {
         $admin = User::factory()->create([
@@ -1332,6 +1434,25 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         ]);
     }
 
+    public function test_request_phone_button_cannot_be_saved_for_telegram_account_channel(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
+        $this->expectException(ValidationException::class);
+
+        AutoReplyRule::query()->create([
+            'channel_id' => $channel->id,
+            'keyword' => 'Телефон',
+            'normalized_keyword' => 'телефон',
+            'reply_text' => 'Поделитесь номером',
+            'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
+            'is_active' => true,
+        ]);
+    }
+
     public function test_admin_can_save_request_phone_button_for_max_channel(): void
     {
         $admin = User::factory()->create([
@@ -1490,7 +1611,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
      */
     private function storeWorkbook(array $rows): string
     {
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
 
         try {
             $sheet = $spreadsheet->getActiveSheet();

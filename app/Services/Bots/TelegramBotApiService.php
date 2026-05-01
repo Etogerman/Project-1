@@ -83,6 +83,26 @@ class TelegramBotApiService
             ->throw();
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function fetchWebhookInfo(Channel $channel): array
+    {
+        $response = Http::timeout(10)
+            ->asJson()
+            ->get(sprintf('https://api.telegram.org/bot%s/getWebhookInfo', $this->token($channel)))
+            ->throw()
+            ->json();
+
+        $webhookInfo = data_get($response, 'result');
+
+        if (! is_array($webhookInfo)) {
+            throw new InvalidArgumentException("Telegram API did not return webhook info for channel [{$channel->id}].");
+        }
+
+        return $webhookInfo;
+    }
+
     public function answerCallbackQuery(Channel $channel, string $callbackQueryId, ?string $text = null): void
     {
         $payload = [

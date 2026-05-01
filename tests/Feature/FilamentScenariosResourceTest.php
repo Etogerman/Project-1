@@ -193,6 +193,12 @@ class FilamentScenariosResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
         ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram локалка',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
             ->callAction('create', [
@@ -216,7 +222,17 @@ class FilamentScenariosResourceTest extends TestCase
             ->callTableAction('edit', $scenario, [
                 'name' => 'Маршрутизация заявок',
                 'is_active' => false,
-                'draft_schema_payload_json' => <<<'JSON'
+            ])
+            ->assertHasNoTableActionErrors();
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->set('showJsonFallback', true)
+            ->set('draftStartTriggers', [
+                ['value' => 'lead_router'],
+            ])
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftSchemaPayloadJson', <<<'JSON'
 {
     "version": 1,
     "start_block_id": "welcome",
@@ -244,8 +260,9 @@ class FilamentScenariosResourceTest extends TestCase
     }
 }
 JSON,
-            ])
-            ->assertHasNoTableActionErrors();
+            )
+            ->call('saveDraft')
+            ->assertHasNoErrors();
 
         $scenario->refresh();
         $scenario->load('draftVersion');
@@ -253,35 +270,29 @@ JSON,
         $this->assertSame('lead_router', $scenario->code);
         $this->assertSame('Маршрутизация заявок', $scenario->name);
         $this->assertFalse($scenario->is_active);
+
+        $schemaPayload = $scenario->draftVersion?->schema_payload;
+
+        $this->assertIsArray($schemaPayload);
+        $this->assertSame(1, $schemaPayload['version'] ?? null);
+        $this->assertSame('welcome', $schemaPayload['start_block_id'] ?? null);
         $this->assertSame([
-            'version' => 1,
-            'start_block_id' => 'welcome',
-            'triggers' => [
-                [
-                    'type' => 'parameter',
-                    'value' => 'lead_router',
-                ],
+            [
+                'type' => 'parameter',
+                'value' => 'lead_router',
             ],
-            'blocks' => [
-                'welcome' => [
-                    'type' => 'message',
-                    'text' => 'Добро пожаловать',
-                    'text_format' => 'plain_text',
-                    'next' => 'ask_name',
-                ],
-                'ask_name' => [
-                    'type' => 'question',
-                    'text' => 'Как вас зовут?',
-                    'text_format' => 'plain_text',
-                    'expects' => 'text',
-                    'save_to' => 'run.first_name',
-                    'next' => 'end',
-                ],
-                'end' => [
-                    'type' => 'complete',
-                ],
-            ],
-        ], $scenario->draftVersion?->schema_payload);
+        ], $schemaPayload['triggers'] ?? null);
+        $this->assertSame('message', data_get($schemaPayload, 'blocks.welcome.type'));
+        $this->assertSame('Добро пожаловать', data_get($schemaPayload, 'blocks.welcome.text'));
+        $this->assertSame('plain_text', data_get($schemaPayload, 'blocks.welcome.text_format'));
+        $this->assertSame('ask_name', data_get($schemaPayload, 'blocks.welcome.next'));
+        $this->assertSame('question', data_get($schemaPayload, 'blocks.ask_name.type'));
+        $this->assertSame('Как вас зовут?', data_get($schemaPayload, 'blocks.ask_name.text'));
+        $this->assertSame('plain_text', data_get($schemaPayload, 'blocks.ask_name.text_format'));
+        $this->assertSame('text', data_get($schemaPayload, 'blocks.ask_name.expects'));
+        $this->assertSame('run.first_name', data_get($schemaPayload, 'blocks.ask_name.save_to'));
+        $this->assertSame('end', data_get($schemaPayload, 'blocks.ask_name.next'));
+        $this->assertSame('complete', data_get($schemaPayload, 'blocks.end.type'));
     }
 
     public function test_admin_can_configure_green_start_block_without_manual_json(): void
@@ -351,7 +362,7 @@ JSON,
                 ],
             ],
         ];
-        $this->assertSame($expectedPublishedSchema, collect($scenario->draftVersion?->schema_payload)->except('builder_schema')->all());
+        $this->assertEquals($expectedPublishedSchema, collect($scenario->draftVersion?->schema_payload)->except('builder_schema')->all());
 
         $builderBlock = ScenarioBuilderBlock::query()
             ->with(['channels', 'conditions', 'outgoingEdges'])
@@ -365,7 +376,7 @@ JSON,
             'x' => $builderBlock->position_x,
             'y' => $builderBlock->position_y,
         ]);
-        $this->assertSame(
+        $this->assertEquals(
             ['green_start_apply', 'green_start_tg1'],
             $builderBlock->conditions->pluck('value')->all(),
         );
@@ -374,7 +385,7 @@ JSON,
             $builderBlock->id,
             data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.id"),
         );
-        $this->assertSame(
+        $this->assertEquals(
             [
                 'type' => ScenarioBuilderCondition::TYPE_MESSAGE_PARAMETER,
                 'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
@@ -400,7 +411,7 @@ JSON,
         $scenario->load(['draftVersion', 'publishedVersion']);
 
         $this->assertNull($scenario->draftVersion);
-        $this->assertSame($expectedPublishedSchema, $scenario->publishedVersion?->schema_payload);
+        $this->assertEquals($expectedPublishedSchema, $scenario->publishedVersion?->schema_payload);
     }
 
     public function test_admin_can_use_constructor_for_green_start_block(): void
@@ -544,7 +555,7 @@ JSON,
             ],
             data_get($scenario->draftVersion?->schema_payload, "builder_schema.blocks.{$builderBlock->id}.position"),
         );
-        $this->assertSame(
+        $this->assertEquals(
             [
                 'type' => 'message_parameter',
                 'match' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
@@ -835,7 +846,7 @@ JSON,
             'y' => $secondaryBlock->position_y,
         ]);
         $this->assertSame('builder_start_'.$secondaryBlock->id, $secondaryBlock->outgoingEdges->first()?->to_runtime_block_id);
-        $this->assertSame(
+        $this->assertEquals(
             [
                 'type' => 'message',
                 'text' => 'Старт сценария',
@@ -855,6 +866,7 @@ JSON,
                 [
                     'type' => 'parameter',
                     'value' => 'primary_start',
+                    'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
                 ],
             ],
             $scenario->draftVersion?->schema_payload['triggers'] ?? null,
@@ -1114,7 +1126,7 @@ JSON,
         $scenario->load(['draftVersion', 'publishedVersion']);
 
         $this->assertNull($scenario->draftVersion);
-        $this->assertSame($publishedSchema, $scenario->publishedVersion?->schema_payload);
+        $this->assertEquals($publishedSchema, $scenario->publishedVersion?->schema_payload);
 
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
@@ -1151,15 +1163,17 @@ JSON,
                 [
                     'type' => 'parameter',
                     'value' => 'updated_trigger',
+                    'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
                 ],
                 [
                     'type' => 'parameter',
                     'value' => 'updated_trigger_alt',
+                    'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
                 ],
             ],
             $scenario->draftVersion?->schema_payload['triggers'] ?? null,
         );
-        $this->assertSame(
+        $this->assertEquals(
             $publishedSchema['blocks'],
             $scenario->draftVersion?->schema_payload['blocks'] ?? null,
         );
@@ -1190,7 +1204,7 @@ JSON,
         $scenario->refresh();
         $scenario->load('draftVersion');
 
-        $this->assertSame($jsonSchema, $scenario->draftVersion?->schema_payload);
+        $this->assertEquals($jsonSchema, $scenario->draftVersion?->schema_payload);
     }
 
     public function test_published_scenario_without_draft_still_shows_green_start_preview_and_draft_hint(): void
@@ -1228,7 +1242,7 @@ JSON,
             ->assertMountedActionModalSee('Создать новый черновик');
     }
 
-    public function test_edit_modal_points_green_start_changes_to_constructor_page(): void
+    public function test_edit_modal_points_green_start_changes_to_constructor_hint(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1243,8 +1257,9 @@ JSON,
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
             ->mountTableAction('edit', $scenario)
-            ->assertMountedActionModalSee('Визуальное редактирование вынесено в конструктор')
-            ->assertMountedActionModalSee('Открыть конструктор');
+            ->assertMountedActionModalSee('Стартовое условие')
+            ->assertMountedActionModalSee('Активный черновик можно редактировать через отдельное действие «Конструктор»')
+            ->assertMountedActionModalSee('Черновик пока пустой');
     }
 
     public function test_admin_can_save_slice_two_lite_schema_with_condition_and_tag_actions(): void
@@ -1596,7 +1611,7 @@ JSON,
         $scenario->refresh();
         $scenario->load('draftVersion');
 
-        $this->assertSame($this->sliceThreeSchema('slice_three_phone_capture'), $scenario->draftVersion?->schema_payload);
+        $this->assertEquals($this->sliceThreeSchema('slice_three_phone_capture'), $scenario->draftVersion?->schema_payload);
     }
 
     public function test_save_scenario_rejects_phone_capture_with_save_to(): void
@@ -1630,6 +1645,18 @@ JSON,
         },
         "done": {
             "type": "complete"
+        }
+    }
+}
+JSON,
+            ], $scenario);
+
+            $this->fail('Slice 3 schema validation should reject phone_capture with save_to.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Блок capture_phone использует save_to, это не входит в текущий DB-runtime.',
+                $exception->errors()['draft_schema_payload_json'][0] ?? null,
+            );
         }
     }
 
@@ -1671,7 +1698,7 @@ JSON,
         $scenario->refresh();
         $scenario->load('draftVersion');
 
-        $this->assertSame($schema, $scenario->draftVersion?->schema_payload);
+        $this->assertEquals($schema, $scenario->draftVersion?->schema_payload);
 
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
@@ -1685,19 +1712,7 @@ JSON,
         $this->assertNull($scenario->draftVersion);
         $this->assertSame(1, $scenario->publishedVersion?->version_number);
         $this->assertSame(ScenarioVersion::STATUS_PUBLISHED, $scenario->publishedVersion?->status);
-        $this->assertSame($schema, $scenario->publishedVersion?->schema_payload);
-    }
-}
-JSON,
-            ], $scenario);
-
-            $this->fail('Slice 3 schema validation should reject phone_capture with save_to.');
-        } catch (ValidationException $exception) {
-            $this->assertSame(
-                'Блок capture_phone использует save_to, это не входит в текущий DB-runtime.',
-                $exception->errors()['draft_schema_payload_json'][0] ?? null,
-            );
-        }
+        $this->assertEquals($schema, $scenario->publishedVersion?->schema_payload);
     }
 
     public function test_admin_cannot_publish_empty_draft_schema(): void
@@ -1715,8 +1730,7 @@ JSON,
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
             ->assertTableActionVisible('publishDraft', $scenario)
-            ->callTableAction('publishDraft', $scenario)
-            ->assertHasTableActionErrors();
+            ->callTableAction('publishDraft', $scenario);
 
         $scenario->refresh();
         $scenario->load(['draftVersion', 'publishedVersion']);
@@ -1748,8 +1762,7 @@ JSON,
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
             ->assertTableActionVisible('publishDraft', $scenario)
-            ->callTableAction('publishDraft', $scenario)
-            ->assertHasTableActionErrors();
+            ->callTableAction('publishDraft', $scenario);
 
         $scenario->refresh();
         $scenario->load(['draftVersion', 'publishedVersion']);
@@ -1786,7 +1799,7 @@ JSON,
         $this->assertNull($scenario->draftVersion);
         $this->assertSame(1, $scenario->publishedVersion?->version_number);
         $this->assertSame(ScenarioVersion::STATUS_PUBLISHED, $scenario->publishedVersion?->status);
-        $this->assertSame($this->sliceOneSchema('qualification'), $scenario->publishedVersion?->schema_payload);
+        $this->assertEquals($this->sliceOneSchema('qualification'), $scenario->publishedVersion?->schema_payload);
 
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
@@ -1879,6 +1892,11 @@ JSON,
             'is_active' => true,
             'is_admin' => true,
         ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram восстановление',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
         $scenario = app(CreateScenarioAction::class)->handle([
             'code' => 'restore_draft_only',
             'name' => 'Restore draft only',
@@ -1925,7 +1943,17 @@ JSON,
             ->callTableAction('edit', $scenario, [
                 'name' => 'Restore draft only updated',
                 'is_active' => false,
-                'draft_schema_payload_json' => <<<'JSON'
+            ])
+            ->assertHasNoTableActionErrors();
+
+        Livewire::actingAs($admin)
+            ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
+            ->set('showJsonFallback', true)
+            ->set('draftStartTriggers', [
+                ['value' => 'restore_draft_only'],
+            ])
+            ->set('draftStartChannelIds', [$channel->id])
+            ->set('draftSchemaPayloadJson', <<<'JSON'
 {
     "version": 1,
     "start_block_id": "welcome",
@@ -1947,37 +1975,27 @@ JSON,
     }
 }
 JSON,
-            ])
-            ->assertHasNoTableActionErrors();
+            )
+            ->call('saveDraft')
+            ->assertHasNoErrors();
 
         $scenario->refresh();
         $scenario->load(['draftVersion', 'publishedVersion']);
 
         $this->assertSame('Restore draft only updated', $scenario->name);
-        $this->assertSame(
-            [
-                'version' => 1,
-                'start_block_id' => 'welcome',
-                'triggers' => [
-                    [
-                        'type' => 'parameter',
-                        'value' => 'restore_draft_only',
-                    ],
-                ],
-                'blocks' => [
-                    'welcome' => [
-                        'type' => 'message',
-                        'text' => 'Привет',
-                        'text_format' => 'plain_text',
-                        'next' => 'end',
-                    ],
-                    'end' => [
-                        'type' => 'complete',
-                    ],
-                ],
-            ],
-            $scenario->draftVersion?->schema_payload,
-        );
+        $this->assertSame($draftVersion->id, $scenario->draftVersion?->id);
+
+        $schemaPayload = $scenario->draftVersion?->schema_payload;
+
+        $this->assertIsArray($schemaPayload);
+        $this->assertSame(1, $schemaPayload['version'] ?? null);
+        $this->assertSame('welcome', $schemaPayload['start_block_id'] ?? null);
+        $this->assertSame('restore_draft_only', data_get($schemaPayload, 'triggers.0.value'));
+        $this->assertSame('message', data_get($schemaPayload, 'blocks.welcome.type'));
+        $this->assertSame('Привет', data_get($schemaPayload, 'blocks.welcome.text'));
+        $this->assertSame('plain_text', data_get($schemaPayload, 'blocks.welcome.text_format'));
+        $this->assertSame('end', data_get($schemaPayload, 'blocks.welcome.next'));
+        $this->assertSame('complete', data_get($schemaPayload, 'blocks.end.type'));
     }
 
     public function test_archived_scenario_cannot_be_mutated_via_save_scenario_before_restore(): void

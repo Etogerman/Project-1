@@ -91,6 +91,14 @@ class ValidateBitrix24CallbackAction
             ->where('application_token_hash', $applicationTokenHash)
             ->first();
 
+        if (! $connection && $callbackType === Bitrix24WebhookEvent::TYPE_OPENLINES && $this->isConfiguredOpenLinesRuntimeToken($applicationTokenHash)) {
+            $connection = Bitrix24Connection::query()
+                ->where('profile_id', $profile->id)
+                ->where('status', Bitrix24Connection::STATUS_ACTIVE)
+                ->where('member_id', $authContext->memberId)
+                ->first();
+        }
+
         if (! $connection) {
             return new Bitrix24CallbackValidationResultData(
                 accepted: false,
@@ -130,5 +138,22 @@ class ValidateBitrix24CallbackAction
         }
 
         return $query->first();
+    }
+
+    private function isConfiguredOpenLinesRuntimeToken(string $applicationTokenHash): bool
+    {
+        foreach ((array) config('bitrix24.openlines.runtime_application_token_hashes', []) as $configuredHash) {
+            if (! is_scalar($configuredHash)) {
+                continue;
+            }
+
+            $configuredHash = trim((string) $configuredHash);
+
+            if ($configuredHash !== '' && hash_equals($configuredHash, $applicationTokenHash)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

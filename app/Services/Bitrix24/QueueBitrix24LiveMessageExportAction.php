@@ -25,6 +25,23 @@ class QueueBitrix24LiveMessageExportAction
             ? $message
             : Message::query()->with(['contact', 'dialog'])->findOrFail($message);
 
+        $existingExport = Bitrix24MessageExport::query()
+            ->where('message_id', $message->id)
+            ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->first();
+
+        if ($existingExport?->export_status === Bitrix24MessageExport::STATUS_EXPORTED) {
+            $rootContact = $this->resolveRootContactAction->handle($message->contact()->firstOrFail());
+
+            return new Bitrix24LiveMessageExportQueueResultData(
+                queued: false,
+                alreadyPending: false,
+                ready: true,
+                messageId: $message->id,
+                rootContactId: $rootContact->id,
+            );
+        }
+
         if (! $this->isMessageReadyForBitrix24LiveExportAction->handle($message)) {
             return new Bitrix24LiveMessageExportQueueResultData(
                 queued: false,
@@ -36,20 +53,6 @@ class QueueBitrix24LiveMessageExportAction
         }
 
         $rootContact = $this->resolveRootContactAction->handle($message->contact()->firstOrFail());
-        $existingExport = Bitrix24MessageExport::query()
-            ->where('message_id', $message->id)
-            ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
-            ->first();
-
-        if ($existingExport?->export_status === Bitrix24MessageExport::STATUS_EXPORTED) {
-            return new Bitrix24LiveMessageExportQueueResultData(
-                queued: false,
-                alreadyPending: false,
-                ready: true,
-                messageId: $message->id,
-                rootContactId: $rootContact->id,
-            );
-        }
 
         if (
             $existingExport?->export_status === Bitrix24MessageExport::STATUS_PENDING

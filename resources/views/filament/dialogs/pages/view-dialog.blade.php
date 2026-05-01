@@ -182,6 +182,14 @@
                     </span>
                 </div>
 
+                @if (filled($dialogHeader['route_status_reason']))
+                    <div class="ac-note-stack ac-surface__divider">
+                        <p data-role="dialog-route-status-reason" class="ac-note ac-note--danger">
+                            {{ $dialogHeader['route_status_reason'] }}
+                        </p>
+                    </div>
+                @endif
+
                 <div class="ac-meta-grid ac-meta-grid--compact ac-surface__divider">
                     <div class="ac-meta">
                         <p class="ac-meta__label">

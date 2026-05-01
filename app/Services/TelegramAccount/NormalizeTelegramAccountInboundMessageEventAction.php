@@ -81,8 +81,8 @@ class NormalizeTelegramAccountInboundMessageEventAction
             ]);
         }
 
-        $media = is_array($validated['media'] ?? null)
-            ? $this->normalizeMediaItems(array_values($validated['media']))
+        $media = is_array($payload['media'] ?? null)
+            ? $this->normalizeMediaItems(array_values($payload['media']))
             : [];
         $text = isset($validated['text']) && is_string($validated['text'])
             ? trim($validated['text'])

@@ -79,7 +79,10 @@ class WarmupScenarioMaxTest extends TestCase
                 && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'message'
                 && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === config('bots.scenarios.warmup.max.buttons.positive');
         });
-        Http::assertSentCount(1);
+        $this->assertDatabaseMissing('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+        ]);
     }
 
     public function test_warmup_does_not_start_without_binding_on_max(): void
@@ -96,7 +99,11 @@ class WarmupScenarioMaxTest extends TestCase
         ))->assertOk();
 
         $this->assertDatabaseCount('scenario_runs', 0);
-        Http::assertNothingSent();
+        $this->assertDatabaseMissing('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_SCENARIO_WARMUP,
+        ]);
     }
 
     public function test_max_button_text_completes_run(): void
@@ -154,6 +161,7 @@ class WarmupScenarioMaxTest extends TestCase
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
             'data_collection_started_at' => now(),
         ]);
 
@@ -185,19 +193,7 @@ class WarmupScenarioMaxTest extends TestCase
 
     public function test_non_matching_max_text_cancels_warmup_and_falls_back_to_auto_reply(): void
     {
-        Http::fake([
-            'https://platform-api.max.ru/*' => Http::sequence()
-                ->push([
-                    'message' => [
-                        'message_id' => 'max-out-9001',
-                    ],
-                ])
-                ->push([
-                    'message' => [
-                        'message_id' => 'max-auto-reply-9002',
-                    ],
-                ]),
-        ]);
+        $this->fakeMaxApiSequence();
 
         $channel = $this->createMaxChannel();
 
@@ -246,7 +242,14 @@ class WarmupScenarioMaxTest extends TestCase
         $this->assertNotNull($run->finished_at);
         $this->assertSame($secondInbound->id, $autoReply->reply_to_message_id);
         $this->assertSame('Обычный автоответ.', $autoReply->text);
-        Http::assertSentCount(2);
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+                && $request['text'] === config('bots.scenarios.warmup.max.text');
+        });
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
+                && $request['text'] === 'Обычный автоответ.';
+        });
     }
 
     public function test_max_uses_snapshot_labels_instead_of_updated_config(): void
@@ -300,6 +303,23 @@ class WarmupScenarioMaxTest extends TestCase
                 'token' => 'max-token',
                 'webhook_secret' => 'max-secret',
             ],
+        ]);
+    }
+
+    private function fakeMaxApiSequence(): void
+    {
+        $sequence = Http::sequence();
+
+        for ($offset = 1; $offset <= 20; $offset++) {
+            $sequence->push([
+                'message' => [
+                    'message_id' => 'max-out-'.$offset,
+                ],
+            ]);
+        }
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => $sequence,
         ]);
     }
 

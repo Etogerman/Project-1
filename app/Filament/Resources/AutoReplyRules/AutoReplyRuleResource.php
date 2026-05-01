@@ -16,17 +16,15 @@ use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Checkbox;
-use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\TextInput;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
-use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
-use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
@@ -37,9 +35,9 @@ use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
-use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema as SchemaFacade;
+use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -721,7 +719,7 @@ class AutoReplyRuleResource extends Resource
                     ->using(function (array $data, AutoReplyRule $record): AutoReplyRule {
                         try {
                             return static::saveAutoReplyRule($data, $record);
-                        } catch (\Illuminate\Validation\ValidationException $exception) {
+                        } catch (ValidationException $exception) {
                             static::notifyValidationFailure($exception);
 
                             throw $exception;
@@ -917,8 +915,7 @@ class AutoReplyRuleResource extends Resource
         array $channelIds,
         array $tagConditions,
         ?AutoReplyRule $record = null,
-    ): void
-    {
+    ): void {
         $matchScope = filled($ruleData['match_scope'] ?? null)
             ? (string) $ruleData['match_scope']
             : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
@@ -995,14 +992,14 @@ class AutoReplyRuleResource extends Resource
             && array_intersect($excludedTagIds, $existingRequiredTagIds) === [];
     }
 
-    public static function notifyValidationFailure(\Illuminate\Validation\ValidationException $exception): void
+    public static function notifyValidationFailure(ValidationException $exception): void
     {
         $message = collect($exception->errors())
             ->flatten()
             ->map(fn (mixed $value): string => is_string($value) ? trim($value) : '')
             ->first(fn (string $value): bool => $value !== '');
 
-        \Filament\Notifications\Notification::make()
+        Notification::make()
             ->title('Правило не сохранено')
             ->body($message !== null && $message !== ''
                 ? $message
@@ -1094,6 +1091,7 @@ class AutoReplyRuleResource extends Resource
         return Channel::query()
             ->whereKey($channelId)
             ->where('platform', Channel::PLATFORM_TELEGRAM)
+            ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
             ->exists();
     }
 
@@ -1106,7 +1104,20 @@ class AutoReplyRuleResource extends Resource
         return Channel::query()
             ->whereKey($channelId)
             ->where('platform', Channel::PLATFORM_MAX)
+            ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
             ->exists();
+    }
+
+    protected static function channelSupportsAutoReplyButtons(Channel $channel): bool
+    {
+        if (! $channel->isBotConnection()) {
+            return false;
+        }
+
+        return in_array($channel->platform, [
+            Channel::PLATFORM_TELEGRAM,
+            Channel::PLATFORM_MAX,
+        ], true);
     }
 
     /**
@@ -1118,8 +1129,16 @@ class AutoReplyRuleResource extends Resource
             return [];
         }
 
-        $platforms = Channel::query()
+        $buttonChannels = Channel::query()
             ->whereIn('id', $channelIds)
+            ->get()
+            ->filter(fn (Channel $channel): bool => static::channelSupportsAutoReplyButtons($channel));
+
+        if ($buttonChannels->isEmpty()) {
+            return [];
+        }
+
+        $platforms = $buttonChannels
             ->pluck('platform')
             ->filter(fn (mixed $platform): bool => is_string($platform) && $platform !== '')
             ->unique()
@@ -1181,7 +1200,9 @@ class AutoReplyRuleResource extends Resource
     {
         $record->loadMissing('channels');
 
-        $firstChannel = $record->channels->first();
+        $firstChannel = $record->channels
+            ->first(fn (Channel $channel): bool => filled($record->getButtonTypeForChannel($channel)))
+            ?? $record->channels->first();
 
         if (! $firstChannel instanceof Channel) {
             return [
@@ -1244,6 +1265,12 @@ class AutoReplyRuleResource extends Resource
 
         $availableButtonKinds = static::getButtonKindOptions($channelIds);
 
+        if ($availableButtonKinds === []) {
+            $buttonKind = null;
+            $buttonText = null;
+            $buttonUrl = null;
+        }
+
         if ($buttonKind !== null && ! array_key_exists($buttonKind, $availableButtonKinds)) {
             throw ValidationException::withMessages([
                 'button_kind' => 'Выбранная кнопка недоступна для текущего набора каналов.',
@@ -1289,17 +1316,29 @@ class AutoReplyRuleResource extends Resource
             default => null,
         };
 
+        $channels = Channel::query()
+            ->whereIn('id', $channelIds)
+            ->get()
+            ->keyBy('id');
+
         return array_map(
-            fn (int $channelId): array => [
-                'channel_id' => $channelId,
-                'button_type' => $buttonType,
-                'button_text' => $buttonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD
-                    ? $sharedButtonConfig['button_text']
-                    : null,
-                'button_url' => $buttonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD
-                    ? $sharedButtonConfig['button_url']
-                    : null,
-            ],
+            function (int $channelId) use ($buttonType, $channels, $sharedButtonConfig): array {
+                $channel = $channels->get($channelId);
+                $channelButtonType = $channel instanceof Channel && static::channelSupportsAutoReplyButtons($channel)
+                    ? $buttonType
+                    : null;
+
+                return [
+                    'channel_id' => $channelId,
+                    'button_type' => $channelButtonType,
+                    'button_text' => $channelButtonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD
+                        ? $sharedButtonConfig['button_text']
+                        : null,
+                    'button_url' => $channelButtonType === AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD
+                        ? $sharedButtonConfig['button_url']
+                        : null,
+                ];
+            },
             $channelIds,
         );
     }
@@ -1324,13 +1363,15 @@ class AutoReplyRuleResource extends Resource
             $primaryChannel = collect($channelIds)
                 ->map(fn (int $channelId): ?Channel => $channels->get($channelId))
                 ->filter(fn (?Channel $channel): bool => $channel instanceof Channel)
-                ->first(fn (Channel $channel): bool => $channel->platform === Channel::PLATFORM_TELEGRAM);
+                ->first(fn (Channel $channel): bool => $channel->platform === Channel::PLATFORM_TELEGRAM
+                    && $channel->isBotConnection());
 
             if (! $primaryChannel instanceof Channel) {
                 $primaryChannel = collect($channelIds)
                     ->map(fn (int $channelId): ?Channel => $channels->get($channelId))
                     ->filter(fn (?Channel $channel): bool => $channel instanceof Channel)
-                    ->first(fn (Channel $channel): bool => $channel->platform === Channel::PLATFORM_MAX);
+                    ->first(fn (Channel $channel): bool => $channel->platform === Channel::PLATFORM_MAX
+                        && $channel->isBotConnection());
             }
 
             if ($primaryChannel instanceof Channel) {
