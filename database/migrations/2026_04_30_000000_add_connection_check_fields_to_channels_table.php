@@ -31,6 +31,35 @@ return new class extends Migration
             ]);
 
         DB::table('channels')
+            ->where('platform', 'telegram')
+            ->where('connection_type', 'bot')
+            ->where('is_active', false)
+            ->update([
+                'connection_error_message' => 'Канал выключен в админке',
+            ]);
+
+        DB::table('channels')
+            ->where('platform', 'telegram')
+            ->where('connection_type', 'bot')
+            ->where('is_active', true)
+            ->where('bot_token_present', false)
+            ->update([
+                'connection_error_message' => 'Нет токена',
+            ]);
+
+        DB::table('channels')
+            ->where('platform', 'telegram')
+            ->where('connection_type', 'bot')
+            ->where('is_active', true)
+            ->where('bot_token_present', true)
+            ->update([
+                'connection_status' => 'connected',
+                'webhook_status' => 'installed',
+                'connection_checked_at' => now(),
+                'connection_error_message' => null,
+            ]);
+
+        DB::table('channels')
             ->where(fn ($query) => $query
                 ->where('platform', '!=', 'telegram')
                 ->orWhere('connection_type', '!=', 'bot'))

@@ -23,7 +23,14 @@ class ApplyDialogRoutePredicateAction
                 ->where('is_active', true)
                 ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
                 ->where('bot_token_present', true)
-                ->whereIn('platform', $this->dialogRoutePredicate->supportedPlatforms()))
+                ->whereIn('platform', $this->dialogRoutePredicate->supportedPlatforms())
+                ->where(function (Builder $query): void {
+                    $query
+                        ->where(function (Builder $telegramQuery): void {
+                            $this->applyFreshTelegramConnection($telegramQuery);
+                        })
+                        ->orWhere('platform', '!=', Channel::PLATFORM_TELEGRAM);
+                }))
             ->where(function (Builder $query): void {
                 $query
                     ->where(function (Builder $telegramQuery): void {
@@ -63,6 +70,22 @@ class ApplyDialogRoutePredicateAction
                         ->orWhere('bot_token_present', false)
                         ->orWhereNotIn('platform', $this->dialogRoutePredicate->supportedPlatforms());
                 })
+                ->orWhereHas('channel', function (Builder $query): void {
+                    $query
+                        ->where('platform', Channel::PLATFORM_TELEGRAM)
+                        ->where('is_active', true)
+                        ->where('connection_type', Channel::CONNECTION_TYPE_BOT)
+                        ->where('bot_token_present', true)
+                        ->where(function (Builder $query): void {
+                            $query
+                                ->whereNull('connection_status')
+                                ->orWhere('connection_status', '!=', Channel::CONNECTION_STATUS_CONNECTED)
+                                ->orWhereNull('webhook_status')
+                                ->orWhere('webhook_status', '!=', Channel::WEBHOOK_STATUS_INSTALLED)
+                                ->orWhereNull('connection_checked_at')
+                                ->orWhere('connection_checked_at', '<', now()->subMinutes(2));
+                        });
+                })
                 ->orWhere(function (Builder $telegramQuery): void {
                     $telegramQuery
                         ->whereHas('channel', fn (Builder $query): Builder => $query
@@ -93,5 +116,15 @@ class ApplyDialogRoutePredicateAction
                             ->where('external_user_id', '!=', ''));
                 });
         });
+    }
+
+    private function applyFreshTelegramConnection(Builder $query): void
+    {
+        $query
+            ->where('platform', Channel::PLATFORM_TELEGRAM)
+            ->where('connection_status', Channel::CONNECTION_STATUS_CONNECTED)
+            ->where('webhook_status', Channel::WEBHOOK_STATUS_INSTALLED)
+            ->whereNotNull('connection_checked_at')
+            ->where('connection_checked_at', '>=', now()->subMinutes(2));
     }
 }
