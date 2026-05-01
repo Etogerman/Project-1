@@ -7,6 +7,8 @@ use App\Jobs\ProcessDeferredParameterAutoReplyJob;
 use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
+use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -18,6 +20,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Str;
 use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
@@ -322,16 +325,19 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
             'pending_auto_reply_source_message_id' => $pendingSource->id,
         ])->save();
 
+        $expiredLiveBatchUuid = (string) Str::uuid();
+        $expiredLiveClaimUuid = (string) Str::uuid();
+
         Bitrix24MessageExport::query()->create([
             'message_id' => $pendingSource->id,
             'contact_id' => $contact->id,
             'bitrix24_contact_id' => $contact->bitrix24_contact_id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-            'live_batch_uuid' => 'expired-live-batch-42',
-            'live_claim_uuid' => 'expired-live-claim-42',
-            'live_claimed_at' => now()->subMinutes(3),
-            'live_claim_expires_at' => now()->subMinute(),
+            'live_batch_uuid' => $expiredLiveBatchUuid,
+            'live_claim_uuid' => $expiredLiveClaimUuid,
+            'live_claimed_at' => now()->subDay(),
+            'live_claim_expires_at' => now()->subDay(),
         ]);
 
         Http::fake([
@@ -344,11 +350,11 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
 
         $this->runSyncJob($contact);
 
-        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($pendingSource): bool {
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($expiredLiveBatchUuid, $pendingSource): bool {
             return $job->messageId === $pendingSource->id
                 && $job->retryAfterSync === true
                 && $job->liveBatchUuid !== null
-                && $job->liveBatchUuid !== 'expired-live-batch-42';
+                && $job->liveBatchUuid !== $expiredLiveBatchUuid;
         });
         Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
 
@@ -457,20 +463,22 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
             'pending_auto_reply_source_message_id' => $pendingSource->id,
         ])->save();
 
+        $staleUnclaimedBatchUuid = (string) Str::uuid();
+
         $export = Bitrix24MessageExport::query()->create([
             'message_id' => $pendingSource->id,
             'contact_id' => $contact->id,
             'bitrix24_contact_id' => $contact->bitrix24_contact_id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-            'live_batch_uuid' => 'stale-unclaimed-batch-42',
+            'live_batch_uuid' => $staleUnclaimedBatchUuid,
             'live_claim_uuid' => null,
             'live_claimed_at' => null,
             'live_claim_expires_at' => null,
         ]);
 
         $export->forceFill([
-            'updated_at' => now()->subSeconds(\App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction::UNCLAIMED_PENDING_RECOVERY_SECONDS + 5),
+            'updated_at' => now()->subDay(),
         ])->save();
 
         Http::fake([
@@ -483,11 +491,11 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
 
         $this->runSyncJob($contact);
 
-        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($pendingSource): bool {
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($pendingSource, $staleUnclaimedBatchUuid): bool {
             return $job->messageId === $pendingSource->id
                 && $job->retryAfterSync === true
                 && $job->liveBatchUuid !== null
-                && $job->liveBatchUuid !== 'stale-unclaimed-batch-42';
+                && $job->liveBatchUuid !== $staleUnclaimedBatchUuid;
         });
         Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
     }
@@ -676,12 +684,61 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
             'is_primary' => true,
         ]);
 
-        return Dialog::factory()->create(array_merge([
+        $dialog = Dialog::factory()->create(array_merge([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
             'current_contact_identity_id' => $identity->id,
             'external_chat_id' => $platform.'-chat-100',
         ], $dialogAttributes));
+
+        $this->pinDialogOpenLineRoute($dialog);
+
+        return $dialog->fresh(['contact', 'channel', 'currentContactIdentity']);
+    }
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     * @return array<string, mixed>
+     */
+    private function makeBitrix24ContactSnapshot(Contact $contact, Channel $channel, array $overrides = []): array
+    {
+        return array_replace([
+            'ID' => (string) ($contact->bitrix24_contact_id ?? '555'),
+            'NAME' => (string) $contact->first_name,
+            'LAST_NAME' => (string) $contact->last_name,
+            'SOURCE_ID' => (string) config('bitrix24.sources.telegram_id'),
+            'ADDRESS_CITY' => (string) $contact->city,
+            'ADDRESS_COUNTRY' => (string) $contact->country,
+            'UF_CRM_64D7457E4DC07' => (string) $this->resolveExpectedBitrixNameSourceId($contact),
+            'UF_CRM_1606901533' => (string) $contact->effective_age_years,
+            'UF_CRM_ABRIKOSOFF_AGE_RANGE' => (string) $contact->age_range,
+            'UF_CRM_5EEB7355C13B1' => (string) config('bitrix24.values.gender.male_id'),
+            'UF_CRM_ABRIKOSOFF_CONTACT_ID' => (string) $contact->id,
+            'UF_CRM_ABRIKOSOFF_CHANNEL_ID' => (string) $channel->id,
+            'UF_CRM_ABRIKOSOFF_CHANNEL_NAME' => (string) $channel->name,
+            'UF_CRM_ABRIKOSOFF_PLATFORM' => (string) $channel->platform,
+            'UF_CRM_ABRIKOSOFF_BOT_CODE' => (string) ($channel->bot_username ?? 'abrikosoff_tg'),
+            'UF_CRM_ABRIKOSOFF_BOT_NAME' => (string) ($channel->bot_name ?? $channel->name),
+            'UF_CRM_ABRIKOSOFF_ALT_FIRST_NAME' => null,
+            'UF_CRM_ABRIKOSOFF_ALT_LAST_NAME' => null,
+            'PHONE' => $contact->phoneNumbers()
+                ->get()
+                ->map(fn (ContactPhoneNumber $phone): array => [
+                    'VALUE' => $phone->phone_normalized,
+                    'VALUE_TYPE' => $phone->is_primary ? 'WORK' : 'OTHER',
+                ])
+                ->values()
+                ->all(),
+        ], $overrides);
+    }
+
+    private function resolveExpectedBitrixNameSourceId(Contact $contact): int
+    {
+        return match ($contact->first_name_source) {
+            Contact::FIRST_NAME_SOURCE_AUTO => (int) config('bitrix24.values.name_source.automatic_information_id'),
+            Contact::FIRST_NAME_SOURCE_MANUAL => (int) config('bitrix24.values.name_source.training_verified_id'),
+            default => (int) config('bitrix24.values.name_source.self_reported_id'),
+        };
     }
 
     private function makeTelegramChannel(array $overrides = []): Channel
@@ -700,13 +757,17 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
             ->where('channel_id', $channel->id)
             ->firstOrFail();
 
-        return Dialog::factory()->create(array_merge([
+        $dialog = Dialog::factory()->create(array_merge([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
             'current_contact_identity_id' => $identity->id,
             'external_chat_id' => $channel->platform.'-chat-'.$contact->id,
             'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
         ], $overrides));
+
+        $this->pinDialogOpenLineRoute($dialog);
+
+        return $dialog->fresh(['contact', 'channel', 'currentContactIdentity']);
     }
 
     private function makeMessage(Dialog $dialog, array $attributes = []): Message
@@ -729,6 +790,60 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
         return $this->makeProfileLinkedActiveBitrix24Connection([
             'scope' => ['crm', 'imconnector', 'imopenlines'],
         ]);
+    }
+
+    private function pinDialogOpenLineRoute(Dialog $dialog): ?Bitrix24OpenLineRoute
+    {
+        $connection = Bitrix24Connection::query()
+            ->where('status', Bitrix24Connection::STATUS_ACTIVE)
+            ->latest('id')
+            ->first();
+
+        if (! $connection instanceof Bitrix24Connection) {
+            return null;
+        }
+
+        $profile = $connection->profile()->first();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            return null;
+        }
+
+        $dialog->loadMissing('channel');
+        $channel = $dialog->channel;
+
+        if (! $channel instanceof Channel) {
+            return null;
+        }
+
+        $connectorCode = $profile->openLinesConnectorCodeForPlatform($channel->platform);
+        $lineId = $profile->openLinesLineIdForPlatform($channel->platform);
+
+        if (! filled($connectorCode) || ! filled($lineId)) {
+            return null;
+        }
+
+        $route = Bitrix24OpenLineRoute::query()->updateOrCreate(
+            [
+                'bitrix24_profile_id' => $profile->id,
+                'channel_id' => $channel->id,
+            ],
+            [
+                'portal_domain' => $profile->portal_domain,
+                'profile_key' => $profile->profile_key,
+                'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+                'connector_code' => $connectorCode,
+                'line_id' => $lineId,
+                'source_id' => $profile->sourceIdForPlatform($channel->platform),
+                'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            ],
+        );
+
+        $dialog->forceFill([
+            'bitrix24_open_line_route_id' => $route->id,
+        ])->save();
+
+        return $route;
     }
 
     private function runSyncJob(Contact $contact): void

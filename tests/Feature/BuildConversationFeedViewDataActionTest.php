@@ -228,7 +228,7 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         );
 
         $this->assertCount(1, $feed);
-        $this->assertSame('Документ: contract.pdf', $feed[0]['media_badges']);
+        $this->assertSame(['Документ: contract.pdf'], $feed[0]['media_badges']);
         $this->assertSame([
             ['label' => 'Ошибка загрузки', 'tone' => 'danger'],
         ], $feed[0]['media_state_badges']);

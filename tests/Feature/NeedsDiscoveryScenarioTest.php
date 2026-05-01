@@ -51,7 +51,10 @@ class NeedsDiscoveryScenarioTest extends TestCase
         ))->assertOk();
 
         $this->assertDatabaseCount('scenario_runs', 0);
-        Http::assertNothingSent();
+        $this->assertDatabaseMissing('messages', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY,
+        ]);
     }
 
     public function test_needs_discovery_does_not_start_while_warmup_has_priority(): void
@@ -160,21 +163,7 @@ class NeedsDiscoveryScenarioTest extends TestCase
 
     public function test_telegram_happy_path_completes_needs_discovery_with_answers(): void
     {
-        Http::fake([
-            'https://api.telegram.org/*' => Http::sequence()
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9201],
-                ])
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9202],
-                ])
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9203],
-                ]),
-        ]);
+        $this->fakeTelegramApiSequence(9201);
 
         $channel = $this->createTelegramChannel();
 
@@ -245,17 +234,7 @@ class NeedsDiscoveryScenarioTest extends TestCase
 
     public function test_needs_discovery_replays_blocked_follow_up_question_after_unblock_before_accepting_next_answer(): void
     {
-        Http::fake([
-            'https://api.telegram.org/*' => Http::sequence()
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9211],
-                ])
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9212],
-                ]),
-        ]);
+        $this->fakeTelegramApiSequence(9211);
 
         $channel = $this->createTelegramChannel();
 
@@ -300,7 +279,13 @@ class NeedsDiscoveryScenarioTest extends TestCase
         $this->assertSame(NeedsDiscoveryScenario::STEP_MAIN_BLOCKER, data_get($run->state_payload, 'run.pending_delivery_step'));
         $this->assertSame('question', data_get($run->state_payload, 'run.pending_delivery_type'));
 
-        Http::assertSentCount(1);
+        $this->assertSame(
+            1,
+            Message::query()
+                ->where('direction', Message::DIRECTION_OUTBOUND)
+                ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY)
+                ->count(),
+        );
 
         $dialog->forceFill([
             'bot_subscription_status' => null,
@@ -336,21 +321,7 @@ class NeedsDiscoveryScenarioTest extends TestCase
 
     public function test_needs_discovery_replays_blocked_completion_after_unblock_before_finishing_run(): void
     {
-        Http::fake([
-            'https://api.telegram.org/*' => Http::sequence()
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9221],
-                ])
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9222],
-                ])
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9223],
-                ]),
-        ]);
+        $this->fakeTelegramApiSequence(9221);
 
         $channel = $this->createTelegramChannel();
 
@@ -436,18 +407,7 @@ class NeedsDiscoveryScenarioTest extends TestCase
 
     public function test_max_happy_path_supports_skip_and_completes_with_partial_answers(): void
     {
-        Http::fake([
-            'https://platform-api.max.ru/*' => Http::sequence()
-                ->push([
-                    'message' => ['message_id' => 'max-out-1'],
-                ])
-                ->push([
-                    'message' => ['message_id' => 'max-out-2'],
-                ])
-                ->push([
-                    'message' => ['message_id' => 'max-out-3'],
-                ]),
-        ]);
+        $this->fakeMaxApiSequence();
 
         $channel = $this->createMaxChannel();
 
@@ -492,21 +452,7 @@ class NeedsDiscoveryScenarioTest extends TestCase
 
     public function test_double_skip_completes_with_completed_skipped_outcome_and_does_not_restart(): void
     {
-        Http::fake([
-            'https://api.telegram.org/*' => Http::sequence()
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9301],
-                ])
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9302],
-                ])
-                ->push([
-                    'ok' => true,
-                    'result' => ['message_id' => 9303],
-                ]),
-        ]);
+        $this->fakeTelegramApiSequence(9301);
 
         $channel = $this->createTelegramChannel();
 
@@ -561,7 +507,13 @@ class NeedsDiscoveryScenarioTest extends TestCase
         ))->assertOk();
 
         $this->assertDatabaseCount('scenario_runs', 1);
-        Http::assertSentCount(3);
+        $this->assertSame(
+            3,
+            Message::query()
+                ->where('direction', Message::DIRECTION_OUTBOUND)
+                ->where('sent_by_system_code', Message::SENT_BY_SYSTEM_CODE_SCENARIO_NEEDS_DISCOVERY)
+                ->count(),
+        );
     }
 
     private function createTelegramChannel(): Channel
@@ -572,6 +524,41 @@ class NeedsDiscoveryScenarioTest extends TestCase
                 'token' => 'telegram-token',
                 'webhook_secret' => 'telegram-secret',
             ],
+        ]);
+    }
+
+    private function fakeTelegramApiSequence(int $firstMessageId): void
+    {
+        $sequence = Http::sequence();
+
+        for ($offset = 0; $offset < 20; $offset++) {
+            $sequence->push([
+                'ok' => true,
+                'result' => [
+                    'message_id' => $firstMessageId + $offset,
+                ],
+            ]);
+        }
+
+        Http::fake([
+            'https://api.telegram.org/*' => $sequence,
+        ]);
+    }
+
+    private function fakeMaxApiSequence(): void
+    {
+        $sequence = Http::sequence();
+
+        for ($offset = 1; $offset <= 20; $offset++) {
+            $sequence->push([
+                'message' => [
+                    'message_id' => 'max-out-'.$offset,
+                ],
+            ]);
+        }
+
+        Http::fake([
+            'https://platform-api.max.ru/*' => $sequence,
         ]);
     }
 

@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Data\Bots\DownloadedAvatarData;
 use App\Jobs\SyncContactIdentityAvatarJob;
 use App\Models\Channel;
-use App\Models\ChannelActivityLog;
 use App\Models\ContactIdentity;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Bots\StoreContactIdentityAvatarAction;
@@ -446,7 +445,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         $this->assertNull($identity->avatar_path);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
-            'level' => ChannelActivityLog::LEVEL_WARNING,
+            'level' => 'warning',
             'event' => 'contact.avatar_sync_failed',
         ]);
     }
@@ -511,7 +510,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         Storage::disk('public')->assertExists($originalAvatarPath);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
-            'level' => ChannelActivityLog::LEVEL_WARNING,
+            'level' => 'warning',
             'event' => 'contact.avatar_sync_failed',
         ]);
     }
@@ -541,7 +540,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         Http::assertNothingSent();
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
-            'level' => ChannelActivityLog::LEVEL_WARNING,
+            'level' => 'warning',
             'event' => 'contact.avatar_sync_failed',
         ]);
     }
@@ -596,7 +595,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
         Storage::disk('contact_avatars')->assertExists($staleAvatarPath);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
-            'level' => ChannelActivityLog::LEVEL_WARNING,
+            'level' => 'warning',
             'event' => 'contact.avatar_sync_failed',
         ]);
     }
@@ -618,7 +617,7 @@ class SyncContactIdentityAvatarJobTest extends TestCase
     protected function tinyJpegAvatar(): string
     {
         return (string) base64_decode(
-            '/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUWFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAbAAEAAwEBAQEAAAAAAAAAAAAABAUGAgMBB//EADYQAAIBAgQDBgQEBwAAAAAAAAECAAMRBBIhMQVBUQYiYXGBEzKRobHB0RQjQlJy8AcWJDNSYv/EABkBAAMBAQEAAAAAAAAAAAAAAAABAgMEBf/EACMRAAICAgICAgMBAAAAAAAAAAABAhEDIRIxBBNBUWEiMnH/2gAMAwEAAhEDEQA/APv4ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooor/2Q==',
+            '/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcgSlBFRyB2ODApLCBxdWFsaXR5ID0gOTAK/9sAQwADAgIDAgIDAwMDBAMDBAUIBQUEBAUKBwcGCAwKDAwLCgsLDQ4SEA0OEQ4LCxAWEBETFBUVFQwPFxgWFBgSFBUU/9sAQwEDBAQFBAUJBQUJFA0LDRQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU/8AAEQgAAQABAwERAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A/VOgD//Z',
             true,
         );
     }

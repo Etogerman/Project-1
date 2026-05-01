@@ -859,6 +859,21 @@ class TelegramAccountGatewayControllerTest extends TestCase
         )->assertOk()
             ->assertJsonPath('stored', true);
 
+        ChannelRuntimeState::query()->updateOrCreate(
+            ['channel_id' => $channel->id],
+            [
+                'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+                'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+                'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+                'last_gateway_heartbeat_at' => now(),
+                'runtime_payload' => [
+                    'gateway_capabilities' => [
+                        'outgoing_replies' => true,
+                    ],
+                ],
+            ],
+        );
+
         return Dialog::query()
             ->where('channel_id', $channel->id)
             ->where('external_chat_id', $externalChatId)

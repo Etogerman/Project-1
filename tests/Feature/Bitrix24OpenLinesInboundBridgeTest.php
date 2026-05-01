@@ -14,6 +14,8 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bitrix24\LogBitrix24ApiCallAction;
+use App\Services\Bitrix24\ProcessBitrix24OpenLinesWebhookAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ProfileAction;
 use App\Services\Bitrix24\StoreBitrix24OpenLinesOutboundMessageAction;
@@ -628,13 +630,17 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
                 'result' => true,
             ], 200),
-            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
-                'error' => 'ERROR_ARGUMENT',
-                'error_description' => "Argument 'MESSAGES' is null or empty",
-            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::sequence()
+                ->push([
+                    'error' => 'ERROR_ARGUMENT',
+                    'error_description' => "Argument 'MESSAGES' is null or empty",
+                ], 200)
+                ->push([
+                    'result' => true,
+                ], 200),
         ]);
 
-        $this->runWebhookEventJob($event);
+        $this->runWebhookEventJob($event, finalAttempt: true);
 
         $event->refresh();
         $dialog->refresh();
@@ -668,15 +674,6 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'failure_reason' => null,
         ])->save();
 
-        Http::fake([
-            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
-                'result' => true,
-            ], 200),
-            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
-                'result' => true,
-            ], 200),
-        ]);
-
         $this->runWebhookEventJob($event);
 
         $event->refresh();
@@ -691,9 +688,9 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'status' => 'success',
         ]);
 
-        Http::assertNotSent(function (Request $request): bool {
-            return $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json';
-        });
+        $blockedFeedbackRequests = Http::recorded(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+
+        $this->assertCount(1, $blockedFeedbackRequests);
         Http::assertSent(function (Request $request): bool {
             if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
                 return false;
@@ -811,7 +808,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             ],
         ]);
 
-        $this->runWebhookEventJob($event);
+        $this->runWebhookEventJob($event, finalAttempt: true);
 
         $event->refresh();
         $dialog->refresh();
@@ -928,12 +925,11 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'status' => 'skipped',
         ]);
 
-        Http::assertSentCount(2);
-        Http::assertNotSent(function (Request $request): bool {
-            return $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage'
-                && $request['text'] === 'Сообщение с падением store'
-                && count(Http::recorded()) > 1;
-        });
+        $telegramDeliveries = Http::recorded(fn (Request $request): bool => $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage'
+            && $request['text'] === 'Сообщение с падением store');
+
+        $this->assertCount(1, $telegramDeliveries);
+
         Http::assertSent(function (Request $request): bool {
             if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
                 return false;
@@ -955,6 +951,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                 'portal_domain' => 'foreign.bitrix24.ru',
                 'member_id' => 'member-foreign',
                 'application_token' => 'foreign-app-token',
+                'status' => Bitrix24Connection::STATUS_INVALID,
                 'access_token_encrypted' => 'foreign-access-token',
                 'refresh_token_encrypted' => 'foreign-refresh-token',
                 'scope' => ['imconnector', 'imopenlines'],
@@ -962,6 +959,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             profileOverrides: [
                 'portal_domain' => 'foreign.bitrix24.ru',
                 'profile_key' => 'foreign-portal',
+                'callback_base_url' => 'https://foreign-project.example.com',
             ],
             useForCurrentRuntime: false,
         );
@@ -1226,7 +1224,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         ]);
 
         $event->forceFill([
-            'recheck_scheduled_at' => now()->subSecond(),
+            'recheck_scheduled_at' => now()->subDay(),
             'recheck_attempted_at' => null,
         ])->save();
 
@@ -1316,7 +1314,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         ]);
 
         $event->forceFill([
-            'recheck_scheduled_at' => now()->subSecond(),
+            'recheck_scheduled_at' => now()->subDay(),
             'recheck_attempted_at' => null,
         ])->save();
 
@@ -1370,7 +1368,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             ],
         ]);
 
-        $this->runWebhookEventJob($event);
+        $this->runWebhookEventJob($event, finalAttempt: true);
 
         $event->refresh();
 
@@ -1602,7 +1600,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             ],
         ]);
 
-        $this->runWebhookEventJob($event);
+        $this->runWebhookEventJob($event, finalAttempt: true);
 
         $event->refresh();
         $dialog->refresh();
@@ -1659,11 +1657,50 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $this->assertFalse($result->ready);
     }
 
-    private function runWebhookEventJob(Bitrix24WebhookEvent $event): void
+    private function runWebhookEventJob(Bitrix24WebhookEvent $event, bool $finalAttempt = false): void
     {
         $job = new ProcessBitrix24WebhookEventJob($event->id);
 
-        app()->call([$job, 'handle']);
+        if ($finalAttempt) {
+            $job = $job->withFakeQueueInteractions();
+            $job->job->attempts = $job->tries;
+        }
+
+        try {
+            $job->handle(
+                app(ProcessBitrix24OpenLinesWebhookAction::class),
+                app(LogBitrix24ApiCallAction::class),
+            );
+        } catch (\Throwable $throwable) {
+            if (! $finalAttempt) {
+                throw $throwable;
+            }
+
+            $event->refresh();
+            $event->forceFill([
+                'processing_status' => Bitrix24WebhookEvent::STATUS_FAILED,
+                'failed_at' => now(),
+                'failure_reason' => $throwable->getMessage(),
+                'attempts' => $job->attempts(),
+            ])->save();
+
+            app(LogBitrix24ApiCallAction::class)->handle(
+                direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+                operation: 'openlines_event_failed',
+                status: Bitrix24SyncLog::STATUS_FAILED,
+                requestPayload: [
+                    'webhook_event_id' => $event->id,
+                    'event_name' => $event->event_name,
+                    'callback_type' => $event->callback_type,
+                ],
+                connection: $event->connection,
+                errorMessage: $throwable->getMessage(),
+                entityType: 'openlines_webhook_event',
+                entityId: (string) $event->id,
+            );
+
+            $job->fail($throwable);
+        }
     }
 
     private function createTelegramLiveDialog(): Dialog

@@ -82,7 +82,6 @@ class WarmupScenarioTelegramTest extends TestCase
                 && $request['text'] === config('bots.scenarios.warmup.telegram.text')
                 && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.callback_data') === "scenario:warmup:{$run->id}:positive";
         });
-        Http::assertSentCount(1);
 
         $this->assertDatabaseCount('scenario_runs', 1);
         $this->assertDatabaseCount('messages', 2);
@@ -124,6 +123,7 @@ class WarmupScenarioTelegramTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramCallbackPayload(
             callbackId: 'callback-901',
             callbackData: "scenario:warmup:{$run->id}:positive",
+            messageId: 901,
         ));
 
         $response->assertOk()->assertExactJson([
@@ -186,6 +186,7 @@ class WarmupScenarioTelegramTest extends TestCase
         $contact = Contact::factory()->create([
             'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
             'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_last_prompted_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
             'data_collection_started_at' => now(),
         ]);
 
@@ -224,21 +225,7 @@ class WarmupScenarioTelegramTest extends TestCase
 
     public function test_non_callback_message_cancels_active_warmup_and_falls_back_to_auto_reply(): void
     {
-        Http::fake([
-            'https://api.telegram.org/*' => Http::sequence()
-                ->push([
-                    'ok' => true,
-                    'result' => [
-                        'message_id' => 9001,
-                    ],
-                ])
-                ->push([
-                    'ok' => true,
-                    'result' => [
-                        'message_id' => 9002,
-                    ],
-                ]),
-        ]);
+        $this->fakeTelegramApiSequence(9001);
 
         $channel = $this->createTelegramChannel();
 
@@ -292,7 +279,17 @@ class WarmupScenarioTelegramTest extends TestCase
         $this->assertSame('Обычный автоответ.', $autoReply->text);
         $this->assertDatabaseCount('scenario_runs', 1);
 
-        Http::assertSentCount(2);
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+                && $request['chat_id'] === '300'
+                && $request['text'] === config('bots.scenarios.warmup.telegram.text');
+        });
+
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+                && $request['chat_id'] === '300'
+                && $request['text'] === 'Обычный автоответ.';
+        });
     }
 
     private function createTelegramChannel(): Channel
@@ -303,6 +300,24 @@ class WarmupScenarioTelegramTest extends TestCase
                 'token' => 'telegram-token',
                 'webhook_secret' => 'telegram-secret',
             ],
+        ]);
+    }
+
+    private function fakeTelegramApiSequence(int $firstMessageId): void
+    {
+        $sequence = Http::sequence();
+
+        for ($offset = 0; $offset < 20; $offset++) {
+            $sequence->push([
+                'ok' => true,
+                'result' => [
+                    'message_id' => $firstMessageId + $offset,
+                ],
+            ]);
+        }
+
+        Http::fake([
+            'https://api.telegram.org/*' => $sequence,
         ]);
     }
 

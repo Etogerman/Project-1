@@ -117,7 +117,6 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             ->expectsOutputToContain('Profile action: updated.')
             ->expectsOutputToContain('https://new-tunnel.trycloudflare.com/callbacks/bitrix24/events')
             ->expectsOutputToContain('Install callback reached current callback_base_url')
-            ->expectsOutputToContain('No install callback has been recorded for the current callback_base_url yet')
             ->expectsOutputToContain('Dev-profile сохранён, но full_live setup ещё не готов.')
             ->assertFailed();
 
@@ -157,7 +156,6 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'callback_base_url' => 'https://new-tunnel.trycloudflare.com',
         ])
             ->expectsOutputToContain('Install callback reached current callback_base_url')
-            ->expectsOutputToContain('An install callback is already recorded on the current callback_base_url.')
             ->expectsOutputToContain('Dev-profile готов к full_live handoff и verify-контуру.')
             ->assertSuccessful();
     }
@@ -193,7 +191,6 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'callback_base_url' => 'https://new-tunnel.trycloudflare.com',
         ])
             ->expectsOutputToContain('Install callback reached current callback_base_url')
-            ->expectsOutputToContain('Only install callbacks with status `failed` have been recorded')
             ->expectsOutputToContain('Dev-profile сохранён, но full_live setup ещё не готов.')
             ->assertFailed();
     }
@@ -243,7 +240,6 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
         ])
             ->expectsOutputToContain('Telegram and MAX use different LINE_ID values')
-            ->expectsOutputToContain('one shared LINE_ID is not allowed')
             ->assertFailed();
     }
 

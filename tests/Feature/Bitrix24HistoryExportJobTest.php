@@ -281,7 +281,7 @@ class Bitrix24HistoryExportJobTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
             'text' => 'Ответ оператора',
-            'received_at' => null,
+            'received_at' => $sameMoment,
             'created_at' => $sameMoment,
         ]);
 
@@ -438,7 +438,7 @@ class Bitrix24HistoryExportJobTest extends TestCase
             'bitrix24_contact_id' => $contact->bitrix24_contact_id,
             'export_mode' => Bitrix24MessageExport::MODE_HISTORY,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-            'batch_uuid' => 'old-batch',
+            'batch_uuid' => fake()->uuid(),
         ]);
 
         Http::fake([

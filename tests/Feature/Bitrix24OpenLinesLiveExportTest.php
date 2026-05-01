@@ -2334,7 +2334,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             $this->expectedOpenLinesExternalUserId($dialog),
             $payload['MESSAGES'][0]['user']['id'] ?? null,
         );
-        $this->assertSame('Live Contact', $payload['MESSAGES'][0]['user']['name'] ?? null);
+        $this->assertSame('@'.$dialog->currentContactIdentity->external_username, $payload['MESSAGES'][0]['user']['name'] ?? null);
         $this->assertArrayNotHasKey('last_name', $payload['MESSAGES'][0]['user']);
         $this->assertArrayNotHasKey('phone', $payload['MESSAGES'][0]['user']);
         $this->assertArrayNotHasKey('crm_contact_id', $payload['MESSAGES'][0]['user']);
@@ -2528,12 +2528,13 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
         ]);
 
-        try {
-            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-            $this->fail('Expected Bitrix24ApiException was not thrown.');
-        } catch (Bitrix24ApiException) {
-            // Expected route failure.
-        }
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+        ]);
 
         Http::assertSent(function (Request $request): bool {
             parse_str($request->body(), $payload);
@@ -2729,7 +2730,12 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         Http::fake();
 
-        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24ApiException was not thrown.');
+        } catch (Bitrix24ApiException $exception) {
+            $this->assertStringContainsString('route is not configured', $exception->getMessage());
+        }
 
         $dialog->refresh();
 
@@ -2855,6 +2861,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
             'text' => 'Expired claim should be requeued',
         ]);
+        $liveBatchUuid = fake()->uuid();
+        $liveClaimUuid = fake()->uuid();
 
         Bitrix24MessageExport::query()->create([
             'message_id' => $message->id,
@@ -2862,10 +2870,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-            'live_batch_uuid' => 'expired-live-batch-1',
-            'live_claim_uuid' => 'expired-live-claim-1',
-            'live_claimed_at' => now()->subMinutes(3),
-            'live_claim_expires_at' => now()->subMinute(),
+            'live_batch_uuid' => $liveBatchUuid,
+            'live_claim_uuid' => $liveClaimUuid,
+            'live_claimed_at' => now()->subHours(5),
+            'live_claim_expires_at' => now()->subHours(4),
         ]);
 
         $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
@@ -2873,10 +2881,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertTrue($result->queued);
         $this->assertFalse($result->alreadyPending);
         $this->assertTrue($result->ready);
-        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message): bool {
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message, $liveBatchUuid): bool {
             return $job->messageId === $message->id
                 && $job->liveBatchUuid !== null
-                && $job->liveBatchUuid !== 'expired-live-batch-1';
+                && $job->liveBatchUuid !== $liveBatchUuid;
         });
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $message->id,
@@ -2941,6 +2949,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
             'text' => 'Stale unclaimed pending export should be requeued',
         ]);
+        $liveBatchUuid = fake()->uuid();
 
         $export = Bitrix24MessageExport::query()->create([
             'message_id' => $message->id,
@@ -2948,14 +2957,15 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-            'live_batch_uuid' => 'stale-unclaimed-batch-1',
+            'live_batch_uuid' => $liveBatchUuid,
             'live_claim_uuid' => null,
             'live_claimed_at' => null,
             'live_claim_expires_at' => null,
         ]);
 
+        $export->timestamps = false;
         $export->forceFill([
-            'updated_at' => now()->subSeconds(QueueBitrix24LiveMessageExportAction::UNCLAIMED_PENDING_RECOVERY_SECONDS + 5),
+            'updated_at' => now()->subHours(4),
         ])->save();
 
         $result = app(QueueBitrix24LiveMessageExportAction::class)->handle($message);
@@ -2963,10 +2973,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertTrue($result->queued);
         $this->assertFalse($result->alreadyPending);
         $this->assertTrue($result->ready);
-        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message): bool {
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message, $liveBatchUuid): bool {
             return $job->messageId === $message->id
                 && $job->liveBatchUuid !== null
-                && $job->liveBatchUuid !== 'stale-unclaimed-batch-1';
+                && $job->liveBatchUuid !== $liveBatchUuid;
         });
     }
 
@@ -2981,6 +2991,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
             'text' => 'Fresh unclaimed pending export should stay pending',
         ]);
+        $liveBatchUuid = fake()->uuid();
 
         Bitrix24MessageExport::query()->create([
             'message_id' => $message->id,
@@ -2988,7 +2999,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-            'live_batch_uuid' => 'fresh-unclaimed-batch-1',
+            'live_batch_uuid' => $liveBatchUuid,
             'live_claim_uuid' => null,
             'live_claimed_at' => null,
             'live_claim_expires_at' => null,
@@ -3067,6 +3078,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
             'text' => 'Second writer must be blocked',
         ]);
+        $liveBatchUuid = fake()->uuid();
+        $liveClaimUuid = fake()->uuid();
 
         Bitrix24MessageExport::query()->create([
             'message_id' => $message->id,
@@ -3074,23 +3087,23 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'bitrix24_contact_id' => $dialog->contact()->firstOrFail()->bitrix24_contact_id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-            'live_batch_uuid' => 'live-batch-duplicate-1',
-            'live_claim_uuid' => 'live-claim-duplicate-1',
+            'live_batch_uuid' => $liveBatchUuid,
+            'live_claim_uuid' => $liveClaimUuid,
             'live_claimed_at' => now()->subSecond(),
             'live_claim_expires_at' => now()->addMinute(),
         ]);
 
         Http::fake();
 
-        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message, liveBatchUuid: 'live-batch-duplicate-1');
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message, liveBatchUuid: $liveBatchUuid);
 
         Http::assertNothingSent();
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $message->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-            'live_batch_uuid' => 'live-batch-duplicate-1',
-            'live_claim_uuid' => 'live-claim-duplicate-1',
+            'live_batch_uuid' => $liveBatchUuid,
+            'live_claim_uuid' => $liveClaimUuid,
         ]);
     }
 

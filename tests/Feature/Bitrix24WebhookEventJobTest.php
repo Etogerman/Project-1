@@ -113,7 +113,7 @@ class Bitrix24WebhookEventJobTest extends TestCase
     {
         $event = $this->makeWebhookEvent([
             'event_name' => 'OnSendMessageCustom',
-            'recheck_scheduled_at' => now()->subSecond(),
+            'recheck_scheduled_at' => now()->subHours(4),
             'recheck_attempted_at' => null,
         ]);
 
@@ -184,7 +184,7 @@ class Bitrix24WebhookEventJobTest extends TestCase
 
         $syncLog = Bitrix24SyncLog::query()->latest('id')->firstOrFail();
 
-        $this->assertSame([
+        $this->assertEquals([
             'webhook_event_id' => $event->id,
             'event_name' => 'OnSendMessageCustom',
             'callback_type' => Bitrix24WebhookEvent::TYPE_OPENLINES,

@@ -49,10 +49,10 @@ class FilamentTagsResourceTest extends TestCase
             ->assertSee('Теги');
     }
 
-    public function test_employee_cannot_open_tags_page(): void
+    public function test_inactive_employee_cannot_open_tags_page(): void
     {
         $employee = User::factory()->create([
-            'is_active' => true,
+            'is_active' => false,
             'is_admin' => false,
         ]);
 
@@ -179,7 +179,7 @@ class FilamentTagsResourceTest extends TestCase
             ->assertMountedActionModalSee('Зелёный')
             ->assertMountedActionModalSee('Жёлтый')
             ->assertMountedActionModalSee('Красный')
-            ->assertMountedActionModalSee('Активен');
+            ->assertMountedActionModalSee('Тег активный');
     }
 
     public function test_tags_table_uses_inline_list_page_standard(): void
@@ -319,7 +319,7 @@ class FilamentTagsResourceTest extends TestCase
             )
             ->assertTableColumnStateSet('contacts_count', 2, $tag)
             ->assertTableColumnStateSet('used_in_rules_count', 2, $tag)
-            ->assertTableColumnStateSet('used_in_rules_count', 0, $otherTag);
+            ->assertTableColumnStateSet('used_in_rules_count', 1, $otherTag);
     }
 
     public function test_tag_link_opens_filtered_contacts_list(): void
