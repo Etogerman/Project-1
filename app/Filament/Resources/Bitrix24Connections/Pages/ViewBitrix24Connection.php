@@ -184,6 +184,7 @@ class ViewBitrix24Connection extends ViewRecord
                     'source_id' => filled($route?->source_id) ? (string) $route?->source_id : '—',
                     'line_owner_label' => $this->resolveLineOwnerLabel($profile, $channel, $route, $form),
                     'last_error_message' => filled($route?->last_error_message) ? (string) $route?->last_error_message : 'Ошибок не было',
+                    'auto_setup_visible' => $autoSetup['visible'],
                     'auto_setup_enabled' => $autoSetup['enabled'],
                     'auto_setup_label' => $autoSetup['label'],
                     'auto_setup_reason' => $autoSetup['reason'],
@@ -504,7 +505,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @return array{enabled: bool, label: string, reason: string}
+     * @return array{visible: bool, enabled: bool, label: string, reason: string}
      */
     protected function resolveOpenLineAutoSetupState(
         Bitrix24Profile $profile,
@@ -512,6 +513,7 @@ class ViewBitrix24Connection extends ViewRecord
         ?Bitrix24OpenLineRoute $route,
     ): array {
         $default = [
+            'visible' => true,
             'enabled' => false,
             'label' => $route instanceof Bitrix24OpenLineRoute && $route->status === Bitrix24OpenLineRoute::STATUS_ACTIVE
                 ? 'Проверить ОЛ'
@@ -534,7 +536,7 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         if (Bitrix24OpenLineRoute::channelTypeForChannel($channel) !== Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT) {
-            return [...$default, 'reason' => 'Доступно только для Telegram bot'];
+            return [...$default, 'visible' => false, 'reason' => ''];
         }
 
         if (! $channel->is_active) {

@@ -13,6 +13,7 @@ class CheckChannelConnectionAction
     public function __construct(
         protected ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
         protected TelegramBotApiService $telegramBotApiService,
+        protected MaxBotApiService $maxBotApiService,
     ) {}
 
     /**
@@ -96,10 +97,8 @@ class CheckChannelConnectionAction
         }
 
         try {
-            $webhookInfo = $this->telegramBotApiService->fetchWebhookInfo($channel);
-            $providerWebhookUrl = filled(data_get($webhookInfo, 'url'))
-                ? trim((string) data_get($webhookInfo, 'url'))
-                : null;
+            $providerWebhookUrls = $this->fetchProviderWebhookUrls($channel);
+            $providerWebhookUrl = $this->selectProviderWebhookUrl($expectedWebhookUrl, $providerWebhookUrls);
 
             if ($providerWebhookUrl === null) {
                 return $this->notConnectedState(
@@ -129,16 +128,49 @@ class CheckChannelConnectionAction
             ];
         } catch (RequestException $throwable) {
             return $this->notConnectedState(
-                $this->formatRequestExceptionMessage($throwable),
+                $this->formatRequestExceptionMessage($throwable, $channel),
                 $expectedWebhookUrl,
                 null,
                 now(),
             );
         } catch (ConnectionException) {
-            return $this->notConnectedState('Не удалось проверить Telegram', $expectedWebhookUrl, null, now());
+            return $this->notConnectedState($this->genericCheckFailureMessage($channel), $expectedWebhookUrl, null, now());
         } catch (Throwable) {
-            return $this->notConnectedState('Не удалось проверить Telegram', $expectedWebhookUrl, null, now());
+            return $this->notConnectedState($this->genericCheckFailureMessage($channel), $expectedWebhookUrl, null, now());
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function fetchProviderWebhookUrls(Channel $channel): array
+    {
+        if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
+            $webhookInfo = $this->telegramBotApiService->fetchWebhookInfo($channel);
+            $url = data_get($webhookInfo, 'url');
+
+            return filled($url) ? [trim((string) $url)] : [];
+        }
+
+        if ($channel->platform === Channel::PLATFORM_MAX) {
+            return $this->maxBotApiService->fetchWebhookUrls($channel);
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  list<string>  $providerWebhookUrls
+     */
+    protected function selectProviderWebhookUrl(string $expectedWebhookUrl, array $providerWebhookUrls): ?string
+    {
+        foreach ($providerWebhookUrls as $providerWebhookUrl) {
+            if ($this->webhookUrlsMatch($expectedWebhookUrl, $providerWebhookUrl)) {
+                return $providerWebhookUrl;
+            }
+        }
+
+        return $providerWebhookUrls[0] ?? null;
     }
 
     /**
@@ -232,14 +264,24 @@ class CheckChannelConnectionAction
         ];
     }
 
-    protected function formatRequestExceptionMessage(RequestException $throwable): string
+    protected function formatRequestExceptionMessage(RequestException $throwable, Channel $channel): string
     {
         $status = $throwable->response?->status();
 
         if (in_array($status, [401, 403, 404], true)) {
-            return 'Токен не принят Telegram';
+            return sprintf('Токен не принят %s', $this->providerLabel($channel));
         }
 
-        return 'Не удалось проверить Telegram';
+        return $this->genericCheckFailureMessage($channel);
+    }
+
+    protected function genericCheckFailureMessage(Channel $channel): string
+    {
+        return sprintf('Не удалось проверить %s', $this->providerLabel($channel));
+    }
+
+    protected function providerLabel(Channel $channel): string
+    {
+        return Channel::platformOptions()[$channel->platform] ?? (string) $channel->platform;
     }
 }

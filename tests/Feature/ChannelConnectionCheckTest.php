@@ -140,6 +140,68 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertSame('https://other-local.example/webhooks/telegram/1', $channel->provider_webhook_url);
     }
 
+    public function test_max_bot_is_connected_when_webhook_matches_current_admin(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/subscriptions' => Http::response([
+                'subscriptions' => [
+                    [
+                        'url' => 'https://connector.example/webhooks/max/1',
+                    ],
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'max-token'],
+            'is_active' => true,
+        ]);
+
+        app(CheckChannelConnectionAction::class)->handle($channel);
+
+        $channel->refresh();
+
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $channel->webhook_status);
+        $this->assertNull($channel->connection_error_message);
+        $this->assertSame("https://connector.example/webhooks/max/{$channel->id}", $channel->expected_webhook_url);
+        $this->assertSame("https://connector.example/webhooks/max/{$channel->id}", $channel->provider_webhook_url);
+        $this->assertNotNull($channel->connection_checked_at);
+    }
+
+    public function test_max_bot_is_not_connected_when_webhook_points_elsewhere(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/subscriptions' => Http::response([
+                'subscriptions' => [
+                    [
+                        'url' => 'https://other-local.example/webhooks/max/1',
+                    ],
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'max-token'],
+            'is_active' => true,
+        ]);
+
+        app(CheckChannelConnectionAction::class)->handle($channel);
+
+        $channel->refresh();
+
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_NOT_INSTALLED, $channel->webhook_status);
+        $this->assertSame('Webhook установлен не на эту админку', $channel->connection_error_message);
+        $this->assertSame('https://other-local.example/webhooks/max/1', $channel->provider_webhook_url);
+    }
+
     public function test_disabled_channel_is_marked_not_connected_without_calling_telegram(): void
     {
         Http::fake();
@@ -260,7 +322,7 @@ class ChannelConnectionCheckTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_connection_check_migration_keeps_existing_active_telegram_bots_sendable_until_first_check(): void
+    public function test_connection_check_migration_keeps_existing_active_supported_bots_sendable_until_first_check(): void
     {
         $migration = require database_path('migrations/2026_04_30_000000_add_connection_check_fields_to_channels_table.php');
 
@@ -283,6 +345,12 @@ class ChannelConnectionCheckTest extends TestCase
             'bot_token_present' => false,
             'is_active' => true,
         ]);
+        $activeMaxBot = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'max-token'],
+            'is_active' => true,
+        ]);
 
         $migration->down();
         $migration->up();
@@ -290,6 +358,7 @@ class ChannelConnectionCheckTest extends TestCase
         $activeRow = DB::table('channels')->where('id', $activeBot->id)->first();
         $inactiveRow = DB::table('channels')->where('id', $inactiveBot->id)->first();
         $missingTokenRow = DB::table('channels')->where('id', $missingTokenBot->id)->first();
+        $activeMaxRow = DB::table('channels')->where('id', $activeMaxBot->id)->first();
 
         $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $activeRow->connection_status);
         $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $activeRow->webhook_status);
@@ -301,6 +370,11 @@ class ChannelConnectionCheckTest extends TestCase
 
         $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $missingTokenRow->connection_status);
         $this->assertSame(Channel::CONNECTION_ERROR_NO_TOKEN, $missingTokenRow->connection_error_message);
+
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $activeMaxRow->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $activeMaxRow->webhook_status);
+        $this->assertNotNull($activeMaxRow->connection_checked_at);
+        $this->assertNull($activeMaxRow->connection_error_message);
     }
 
     public function test_reenabled_channel_is_marked_unchecked_until_next_connection_check(): void

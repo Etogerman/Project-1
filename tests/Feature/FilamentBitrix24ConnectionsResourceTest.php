@@ -615,20 +615,21 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'portal_domain' => $profile->portal_domain,
             'scope' => ['crm'],
         ]);
-        Channel::factory()->create([
+        $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'is_active' => true,
             'credentials' => ['token' => 'telegram-token'],
         ]);
 
-        $cards = Livewire::actingAs($superadmin)
+        $cards = collect(Livewire::actingAs($superadmin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->instance()
-            ->getOpenLineRouteCards();
+            ->getOpenLineRouteCards())
+            ->keyBy('channel_id');
 
-        $this->assertFalse($cards[0]['auto_setup_enabled']);
-        $this->assertSame('Не хватает прав приложения Bitrix24', $cards[0]['auto_setup_reason']);
+        $this->assertFalse($cards->get($channel->id)['auto_setup_enabled']);
+        $this->assertSame('Не хватает прав приложения Bitrix24', $cards->get($channel->id)['auto_setup_reason']);
     }
 
     public function test_auto_setup_button_accepts_local_bitrix24_app_scope(): void
@@ -644,20 +645,64 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'portal_domain' => $profile->portal_domain,
             'scope' => ['app'],
         ]);
-        Channel::factory()->create([
+        $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'is_active' => true,
             'credentials' => ['token' => 'telegram-token'],
         ]);
 
-        $cards = Livewire::actingAs($superadmin)
+        $cards = collect(Livewire::actingAs($superadmin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->instance()
-            ->getOpenLineRouteCards();
+            ->getOpenLineRouteCards())
+            ->keyBy('channel_id');
 
-        $this->assertTrue($cards[0]['auto_setup_enabled']);
-        $this->assertSame('', $cards[0]['auto_setup_reason']);
+        $this->assertTrue($cards->get($channel->id)['auto_setup_enabled']);
+        $this->assertSame('', $cards->get($channel->id)['auto_setup_reason']);
+    }
+
+    public function test_auto_setup_button_is_visible_only_for_telegram_bot_routes(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+            'max_connector_code' => 'abc_max',
+            'max_source_id' => 'ABC_MAX',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'scope' => ['app'],
+        ]);
+        $maxBot = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+        $telegramAccount = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $telegramBot = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        $cards = collect(Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->instance()
+            ->getOpenLineRouteCards())
+            ->keyBy('channel_id');
+
+        $this->assertFalse($cards->get($maxBot->id)['auto_setup_visible']);
+        $this->assertFalse($cards->get($telegramAccount->id)['auto_setup_visible']);
+        $this->assertTrue($cards->get($telegramBot->id)['auto_setup_visible']);
+        $this->assertTrue($cards->get($telegramBot->id)['auto_setup_enabled']);
     }
 
     private function makeAdmin(): User

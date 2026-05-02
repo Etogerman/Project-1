@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Channels;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
+use App\Models\ChannelRuntimeState;
 use App\Models\Message;
 use App\Services\Bots\CheckChannelConnectionAction;
 use App\Services\Bots\RegisterChannelWebhookAction;
@@ -593,7 +594,7 @@ class ChannelResource extends Resource
                             Notification::make()
                                 ->success()
                                 ->title('Канал подключен')
-                                ->body('Telegram подтвердил webhook этой админки.')
+                                ->body('Провайдер подтвердил webhook этой админки.')
                                 ->send();
 
                             return;
@@ -1069,7 +1070,7 @@ class ChannelResource extends Resource
                 return 'Аккаунт ещё не авторизован';
             }
 
-            if ($runtimeState->authorization_state === \App\Models\ChannelRuntimeState::AUTHORIZATION_STATE_READY) {
+            if ($runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY) {
                 return sprintf(
                     'Авторизация: %s · Синхронизация: %s',
                     $runtimeState->getAuthStatusLabel(),

@@ -146,6 +146,35 @@ class MaxBotApiService
         );
     }
 
+    /**
+     * @return list<string>
+     */
+    public function fetchWebhookUrls(Channel $channel): array
+    {
+        $subscriptionsResponse = $this->client($channel)
+            ->get('https://platform-api.max.ru/subscriptions')
+            ->throw()
+            ->json();
+
+        $subscriptions = data_get($subscriptionsResponse, 'subscriptions', $subscriptionsResponse);
+
+        if (! is_array($subscriptions)) {
+            return [];
+        }
+
+        $urls = [];
+
+        foreach ($subscriptions as $subscription) {
+            $url = is_array($subscription) ? data_get($subscription, 'url') : null;
+
+            if (filled($url)) {
+                $urls[] = trim((string) $url);
+            }
+        }
+
+        return array_values(array_unique(array_filter($urls)));
+    }
+
     public function fetchChatAvatarData(Channel $channel, string $externalChatId): MaxChatAvatarData
     {
         if (! filled($externalChatId)) {
