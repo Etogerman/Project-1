@@ -98,6 +98,17 @@ class CheckChannelConnectionAction
 
         try {
             $providerWebhookUrls = $this->fetchProviderWebhookUrls($channel);
+            $unexpectedProviderWebhookUrls = $this->unexpectedProviderWebhookUrls($channel, $expectedWebhookUrl, $providerWebhookUrls);
+
+            if ($unexpectedProviderWebhookUrls !== []) {
+                return $this->notConnectedState(
+                    $this->formatUnexpectedProviderWebhookUrlsMessage($channel, $unexpectedProviderWebhookUrls),
+                    $expectedWebhookUrl,
+                    $this->formatProviderWebhookUrls($providerWebhookUrls),
+                    now(),
+                );
+            }
+
             $providerWebhookUrl = $this->selectProviderWebhookUrl($expectedWebhookUrl, $providerWebhookUrls);
 
             if ($providerWebhookUrl === null) {
@@ -171,6 +182,52 @@ class CheckChannelConnectionAction
         }
 
         return $providerWebhookUrls[0] ?? null;
+    }
+
+    /**
+     * @param  list<string>  $providerWebhookUrls
+     * @return list<string>
+     */
+    protected function unexpectedProviderWebhookUrls(Channel $channel, string $expectedWebhookUrl, array $providerWebhookUrls): array
+    {
+        if ($channel->platform !== Channel::PLATFORM_MAX) {
+            return [];
+        }
+
+        $hasExpectedWebhookUrl = false;
+        $unexpectedWebhookUrls = [];
+
+        foreach ($providerWebhookUrls as $providerWebhookUrl) {
+            if ($this->webhookUrlsMatch($expectedWebhookUrl, $providerWebhookUrl)) {
+                $hasExpectedWebhookUrl = true;
+
+                continue;
+            }
+
+            $unexpectedWebhookUrls[] = $providerWebhookUrl;
+        }
+
+        return $hasExpectedWebhookUrl ? array_values($unexpectedWebhookUrls) : [];
+    }
+
+    /**
+     * @param  list<string>  $unexpectedWebhookUrls
+     */
+    protected function formatUnexpectedProviderWebhookUrlsMessage(Channel $channel, array $unexpectedWebhookUrls): string
+    {
+        return sprintf(
+            'В %s найдены лишние webhook subscriptions: %s',
+            $this->providerLabel($channel),
+            $this->formatProviderWebhookUrls($unexpectedWebhookUrls),
+        );
+    }
+
+    /**
+     * @param  list<string>  $providerWebhookUrls
+     */
+    protected function formatProviderWebhookUrls(array $providerWebhookUrls): string
+    {
+        return Str::limit(implode(', ', $providerWebhookUrls), 2048, '');
     }
 
     /**
