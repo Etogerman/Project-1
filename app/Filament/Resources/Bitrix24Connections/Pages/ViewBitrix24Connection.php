@@ -535,7 +535,12 @@ class ViewBitrix24Connection extends ViewRecord
             return [...$default, 'reason' => 'Доступно только для stagecrm.fvds.ru'];
         }
 
-        if (Bitrix24OpenLineRoute::channelTypeForChannel($channel) !== Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT) {
+        $channelType = Bitrix24OpenLineRoute::channelTypeForChannel($channel);
+
+        if (! in_array($channelType, [
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+        ], true)) {
             return [...$default, 'visible' => false, 'reason' => ''];
         }
 
@@ -547,12 +552,25 @@ class ViewBitrix24Connection extends ViewRecord
             return [...$default, 'reason' => 'Нет токена'];
         }
 
-        if (! filled($profile->telegram_connector_code)) {
-            return [...$default, 'reason' => 'Не заполнен Telegram connector_code'];
+        $connectorCode = match ($channelType) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $profile->max_connector_code,
+            default => $profile->telegram_connector_code,
+        };
+        $sourceId = match ($channelType) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $profile->max_source_id,
+            default => $profile->telegram_source_id,
+        };
+        $channelLabel = match ($channelType) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX',
+            default => 'Telegram',
+        };
+
+        if (! filled($connectorCode)) {
+            return [...$default, 'reason' => "Не заполнен {$channelLabel} connector_code"];
         }
 
-        if (! filled($profile->telegram_source_id)) {
-            return [...$default, 'reason' => 'Не заполнен Telegram source_id'];
+        if (! filled($sourceId)) {
+            return [...$default, 'reason' => "Не заполнен {$channelLabel} source_id"];
         }
 
         $actualScopes = collect($record->scope ?? [])

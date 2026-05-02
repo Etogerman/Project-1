@@ -449,6 +449,89 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
     }
 
+    public function test_superadmin_can_auto_setup_max_open_line_route(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'dev-german-main',
+            'max_connector_code' => 'abc_max_dev_german_main',
+            'max_source_id' => 'ABC_MAX_DEV_GERMAN_MAIN',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'application_name' => 'Герман-4',
+            'scope' => ['crm', 'im', 'imopenlines', 'imconnector'],
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX локалка',
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection, $channel): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.add'
+                    && $usedConnection->is($connection)
+                    && data_get($params, 'PARAMS.LINE_NAME') === sprintf('Abrikosoff / dev-german-main / #%d MAX локалка', $channel->id)
+                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_MAX_DEV_GERMAN_MAIN')
+                ->andReturn($this->bitrixResponse(true, 'line-max'));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
+                    && $usedConnection->is($connection)
+                    && ($params['ID'] ?? null) === 'abc_max_dev_german_main'
+                    && ($params['NAME'] ?? null) === 'Герман-4 ABC MAX bot'
+                    && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC MAX bot')
+                ->andReturn($this->bitrixResponse(true, ['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
+                    && ($params['LINE'] ?? null) === 'line-max'
+                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id
+                    && data_get($params, 'DATA.NAME') === 'MAX локалка')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.activate'
+                    && $usedConnection->is($connection)
+                    && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
+                    && ($params['LINE'] ?? null) === 'line-max'
+                    && ($params['ACTIVE'] ?? null) === '1')
+                ->andReturn($this->bitrixResponse(true, true));
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('setupOpenLineRoute', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', null);
+
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'dev-german-main',
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+            'connector_code' => 'abc_max_dev_german_main',
+            'line_id' => 'line-max',
+            'line_owner_key' => 'stagecrm.fvds.ru#line-max',
+            'source_id' => 'ABC_MAX_DEV_GERMAN_MAIN',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'last_error_message' => null,
+            'created_by_user_id' => $superadmin->id,
+            'updated_by_user_id' => $superadmin->id,
+        ]);
+    }
+
     public function test_auto_setup_stores_misconfigured_route_when_connector_registration_fails(): void
     {
         $superadmin = $this->makeSuperadmin();
@@ -748,7 +831,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertSame('', $cards->get($channel->id)['auto_setup_reason']);
     }
 
-    public function test_auto_setup_button_is_visible_only_for_telegram_bot_routes(): void
+    public function test_auto_setup_button_is_visible_for_supported_bot_routes(): void
     {
         $superadmin = $this->makeSuperadmin();
         $profile = $this->makeProfile([
@@ -785,7 +868,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->getOpenLineRouteCards())
             ->keyBy('channel_id');
 
-        $this->assertFalse($cards->get($maxBot->id)['auto_setup_visible']);
+        $this->assertTrue($cards->get($maxBot->id)['auto_setup_visible']);
+        $this->assertTrue($cards->get($maxBot->id)['auto_setup_enabled']);
         $this->assertFalse($cards->get($telegramAccount->id)['auto_setup_visible']);
         $this->assertTrue($cards->get($telegramBot->id)['auto_setup_visible']);
         $this->assertTrue($cards->get($telegramBot->id)['auto_setup_enabled']);
