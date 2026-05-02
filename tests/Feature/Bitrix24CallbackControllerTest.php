@@ -51,6 +51,7 @@ class Bitrix24CallbackControllerTest extends TestCase
             'result' => [
                 'CODE' => 'local.app.code',
                 'INSTALLED' => true,
+                'NAME' => 'Герман-4',
             ],
         ]);
         Http::fake([
@@ -92,6 +93,7 @@ class Bitrix24CallbackControllerTest extends TestCase
 
         $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
         $this->assertSame('member-1', $connection->member_id);
+        $this->assertSame('Герман-4', $connection->application_name);
         $this->assertNull($connection->application_token);
         $this->assertSame($expectedTokenHash, $connection->application_token_hash);
         $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);

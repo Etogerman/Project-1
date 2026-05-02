@@ -33,16 +33,18 @@ class HandleBitrix24InstallCallbackAction
         $fingerprint = $this->buildFingerprint->handle($normalized['payload']);
         $installPayload = $this->buildInstallPayloadData($request->all(), $normalized['payload'], $authContext, $ingress->callbackBaseUrl);
 
-        [$status, $reason] = $this->validateInstallCallback->handle(
+        $validationResult = $this->validateInstallCallback->handle(
             looksLikeBitrix: $normalized['looks_like_bitrix'],
             payload: $installPayload,
             profile: $ingress->profile,
         );
+        [$status, $reason] = $validationResult;
+        $applicationInfo = $validationResult[2] ?? [];
 
         $connection = null;
 
         if ($status === Bitrix24WebhookEvent::STATUS_PENDING) {
-            $connection = $this->upsertConnection->handle($ingress->profile, $installPayload);
+            $connection = $this->upsertConnection->handle($ingress->profile, $installPayload, $applicationInfo);
         } else {
             $connection = $ingress->profile !== null
                 ? $this->findRelatedConnection($ingress->profile, $authContext)
