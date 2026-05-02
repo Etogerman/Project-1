@@ -11,6 +11,35 @@ use Tests\TestCase;
 
 class MaxBotApiServiceTest extends TestCase
 {
+    public function test_fetch_webhook_urls_returns_unique_subscription_urls(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+
+        Http::fake([
+            'https://platform-api.max.ru/subscriptions' => Http::response([
+                'subscriptions' => [
+                    ['url' => 'https://connector.example/webhooks/max/1'],
+                    ['url' => 'https://connector.example/webhooks/max/1'],
+                    ['url' => ''],
+                    ['unexpected' => 'ignored'],
+                ],
+            ]),
+        ]);
+
+        $this->assertSame(
+            ['https://connector.example/webhooks/max/1'],
+            app(MaxBotApiService::class)->fetchWebhookUrls($channel),
+        );
+
+        Http::assertSent(function ($request): bool {
+            return $request->url() === 'https://platform-api.max.ru/subscriptions'
+                && $request->hasHeader('Authorization', 'max-token');
+        });
+    }
+
     public function test_fetch_chat_avatar_data_returns_dialog_with_user_avatar_urls(): void
     {
         $channel = Channel::factory()->create([

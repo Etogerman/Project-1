@@ -11,7 +11,7 @@ use Throwable;
 class ValidateBitrix24InstallCallbackAction
 {
     /**
-     * @return array{0: string, 1: ?string}
+     * @return array{0: string, 1: ?string, 2?: array<string, mixed>}
      */
     public function handle(bool $looksLikeBitrix, Bitrix24InstallPayloadData $payload, ?Bitrix24Profile $profile): array
     {
@@ -115,7 +115,7 @@ class ValidateBitrix24InstallCallbackAction
             return [Bitrix24WebhookEvent::STATUS_FAILED, 'Bitrix24 install probe reported application as not installed.'];
         }
 
-        return [Bitrix24WebhookEvent::STATUS_PENDING, null];
+        return [Bitrix24WebhookEvent::STATUS_PENDING, null, $result];
     }
 
     private function buildAppInfoUrl(string $trustedPortal): string

@@ -14,6 +14,7 @@ use Illuminate\Support\Str;
 class AutoSetupBitrix24OpenLineRouteAction
 {
     public const SUPPORTED_PORTAL_DOMAIN = 'stagecrm.fvds.ru';
+    private const GENERIC_APPLICATION_NAME = 'Abrikosoff Connector';
 
     /**
      * @var list<string>
@@ -59,8 +60,8 @@ class AutoSetupBitrix24OpenLineRouteAction
         Channel $channel,
         ?User $user,
     ): Bitrix24OpenLineRoute {
-        $connectorCode = $this->requiredProfileValue($profile->telegram_connector_code, 'В профиле Bitrix24 не заполнен Telegram connector_code.');
-        $sourceId = $this->requiredProfileValue($profile->telegram_source_id, 'В профиле Bitrix24 не заполнен Telegram source_id.');
+        $connectorCode = $this->requiredConnectorCode($profile, $channel);
+        $sourceId = $this->requiredSourceId($profile, $channel);
         $route = $this->findRoute($profile, $channel);
         $lineId = $this->normalizedRouteLineId($route);
 
@@ -82,7 +83,8 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         try {
-            $this->registerConnector($connection, $profile, $connectorCode, $sourceId);
+            $connection = $this->refreshApplicationNameIfDefault($connection);
+            $this->registerConnector($connection, $profile, $channel, $connectorCode, $sourceId);
             $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId);
             $this->activateConnector($connection, $connectorCode, $lineId);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
@@ -124,8 +126,8 @@ class AutoSetupBitrix24OpenLineRouteAction
             throw new Bitrix24OpenLineAutoSetupException('Автонастройка ОЛ в первом срезе доступна только для stagecrm.fvds.ru.');
         }
 
-        if (Bitrix24OpenLineRoute::channelTypeForChannel($channel) !== Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT) {
-            throw new Bitrix24OpenLineAutoSetupException('Автонастройка ОЛ сейчас доступна только для Telegram bot каналов.');
+        if (! $this->isAutoSetupSupportedChannel($channel)) {
+            throw new Bitrix24OpenLineAutoSetupException('Автонастройка ОЛ сейчас доступна только для Telegram bot и MAX bot каналов.');
         }
 
         if (! $channel->is_active) {
@@ -133,12 +135,20 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         if (! $channel->hasBotTokenConfigured()) {
-            throw new Bitrix24OpenLineAutoSetupException('У канала нет токена Telegram bot.');
+            throw new Bitrix24OpenLineAutoSetupException('У канала нет токена.');
         }
 
-        $this->requiredProfileValue($profile->telegram_connector_code, 'В профиле Bitrix24 не заполнен Telegram connector_code.');
-        $this->requiredProfileValue($profile->telegram_source_id, 'В профиле Bitrix24 не заполнен Telegram source_id.');
+        $this->requiredConnectorCode($profile, $channel);
+        $this->requiredSourceId($profile, $channel);
         $this->assertRequiredScopes($connection);
+    }
+
+    private function isAutoSetupSupportedChannel(Channel $channel): bool
+    {
+        return in_array(Bitrix24OpenLineRoute::channelTypeForChannel($channel), [
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+        ], true);
     }
 
     private function assertRequiredScopes(Bitrix24Connection $connection): void
@@ -192,10 +202,11 @@ class AutoSetupBitrix24OpenLineRouteAction
     private function registerConnector(
         Bitrix24Connection $connection,
         Bitrix24Profile $profile,
+        Channel $channel,
         string $connectorCode,
         string $sourceId,
     ): void {
-        $connectorName = $this->buildConnectorName($connection, $sourceId);
+        $connectorName = $this->buildConnectorName($connection, $sourceId, $channel);
 
         $response = $this->apiClient->call('imconnector.register', [
             'ID' => $connectorCode,
@@ -292,7 +303,46 @@ class AutoSetupBitrix24OpenLineRouteAction
 
         $route->save();
 
+        $this->syncProfileRouteFields($profile, $channel, $connectorCode, $lineId, $sourceId, $status);
+
         return $route;
+    }
+
+    private function syncProfileRouteFields(
+        Bitrix24Profile $profile,
+        Channel $channel,
+        string $connectorCode,
+        string $lineId,
+        string $sourceId,
+        string $status,
+    ): void {
+        if ($status !== Bitrix24OpenLineRoute::STATUS_ACTIVE) {
+            return;
+        }
+
+        $fields = match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => [
+                'telegram_connector_code' => $connectorCode,
+                'telegram_line_id' => $lineId,
+                'telegram_source_id' => $sourceId,
+            ],
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => [
+                'max_connector_code' => $connectorCode,
+                'max_line_id' => $lineId,
+                'max_source_id' => $sourceId,
+            ],
+            default => [],
+        };
+
+        if ($fields === []) {
+            return;
+        }
+
+        $profile->fill($fields);
+
+        if ($profile->isDirty()) {
+            $profile->save();
+        }
     }
 
     private function findRoute(Bitrix24Profile $profile, Channel $channel): ?Bitrix24OpenLineRoute
@@ -392,16 +442,99 @@ class AutoSetupBitrix24OpenLineRouteAction
         return $prefix.$suffix;
     }
 
-    private function buildConnectorName(Bitrix24Connection $connection, string $sourceId): string
+    private function buildConnectorName(Bitrix24Connection $connection, string $sourceId, ?Channel $channel = null): string
     {
-        $applicationName = $this->displayName($connection->application_name)
-            ?? $this->displayName(config('bitrix24.application.name'))
-            ?? 'Abrikosoff';
-
         $sourceName = $this->sourceShortName($sourceId);
-        $parts = array_values(array_filter([$applicationName, $sourceName, 'Telegram bot']));
+        $parts = array_values(array_filter([
+            $this->applicationDisplayName($connection),
+            $sourceName,
+            $this->connectorChannelLabel($channel),
+        ]));
 
         return Str::limit(implode(' ', $parts), 120, '');
+    }
+
+    private function refreshApplicationNameIfDefault(Bitrix24Connection $connection): Bitrix24Connection
+    {
+        $currentName = $this->displayName($connection->application_name);
+        $configuredName = $this->displayName(config('bitrix24.application.name'));
+
+        if ($currentName !== null && ! $this->isGenericApplicationName($currentName)) {
+            return $connection;
+        }
+
+        if ($configuredName !== null && ! $this->isGenericApplicationName($configuredName)) {
+            $connection->forceFill([
+                'application_name' => $configuredName,
+            ])->save();
+
+            return $connection->refresh();
+        }
+
+        $response = $this->apiClient->call('app.info', [], $connection);
+
+        if (! $response->successful || ! is_array($response->result)) {
+            return $connection;
+        }
+
+        $applicationName = $this->resolveApplicationDisplayName($response->result);
+
+        if ($applicationName === null || $applicationName === $currentName) {
+            return $connection;
+        }
+
+        $connection->forceFill([
+            'application_name' => $applicationName,
+        ])->save();
+
+        return $connection->refresh();
+    }
+
+    private function applicationDisplayName(Bitrix24Connection $connection): string
+    {
+        $configuredName = $this->displayName(config('bitrix24.application.name'));
+        $connectionName = $this->displayName($connection->application_name);
+
+        if ($configuredName !== null && ! $this->isGenericApplicationName($configuredName)) {
+            return $configuredName;
+        }
+
+        if ($connectionName !== null && ! $this->isGenericApplicationName($connectionName)) {
+            return $connectionName;
+        }
+
+        return $configuredName ?? $connectionName ?? 'Abrikosoff';
+    }
+
+    private function isGenericApplicationName(string $name): bool
+    {
+        return mb_strtolower(trim($name)) === mb_strtolower(self::GENERIC_APPLICATION_NAME);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function resolveApplicationDisplayName(array $payload): ?string
+    {
+        foreach ([
+            'NAME',
+            'APP_NAME',
+            'TITLE',
+            'LANG.ru.NAME',
+            'LANG.en.NAME',
+            'LANG.NAME',
+            'LANGUAGE.ru.NAME',
+            'LANGUAGE.en.NAME',
+            'LANGUAGE.NAME',
+        ] as $path) {
+            $name = $this->displayName(data_get($payload, $path));
+
+            if ($name !== null) {
+                return $name;
+            }
+        }
+
+        return null;
     }
 
     private function displayName(mixed $value): ?string
@@ -417,11 +550,53 @@ class AutoSetupBitrix24OpenLineRouteAction
 
     private function sourceShortName(string $sourceId): ?string
     {
-        if (preg_match('/^([a-z0-9]+)[_-]telegram(?:[_-]|$)/i', trim($sourceId), $matches) !== 1) {
+        if (preg_match('/^([a-z0-9]+)[_-](?:telegram|max)(?:[_-]|$)/i', trim($sourceId), $matches) !== 1) {
             return null;
         }
 
         return mb_strtoupper($matches[1]);
+    }
+
+    private function requiredConnectorCode(Bitrix24Profile $profile, Channel $channel): string
+    {
+        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => $this->requiredProfileValue(
+                $profile->telegram_connector_code,
+                'В профиле Bitrix24 не заполнен Telegram connector_code.',
+            ),
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $this->requiredProfileValue(
+                $profile->max_connector_code,
+                'В профиле Bitrix24 не заполнен MAX connector_code.',
+            ),
+            default => throw new Bitrix24OpenLineAutoSetupException('Автонастройка ОЛ сейчас доступна только для Telegram bot и MAX bot каналов.'),
+        };
+    }
+
+    private function requiredSourceId(Bitrix24Profile $profile, Channel $channel): string
+    {
+        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => $this->requiredProfileValue(
+                $profile->telegram_source_id,
+                'В профиле Bitrix24 не заполнен Telegram source_id.',
+            ),
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $this->requiredProfileValue(
+                $profile->max_source_id,
+                'В профиле Bitrix24 не заполнен MAX source_id.',
+            ),
+            default => throw new Bitrix24OpenLineAutoSetupException('Автонастройка ОЛ сейчас доступна только для Telegram bot и MAX bot каналов.'),
+        };
+    }
+
+    private function connectorChannelLabel(?Channel $channel): string
+    {
+        if (! $channel instanceof Channel) {
+            return 'Telegram bot';
+        }
+
+        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX bot',
+            default => 'Telegram bot',
+        };
     }
 
     private function settingsUrl(Bitrix24Profile $profile, Bitrix24Connection $connection): string

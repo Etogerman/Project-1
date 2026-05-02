@@ -19,7 +19,7 @@ return new class extends Migration
         });
 
         DB::table('channels')
-            ->where('platform', 'telegram')
+            ->whereIn('platform', ['telegram', 'max'])
             ->where('connection_type', 'bot')
             ->update([
                 'connection_status' => 'not_connected',
@@ -31,7 +31,7 @@ return new class extends Migration
             ]);
 
         DB::table('channels')
-            ->where('platform', 'telegram')
+            ->whereIn('platform', ['telegram', 'max'])
             ->where('connection_type', 'bot')
             ->where('is_active', false)
             ->update([
@@ -39,7 +39,7 @@ return new class extends Migration
             ]);
 
         DB::table('channels')
-            ->where('platform', 'telegram')
+            ->whereIn('platform', ['telegram', 'max'])
             ->where('connection_type', 'bot')
             ->where('is_active', true)
             ->where('bot_token_present', false)
@@ -48,7 +48,7 @@ return new class extends Migration
             ]);
 
         DB::table('channels')
-            ->where('platform', 'telegram')
+            ->whereIn('platform', ['telegram', 'max'])
             ->where('connection_type', 'bot')
             ->where('is_active', true)
             ->where('bot_token_present', true)
@@ -61,7 +61,7 @@ return new class extends Migration
 
         DB::table('channels')
             ->where(fn ($query) => $query
-                ->where('platform', '!=', 'telegram')
+                ->whereNotIn('platform', ['telegram', 'max'])
                 ->orWhere('connection_type', '!=', 'bot'))
             ->update([
                 'connection_status' => 'unsupported',

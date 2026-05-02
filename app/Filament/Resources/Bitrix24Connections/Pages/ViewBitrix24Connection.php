@@ -184,6 +184,7 @@ class ViewBitrix24Connection extends ViewRecord
                     'source_id' => filled($route?->source_id) ? (string) $route?->source_id : '—',
                     'line_owner_label' => $this->resolveLineOwnerLabel($profile, $channel, $route, $form),
                     'last_error_message' => filled($route?->last_error_message) ? (string) $route?->last_error_message : 'Ошибок не было',
+                    'auto_setup_visible' => $autoSetup['visible'],
                     'auto_setup_enabled' => $autoSetup['enabled'],
                     'auto_setup_label' => $autoSetup['label'],
                     'auto_setup_reason' => $autoSetup['reason'],
@@ -504,7 +505,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @return array{enabled: bool, label: string, reason: string}
+     * @return array{visible: bool, enabled: bool, label: string, reason: string}
      */
     protected function resolveOpenLineAutoSetupState(
         Bitrix24Profile $profile,
@@ -512,6 +513,7 @@ class ViewBitrix24Connection extends ViewRecord
         ?Bitrix24OpenLineRoute $route,
     ): array {
         $default = [
+            'visible' => true,
             'enabled' => false,
             'label' => $route instanceof Bitrix24OpenLineRoute && $route->status === Bitrix24OpenLineRoute::STATUS_ACTIVE
                 ? 'Проверить ОЛ'
@@ -533,8 +535,13 @@ class ViewBitrix24Connection extends ViewRecord
             return [...$default, 'reason' => 'Доступно только для stagecrm.fvds.ru'];
         }
 
-        if (Bitrix24OpenLineRoute::channelTypeForChannel($channel) !== Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT) {
-            return [...$default, 'reason' => 'Доступно только для Telegram bot'];
+        $channelType = Bitrix24OpenLineRoute::channelTypeForChannel($channel);
+
+        if (! in_array($channelType, [
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+        ], true)) {
+            return [...$default, 'visible' => false, 'reason' => ''];
         }
 
         if (! $channel->is_active) {
@@ -545,12 +552,25 @@ class ViewBitrix24Connection extends ViewRecord
             return [...$default, 'reason' => 'Нет токена'];
         }
 
-        if (! filled($profile->telegram_connector_code)) {
-            return [...$default, 'reason' => 'Не заполнен Telegram connector_code'];
+        $connectorCode = match ($channelType) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $profile->max_connector_code,
+            default => $profile->telegram_connector_code,
+        };
+        $sourceId = match ($channelType) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $profile->max_source_id,
+            default => $profile->telegram_source_id,
+        };
+        $channelLabel = match ($channelType) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX',
+            default => 'Telegram',
+        };
+
+        if (! filled($connectorCode)) {
+            return [...$default, 'reason' => "Не заполнен {$channelLabel} connector_code"];
         }
 
-        if (! filled($profile->telegram_source_id)) {
-            return [...$default, 'reason' => 'Не заполнен Telegram source_id'];
+        if (! filled($sourceId)) {
+            return [...$default, 'reason' => "Не заполнен {$channelLabel} source_id"];
         }
 
         $actualScopes = collect($record->scope ?? [])

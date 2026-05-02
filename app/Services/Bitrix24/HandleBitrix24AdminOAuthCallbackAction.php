@@ -86,7 +86,7 @@ class HandleBitrix24AdminOAuthCallbackAction
             throw new Bitrix24AdminOAuthException('Bitrix24 не вернул ключи доступа.');
         }
 
-        $this->assertApplicationIdentity($profile, $accessToken);
+        $applicationInfo = $this->resolveApplicationInfo($profile, $accessToken);
 
         $connection = Bitrix24Connection::query()->firstOrNew([
             'profile_id' => $profile->id,
@@ -95,7 +95,8 @@ class HandleBitrix24AdminOAuthCallbackAction
         $connection->fill([
             'profile_id' => $profile->id,
             'portal_domain' => $this->normalizePortalDomain($profile->portal_domain),
-            'application_name' => (string) config('bitrix24.application.name'),
+            'application_name' => $this->resolveApplicationDisplayName($applicationInfo)
+                ?? (string) config('bitrix24.application.name'),
             'client_id' => $profile->client_id,
             'member_id' => $memberId,
             'status' => Bitrix24Connection::STATUS_ACTIVE,
@@ -261,7 +262,10 @@ class HandleBitrix24AdminOAuthCallbackAction
         }
     }
 
-    private function assertApplicationIdentity(Bitrix24Profile $profile, string $accessToken): void
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveApplicationInfo(Bitrix24Profile $profile, string $accessToken): array
     {
         try {
             $response = Http::asForm()
@@ -293,6 +297,34 @@ class HandleBitrix24AdminOAuthCallbackAction
         if ($this->isExplicitlyUninstalled($result['INSTALLED'] ?? null) && ! $this->allowsUninstalledAppProbe()) {
             throw new Bitrix24AdminOAuthException('Bitrix24 сообщил, что приложение не установлено.');
         }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $applicationInfo
+     */
+    private function resolveApplicationDisplayName(array $applicationInfo): ?string
+    {
+        foreach ([
+            $applicationInfo['NAME'] ?? null,
+            $applicationInfo['APP_NAME'] ?? null,
+            $applicationInfo['TITLE'] ?? null,
+            $applicationInfo['LANG']['ru']['NAME'] ?? null,
+            $applicationInfo['LANG']['en']['NAME'] ?? null,
+            $applicationInfo['LANG']['NAME'] ?? null,
+            $applicationInfo['LANGUAGE']['ru']['NAME'] ?? null,
+            $applicationInfo['LANGUAGE']['en']['NAME'] ?? null,
+            $applicationInfo['LANGUAGE']['NAME'] ?? null,
+        ] as $candidate) {
+            $name = $this->nullableString($candidate);
+
+            if ($name !== null) {
+                return $name;
+            }
+        }
+
+        return null;
     }
 
     private function resolveClientEndpoint(Bitrix24Profile $profile, array $tokenPayload): string

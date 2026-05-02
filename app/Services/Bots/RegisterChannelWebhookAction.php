@@ -48,10 +48,10 @@ class RegisterChannelWebhookAction
             };
 
             $this->syncChannelBotMetadataAction->handle($channel);
-            if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
+            if ($channel->supportsConnectionCheck()) {
                 $this->checkChannelConnectionAction->handle(
                     $channel->fresh() ?? $channel,
-                    'Webhook не подтверждён Telegram после регистрации',
+                    'Webhook не подтверждён после регистрации',
                 );
             }
             $channel->clearOperationalError();

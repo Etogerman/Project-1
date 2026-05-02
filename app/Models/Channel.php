@@ -284,7 +284,7 @@ class Channel extends Model
 
     public function supportsConnectionCheck(): bool
     {
-        return $this->platform === self::PLATFORM_TELEGRAM
+        return in_array($this->platform, [self::PLATFORM_TELEGRAM, self::PLATFORM_MAX], true)
             && $this->connection_type === self::CONNECTION_TYPE_BOT;
     }
 
