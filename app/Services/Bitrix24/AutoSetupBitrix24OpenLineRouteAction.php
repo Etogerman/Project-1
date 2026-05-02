@@ -14,6 +14,7 @@ use Illuminate\Support\Str;
 class AutoSetupBitrix24OpenLineRouteAction
 {
     public const SUPPORTED_PORTAL_DOMAIN = 'stagecrm.fvds.ru';
+    private const GENERIC_APPLICATION_NAME = 'Abrikosoff Connector';
 
     /**
      * @var list<string>
@@ -302,7 +303,46 @@ class AutoSetupBitrix24OpenLineRouteAction
 
         $route->save();
 
+        $this->syncProfileRouteFields($profile, $channel, $connectorCode, $lineId, $sourceId, $status);
+
         return $route;
+    }
+
+    private function syncProfileRouteFields(
+        Bitrix24Profile $profile,
+        Channel $channel,
+        string $connectorCode,
+        string $lineId,
+        string $sourceId,
+        string $status,
+    ): void {
+        if ($status !== Bitrix24OpenLineRoute::STATUS_ACTIVE) {
+            return;
+        }
+
+        $fields = match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => [
+                'telegram_connector_code' => $connectorCode,
+                'telegram_line_id' => $lineId,
+                'telegram_source_id' => $sourceId,
+            ],
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => [
+                'max_connector_code' => $connectorCode,
+                'max_line_id' => $lineId,
+                'max_source_id' => $sourceId,
+            ],
+            default => [],
+        };
+
+        if ($fields === []) {
+            return;
+        }
+
+        $profile->fill($fields);
+
+        if ($profile->isDirty()) {
+            $profile->save();
+        }
     }
 
     private function findRoute(Bitrix24Profile $profile, Channel $channel): ?Bitrix24OpenLineRoute
@@ -404,12 +444,12 @@ class AutoSetupBitrix24OpenLineRouteAction
 
     private function buildConnectorName(Bitrix24Connection $connection, string $sourceId, ?Channel $channel = null): string
     {
-        $applicationName = $this->displayName($connection->application_name)
-            ?? $this->displayName(config('bitrix24.application.name'))
-            ?? 'Abrikosoff';
-
         $sourceName = $this->sourceShortName($sourceId);
-        $parts = array_values(array_filter([$applicationName, $sourceName, $this->connectorChannelLabel($channel)]));
+        $parts = array_values(array_filter([
+            $this->applicationDisplayName($connection),
+            $sourceName,
+            $this->connectorChannelLabel($channel),
+        ]));
 
         return Str::limit(implode(' ', $parts), 120, '');
     }
@@ -417,10 +457,18 @@ class AutoSetupBitrix24OpenLineRouteAction
     private function refreshApplicationNameIfDefault(Bitrix24Connection $connection): Bitrix24Connection
     {
         $currentName = $this->displayName($connection->application_name);
-        $defaultName = $this->displayName(config('bitrix24.application.name'));
+        $configuredName = $this->displayName(config('bitrix24.application.name'));
 
-        if ($currentName !== null && $currentName !== $defaultName) {
+        if ($currentName !== null && ! $this->isGenericApplicationName($currentName)) {
             return $connection;
+        }
+
+        if ($configuredName !== null && ! $this->isGenericApplicationName($configuredName)) {
+            $connection->forceFill([
+                'application_name' => $configuredName,
+            ])->save();
+
+            return $connection->refresh();
         }
 
         $response = $this->apiClient->call('app.info', [], $connection);
@@ -440,6 +488,27 @@ class AutoSetupBitrix24OpenLineRouteAction
         ])->save();
 
         return $connection->refresh();
+    }
+
+    private function applicationDisplayName(Bitrix24Connection $connection): string
+    {
+        $configuredName = $this->displayName(config('bitrix24.application.name'));
+        $connectionName = $this->displayName($connection->application_name);
+
+        if ($configuredName !== null && ! $this->isGenericApplicationName($configuredName)) {
+            return $configuredName;
+        }
+
+        if ($connectionName !== null && ! $this->isGenericApplicationName($connectionName)) {
+            return $connectionName;
+        }
+
+        return $configuredName ?? $connectionName ?? 'Abrikosoff';
+    }
+
+    private function isGenericApplicationName(string $name): bool
+    {
+        return mb_strtolower(trim($name)) === mb_strtolower(self::GENERIC_APPLICATION_NAME);
     }
 
     /**
