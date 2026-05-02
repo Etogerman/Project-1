@@ -82,6 +82,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         try {
+            $connection = $this->refreshApplicationNameIfDefault($connection);
             $this->registerConnector($connection, $profile, $connectorCode, $sourceId);
             $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId);
             $this->activateConnector($connection, $connectorCode, $lineId);
@@ -402,6 +403,60 @@ class AutoSetupBitrix24OpenLineRouteAction
         $parts = array_values(array_filter([$applicationName, $sourceName, 'Telegram bot']));
 
         return Str::limit(implode(' ', $parts), 120, '');
+    }
+
+    private function refreshApplicationNameIfDefault(Bitrix24Connection $connection): Bitrix24Connection
+    {
+        $currentName = $this->displayName($connection->application_name);
+        $defaultName = $this->displayName(config('bitrix24.application.name'));
+
+        if ($currentName !== null && $currentName !== $defaultName) {
+            return $connection;
+        }
+
+        $response = $this->apiClient->call('app.info', [], $connection);
+
+        if (! $response->successful || ! is_array($response->result)) {
+            return $connection;
+        }
+
+        $applicationName = $this->resolveApplicationDisplayName($response->result);
+
+        if ($applicationName === null || $applicationName === $currentName) {
+            return $connection;
+        }
+
+        $connection->forceFill([
+            'application_name' => $applicationName,
+        ])->save();
+
+        return $connection->refresh();
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function resolveApplicationDisplayName(array $payload): ?string
+    {
+        foreach ([
+            'NAME',
+            'APP_NAME',
+            'TITLE',
+            'LANG.ru.NAME',
+            'LANG.en.NAME',
+            'LANG.NAME',
+            'LANGUAGE.ru.NAME',
+            'LANGUAGE.en.NAME',
+            'LANGUAGE.NAME',
+        ] as $path) {
+            $name = $this->displayName(data_get($payload, $path));
+
+            if ($name !== null) {
+                return $name;
+            }
+        }
+
+        return null;
     }
 
     private function displayName(mixed $value): ?string
