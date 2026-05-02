@@ -127,6 +127,68 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
+    public function test_openlines_operator_message_rebinds_old_unpinned_dialog_to_matching_route(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->createTelegramLiveDialog();
+        $routeId = $dialog->bitrix24_open_line_route_id;
+
+        $dialog->forceFill([
+            'bitrix24_open_line_route_id' => null,
+        ])->save();
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 7101,
+                ],
+            ]),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 'bitrix-chat-old-dialog',
+                        'message_id' => 'bitrix-im-old-dialog',
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Ответ в старый диалог',
+                    ],
+                ]],
+            ],
+        ]);
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertSame($routeId, $dialog->bitrix24_open_line_route_id);
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'provider_event_key' => 'bitrix24-openlines:bitrix-im-old-dialog',
+            'external_message_id' => '7101',
+            'text' => 'Ответ в старый диалог',
+        ]);
+
+        Http::assertSent(function (Request $request): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage'
+                && $request['chat_id'] === 'telegram-chat-100'
+                && $request['text'] === 'Ответ в старый диалог';
+        });
+    }
+
     public function test_openlines_operator_message_is_ignored_when_callback_route_does_not_match_current_profile(): void
     {
         $connection = $this->makeActiveConnection();

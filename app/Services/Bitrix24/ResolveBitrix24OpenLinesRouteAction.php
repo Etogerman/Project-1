@@ -51,7 +51,7 @@ class ResolveBitrix24OpenLinesRouteAction
 
         if (! $route instanceof Bitrix24OpenLineRoute) {
             throw new Bitrix24OpenLinesRouteMismatchException(sprintf(
-                'Bitrix24 Open Lines callback for unpinned dialog #%d requires matching legacy route [%s:%s].',
+                'Bitrix24 Open Lines callback for unpinned dialog #%d requires matching usable route [%s:%s].',
                 $dialog->id,
                 $connectorCode,
                 $lineId,
@@ -124,7 +124,7 @@ class ResolveBitrix24OpenLinesRouteAction
             ->where('channel_id', $channel->id)
             ->where('connector_code', $connectorCode)
             ->where('line_id', $lineId)
-            ->where('status', Bitrix24OpenLineRoute::STATUS_LEGACY)
+            ->usable()
             ->first();
 
         if ($route instanceof Bitrix24OpenLineRoute) {

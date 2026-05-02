@@ -154,7 +154,26 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $this->assertSame($route->id, $dialog->fresh()->bitrix24_open_line_route_id);
     }
 
-    public function test_incoming_callback_rejects_active_route_for_unpinned_dialog(): void
+    public function test_incoming_callback_binds_matching_active_route_for_unpinned_dialog(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection();
+        $dialog = $this->makeDialog();
+        $route = $this->makeRoute($dialog, [
+            'bitrix24_profile_id' => $connection->profile_id,
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => 'line-telegram',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+
+        $resolved = app(ResolveBitrix24OpenLinesRouteAction::class)
+            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', 'line-telegram');
+
+        $this->assertSame($route->id, $resolved->routeId);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $resolved->status);
+        $this->assertSame($route->id, $dialog->fresh()->bitrix24_open_line_route_id);
+    }
+
+    public function test_incoming_callback_rejects_unpinned_dialog_when_connector_or_line_does_not_match(): void
     {
         $connection = $this->makeProfileLinkedActiveBitrix24Connection();
         $dialog = $this->makeDialog();
@@ -166,10 +185,10 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         ]);
 
         $this->expectException(Bitrix24OpenLinesRouteMismatchException::class);
-        $this->expectExceptionMessage('requires matching legacy route');
+        $this->expectExceptionMessage('requires matching usable route');
 
         app(ResolveBitrix24OpenLinesRouteAction::class)
-            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', 'line-telegram');
+            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', 'another-line');
     }
 
     public function test_incoming_callback_requires_connector_and_line(): void
