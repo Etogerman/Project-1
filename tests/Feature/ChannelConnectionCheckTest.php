@@ -243,6 +243,48 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertNotNull($channel->connection_checked_at);
     }
 
+    public function test_max_bot_truncates_long_subscription_list_to_provider_webhook_url_limit(): void
+    {
+        $longOldWebhookUrl = 'https://old-local.example/webhooks/max/'.str_repeat('very-long-segment-', 140);
+        $anotherLongOldWebhookUrl = 'https://another-old-local.example/webhooks/max/'.str_repeat('another-long-segment-', 140);
+
+        Http::fake([
+            'https://platform-api.max.ru/subscriptions' => Http::response([
+                'subscriptions' => [
+                    [
+                        'url' => 'https://connector.example/webhooks/max/1',
+                    ],
+                    [
+                        'url' => $longOldWebhookUrl,
+                    ],
+                    [
+                        'url' => $anotherLongOldWebhookUrl,
+                    ],
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'id' => 1,
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'max-token'],
+            'is_active' => true,
+        ]);
+
+        app(CheckChannelConnectionAction::class)->handle($channel);
+
+        $channel->refresh();
+
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_NOT_INSTALLED, $channel->webhook_status);
+        $this->assertLessThanOrEqual(2048, strlen((string) $channel->provider_webhook_url));
+        $this->assertFalse(str_ends_with((string) $channel->provider_webhook_url, '...'));
+        $this->assertStringContainsString('https://connector.example/webhooks/max/1', (string) $channel->provider_webhook_url);
+        $this->assertStringContainsString('В MAX найдены лишние webhook subscriptions:', (string) $channel->connection_error_message);
+        $this->assertLessThanOrEqual(1000, mb_strlen((string) $channel->connection_error_message));
+    }
+
     public function test_disabled_channel_is_marked_not_connected_without_calling_telegram(): void
     {
         Http::fake();
