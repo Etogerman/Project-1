@@ -959,6 +959,32 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertSame('Новое имя', $connection->refresh()->application_name);
     }
 
+    public function test_employee_with_bitrix24_edit_cannot_save_application_name(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $connection = $this->makeConnection([
+            'application_name' => 'Герман-4',
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', true);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldReceive('call')->never();
+        });
+
+        $component = Livewire::actingAs($employee)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee('Герман-4')
+            ->assertDontSee('Сохранить имя');
+
+        $this->assertFalse($component->instance()->canEditApplicationName());
+    }
+
     public function test_auto_setup_is_blocked_for_non_stagecrm_portal(): void
     {
         $superadmin = $this->makeSuperadmin();

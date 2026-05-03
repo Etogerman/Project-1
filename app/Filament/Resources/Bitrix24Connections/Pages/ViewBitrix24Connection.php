@@ -147,7 +147,11 @@ class ViewBitrix24Connection extends ViewRecord
 
     public function canEditApplicationName(): bool
     {
-        return $this->canEditOpenLineRoutes();
+        $user = auth()->user();
+
+        return $user instanceof User
+            && $user->isSuperadmin()
+            && $this->getRecord() instanceof Bitrix24Connection;
     }
 
     /**
