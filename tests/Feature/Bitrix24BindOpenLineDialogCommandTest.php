@@ -120,17 +120,100 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
         $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
     }
 
-    private function makeMaxDialog(Bitrix24Connection $connection): Dialog
+    public function test_command_does_not_save_without_synced_bitrix_contact(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection(
+            profileOverrides: [
+                'max_connector_code' => 'abrikosoff_max',
+                'max_line_id' => 'line-max',
+            ],
+        );
+        $dialog = $this->makeMaxDialog($connection, [
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->andReturn(new Bitrix24RestResponseData(
+                    successful: true,
+                    httpStatus: 200,
+                    result: [
+                        'id' => '7',
+                        'entity_data_2' => 'CONTACT|9',
+                    ],
+                    errorCode: null,
+                    errorMessage: null,
+                    raw: ['result' => true],
+                    requestMethod: 'POST',
+                    restMethod: 'imopenlines.dialog.get',
+                    attemptedRefresh: false,
+                ));
+        });
+
+        $this->artisan('bitrix24:bind-openline-dialog', [
+            'dialog' => $dialog->id,
+            '--user-code' => sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|5', $dialog->id),
+            '--chat-id' => '7',
+        ])
+            ->expectsOutput('Диалог нельзя привязать к старой ОЛ до синхронизации контакта с Bitrix24 CONTACT.')
+            ->assertFailed();
+
+        $dialog->refresh();
+
+        $this->assertNull($dialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
+    }
+
+    public function test_command_does_not_save_when_connector_chat_does_not_match_dialog_key(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection(
+            profileOverrides: [
+                'max_connector_code' => 'abrikosoff_max',
+                'max_line_id' => 'line-max',
+            ],
+        );
+        $dialog = $this->makeMaxDialog($connection);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldNotReceive('call');
+        });
+
+        $this->artisan('bitrix24:bind-openline-dialog', [
+            'dialog' => $dialog->id,
+            '--user-code' => 'abrikosoff_max|line-max|foreign-dialog:999|5',
+            '--chat-id' => '7',
+        ])
+            ->expectsOutput(sprintf(
+                'USER_CODE содержит connector chat [foreign-dialog:999], а для диалога #%d ожидается [abrikosoff-dialog:%d]. Привязка не сохранена.',
+                $dialog->id,
+                $dialog->id,
+            ))
+            ->assertFailed();
+
+        $dialog->refresh();
+
+        $this->assertNull($dialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
+    }
+
+    /**
+     * @param  array<string, mixed>  $contactAttributes
+     */
+    private function makeMaxDialog(Bitrix24Connection $connection, array $contactAttributes = []): Dialog
     {
         $profile = $connection->profile()->firstOrFail();
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_MAX,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
-        $contact = Contact::factory()->create([
+        $contact = Contact::factory()->create(array_merge([
             'bitrix24_contact_id' => '9',
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
-        ]);
+        ], $contactAttributes));
         $identity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,

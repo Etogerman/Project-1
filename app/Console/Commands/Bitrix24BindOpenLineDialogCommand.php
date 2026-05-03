@@ -77,6 +77,19 @@ class Bitrix24BindOpenLineDialogCommand extends Command
             return self::FAILURE;
         }
 
+        $expectedConnectorChatId = $this->resolveLiveChatKeyAction->handle($dialog);
+
+        if ($binding->connectorChatId !== $expectedConnectorChatId) {
+            $this->error(sprintf(
+                'USER_CODE содержит connector chat [%s], а для диалога #%d ожидается [%s]. Привязка не сохранена.',
+                $binding->connectorChatId,
+                $dialog->id,
+                $expectedConnectorChatId,
+            ));
+
+            return self::FAILURE;
+        }
+
         try {
             $response = $this->bitrix24ApiClient->call(
                 'imopenlines.dialog.get',
@@ -247,7 +260,9 @@ class Bitrix24BindOpenLineDialogCommand extends Command
             : '';
 
         if ($expectedContactId === '') {
-            return true;
+            $this->error('Диалог нельзя привязать к старой ОЛ до синхронизации контакта с Bitrix24 CONTACT.');
+
+            return false;
         }
 
         $contactIds = $this->extractCrmContactIds($result['entity_data_2'] ?? null);
