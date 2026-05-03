@@ -14,6 +14,7 @@ use Illuminate\Support\Str;
 class AutoSetupBitrix24OpenLineRouteAction
 {
     public const SUPPORTED_PORTAL_DOMAIN = 'stagecrm.fvds.ru';
+
     private const GENERIC_APPLICATION_NAME = 'Abrikosoff Connector';
 
     /**
@@ -132,9 +133,8 @@ class AutoSetupBitrix24OpenLineRouteAction
             throw new Bitrix24OpenLineAutoSetupException('Bitrix24-подключение относится к другому профилю.');
         }
 
-        $this->assertCanRefreshConnectorRegistration($connection, $profile, $channel, $route);
-
         try {
+            $this->assertCanRefreshConnectorRegistration($connection, $profile, $channel, $route);
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code, (string) $route->source_id);
             $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id, (string) $route->source_id);
@@ -142,6 +142,14 @@ class AutoSetupBitrix24OpenLineRouteAction
             $this->markRouteError($route, $exception->getMessage());
 
             throw $exception;
+        } catch (Bitrix24ApiException $exception) {
+            $message = $exception->getMessage() !== ''
+                ? $exception->getMessage()
+                : 'Не удалось обновить регистрацию соединителя Bitrix24.';
+
+            $this->markRouteError($route, $message);
+
+            throw new Bitrix24OpenLineAutoSetupException($message, previous: $exception);
         }
 
         $route->forceFill([
