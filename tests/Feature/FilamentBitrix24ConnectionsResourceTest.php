@@ -694,7 +694,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
     }
 
-    public function test_auto_setup_refreshes_default_application_name_before_existing_connector_registration(): void
+    public function test_existing_active_route_button_refreshes_connector_without_rebinding_open_line(): void
     {
         config()->set('bitrix24.application.name', 'Герман-4');
 
@@ -744,19 +744,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['NAME'] ?? null) === 'Герман-4 Telegram bot')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
-                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['LINE'] ?? null) === 'line-existing')
-                ->andReturn($this->bitrixResponse(true, true));
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.activate'
-                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['LINE'] ?? null) === 'line-existing')
-                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
+            $mock->shouldNotReceive('call')->with('imconnector.activate', \Mockery::any(), \Mockery::any());
         });
 
         Livewire::actingAs($superadmin)
@@ -774,7 +763,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
     }
 
-    public function test_auto_setup_uses_configured_application_name_when_connection_has_generic_name(): void
+    public function test_existing_active_route_button_keeps_route_identity_when_connection_has_generic_name(): void
     {
         config()->set('bitrix24.application.name', 'Герман-4');
 
@@ -825,19 +814,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 Telegram bot')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
-                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['LINE'] ?? null) === 'line-existing')
-                ->andReturn($this->bitrixResponse(true, true));
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.activate'
-                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['LINE'] ?? null) === 'line-existing')
-                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
+            $mock->shouldNotReceive('call')->with('imconnector.activate', \Mockery::any(), \Mockery::any());
         });
 
         Livewire::actingAs($superadmin)
@@ -943,6 +921,21 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->assertSet('applicationNameForm.application_name', 'Новое имя');
 
         $this->assertSame('Новое имя', $connection->refresh()->application_name);
+        $this->assertSame(2, Bitrix24OpenLineRoute::query()->count());
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'channel_id' => $telegram->id,
+            'connector_code' => 'abc_telegram_dev_german_main',
+            'line_id' => 'line-telegram',
+            'source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'channel_id' => $max->id,
+            'connector_code' => 'abc_max_dev_german_main',
+            'line_id' => 'line-max',
+            'source_id' => 'ABC_MAX_DEV_GERMAN_MAIN',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
     }
 
     public function test_employee_with_bitrix24_edit_cannot_save_application_name(): void

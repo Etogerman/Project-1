@@ -297,8 +297,18 @@ class ViewBitrix24Connection extends ViewRecord
             return;
         }
 
+        $route = Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('channel_id', $channel->id)
+            ->first();
+        $refreshExistingRoute = $route instanceof Bitrix24OpenLineRoute && $route->isUsable();
+
         try {
-            app(AutoSetupBitrix24OpenLineRouteAction::class)->handle($record, $channel, auth()->user());
+            if ($refreshExistingRoute) {
+                app(AutoSetupBitrix24OpenLineRouteAction::class)->refreshConnectorRegistration($record, $route);
+            } else {
+                app(AutoSetupBitrix24OpenLineRouteAction::class)->handle($record, $channel, auth()->user());
+            }
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->failOpenLineRouteSave($exception->getMessage());
 
@@ -310,7 +320,7 @@ class ViewBitrix24Connection extends ViewRecord
 
         Notification::make()
             ->success()
-            ->title('Открытая линия настроена')
+            ->title($refreshExistingRoute ? 'Карточка соединителя обновлена' : 'Открытая линия настроена')
             ->send();
     }
 
@@ -618,8 +628,8 @@ class ViewBitrix24Connection extends ViewRecord
         $default = [
             'visible' => true,
             'enabled' => false,
-            'label' => $route instanceof Bitrix24OpenLineRoute && $route->status === Bitrix24OpenLineRoute::STATUS_ACTIVE
-                ? 'Проверить ОЛ'
+            'label' => $route instanceof Bitrix24OpenLineRoute && $route->isUsable()
+                ? 'Обновить карточку'
                 : 'Настроить ОЛ',
             'reason' => '',
         ];
