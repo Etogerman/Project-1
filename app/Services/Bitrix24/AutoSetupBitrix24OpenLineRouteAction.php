@@ -66,6 +66,8 @@ class AutoSetupBitrix24OpenLineRouteAction
         $route = $this->findRoute($profile, $channel);
         $lineId = $this->normalizedRouteLineId($route);
 
+        $this->assertConnectorCodeIsExclusive($profile, $connectorCode, $route);
+
         if ($lineId !== null) {
             $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, $lineId);
         } else {
@@ -137,7 +139,6 @@ class AutoSetupBitrix24OpenLineRouteAction
             $this->assertCanRefreshConnectorRegistration($connection, $profile, $channel, $route);
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
-            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -250,6 +251,8 @@ class AutoSetupBitrix24OpenLineRouteAction
             }
         }
 
+        $this->assertConnectorCodeIsExclusive($profile, (string) $route->connector_code, $route);
+
         $this->assertRequiredScopes($connection);
     }
 
@@ -319,7 +322,7 @@ class AutoSetupBitrix24OpenLineRouteAction
             'CONNECTOR' => $connectorCode,
             'LINE' => $lineId,
             'DATA' => [
-                'ID' => 'channel:'.$channel->id,
+                'ID' => $this->connectorDataExternalId($channel, $connectorCode, $lineId),
                 'URL' => $channelUrl,
                 'URL_IM' => $channelUrl,
                 'NAME' => $connectorName,
@@ -338,6 +341,38 @@ class AutoSetupBitrix24OpenLineRouteAction
         ], $connection);
 
         $this->assertSuccessfulBooleanResult($response, 'Не удалось активировать соединитель Bitrix24.');
+    }
+
+    private function assertConnectorCodeIsExclusive(
+        Bitrix24Profile $profile,
+        string $connectorCode,
+        ?Bitrix24OpenLineRoute $route = null,
+    ): void {
+        $connectorCode = trim($connectorCode);
+
+        if ($connectorCode === '') {
+            return;
+        }
+
+        $conflictingRoute = Bitrix24OpenLineRoute::query()
+            ->where('portal_domain', $profile->portal_domain)
+            ->where('connector_code', $connectorCode)
+            ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
+            ->whereNotNull('line_id')
+            ->where('line_id', '!=', '')
+            ->when($route?->getKey() !== null, fn ($query) => $query->whereKeyNot($route->getKey()))
+            ->orderBy('id')
+            ->first();
+
+        if (! $conflictingRoute instanceof Bitrix24OpenLineRoute) {
+            return;
+        }
+
+        throw new Bitrix24OpenLineAutoSetupException(sprintf(
+            'connector_code `%s` уже используется рабочим маршрутом ОЛ #%d на этом портале. Обновление регистрации заблокировано, чтобы не перезаписать другие открытые линии Bitrix24.',
+            $connectorCode,
+            $conflictingRoute->id,
+        ));
     }
 
     private function saveRoute(
@@ -519,6 +554,14 @@ class AutoSetupBitrix24OpenLineRouteAction
         ]));
 
         return Str::limit(implode(' ', $parts), 120, '');
+    }
+
+    private function connectorDataExternalId(Channel $channel, string $connectorCode, string $lineId): string
+    {
+        $value = sprintf('channel:%d:connector:%s:line:%s', $channel->id, $connectorCode, $lineId);
+        $normalized = preg_replace('/[^A-Za-z0-9_.:-]+/', '_', $value);
+
+        return Str::limit($normalized ?? $value, 255, '');
     }
 
     private function refreshApplicationNameForConnectorRegistration(Bitrix24Connection $connection): Bitrix24Connection

@@ -424,7 +424,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && $usedConnection->is($connection)
                     && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-777'
-                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id
+                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id.':connector:abc_telegram_dev_german_main:line:line-777'
                     && data_get($params, 'DATA.NAME') === 'Герман-4 Telegram bot')
                 ->andReturn($this->bitrixResponse(true, true));
 
@@ -522,7 +522,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && $usedConnection->is($connection)
                     && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-max'
-                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id
+                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id.':connector:abc_max_dev_german_main:line:line-max'
                     && data_get($params, 'DATA.NAME') === 'Герман-4 MAX bot')
                 ->andReturn($this->bitrixResponse(true, true));
 
@@ -914,6 +914,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             $mock->shouldReceive('call')
                 ->never()
                 ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
 
             $mock->shouldReceive('call')
                 ->once()
@@ -933,21 +934,6 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['ICON']['COLOR'] ?? null) === '#7C3AED')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
-                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['LINE'] ?? null) === 'line-telegram'
-                    && ($params['DATA']['NAME'] ?? null) === 'Новое имя Telegram bot')
-                ->andReturn($this->bitrixResponse(true, true));
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
-                    && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
-                    && ($params['LINE'] ?? null) === 'line-max'
-                    && ($params['DATA']['NAME'] ?? null) === 'Новое имя MAX bot')
-                ->andReturn($this->bitrixResponse(true, true));
         });
 
         Livewire::actingAs($superadmin)
