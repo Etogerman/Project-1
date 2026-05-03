@@ -525,6 +525,44 @@ class Bitrix24CallbackControllerTest extends TestCase
         Queue::assertPushed(ProcessBitrix24InstallCallbackJob::class, 1);
     }
 
+    public function test_install_callback_accepts_nested_auth_scope_string(): void
+    {
+        Queue::fake();
+
+        $response = $this->postLocalBitrixCallback('/callbacks/bitrix24/install', [
+            'event' => 'ONAPPINSTALL',
+            'auth' => [
+                'domain' => 'crm.alexlesley.biz',
+                'member_id' => 'member-auth-scope',
+                'application_token' => 'app-token',
+                'client_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'server_endpoint' => 'https://crm.alexlesley.biz/rest/',
+                'scope' => 'crm,task,tasks,im,imopenlines,imconnector,imbot',
+                'access_token' => 'secret-access-token',
+                'refresh_token' => 'secret-refresh-token',
+                'expires' => (string) now()->addHour()->timestamp,
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('callback_type', 'install')
+            ->assertJsonPath('method', 'POST');
+
+        $connection = Bitrix24Connection::query()->firstOrFail();
+
+        $this->assertSame([
+            'crm',
+            'task',
+            'tasks',
+            'im',
+            'imopenlines',
+            'imconnector',
+            'imbot',
+        ], $connection->scope);
+
+        Queue::assertPushed(ProcessBitrix24InstallCallbackJob::class, 1);
+    }
+
     public function test_install_callback_syncs_stale_configured_profile_callback_base_url(): void
     {
         Queue::fake();
