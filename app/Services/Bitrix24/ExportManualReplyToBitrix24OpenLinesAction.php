@@ -80,7 +80,9 @@ class ExportManualReplyToBitrix24OpenLinesAction
             } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
                 throw new Bitrix24OpenLinesManualReplyExportException(
                     'Bitrix24 Open Lines verified dialog binding send failed: '.$exception->getMessage(),
-                    Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+                    $this->shouldFallbackVerifiedBindingToLegacyTransport($exception)
+                        ? Bitrix24MessageExport::FAILURE_VERIFIED_BINDING_CRM_MESSAGE_ADD_UNAVAILABLE
+                        : Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
                     $exception->failureUncertain,
                     $exception,
                 );
@@ -130,6 +132,19 @@ class ExportManualReplyToBitrix24OpenLinesAction
             serviceUserId: $serviceUserId,
             resolvedChat: $resolvedChat,
         );
+    }
+
+    private function shouldFallbackVerifiedBindingToLegacyTransport(
+        Bitrix24OpenLinesManualReplyExportException $exception,
+    ): bool {
+        if ($exception->failureUncertain || $exception->failureCode !== Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED) {
+            return false;
+        }
+
+        $message = mb_strtolower($exception->getMessage());
+
+        return str_contains($message, 'chat does not belong to the crm entity')
+            || str_contains($message, 'chat does not belong');
     }
 
     private function resolveReusableChat(Dialog $dialog): ?Bitrix24OpenLinesManualReplyChatData

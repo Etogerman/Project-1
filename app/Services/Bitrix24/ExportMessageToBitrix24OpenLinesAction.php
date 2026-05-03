@@ -142,6 +142,7 @@ class ExportMessageToBitrix24OpenLinesAction
                             operation: 'openlines_manual_reply_exported_legacy_fallback',
                             connection: $manualReplyConnection,
                             applyLegacyFallbackSignature: $this->shouldApplyLegacyFallbackSignature($message),
+                            expectedResolvedBitrixChatId: $this->resolveExpectedLegacyFallbackChatId($dialog, $route, $exception),
                             responsePayload: [
                                 'fallback_from_failure_code' => $exception->failureCode,
                                 'fallback_from_failure_reason' => $exception->getMessage(),
@@ -489,6 +490,7 @@ class ExportMessageToBitrix24OpenLinesAction
             Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
             Bitrix24MessageExport::FAILURE_CHAT_ACCESS_DENIED,
             Bitrix24MessageExport::FAILURE_CHAT_USER_ADD_FAILED,
+            Bitrix24MessageExport::FAILURE_VERIFIED_BINDING_CRM_MESSAGE_ADD_UNAVAILABLE,
         ], true);
     }
 
@@ -507,6 +509,7 @@ class ExportMessageToBitrix24OpenLinesAction
         string $operation,
         ?Bitrix24Connection $connection = null,
         bool $applyLegacyFallbackSignature = false,
+        ?string $expectedResolvedBitrixChatId = null,
         array $responsePayload = [],
     ): Message {
         $route = new Bitrix24OpenLinesRouteData(
@@ -546,6 +549,20 @@ class ExportMessageToBitrix24OpenLinesAction
             );
         }
 
+        $resolvedBitrixChatId = $this->extractLegacySessionChatId($response->result);
+
+        if ($expectedResolvedBitrixChatId !== null && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
+            throw new Bitrix24LiveExportTransportException(
+                sprintf(
+                    'Bitrix24 Open Lines verified binding legacy fallback returned unexpected chat id [%s], expected [%s].',
+                    $resolvedBitrixChatId ?? 'null',
+                    $expectedResolvedBitrixChatId,
+                ),
+                failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                failureUncertain: true,
+            );
+        }
+
         return $this->completeSuccessfulExport(
             message: $message,
             dialog: $dialog,
@@ -558,12 +575,26 @@ class ExportMessageToBitrix24OpenLinesAction
             chatKey: $this->resolveExportChatKey($dialog, $route),
             operation: $operation,
             transportMethod: Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            resolvedBitrixChatId: $this->extractLegacySessionChatId($response->result),
+            resolvedBitrixChatId: $resolvedBitrixChatId,
             responsePayload: $responsePayload + [
                 'result' => $response->result,
                 'rest_method' => $response->restMethod,
             ],
         );
+    }
+
+    private function resolveExpectedLegacyFallbackChatId(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24OpenLinesManualReplyExportException $exception,
+    ): ?string {
+        if ($exception->failureCode !== Bitrix24MessageExport::FAILURE_VERIFIED_BINDING_CRM_MESSAGE_ADD_UNAVAILABLE) {
+            return null;
+        }
+
+        $binding = $this->resolveDialogBindingAction->handle($dialog, $route);
+
+        return $binding?->resolvedBitrixChatId;
     }
 
     private function resolveExportChatKey(Dialog $dialog, Bitrix24OpenLinesRouteData $route): string
