@@ -60,19 +60,24 @@ class CheckChannelConnectionAction
             );
         }
 
-        if ($checkedAt->lt(now()->subMinutes(2))) {
-            return $this->notConnectedState(
-                Channel::CONNECTION_ERROR_STALE,
-                $expectedWebhookUrl ?? (filled($channel->expected_webhook_url) ? (string) $channel->expected_webhook_url : null),
-                filled($channel->provider_webhook_url) ? (string) $channel->provider_webhook_url : null,
-                $checkedAt,
-            );
+        $connectionStatus = $channel->connection_status ?? Channel::CONNECTION_STATUS_NOT_CONNECTED;
+        $webhookStatus = $channel->webhook_status ?? Channel::WEBHOOK_STATUS_NOT_INSTALLED;
+        $connectionErrorMessage = filled($channel->connection_error_message)
+            ? (string) $channel->connection_error_message
+            : null;
+
+        if (
+            $checkedAt->lt(now()->subMinutes(2))
+            && $connectionStatus === Channel::CONNECTION_STATUS_CONNECTED
+            && $webhookStatus === Channel::WEBHOOK_STATUS_INSTALLED
+        ) {
+            $connectionErrorMessage = Channel::CONNECTION_ERROR_STALE;
         }
 
         return [
-            'connection_status' => $channel->connection_status ?? Channel::CONNECTION_STATUS_NOT_CONNECTED,
-            'webhook_status' => $channel->webhook_status ?? Channel::WEBHOOK_STATUS_NOT_INSTALLED,
-            'connection_error_message' => filled($channel->connection_error_message) ? (string) $channel->connection_error_message : null,
+            'connection_status' => $connectionStatus,
+            'webhook_status' => $webhookStatus,
+            'connection_error_message' => $connectionErrorMessage,
             'provider_webhook_url' => filled($channel->provider_webhook_url) ? (string) $channel->provider_webhook_url : null,
             'expected_webhook_url' => filled($channel->expected_webhook_url) ? (string) $channel->expected_webhook_url : $expectedWebhookUrl,
             'connection_checked_at' => $checkedAt,
