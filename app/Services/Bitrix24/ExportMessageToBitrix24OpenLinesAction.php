@@ -558,8 +558,8 @@ class ExportMessageToBitrix24OpenLinesAction
                     $resolvedBitrixChatId ?? 'null',
                     $expectedResolvedBitrixChatId,
                 ),
-                failureCode: Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
-                failureUncertain: false,
+                failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                failureUncertain: true,
             );
         }
 

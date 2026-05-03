@@ -1008,8 +1008,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
             $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
         } catch (Bitrix24LiveExportTransportException $exception) {
-            $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $exception->failureCode);
-            $this->assertFalse($exception->failureUncertain);
+            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
+            $this->assertTrue($exception->failureUncertain);
             $this->assertStringContainsString(
                 'unexpected chat id [new-chat-24], expected [legacy-chat-7]',
                 $exception->getMessage(),
@@ -1026,8 +1026,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         $this->assertSame(Bitrix24MessageExport::STATUS_FAILED, $export->export_status);
         $this->assertSame(Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES, $export->transport_method);
-        $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $export->failure_code);
-        $this->assertFalse($export->failure_uncertain);
+        $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $export->failure_code);
+        $this->assertTrue($export->failure_uncertain);
         $this->assertNull($export->resolved_bitrix_chat_id);
         $this->assertStringContainsString(
             'unexpected chat id [new-chat-24], expected [legacy-chat-7]',
@@ -1036,6 +1036,19 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+
+        $legacyFallbackRequestCount = collect(Http::recorded())
+            ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json')
+            ->count();
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertSame(
+            $legacyFallbackRequestCount,
+            collect(Http::recorded())
+                ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json')
+                ->count(),
+        );
     }
 
     public function test_manual_reply_binding_legacy_fallback_fails_when_bitrix_returns_no_chat_id(): void
@@ -1079,8 +1092,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
             $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
         } catch (Bitrix24LiveExportTransportException $exception) {
-            $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $exception->failureCode);
-            $this->assertFalse($exception->failureUncertain);
+            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
+            $this->assertTrue($exception->failureUncertain);
             $this->assertStringContainsString(
                 'unexpected chat id [null], expected [legacy-chat-7]',
                 $exception->getMessage(),
@@ -1097,8 +1110,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         $this->assertSame(Bitrix24MessageExport::STATUS_FAILED, $export->export_status);
         $this->assertSame(Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES, $export->transport_method);
-        $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $export->failure_code);
-        $this->assertFalse($export->failure_uncertain);
+        $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $export->failure_code);
+        $this->assertTrue($export->failure_uncertain);
         $this->assertNull($export->resolved_bitrix_chat_id);
         $this->assertStringContainsString(
             'unexpected chat id [null], expected [legacy-chat-7]',
@@ -1107,6 +1120,19 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+
+        $legacyFallbackRequestCount = collect(Http::recorded())
+            ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json')
+            ->count();
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertSame(
+            $legacyFallbackRequestCount,
+            collect(Http::recorded())
+                ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json')
+                ->count(),
+        );
     }
 
     public function test_manual_reply_live_export_ignores_single_active_chat_from_other_connector_and_uses_session_open_fallback(): void
