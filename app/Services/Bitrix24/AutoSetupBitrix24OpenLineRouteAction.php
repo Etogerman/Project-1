@@ -85,8 +85,8 @@ class AutoSetupBitrix24OpenLineRouteAction
 
         try {
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
-            $this->registerConnector($connection, $profile, $channel, $connectorCode, $sourceId);
-            $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId, $sourceId);
+            $this->registerConnector($connection, $profile, $channel, $connectorCode);
+            $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId);
             $this->activateConnector($connection, $connectorCode, $lineId);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->saveRoute(
@@ -136,8 +136,8 @@ class AutoSetupBitrix24OpenLineRouteAction
         try {
             $this->assertCanRefreshConnectorRegistration($connection, $profile, $channel, $route);
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
-            $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code, (string) $route->source_id);
-            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id, (string) $route->source_id);
+            $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
+            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -283,9 +283,8 @@ class AutoSetupBitrix24OpenLineRouteAction
         Bitrix24Profile $profile,
         Channel $channel,
         string $connectorCode,
-        string $sourceId,
     ): void {
-        $connectorName = $this->buildConnectorName($connection, $sourceId, $channel);
+        $connectorName = $this->buildConnectorName($connection, $channel);
 
         $response = $this->apiClient->call('imconnector.register', [
             'ID' => $connectorCode,
@@ -312,10 +311,9 @@ class AutoSetupBitrix24OpenLineRouteAction
         Channel $channel,
         string $connectorCode,
         string $lineId,
-        string $sourceId,
     ): void {
         $channelUrl = $this->settingsUrl($profile, $connection);
-        $connectorName = $this->buildConnectorName($connection, $sourceId, $channel);
+        $connectorName = $this->buildConnectorName($connection, $channel);
 
         $response = $this->apiClient->call('imconnector.connector.data.set', [
             'CONNECTOR' => $connectorCode,
@@ -513,12 +511,10 @@ class AutoSetupBitrix24OpenLineRouteAction
         return $prefix.$suffix;
     }
 
-    private function buildConnectorName(Bitrix24Connection $connection, string $sourceId, ?Channel $channel = null): string
+    private function buildConnectorName(Bitrix24Connection $connection, ?Channel $channel = null): string
     {
-        $sourceName = $this->sourceShortName($sourceId);
         $parts = array_values(array_filter([
             $this->applicationDisplayName($connection),
-            $sourceName,
             $this->connectorChannelLabel($channel),
         ]));
 
@@ -596,15 +592,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         $name = trim((string) $value);
 
         return $name === '' ? null : $name;
-    }
-
-    private function sourceShortName(string $sourceId): ?string
-    {
-        if (preg_match('/^([a-z0-9]+)[_-](?:telegram|max)(?:[_-]|$)/i', trim($sourceId), $matches) !== 1) {
-            return null;
-        }
-
-        return mb_strtoupper($matches[1]);
     }
 
     private function requiredConnectorCode(Bitrix24Profile $profile, Channel $channel): string
