@@ -18,6 +18,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         private readonly ResolveBitrix24OpenLinesRouteAction $resolveBitrix24OpenLinesRouteAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
+        private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
     ) {}
 
     public function handle(Message $message, Dialog $dialog, Contact $rootContact): Bitrix24OpenLinesManualReplyExportData
@@ -40,7 +41,51 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
         $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
         $connection = $this->resolveCurrentConnectionAction->handle();
+        $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
         $excludedChatIds = [];
+
+        if ($dialogBinding !== null) {
+            if ($dialogBinding->resolvedBitrixChatId === null) {
+                throw new Bitrix24OpenLinesManualReplyExportException(
+                    'Bitrix24 Open Lines verified dialog binding is missing resolved chat id.',
+                    Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+                );
+            }
+
+            $resolvedChat = $this->resolveDialogChat(
+                $dialog,
+                $route,
+                $connection,
+                $dialogBinding->resolvedBitrixChatId,
+            );
+
+            if (! $resolvedChat instanceof Bitrix24OpenLinesManualReplyChatData) {
+                throw new Bitrix24OpenLinesManualReplyExportException(
+                    'Bitrix24 Open Lines verified dialog binding could not be resolved.',
+                    Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+                );
+            }
+
+            try {
+                return $this->sendMessage(
+                    message: $message,
+                    dialog: $dialog,
+                    rootContact: $rootContact,
+                    route: $route,
+                    connection: $connection,
+                    serviceUserId: $serviceUserId,
+                    resolvedChat: $resolvedChat,
+                    allowDialogBindingRecovery: false,
+                );
+            } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
+                throw new Bitrix24OpenLinesManualReplyExportException(
+                    'Bitrix24 Open Lines verified dialog binding send failed: '.$exception->getMessage(),
+                    Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+                    $exception->failureUncertain,
+                    $exception,
+                );
+            }
+        }
 
         if ($reusableChat = $this->resolveReusableChat($dialog)) {
             $currentRouteChat = $this->resolveCurrentRouteChat($dialog, $route, $connection);
@@ -366,6 +411,10 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
     private function buildUserCode(Dialog $dialog, Bitrix24OpenLinesRouteData $route): ?string
     {
+        if ($binding = $this->resolveDialogBindingAction->handle($dialog, $route)) {
+            return $binding->userCode;
+        }
+
         $dialog->loadMissing('currentContactIdentity');
 
         $externalUserId = (string) ($dialog->currentContactIdentity?->external_user_id ?? '');
@@ -530,8 +579,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         int $serviceUserId,
         Bitrix24OpenLinesManualReplyChatData $resolvedChat,
         Bitrix24Connection $connection,
-    ): void
-    {
+    ): void {
         try {
             $response = $this->bitrix24ApiClient->call(
                 'imopenlines.crm.chat.user.add',
