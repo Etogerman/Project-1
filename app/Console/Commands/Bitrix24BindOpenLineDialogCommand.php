@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Data\Bitrix24\Bitrix24OpenLinesDialogBindingData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
+use App\Models\Bitrix24Connection;
 use App\Models\Dialog;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
@@ -130,6 +131,10 @@ class Bitrix24BindOpenLineDialogCommand extends Command
         }
 
         if (! $this->assertContactBindingMatches($dialog, $response->result)) {
+            return self::FAILURE;
+        }
+
+        if (! $this->assertChatIsActiveForContact($dialog, $connection, $route, $resolvedChatId)) {
             return self::FAILURE;
         }
 
@@ -286,6 +291,77 @@ class Bitrix24BindOpenLineDialogCommand extends Command
         return true;
     }
 
+    private function assertChatIsActiveForContact(
+        Dialog $dialog,
+        Bitrix24Connection $connection,
+        Bitrix24OpenLinesRouteData $route,
+        string $resolvedChatId,
+    ): bool {
+        $dialog->loadMissing('contact');
+
+        $expectedContactId = is_scalar($dialog->contact?->bitrix24_contact_id ?? null)
+            ? trim((string) $dialog->contact->bitrix24_contact_id)
+            : '';
+
+        if ($expectedContactId === '') {
+            $this->error('Диалог нельзя привязать к старой ОЛ до синхронизации контакта с Bitrix24 CONTACT.');
+
+            return false;
+        }
+
+        try {
+            $response = $this->bitrix24ApiClient->call(
+                'imopenlines.crm.chat.get',
+                [
+                    'CRM_ENTITY_TYPE' => 'CONTACT',
+                    'CRM_ENTITY' => $expectedContactId,
+                    'ACTIVE_ONLY' => 'Y',
+                ],
+                connection: $connection,
+                transportRetry: false,
+            );
+        } catch (Bitrix24ApiException $exception) {
+            $this->error('Проверка активных чатов CONTACT в Bitrix24 завершилась транспортной ошибкой: '.$exception->getMessage());
+
+            return false;
+        }
+
+        if (! $response->successful || ! is_array($response->result)) {
+            $this->error('Bitrix24 не подтвердил список активных чатов CONTACT: '.($response->errorMessage ?? 'Unknown error.'));
+
+            return false;
+        }
+
+        foreach ($this->extractChatRows($response->result) as $chat) {
+            if ($this->extractChatId($chat) !== $resolvedChatId) {
+                continue;
+            }
+
+            $connectorId = $this->extractConnectorId($chat);
+
+            if ($connectorId !== null && $connectorId !== $route->connectorCode) {
+                $this->error(sprintf(
+                    'Bitrix24 вернул chat id [%s] активным, но его connector [%s] не совпадает с маршрутом [%s]. Привязка не сохранена.',
+                    $resolvedChatId,
+                    $connectorId,
+                    $route->connectorCode,
+                ));
+
+                return false;
+            }
+
+            return true;
+        }
+
+        $this->error(sprintf(
+            'Bitrix24 подтвердил USER_CODE, но chat id [%s] не найден среди активных чатов CONTACT [%s]. Такой binding не подходит для отправки через imopenlines.crm.message.add.',
+            $resolvedChatId,
+            $expectedContactId,
+        ));
+
+        return false;
+    }
+
     /**
      * @return array<string, true>
      */
@@ -311,5 +387,62 @@ class Bitrix24BindOpenLineDialogCommand extends Command
         }
 
         return $contactIds;
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @return list<array<string, mixed>>
+     */
+    private function extractChatRows(array $result): array
+    {
+        $chatRows = null;
+
+        if (array_is_list($result)) {
+            $chatRows = $result;
+        } else {
+            foreach (['chats', 'CHATS', 'result', 'RESULT', 'items', 'ITEMS'] as $key) {
+                $value = $result[$key] ?? null;
+
+                if (is_array($value)) {
+                    $chatRows = $value;
+                    break;
+                }
+            }
+
+            if ($chatRows === null && $this->extractChatId($result) !== null) {
+                $chatRows = [$result];
+            }
+        }
+
+        if (! is_array($chatRows)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $chatRows,
+            fn (mixed $row): bool => is_array($row) && $this->extractChatId($row) !== null,
+        ));
+    }
+
+    /**
+     * @param  array<string, mixed>  $chat
+     */
+    private function extractConnectorId(array $chat): ?string
+    {
+        foreach (['CONNECTOR_ID', 'connector_id', 'connectorId', 'CONNECTOR'] as $key) {
+            $value = $chat[$key] ?? null;
+
+            if (! is_scalar($value)) {
+                continue;
+            }
+
+            $normalized = trim((string) $value);
+
+            if ($normalized !== '') {
+                return $normalized;
+            }
+        }
+
+        return null;
     }
 }
