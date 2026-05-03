@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Data\Bitrix24\Bitrix24AuthContextData;
 use App\Data\Bitrix24\Bitrix24CallbackHandlingResultData;
 use App\Data\Bitrix24\Bitrix24InstallPayloadData;
 use App\Data\Bitrix24\Bitrix24WebhookEventData;
@@ -126,7 +127,7 @@ class HandleBitrix24InstallCallbackAction
     private function buildInstallPayloadData(
         array $rawPayload,
         array $sanitizedPayload,
-        \App\Data\Bitrix24\Bitrix24AuthContextData $authContext,
+        Bitrix24AuthContextData $authContext,
         ?string $callbackBaseUrl,
     ): Bitrix24InstallPayloadData {
         $auth = $this->caseInsensitiveValue($rawPayload, 'auth');
@@ -137,23 +138,15 @@ class HandleBitrix24InstallCallbackAction
 
         $scope = $this->caseInsensitiveValue($auth, 'scope');
 
-        if (! is_array($scope)) {
+        if ($scope === null) {
             $scope = $this->caseInsensitiveValue($rawPayload, 'scope');
         }
 
-        if (! is_array($scope)) {
+        if ($scope === null) {
             $scope = $this->caseInsensitiveValue($rawPayload, 'application_scope');
         }
 
-        if (is_string($scope)) {
-            $scope = preg_split('/\s*,\s*/', $scope) ?: [];
-        }
-
-        if (! is_array($scope)) {
-            $scope = [];
-        }
-
-        $scope = array_values(array_filter($scope, fn (mixed $value): bool => is_scalar($value) && trim((string) $value) !== ''));
+        $scope = $this->normalizeScope($scope);
 
         return new Bitrix24InstallPayloadData(
             portalDomain: $authContext->portalDomain,
@@ -179,6 +172,28 @@ class HandleBitrix24InstallCallbackAction
     }
 
     /**
+     * @return list<string>
+     */
+    private function normalizeScope(mixed $scope): array
+    {
+        if (is_string($scope)) {
+            $scope = preg_split('/\s*,\s*/', $scope) ?: [];
+        }
+
+        if (! is_array($scope)) {
+            $scope = [];
+        }
+
+        return array_values(array_filter(
+            array_map(
+                static fn (mixed $value): string => is_scalar($value) ? trim((string) $value) : '',
+                $scope,
+            ),
+            static fn (string $value): bool => $value !== '',
+        ));
+    }
+
+    /**
      * @param  array<string, mixed>  $values
      */
     private function caseInsensitiveValue(array $values, string $needle): mixed
@@ -194,7 +209,7 @@ class HandleBitrix24InstallCallbackAction
         return null;
     }
 
-    private function findRelatedConnection(?Bitrix24Profile $profile, \App\Data\Bitrix24\Bitrix24AuthContextData $authContext): ?Bitrix24Connection
+    private function findRelatedConnection(?Bitrix24Profile $profile, Bitrix24AuthContextData $authContext): ?Bitrix24Connection
     {
         $query = Bitrix24Connection::query();
 
