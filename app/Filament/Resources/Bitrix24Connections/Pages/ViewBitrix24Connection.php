@@ -33,6 +33,13 @@ class ViewBitrix24Connection extends ViewRecord
      */
     public array $openLineRouteForms = [];
 
+    /**
+     * @var array{application_name:string}
+     */
+    public array $applicationNameForm = [
+        'application_name' => '',
+    ];
+
     public ?string $openLineRouteErrorMessage = null;
 
     public function mount(int|string $record): void
@@ -40,6 +47,7 @@ class ViewBitrix24Connection extends ViewRecord
         parent::mount($record);
 
         $this->reloadOpenLineRouteForms();
+        $this->reloadApplicationNameForm();
     }
 
     public function getTitle(): string|Htmlable
@@ -135,6 +143,11 @@ class ViewBitrix24Connection extends ViewRecord
         return $user instanceof User
             && $user->isSuperadmin()
             && $this->getRecord() instanceof Bitrix24Connection;
+    }
+
+    public function canEditApplicationName(): bool
+    {
+        return $this->canEditOpenLineRoutes();
     }
 
     /**
@@ -297,6 +310,75 @@ class ViewBitrix24Connection extends ViewRecord
             ->send();
     }
 
+    public function saveApplicationName(): void
+    {
+        abort_unless($this->canEditApplicationName(), 403);
+
+        $record = $this->getRecord();
+
+        if (! $record instanceof Bitrix24Connection) {
+            $this->failApplicationNameSave('Подключение Bitrix24 не найдено.');
+
+            return;
+        }
+
+        $applicationName = trim((string) ($this->applicationNameForm['application_name'] ?? ''));
+
+        if ($applicationName === '') {
+            $this->failApplicationNameSave('Название приложения не заполнено.');
+
+            return;
+        }
+
+        if (mb_strlen($applicationName) > 120) {
+            $this->failApplicationNameSave('Название приложения должно быть не длиннее 120 символов.');
+
+            return;
+        }
+
+        $record->forceFill([
+            'application_name' => $applicationName,
+        ])->save();
+
+        $refreshed = 0;
+        $failed = 0;
+
+        $routes = Bitrix24OpenLineRoute::query()
+            ->with(['bitrix24Profile', 'channel'])
+            ->where('bitrix24_profile_id', $record->profile_id)
+            ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
+            ->get();
+
+        foreach ($routes as $route) {
+            try {
+                app(AutoSetupBitrix24OpenLineRouteAction::class)->refreshConnectorRegistration($record, $route);
+                $refreshed++;
+            } catch (Bitrix24OpenLineAutoSetupException) {
+                $failed++;
+            }
+        }
+
+        $record->refresh();
+        $this->reloadApplicationNameForm();
+        $this->reloadOpenLineRouteForms();
+
+        if ($failed > 0) {
+            Notification::make()
+                ->warning()
+                ->title('Название сохранено, часть карточек Bitrix24 не обновилась')
+                ->body(sprintf('Обновлено: %d. Ошибок: %d. Проверьте ошибки в маршрутах ОЛ.', $refreshed, $failed))
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->success()
+            ->title('Название приложения сохранено')
+            ->body($refreshed > 0 ? sprintf('Карточки контакт-центра Bitrix24 обновлены: %d.', $refreshed) : null)
+            ->send();
+    }
+
     public function reloadOpenLineRouteForms(): void
     {
         $profile = $this->getBitrix24Profile();
@@ -317,6 +399,15 @@ class ViewBitrix24Connection extends ViewRecord
                 $channel->id => $this->defaultOpenLineRouteForm($profile, $channel, $routes->get($channel->id)),
             ])
             ->all();
+    }
+
+    public function reloadApplicationNameForm(): void
+    {
+        $record = $this->getRecord();
+
+        $this->applicationNameForm = [
+            'application_name' => $record instanceof Bitrix24Connection ? (string) $record->application_name : '',
+        ];
     }
 
     protected function formatTimestamp(mixed $value): string
@@ -498,6 +589,14 @@ class ViewBitrix24Connection extends ViewRecord
     {
         $this->openLineRouteErrorMessage = $message;
 
+        Notification::make()
+            ->danger()
+            ->title($message)
+            ->send();
+    }
+
+    protected function failApplicationNameSave(string $message): void
+    {
         Notification::make()
             ->danger()
             ->title($message)

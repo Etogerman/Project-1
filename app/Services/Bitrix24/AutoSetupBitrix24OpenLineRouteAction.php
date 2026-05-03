@@ -85,7 +85,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         try {
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, $connectorCode, $sourceId);
-            $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId);
+            $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId, $sourceId);
             $this->activateConnector($connection, $connectorCode, $lineId);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->saveRoute(
@@ -137,7 +137,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         try {
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code, (string) $route->source_id);
-            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
+            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id, (string) $route->source_id);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -304,8 +304,10 @@ class AutoSetupBitrix24OpenLineRouteAction
         Channel $channel,
         string $connectorCode,
         string $lineId,
+        string $sourceId,
     ): void {
         $channelUrl = $this->settingsUrl($profile, $connection);
+        $connectorName = $this->buildConnectorName($connection, $sourceId, $channel);
 
         $response = $this->apiClient->call('imconnector.connector.data.set', [
             'CONNECTOR' => $connectorCode,
@@ -314,7 +316,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                 'ID' => 'channel:'.$channel->id,
                 'URL' => $channelUrl,
                 'URL_IM' => $channelUrl,
-                'NAME' => $channel->name,
+                'NAME' => $connectorName,
             ],
         ], $connection);
 
@@ -518,11 +520,12 @@ class AutoSetupBitrix24OpenLineRouteAction
     private function refreshApplicationNameForConnectorRegistration(Bitrix24Connection $connection): Bitrix24Connection
     {
         $currentName = $this->displayName($connection->application_name);
-        $configuredName = $this->displayName(config('bitrix24.application.name'));
-        $bitrixName = $this->fetchBitrix24ApplicationName($connection);
 
-        $applicationName = $bitrixName
-            ?? ($configuredName !== null && ! $this->isGenericApplicationName($configuredName) ? $configuredName : null);
+        if ($currentName !== null && ! $this->isGenericApplicationName($currentName)) {
+            return $connection;
+        }
+
+        $applicationName = $this->configuredApplicationDisplayName();
 
         if ($applicationName === null || $applicationName === $currentName) {
             return $connection;
@@ -535,21 +538,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         return $connection->refresh();
     }
 
-    private function fetchBitrix24ApplicationName(Bitrix24Connection $connection): ?string
-    {
-        try {
-            $response = $this->apiClient->call('app.info', [], $connection);
-        } catch (\Throwable) {
-            return null;
-        }
-
-        if (! $response->successful || ! is_array($response->result)) {
-            return null;
-        }
-
-        return $this->resolveApplicationDisplayName($response->result);
-    }
-
     private function markRouteError(Bitrix24OpenLineRoute $route, string $message): void
     {
         $route->forceFill([
@@ -560,49 +548,35 @@ class AutoSetupBitrix24OpenLineRouteAction
 
     private function applicationDisplayName(Bitrix24Connection $connection): string
     {
-        $configuredName = $this->displayName(config('bitrix24.application.name'));
         $connectionName = $this->displayName($connection->application_name);
 
         if ($connectionName !== null && ! $this->isGenericApplicationName($connectionName)) {
             return $connectionName;
         }
 
-        if ($configuredName !== null && ! $this->isGenericApplicationName($configuredName)) {
+        $configuredName = $this->configuredApplicationDisplayName();
+
+        if ($configuredName !== null) {
             return $configuredName;
         }
 
-        return $configuredName ?? $connectionName ?? 'Abrikosoff';
+        return $connectionName ?? 'Abrikosoff';
+    }
+
+    private function configuredApplicationDisplayName(): ?string
+    {
+        $configuredName = $this->displayName(config('bitrix24.application.name'));
+
+        if ($configuredName === null || $this->isGenericApplicationName($configuredName)) {
+            return null;
+        }
+
+        return $configuredName;
     }
 
     private function isGenericApplicationName(string $name): bool
     {
         return mb_strtolower(trim($name)) === mb_strtolower(self::GENERIC_APPLICATION_NAME);
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    private function resolveApplicationDisplayName(array $payload): ?string
-    {
-        foreach ([
-            'NAME',
-            'APP_NAME',
-            'TITLE',
-            'LANG.ru.NAME',
-            'LANG.en.NAME',
-            'LANG.NAME',
-            'LANGUAGE.ru.NAME',
-            'LANGUAGE.en.NAME',
-            'LANGUAGE.NAME',
-        ] as $path) {
-            $name = $this->displayName(data_get($payload, $path));
-
-            if ($name !== null) {
-                return $name;
-            }
-        }
-
-        return null;
     }
 
     private function displayName(mixed $value): ?string

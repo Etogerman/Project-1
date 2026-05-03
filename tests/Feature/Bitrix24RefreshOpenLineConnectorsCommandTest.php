@@ -20,12 +20,12 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
 
     public function test_refreshes_telegram_bot_connector_registration_without_recreating_open_line(): void
     {
-        config()->set('bitrix24.application.name', 'Старое имя из env');
+        config()->set('bitrix24.application.name', 'Герман-4');
 
         $connection = $this->makeProfileLinkedActiveBitrix24Connection(
             connectionOverrides: [
                 'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
-                'application_name' => 'Old Connector Name',
+                'application_name' => 'Имя из админки',
                 'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
             ],
             profileOverrides: [
@@ -58,13 +58,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel, $connection): void {
             $mock->shouldNotReceive('call')->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
             $mock->shouldNotReceive('call')->with('imconnector.activate', \Mockery::any(), \Mockery::any());
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'app.info'
-                    && $params === []
-                    && $usedConnection->is($connection))
-                ->andReturn($this->bitrixResponse(true, ['NAME' => 'Герман-4']));
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
 
             $mock->shouldReceive('call')
                 ->once()
@@ -72,7 +66,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     return $method === 'imconnector.register'
                         && $usedConnection->is($connection)
                         && $params['ID'] === 'abc_telegram'
-                        && $params['NAME'] === 'Герман-4 ABC Telegram bot'
+                        && $params['NAME'] === 'Имя из админки ABC Telegram bot'
                         && $params['ICON']['COLOR'] === '#2AABEE'
                         && $params['ICON_DISABLED']['COLOR'] === '#99ADB3'
                         && str_contains($this->decodedSvgDataImage($params['ICON']['DATA_IMAGE'] ?? null), 'path fill="white"');
@@ -85,7 +79,8 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     && $usedConnection->is($connection)
                     && $params['CONNECTOR'] === 'abc_telegram'
                     && $params['LINE'] === '5'
-                    && $params['DATA']['ID'] === 'channel:'.$channel->id)
+                    && $params['DATA']['ID'] === 'channel:'.$channel->id
+                    && $params['DATA']['NAME'] === 'Имя из админки ABC Telegram bot')
                 ->andReturn($this->bitrixResponse(true, true));
         });
 
@@ -93,7 +88,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             '--connection' => $connection->id,
         ])->assertSuccessful();
 
-        $this->assertSame('Герман-4', $connection->refresh()->application_name);
+        $this->assertSame('Имя из админки', $connection->refresh()->application_name);
         $this->assertSame('5', $route->refresh()->line_id);
         $this->assertSame('stagecrm.fvds.ru#5', $route->line_owner_key);
         $this->assertNull($route->last_error_message);
@@ -102,12 +97,12 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
 
     public function test_refreshes_max_connector_registration_with_max_name_and_icon(): void
     {
-        config()->set('bitrix24.application.name', 'Старое имя из env');
+        config()->set('bitrix24.application.name', 'Герман-4');
 
         $connection = $this->makeProfileLinkedActiveBitrix24Connection(
             connectionOverrides: [
                 'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
-                'application_name' => 'Old Connector Name',
+                'application_name' => 'Имя из админки',
                 'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
             ],
             profileOverrides: [
@@ -139,20 +134,14 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel, $connection): void {
             $mock->shouldNotReceive('call')->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
             $mock->shouldNotReceive('call')->with('imconnector.activate', \Mockery::any(), \Mockery::any());
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'app.info'
-                    && $params === []
-                    && $usedConnection->is($connection))
-                ->andReturn($this->bitrixResponse(true, ['NAME' => 'Герман-4']));
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
 
             $mock->shouldReceive('call')
                 ->once()
                 ->withArgs(function (string $method, array $params): bool {
                     return $method === 'imconnector.register'
                         && $params['ID'] === 'abc_max'
-                        && $params['NAME'] === 'Герман-4 ABC MAX bot'
+                        && $params['NAME'] === 'Имя из админки ABC MAX bot'
                         && $params['ICON']['COLOR'] === '#7C3AED'
                         && str_contains($this->decodedSvgDataImage($params['ICON']['DATA_IMAGE'] ?? null), '>MAX<');
                 })
@@ -163,7 +152,8 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
                     && $params['CONNECTOR'] === 'abc_max'
                     && $params['LINE'] === '7'
-                    && $params['DATA']['ID'] === 'channel:'.$channel->id)
+                    && $params['DATA']['ID'] === 'channel:'.$channel->id
+                    && $params['DATA']['NAME'] === 'Имя из админки ABC MAX bot')
                 ->andReturn($this->bitrixResponse(true, true));
         });
 
@@ -171,7 +161,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             '--connection' => $connection->id,
         ])->assertSuccessful();
 
-        $this->assertSame('Герман-4', $connection->refresh()->application_name);
+        $this->assertSame('Имя из админки', $connection->refresh()->application_name);
     }
 
     public function test_dry_run_does_not_call_bitrix24(): void
