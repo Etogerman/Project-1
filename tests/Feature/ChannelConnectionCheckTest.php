@@ -309,7 +309,7 @@ class ChannelConnectionCheckTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_effective_state_treats_stale_connection_as_not_connected(): void
+    public function test_effective_state_keeps_stale_successful_connection_sendable_with_warning(): void
     {
         $channel = Channel::factory()->create([
             'id' => 1,
@@ -326,8 +326,8 @@ class ChannelConnectionCheckTest extends TestCase
 
         $state = app(CheckChannelConnectionAction::class)->resolveEffectiveState($channel);
 
-        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $state['connection_status']);
-        $this->assertSame(Channel::WEBHOOK_STATUS_NOT_INSTALLED, $state['webhook_status']);
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $state['connection_status']);
+        $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $state['webhook_status']);
         $this->assertSame(Channel::CONNECTION_ERROR_STALE, $state['connection_error_message']);
     }
 

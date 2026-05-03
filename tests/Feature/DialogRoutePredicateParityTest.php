@@ -82,6 +82,38 @@ class DialogRoutePredicateParityTest extends TestCase
         $this->assertEqualsCanonicalizing($allIds, array_merge($readyIds, $problemIds));
     }
 
+    public function test_changed_expected_webhook_url_is_problem_in_sql_scope_like_resolver(): void
+    {
+        config()->set('app.url', 'https://current-admin.example');
+
+        $dialog = $this->createDialog(
+            channelAttributes: [
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'credentials' => ['token' => 'telegram-old-url-token'],
+                'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+                'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+                'connection_checked_at' => now(),
+            ],
+            dialogAttributes: [
+                'external_chat_id' => 'telegram-old-url-chat',
+            ],
+        );
+
+        $channel = $dialog->channel()->firstOrFail();
+        $channel->forceFill([
+            'expected_webhook_url' => "https://old-admin.example/webhooks/telegram/{$channel->id}",
+            'provider_webhook_url' => "https://old-admin.example/webhooks/telegram/{$channel->id}",
+        ])->save();
+        $dialog->unsetRelation('channel');
+
+        $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog);
+
+        $this->assertFalse($status->isSendable);
+        $this->assertSame(Channel::CONNECTION_ERROR_EXPECTED_URL_CHANGED, $status->blockedReason);
+        $this->assertSame([], Dialog::query()->whereKey($dialog->id)->whereRouteReady()->pluck('id')->all());
+        $this->assertSame([$dialog->id], Dialog::query()->whereKey($dialog->id)->whereRouteProblem()->pluck('id')->all());
+    }
+
     /**
      * @return Collection<int, Dialog>
      */
