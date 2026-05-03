@@ -519,15 +519,35 @@ class ExportMessageToBitrix24OpenLinesAction
             lineId: $lineId,
             routeId: $routeId,
         );
-        $expectedResolvedBitrixChatId ??= $this->resolveDialogBindingAction->handle($dialog, $route)?->resolvedBitrixChatId;
+        $connection ??= $this->resolveCurrentConnectionAction->handle();
+        $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
+        $expectedResolvedBitrixChatId ??= $dialogBinding?->resolvedBitrixChatId;
+
+        if ($dialogBinding !== null && $expectedResolvedBitrixChatId === null) {
+            throw new Bitrix24LiveExportTransportException(
+                'Bitrix24 Open Lines verified dialog binding is missing resolved chat id.',
+                failureCode: Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            );
+        }
+
+        $rootContact = Contact::query()->findOrFail($rootContactId);
 
         try {
             $this->guardOpenLineMutationAction->handle(
                 $dialog,
-                Contact::query()->findOrFail($rootContactId),
+                $rootContact,
                 $route,
-                $connection ?? $this->resolveCurrentConnectionAction->handle(),
+                $connection,
             );
+
+            if ($expectedResolvedBitrixChatId !== null) {
+                $this->guardOpenLineMutationAction->assertVerifiedBindingChatIsActiveForContact(
+                    $rootContact,
+                    $route,
+                    $connection,
+                    $expectedResolvedBitrixChatId,
+                );
+            }
         } catch (Bitrix24OpenLineMutationGuardException $exception) {
             throw new Bitrix24LiveExportTransportException(
                 $exception->getMessage(),
