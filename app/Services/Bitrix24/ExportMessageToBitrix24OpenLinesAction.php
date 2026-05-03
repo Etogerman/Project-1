@@ -6,6 +6,7 @@ use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
+use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
@@ -32,6 +33,7 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
+        private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
     ) {}
 
     public function handle(Message|int $message, bool $retryAfterSync = false, ?string $liveBatchUuid = null): Message
@@ -517,6 +519,23 @@ class ExportMessageToBitrix24OpenLinesAction
             lineId: $lineId,
             routeId: $routeId,
         );
+
+        try {
+            $this->guardOpenLineMutationAction->handle(
+                $dialog,
+                Contact::query()->findOrFail($rootContactId),
+                $route,
+                $connection ?? $this->resolveCurrentConnectionAction->handle(),
+            );
+        } catch (Bitrix24OpenLineMutationGuardException $exception) {
+            throw new Bitrix24LiveExportTransportException(
+                $exception->getMessage(),
+                failureCode: $exception->failureCode,
+                failureUncertain: $exception->failureUncertain,
+                previous: $exception,
+            );
+        }
+
         $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle(
             $message,
             $route,

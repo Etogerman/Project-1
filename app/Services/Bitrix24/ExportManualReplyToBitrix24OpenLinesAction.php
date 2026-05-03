@@ -19,6 +19,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
+        private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
     ) {}
 
     public function handle(Message $message, Dialog $dialog, Contact $rootContact): Bitrix24OpenLinesManualReplyExportData
@@ -215,7 +216,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
             $connectorId = $this->extractConnectorId($candidateChats[0]);
 
             if ($connectorId !== null && $connectorId !== $route->connectorCode) {
-                return $this->resolveFallbackChat($dialog, $route, $connection);
+                return $this->resolveFallbackChat($dialog, $rootContact, $route, $connection, $candidateChats);
             }
 
             return $this->makeResolvedChat(
@@ -253,7 +254,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
             );
         }
 
-        return $this->resolveFallbackChat($dialog, $route, $connection);
+        return $this->resolveFallbackChat($dialog, $rootContact, $route, $connection, $candidateChats);
     }
 
     /**
@@ -312,8 +313,10 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
     private function resolveFallbackChat(
         Dialog $dialog,
+        Contact $rootContact,
         Bitrix24OpenLinesRouteData $route,
         Bitrix24Connection $connection,
+        array $activeChatRows,
     ): Bitrix24OpenLinesManualReplyChatData {
         $userCode = $this->buildUserCode($dialog, $route);
 
@@ -321,6 +324,23 @@ class ExportManualReplyToBitrix24OpenLinesAction
             throw new Bitrix24OpenLinesManualReplyExportException(
                 'Bitrix24 Open Lines session fallback is unavailable for this manual reply.',
                 Bitrix24MessageExport::FAILURE_SESSION_OPEN_UNAVAILABLE,
+            );
+        }
+
+        try {
+            $this->guardOpenLineMutationAction->handle(
+                $dialog,
+                $rootContact,
+                $route,
+                $connection,
+                $activeChatRows,
+            );
+        } catch (Bitrix24OpenLineMutationGuardException $exception) {
+            throw new Bitrix24OpenLinesManualReplyExportException(
+                $exception->getMessage(),
+                $exception->failureCode,
+                $exception->failureUncertain,
+                $exception,
             );
         }
 
