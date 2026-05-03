@@ -22,6 +22,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
+use App\Services\Bitrix24\Bitrix24LiveExportTransportException;
 use App\Services\Bitrix24\Bitrix24OpenLinesManualReplyExportException;
 use App\Services\Bitrix24\BuildBitrix24OpenLinesMessagePayloadAction;
 use App\Services\Bitrix24\DedupeBitrix24ContactPhonesAction;
@@ -961,6 +962,150 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'ℹ️ [Оператор] Ручной ответ через legacy binding fallback';
         });
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+    }
+
+    public function test_manual_reply_binding_legacy_fallback_fails_when_bitrix_returns_another_chat_id(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Ручной ответ через неверный legacy fallback',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 'legacy-chat-7',
+                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
+                'error' => 'CHAT_NOT_IN_CRM',
+                'error_description' => 'Chat does not belong to the CRM entity being checked',
+            ], 400),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => [
+                    'DATA' => [
+                        'RESULT' => [[
+                            'session' => [
+                                'CHAT_ID' => 'new-chat-24',
+                            ],
+                        ]],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $exception->failureCode);
+            $this->assertFalse($exception->failureUncertain);
+            $this->assertStringContainsString(
+                'unexpected chat id [new-chat-24], expected [legacy-chat-7]',
+                $exception->getMessage(),
+            );
+        }
+
+        $dialog->refresh();
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_FAILED, $dialog->bitrix24_live_status);
+
+        $export = Bitrix24MessageExport::query()
+            ->where('message_id', $message->id)
+            ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->firstOrFail();
+
+        $this->assertSame(Bitrix24MessageExport::STATUS_FAILED, $export->export_status);
+        $this->assertSame(Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES, $export->transport_method);
+        $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $export->failure_code);
+        $this->assertFalse($export->failure_uncertain);
+        $this->assertNull($export->resolved_bitrix_chat_id);
+        $this->assertStringContainsString(
+            'unexpected chat id [new-chat-24], expected [legacy-chat-7]',
+            (string) $export->failure_reason,
+        );
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+    }
+
+    public function test_manual_reply_binding_legacy_fallback_fails_when_bitrix_returns_no_chat_id(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Ручной ответ через пустой legacy fallback',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 'legacy-chat-7',
+                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
+                'error' => 'CHAT_NOT_IN_CRM',
+                'error_description' => 'Chat does not belong to the CRM entity being checked',
+            ], 400),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => [
+                    'DATA' => [
+                        'RESULT' => [[
+                            'session' => [],
+                        ]],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $exception->failureCode);
+            $this->assertFalse($exception->failureUncertain);
+            $this->assertStringContainsString(
+                'unexpected chat id [null], expected [legacy-chat-7]',
+                $exception->getMessage(),
+            );
+        }
+
+        $dialog->refresh();
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_FAILED, $dialog->bitrix24_live_status);
+
+        $export = Bitrix24MessageExport::query()
+            ->where('message_id', $message->id)
+            ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->firstOrFail();
+
+        $this->assertSame(Bitrix24MessageExport::STATUS_FAILED, $export->export_status);
+        $this->assertSame(Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES, $export->transport_method);
+        $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $export->failure_code);
+        $this->assertFalse($export->failure_uncertain);
+        $this->assertNull($export->resolved_bitrix_chat_id);
+        $this->assertStringContainsString(
+            'unexpected chat id [null], expected [legacy-chat-7]',
+            (string) $export->failure_reason,
+        );
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
     }
 
