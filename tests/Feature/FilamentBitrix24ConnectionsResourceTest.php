@@ -18,6 +18,7 @@ use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -390,6 +391,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection, $channel): void {
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
+
             $mock->shouldReceive('call')
                 ->once()
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.add'
@@ -400,11 +403,19 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
 
             $mock->shouldReceive('call')
                 ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
-                    && $usedConnection->is($connection)
-                    && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'Герман-4 ABC Telegram bot'
-                    && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC Telegram bot')
+                ->withArgs(function (string $method, array $params, Bitrix24Connection $usedConnection) use ($connection): bool {
+                    $icon = $this->decodedSvgDataImage(data_get($params, 'ICON.DATA_IMAGE'));
+
+                    return $method === 'imconnector.register'
+                        && $usedConnection->is($connection)
+                        && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
+                        && ($params['NAME'] ?? null) === 'Герман-4 ABC Telegram bot'
+                        && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC Telegram bot'
+                        && data_get($params, 'ICON.COLOR') === '#2AABEE'
+                        && data_get($params, 'ICON_DISABLED.COLOR') === '#99ADB3'
+                        && str_contains($icon, '<path')
+                        && ! str_contains($icon, 'MAX');
+                })
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
@@ -414,7 +425,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-777'
                     && data_get($params, 'DATA.ID') === 'channel:'.$channel->id
-                    && data_get($params, 'DATA.NAME') === 'Локальный бот')
+                    && data_get($params, 'DATA.NAME') === 'Герман-4 ABC Telegram bot')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
@@ -479,6 +490,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection, $channel): void {
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
+
             $mock->shouldReceive('call')
                 ->once()
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.add'
@@ -489,11 +502,18 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
 
             $mock->shouldReceive('call')
                 ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
-                    && $usedConnection->is($connection)
-                    && ($params['ID'] ?? null) === 'abc_max_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'Герман-4 ABC MAX bot'
-                    && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC MAX bot')
+                ->withArgs(function (string $method, array $params, Bitrix24Connection $usedConnection) use ($connection): bool {
+                    $icon = $this->decodedSvgDataImage(data_get($params, 'ICON.DATA_IMAGE'));
+
+                    return $method === 'imconnector.register'
+                        && $usedConnection->is($connection)
+                        && ($params['ID'] ?? null) === 'abc_max_dev_german_main'
+                        && ($params['NAME'] ?? null) === 'Герман-4 ABC MAX bot'
+                        && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC MAX bot'
+                        && data_get($params, 'ICON.COLOR') === '#7C3AED'
+                        && data_get($params, 'ICON_DISABLED.COLOR') === '#99ADB3'
+                        && str_contains($icon, '>MAX<');
+                })
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
@@ -503,7 +523,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-max'
                     && data_get($params, 'DATA.ID') === 'channel:'.$channel->id
-                    && data_get($params, 'DATA.NAME') === 'MAX локалка')
+                    && data_get($params, 'DATA.NAME') === 'Герман-4 ABC MAX bot')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
@@ -635,6 +655,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
+
             $mock->shouldReceive('call')
                 ->never()
                 ->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
@@ -674,6 +696,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
 
     public function test_auto_setup_refreshes_default_application_name_before_existing_connector_registration(): void
     {
+        config()->set('bitrix24.application.name', 'Герман-4');
+
         $superadmin = $this->makeSuperadmin();
         $profile = $this->makeProfile([
             'portal_domain' => 'stagecrm.fvds.ru',
@@ -707,13 +731,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'app.info'
-                    && $params === []
-                    && $usedConnection->is($connection))
-                ->andReturn($this->bitrixResponse(true, ['NAME' => 'Герман-4']));
-
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
             $mock->shouldReceive('call')
                 ->never()
                 ->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
@@ -793,10 +811,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
-            $mock->shouldReceive('call')
-                ->never()
-                ->with('app.info', \Mockery::any(), \Mockery::any());
-
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
             $mock->shouldReceive('call')
                 ->never()
                 ->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
@@ -838,6 +853,136 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'line_owner_key' => 'stagecrm.fvds.ru#line-existing',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
+    }
+
+    public function test_superadmin_can_save_application_name_and_refresh_existing_open_line_connectors(): void
+    {
+        config()->set('bitrix24.application.name', 'Configured Name');
+
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'dev-german-main',
+            'telegram_connector_code' => 'abc_telegram_dev_german_main',
+            'telegram_source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
+            'max_connector_code' => 'abc_max_dev_german_main',
+            'max_source_id' => 'ABC_MAX_DEV_GERMAN_MAIN',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'application_name' => 'Герман-4',
+            'scope' => ['crm', 'im', 'imopenlines', 'imconnector'],
+        ]);
+        $telegram = Channel::factory()->create([
+            'name' => 'Локальный бот',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $max = Channel::factory()->create([
+            'name' => 'MAX локально',
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+
+        foreach ([
+            [$telegram, 'abc_telegram_dev_german_main', 'line-telegram', 'ABC_TELEGRAM_DEV_GERMAN_MAIN'],
+            [$max, 'abc_max_dev_german_main', 'line-max', 'ABC_MAX_DEV_GERMAN_MAIN'],
+        ] as [$channel, $connectorCode, $lineId, $sourceId]) {
+            Bitrix24OpenLineRoute::query()->create([
+                'bitrix24_profile_id' => $profile->id,
+                'channel_id' => $channel->id,
+                'portal_domain' => $profile->portal_domain,
+                'profile_key' => $profile->profile_key,
+                'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+                'connector_code' => $connectorCode,
+                'line_id' => $lineId,
+                'source_id' => $sourceId,
+                'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            ]);
+        }
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
+            $mock->shouldReceive('call')
+                ->never()
+                ->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
+            $mock->shouldReceive('call')
+                ->never()
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
+                    && $usedConnection->is($connection)
+                    && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
+                    && ($params['NAME'] ?? null) === 'Новое имя ABC Telegram bot'
+                    && ($params['ICON']['COLOR'] ?? null) === '#2AABEE')
+                ->andReturn($this->bitrixResponse(true, ['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
+                    && $usedConnection->is($connection)
+                    && ($params['ID'] ?? null) === 'abc_max_dev_german_main'
+                    && ($params['NAME'] ?? null) === 'Новое имя ABC MAX bot'
+                    && ($params['ICON']['COLOR'] ?? null) === '#7C3AED')
+                ->andReturn($this->bitrixResponse(true, ['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
+                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
+                    && ($params['LINE'] ?? null) === 'line-telegram'
+                    && ($params['DATA']['NAME'] ?? null) === 'Новое имя ABC Telegram bot')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
+                    && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
+                    && ($params['LINE'] ?? null) === 'line-max'
+                    && ($params['DATA']['NAME'] ?? null) === 'Новое имя ABC MAX bot')
+                ->andReturn($this->bitrixResponse(true, true));
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set('applicationNameForm.application_name', ' Новое имя ')
+            ->call('saveApplicationName')
+            ->assertSet('applicationNameForm.application_name', 'Новое имя');
+
+        $this->assertSame('Новое имя', $connection->refresh()->application_name);
+    }
+
+    public function test_employee_with_bitrix24_edit_cannot_save_application_name(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $connection = $this->makeConnection([
+            'application_name' => 'Герман-4',
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', true);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldReceive('call')->never();
+        });
+
+        $component = Livewire::actingAs($employee)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee('Герман-4')
+            ->assertDontSee('Сохранить имя');
+
+        $this->assertFalse($component->instance()->canEditApplicationName());
     }
 
     public function test_auto_setup_is_blocked_for_non_stagecrm_portal(): void
@@ -989,6 +1134,15 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'is_admin' => true,
             'role' => User::ROLE_SUPERADMIN,
         ]);
+    }
+
+    private function decodedSvgDataImage(mixed $value): string
+    {
+        if (! is_string($value) || ! str_starts_with($value, 'data:image/svg+xml,')) {
+            return '';
+        }
+
+        return rawurldecode(Str::after($value, 'data:image/svg+xml,'));
     }
 
     private function bitrixResponse(

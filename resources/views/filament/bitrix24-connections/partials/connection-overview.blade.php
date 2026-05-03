@@ -66,7 +66,30 @@
                 <tbody>
                     <tr>
                         <th scope="row">Приложение</th>
-                        <td><div class="ac-bitrix-cell-clip" title="{{ $formatText($record->application_name) }}">{{ $formatText($record->application_name) }}</div></td>
+                        <td>
+                            @if ($this->canEditApplicationName())
+                                <div class="flex min-w-0 flex-col gap-2">
+                                    <input
+                                        type="text"
+                                        maxlength="120"
+                                        placeholder="Название приложения"
+                                        wire:model.live="applicationNameForm.application_name"
+                                        class="w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 shadow-sm outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                                    />
+                                    <button
+                                        type="button"
+                                        wire:click="saveApplicationName"
+                                        wire:loading.attr="disabled"
+                                        wire:target="saveApplicationName"
+                                        class="w-fit rounded-md bg-amber-500 px-3 py-1 text-xs font-semibold text-slate-950 transition hover:bg-amber-400 disabled:cursor-wait disabled:opacity-60"
+                                    >
+                                        Сохранить имя
+                                    </button>
+                                </div>
+                            @else
+                                <div class="ac-bitrix-cell-clip" title="{{ $formatText($record->application_name) }}">{{ $formatText($record->application_name) }}</div>
+                            @endif
+                        </td>
                     </tr>
                     <tr>
                         <th scope="row">Установлено</th>

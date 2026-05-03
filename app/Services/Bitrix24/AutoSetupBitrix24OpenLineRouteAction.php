@@ -14,6 +14,7 @@ use Illuminate\Support\Str;
 class AutoSetupBitrix24OpenLineRouteAction
 {
     public const SUPPORTED_PORTAL_DOMAIN = 'stagecrm.fvds.ru';
+
     private const GENERIC_APPLICATION_NAME = 'Abrikosoff Connector';
 
     /**
@@ -83,9 +84,9 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         try {
-            $connection = $this->refreshApplicationNameIfDefault($connection);
+            $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, $connectorCode, $sourceId);
-            $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId);
+            $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId, $sourceId);
             $this->activateConnector($connection, $connectorCode, $lineId);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->saveRoute(
@@ -114,6 +115,49 @@ class AutoSetupBitrix24OpenLineRouteAction
             errorMessage: null,
             user: $user,
         );
+    }
+
+    public function refreshConnectorRegistration(Bitrix24Connection $connection, Bitrix24OpenLineRoute $route): Bitrix24OpenLineRoute
+    {
+        $connection->loadMissing('profile');
+        $route->loadMissing(['bitrix24Profile', 'channel']);
+
+        $profile = $route->bitrix24Profile;
+        $channel = $route->channel;
+
+        if (! $profile instanceof Bitrix24Profile || ! $channel instanceof Channel) {
+            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не связан с профилем Bitrix24 или каналом.');
+        }
+
+        if ((int) $connection->profile_id !== (int) $profile->id) {
+            throw new Bitrix24OpenLineAutoSetupException('Bitrix24-подключение относится к другому профилю.');
+        }
+
+        try {
+            $this->assertCanRefreshConnectorRegistration($connection, $profile, $channel, $route);
+            $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
+            $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code, (string) $route->source_id);
+            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id, (string) $route->source_id);
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $this->markRouteError($route, $exception->getMessage());
+
+            throw $exception;
+        } catch (Bitrix24ApiException $exception) {
+            $message = $exception->getMessage() !== ''
+                ? $exception->getMessage()
+                : 'Не удалось обновить регистрацию соединителя Bitrix24.';
+
+            $this->markRouteError($route, $message);
+
+            throw new Bitrix24OpenLineAutoSetupException($message, previous: $exception);
+        }
+
+        $route->forceFill([
+            'last_error_message' => null,
+            'last_error_at' => null,
+        ])->save();
+
+        return $route->refresh();
     }
 
     private function assertCanAutoSetup(Bitrix24Connection $connection, Bitrix24Profile $profile, Channel $channel): void
@@ -174,6 +218,41 @@ class AutoSetupBitrix24OpenLineRouteAction
         );
     }
 
+    private function assertCanRefreshConnectorRegistration(
+        Bitrix24Connection $connection,
+        Bitrix24Profile $profile,
+        Channel $channel,
+        Bitrix24OpenLineRoute $route,
+    ): void {
+        if ($connection->status !== Bitrix24Connection::STATUS_ACTIVE) {
+            throw new Bitrix24OpenLineAutoSetupException('Bitrix24-подключение не активно.');
+        }
+
+        if ($profile->portal_domain !== self::SUPPORTED_PORTAL_DOMAIN) {
+            throw new Bitrix24OpenLineAutoSetupException('Обновление регистрации ОЛ доступно только для stagecrm.fvds.ru.');
+        }
+
+        if (! $this->isAutoSetupSupportedChannel($channel)) {
+            throw new Bitrix24OpenLineAutoSetupException('Обновление регистрации ОЛ сейчас доступно только для Telegram bot и MAX bot каналов.');
+        }
+
+        if (! $route->isUsable()) {
+            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не активен или не содержит открытую линию.');
+        }
+
+        foreach ([
+            'connector_code' => 'В маршруте ОЛ не заполнен код соединителя.',
+            'line_id' => 'В маршруте ОЛ не заполнена открытая линия.',
+            'source_id' => 'В маршруте ОЛ не заполнен CRM source.',
+        ] as $field => $message) {
+            if (! filled($route->{$field})) {
+                throw new Bitrix24OpenLineAutoSetupException($message);
+            }
+        }
+
+        $this->assertRequiredScopes($connection);
+    }
+
     private function createOpenLine(
         Bitrix24Connection $connection,
         Bitrix24Profile $profile,
@@ -211,18 +290,8 @@ class AutoSetupBitrix24OpenLineRouteAction
         $response = $this->apiClient->call('imconnector.register', [
             'ID' => $connectorCode,
             'NAME' => $connectorName,
-            'ICON' => [
-                'DATA_IMAGE' => $this->telegramIconDataUri(),
-                'COLOR' => '#2AABEE',
-                'SIZE' => '90%',
-                'POSITION' => 'center',
-            ],
-            'ICON_DISABLED' => [
-                'DATA_IMAGE' => $this->telegramIconDataUri(),
-                'COLOR' => '#99ADB3',
-                'SIZE' => '90%',
-                'POSITION' => 'center',
-            ],
+            'ICON' => $this->connectorIcon($channel),
+            'ICON_DISABLED' => $this->connectorIcon($channel, disabled: true),
             'PLACEMENT_HANDLER' => $this->settingsUrl($profile, $connection),
             'DEL_EXTERNAL_MESSAGES' => true,
             'EDIT_INTERNAL_MESSAGES' => true,
@@ -243,8 +312,10 @@ class AutoSetupBitrix24OpenLineRouteAction
         Channel $channel,
         string $connectorCode,
         string $lineId,
+        string $sourceId,
     ): void {
         $channelUrl = $this->settingsUrl($profile, $connection);
+        $connectorName = $this->buildConnectorName($connection, $sourceId, $channel);
 
         $response = $this->apiClient->call('imconnector.connector.data.set', [
             'CONNECTOR' => $connectorCode,
@@ -253,7 +324,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                 'ID' => 'channel:'.$channel->id,
                 'URL' => $channelUrl,
                 'URL_IM' => $channelUrl,
-                'NAME' => $channel->name,
+                'NAME' => $connectorName,
             ],
         ], $connection);
 
@@ -454,30 +525,15 @@ class AutoSetupBitrix24OpenLineRouteAction
         return Str::limit(implode(' ', $parts), 120, '');
     }
 
-    private function refreshApplicationNameIfDefault(Bitrix24Connection $connection): Bitrix24Connection
+    private function refreshApplicationNameForConnectorRegistration(Bitrix24Connection $connection): Bitrix24Connection
     {
         $currentName = $this->displayName($connection->application_name);
-        $configuredName = $this->displayName(config('bitrix24.application.name'));
 
         if ($currentName !== null && ! $this->isGenericApplicationName($currentName)) {
             return $connection;
         }
 
-        if ($configuredName !== null && ! $this->isGenericApplicationName($configuredName)) {
-            $connection->forceFill([
-                'application_name' => $configuredName,
-            ])->save();
-
-            return $connection->refresh();
-        }
-
-        $response = $this->apiClient->call('app.info', [], $connection);
-
-        if (! $response->successful || ! is_array($response->result)) {
-            return $connection;
-        }
-
-        $applicationName = $this->resolveApplicationDisplayName($response->result);
+        $applicationName = $this->configuredApplicationDisplayName();
 
         if ($applicationName === null || $applicationName === $currentName) {
             return $connection;
@@ -490,51 +546,45 @@ class AutoSetupBitrix24OpenLineRouteAction
         return $connection->refresh();
     }
 
+    private function markRouteError(Bitrix24OpenLineRoute $route, string $message): void
+    {
+        $route->forceFill([
+            'last_error_message' => $this->sanitizeErrorMessage($message),
+            'last_error_at' => now(),
+        ])->save();
+    }
+
     private function applicationDisplayName(Bitrix24Connection $connection): string
     {
-        $configuredName = $this->displayName(config('bitrix24.application.name'));
         $connectionName = $this->displayName($connection->application_name);
-
-        if ($configuredName !== null && ! $this->isGenericApplicationName($configuredName)) {
-            return $configuredName;
-        }
 
         if ($connectionName !== null && ! $this->isGenericApplicationName($connectionName)) {
             return $connectionName;
         }
 
-        return $configuredName ?? $connectionName ?? 'Abrikosoff';
+        $configuredName = $this->configuredApplicationDisplayName();
+
+        if ($configuredName !== null) {
+            return $configuredName;
+        }
+
+        return $connectionName ?? 'Abrikosoff';
+    }
+
+    private function configuredApplicationDisplayName(): ?string
+    {
+        $configuredName = $this->displayName(config('bitrix24.application.name'));
+
+        if ($configuredName === null || $this->isGenericApplicationName($configuredName)) {
+            return null;
+        }
+
+        return $configuredName;
     }
 
     private function isGenericApplicationName(string $name): bool
     {
         return mb_strtolower(trim($name)) === mb_strtolower(self::GENERIC_APPLICATION_NAME);
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    private function resolveApplicationDisplayName(array $payload): ?string
-    {
-        foreach ([
-            'NAME',
-            'APP_NAME',
-            'TITLE',
-            'LANG.ru.NAME',
-            'LANG.en.NAME',
-            'LANG.NAME',
-            'LANGUAGE.ru.NAME',
-            'LANGUAGE.en.NAME',
-            'LANGUAGE.NAME',
-        ] as $path) {
-            $name = $this->displayName(data_get($payload, $path));
-
-            if ($name !== null) {
-                return $name;
-            }
-        }
-
-        return null;
     }
 
     private function displayName(mixed $value): ?string
@@ -595,7 +645,39 @@ class AutoSetupBitrix24OpenLineRouteAction
 
         return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
             Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX bot',
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => 'Telegram account',
             default => 'Telegram bot',
+        };
+    }
+
+    /**
+     * @return array{DATA_IMAGE: string, COLOR: string, SIZE: string, POSITION: string}
+     */
+    private function connectorIcon(Channel $channel, bool $disabled = false): array
+    {
+        return [
+            'DATA_IMAGE' => $this->connectorIconDataUri($channel),
+            'COLOR' => $disabled ? '#99ADB3' : $this->connectorIconColor($channel),
+            'SIZE' => '90%',
+            'POSITION' => 'center',
+        ];
+    }
+
+    private function connectorIconDataUri(Channel $channel): string
+    {
+        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $this->maxIconDataUri(),
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => $this->telegramAccountIconDataUri(),
+            default => $this->telegramIconDataUri(),
+        };
+    }
+
+    private function connectorIconColor(Channel $channel): string
+    {
+        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => '#7C3AED',
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => '#0F766E',
+            default => '#2AABEE',
         };
     }
 
@@ -607,6 +689,20 @@ class AutoSetupBitrix24OpenLineRouteAction
     private function telegramIconDataUri(): string
     {
         $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path fill="white" d="M27.7 5.3 4.9 14.1c-1.6.6-1.6 1.5-.3 1.9l5.9 1.8 2.2 6.8c.3.8.1 1.1 1 .4l3.1-3 6.4 4.7c1.2.7 2 .3 2.3-1.1L29.6 7c.4-1.4-.5-2.1-1.9-1.7ZM11.4 17.4 24.7 9c.7-.4 1.3-.2.8.3L14.1 19.6l-.4 4.1-2.3-6.3Z"/></svg>';
+
+        return 'data:image/svg+xml,'.rawurlencode($svg);
+    }
+
+    private function telegramAccountIconDataUri(): string
+    {
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="10.6" r="5.2" fill="white"/><path fill="white" d="M6.4 27c1.4-6.2 5.1-9.4 9.6-9.4s8.2 3.2 9.6 9.4H6.4Z"/></svg>';
+
+        return 'data:image/svg+xml,'.rawurlencode($svg);
+    }
+
+    private function maxIconDataUri(): string
+    {
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><text x="16" y="20.5" fill="white" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" text-anchor="middle">MAX</text></svg>';
 
         return 'data:image/svg+xml,'.rawurlencode($svg);
     }
