@@ -490,7 +490,6 @@ class ExportMessageToBitrix24OpenLinesAction
             Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
             Bitrix24MessageExport::FAILURE_CHAT_ACCESS_DENIED,
             Bitrix24MessageExport::FAILURE_CHAT_USER_ADD_FAILED,
-            Bitrix24MessageExport::FAILURE_VERIFIED_BINDING_CRM_MESSAGE_ADD_UNAVAILABLE,
         ], true);
     }
 
