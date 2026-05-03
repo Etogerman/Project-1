@@ -2501,7 +2501,17 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         Http::fake([
             'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
-                'result' => true,
+                'result' => [
+                    'DATA' => [
+                        'RESULT' => [
+                            [
+                                'session' => [
+                                    'CHAT_ID' => 'legacy-chat-7',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
             ], 200),
         ]);
 
@@ -2511,6 +2521,15 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         $this->assertSame('legacy-dialog-23', $dialog->bitrix24_live_chat_id);
         $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => 'legacy-chat-7',
+            'failure_code' => null,
+            'failure_uncertain' => false,
+        ]);
 
         Http::assertSent(function (Request $request): bool {
             if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
@@ -2525,6 +2544,62 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === 'legacy-user-5'
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Сообщение в старую ОЛ';
         });
+    }
+
+    public function test_live_export_rejects_verified_legacy_binding_when_bitrix_returns_different_chat(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, dialogAttributes: [
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+            'bitrix24_open_line_resolved_chat_id_override' => 'expected-chat-23',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Bitrix не должен подменить verified binding chat',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => [
+                    'DATA' => [
+                        'RESULT' => [
+                            [
+                                'session' => [
+                                    'CHAT_ID' => 'unexpected-chat-26',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
+            $this->assertTrue($exception->failureUncertain);
+            $this->assertStringContainsString('unexpected chat id [unexpected-chat-26], expected [expected-chat-23]', $exception->getMessage());
+        }
+
+        $dialog->refresh();
+
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_FAILED, $dialog->bitrix24_live_status);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => null,
+            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            'failure_uncertain' => true,
+        ]);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
     }
 
     public function test_live_export_blocks_telegram_legacy_send_when_open_line_history_requires_verified_binding(): void

@@ -519,6 +519,7 @@ class ExportMessageToBitrix24OpenLinesAction
             lineId: $lineId,
             routeId: $routeId,
         );
+        $expectedResolvedBitrixChatId ??= $this->resolveDialogBindingAction->handle($dialog, $route)?->resolvedBitrixChatId;
 
         try {
             $this->guardOpenLineMutationAction->handle(
@@ -572,7 +573,7 @@ class ExportMessageToBitrix24OpenLinesAction
         if ($expectedResolvedBitrixChatId !== null && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
             throw new Bitrix24LiveExportTransportException(
                 sprintf(
-                    'Bitrix24 Open Lines verified binding legacy fallback returned unexpected chat id [%s], expected [%s].',
+                    'Bitrix24 Open Lines verified binding legacy export returned unexpected chat id [%s], expected [%s].',
                     $resolvedBitrixChatId ?? 'null',
                     $expectedResolvedBitrixChatId,
                 ),
