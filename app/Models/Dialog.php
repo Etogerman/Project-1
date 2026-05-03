@@ -2,12 +2,12 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+use App\Services\Dialogs\ApplyDialogRoutePredicateAction;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use App\Services\Dialogs\ApplyDialogRoutePredicateAction;
 
 class Dialog extends Model
 {
@@ -83,6 +83,9 @@ class Dialog extends Model
         'bitrix24_live_chat_id',
         'bitrix24_live_status',
         'bitrix24_open_line_route_id',
+        'bitrix24_open_line_user_code_override',
+        'bitrix24_open_line_resolved_chat_id_override',
+        'bitrix24_open_line_binding_verified_at',
         'bitrix24_live_last_exported_at',
         'bitrix24_live_last_imported_at',
         'confirmed_phone_raw',
@@ -100,6 +103,7 @@ class Dialog extends Model
     protected $casts = [
         'bitrix24_live_last_exported_at' => 'datetime',
         'bitrix24_live_last_imported_at' => 'datetime',
+        'bitrix24_open_line_binding_verified_at' => 'datetime',
         'bot_subscription_changed_at' => 'datetime',
         'phone_confirmed_at' => 'datetime',
         'last_message_at' => 'datetime',

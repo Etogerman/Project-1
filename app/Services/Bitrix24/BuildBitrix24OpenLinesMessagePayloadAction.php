@@ -18,6 +18,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         private readonly ResolveBitrix24LiveChatKeyAction $resolveBitrix24LiveChatKeyAction,
         private readonly MessageChronology $messageChronology,
         private readonly BuildBitrix24OpenLinesExternalUserIdAction $buildExternalUserIdAction,
+        private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
     ) {}
 
     /**
@@ -28,8 +29,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         Bitrix24OpenLinesRouteData $route,
         bool $retryAfterSync = false,
         bool $applyLegacyFallbackSignature = false,
-    ): array
-    {
+    ): array {
         $message->loadMissing([
             'dialog.channel',
             'dialog.currentContactIdentity',
@@ -44,8 +44,10 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $identity = $dialog->currentContactIdentity ?? $message->contactIdentity;
         $timestamp = $this->messageChronology->resolveSortAt($message);
         $text = $this->resolveMessageText($message, $channel, $applyLegacyFallbackSignature);
-        $chatKey = $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
-        $userId = $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
+        $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
+        $chatKey = $dialogBinding?->connectorChatId ?? $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
+        $userId = $dialogBinding?->connectorUserId
+            ?? $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 

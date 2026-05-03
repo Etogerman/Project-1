@@ -74,6 +74,9 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertTrue(Schema::hasColumns('dialogs', [
             'bitrix24_live_chat_id',
             'bitrix24_live_status',
+            'bitrix24_open_line_user_code_override',
+            'bitrix24_open_line_resolved_chat_id_override',
+            'bitrix24_open_line_binding_verified_at',
             'bitrix24_live_last_exported_at',
             'bitrix24_live_last_imported_at',
         ]));
@@ -83,6 +86,9 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         $this->assertNull($dialog->bitrix24_live_chat_id);
         $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED, $dialog->bitrix24_live_status);
+        $this->assertNull($dialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
         $this->assertNull($dialog->bitrix24_live_last_exported_at);
         $this->assertNull($dialog->bitrix24_live_last_imported_at);
         $this->assertFalse($dialog->isBitrix24LiveActive());
@@ -776,6 +782,111 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             return $request['USER_CODE'] === $this->expectedManualReplyUserCode($dialog, 'abrikosoff_max', 'line-max');
         });
+    }
+
+    public function test_manual_reply_uses_verified_legacy_open_line_binding_without_creating_new_session(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Ручной ответ в старую ОЛ',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 'legacy-chat-7',
+                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
+                'result' => [
+                    'MESSAGE_ID' => 'remote-message-legacy-7',
+                ],
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            'resolved_bitrix_chat_id' => 'legacy-chat-7',
+            'resolved_crm_entity_type' => 'CONTACT',
+            'resolved_crm_entity_id' => 'B24-CONTACT-100',
+            'bitrix_remote_message_id' => 'remote-message-legacy-7',
+        ]);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
+            && $request['USER_CODE'] === 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json'
+            && $request['CHAT_ID'] === 'legacy-chat-7'
+            && $request['MESSAGE'] === 'Ручной ответ в старую ОЛ');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+    }
+
+    public function test_manual_reply_binding_failure_does_not_fallback_to_new_session(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Ручной ответ в старую ОЛ',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 'legacy-chat-7',
+                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
+                'error' => 'ACCESS_DENIED',
+                'error_description' => 'Not in chat.',
+            ], 400),
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.user.add.json' => Http::response([
+                'error' => 'ACCESS_DENIED',
+                'error_description' => 'Cannot add user.',
+            ], 400),
+        ]);
+
+        $this->expectException(Bitrix24OpenLinesManualReplyExportException::class);
+        $this->expectExceptionMessage('verified dialog binding send failed');
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+        } finally {
+            $this->assertDatabaseHas('bitrix24_message_exports', [
+                'message_id' => $message->id,
+                'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+                'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+                'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+                'failure_code' => Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            ]);
+
+            Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
+                && $request['USER_CODE'] === 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5');
+            Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.user.add.json');
+            Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
+            Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+        }
     }
 
     public function test_manual_reply_live_export_ignores_single_active_chat_from_other_connector_and_uses_session_open_fallback(): void
@@ -2250,6 +2361,49 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         });
     }
 
+    public function test_live_export_uses_verified_legacy_open_line_binding_for_connector_chat_and_user(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Сообщение в старую ОЛ',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame('legacy-dialog-23', $dialog->bitrix24_live_chat_id);
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
+
+        Http::assertSent(function (Request $request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
+                && ($payload['LINE'] ?? null) === 'line-max'
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'legacy-dialog-23'
+                && ($payload['MESSAGES'][0]['user']['id'] ?? null) === 'legacy-user-5'
+                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Сообщение в старую ОЛ';
+        });
+    }
+
     public function test_fake_happy_path_live_export_marks_message_as_exported_without_bitrix_request(): void
     {
         Queue::fake();
@@ -3580,8 +3734,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         string $resolvedChatId,
         ?string $resolvedCrmEntityType = null,
         ?string $resolvedCrmEntityId = null,
-    ): Message
-    {
+    ): Message {
         $previousMessage = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
@@ -3611,8 +3764,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         string $resolvedChatId,
         ?string $resolvedCrmEntityType = null,
         ?string $resolvedCrmEntityId = null,
-    ): Message
-    {
+    ): Message {
         $previousMessage = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,

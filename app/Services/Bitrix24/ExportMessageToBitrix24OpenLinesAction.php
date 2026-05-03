@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
@@ -30,6 +31,7 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
+        private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
     ) {}
 
     public function handle(Message|int $message, bool $retryAfterSync = false, ?string $liveBatchUuid = null): Message
@@ -107,9 +109,7 @@ class ExportMessageToBitrix24OpenLinesAction
                         lineId: $route->lineId,
                         routeId: $route->routeId,
                         retryAfterSync: $retryAfterSync,
-                        chatKey: filled($dialog->bitrix24_live_chat_id)
-                            ? (string) $dialog->bitrix24_live_chat_id
-                            : $this->resolveBitrix24LiveChatKeyAction->handle($dialog),
+                        chatKey: $this->resolveExportChatKey($dialog, $route),
                         operation: 'openlines_manual_reply_exported',
                         transportMethod: Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
                         resolvedBitrixChatId: $manualReplyExport->resolvedBitrixChatId,
@@ -509,12 +509,18 @@ class ExportMessageToBitrix24OpenLinesAction
         bool $applyLegacyFallbackSignature = false,
         array $responsePayload = [],
     ): Message {
-        $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle($message, new \App\Data\Bitrix24\Bitrix24OpenLinesRouteData(
+        $route = new Bitrix24OpenLinesRouteData(
             platform: $dialog->channel()->firstOrFail()->platform,
             connectorCode: $connectorCode,
             lineId: $lineId,
             routeId: $routeId,
-        ), $retryAfterSync, $applyLegacyFallbackSignature);
+        );
+        $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle(
+            $message,
+            $route,
+            $retryAfterSync,
+            $applyLegacyFallbackSignature,
+        );
 
         try {
             $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload, $connection);
@@ -549,7 +555,7 @@ class ExportMessageToBitrix24OpenLinesAction
             lineId: $lineId,
             routeId: $routeId,
             retryAfterSync: $retryAfterSync,
-            chatKey: $this->resolveBitrix24LiveChatKeyAction->handle($dialog),
+            chatKey: $this->resolveExportChatKey($dialog, $route),
             operation: $operation,
             transportMethod: Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             resolvedBitrixChatId: $this->extractLegacySessionChatId($response->result),
@@ -558,6 +564,17 @@ class ExportMessageToBitrix24OpenLinesAction
                 'rest_method' => $response->restMethod,
             ],
         );
+    }
+
+    private function resolveExportChatKey(Dialog $dialog, Bitrix24OpenLinesRouteData $route): string
+    {
+        if ($binding = $this->resolveDialogBindingAction->handle($dialog, $route)) {
+            return $binding->connectorChatId;
+        }
+
+        return filled($dialog->bitrix24_live_chat_id)
+            ? (string) $dialog->bitrix24_live_chat_id
+            : $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
     }
 
     private function extractLegacySessionChatId(mixed $result): ?string
