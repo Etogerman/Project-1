@@ -409,8 +409,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     return $method === 'imconnector.register'
                         && $usedConnection->is($connection)
                         && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                        && ($params['NAME'] ?? null) === 'Герман-4 ABC Telegram bot'
-                        && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC Telegram bot'
+                        && ($params['NAME'] ?? null) === 'Герман-4 Telegram bot'
+                        && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 Telegram bot'
                         && data_get($params, 'ICON.COLOR') === '#2AABEE'
                         && data_get($params, 'ICON_DISABLED.COLOR') === '#99ADB3'
                         && str_contains($icon, '<path')
@@ -425,7 +425,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-777'
                     && data_get($params, 'DATA.ID') === 'channel:'.$channel->id
-                    && data_get($params, 'DATA.NAME') === 'Герман-4 ABC Telegram bot')
+                    && data_get($params, 'DATA.NAME') === 'Герман-4 Telegram bot')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
@@ -508,8 +508,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     return $method === 'imconnector.register'
                         && $usedConnection->is($connection)
                         && ($params['ID'] ?? null) === 'abc_max_dev_german_main'
-                        && ($params['NAME'] ?? null) === 'Герман-4 ABC MAX bot'
-                        && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC MAX bot'
+                        && ($params['NAME'] ?? null) === 'Герман-4 MAX bot'
+                        && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 MAX bot'
                         && data_get($params, 'ICON.COLOR') === '#7C3AED'
                         && data_get($params, 'ICON_DISABLED.COLOR') === '#99ADB3'
                         && str_contains($icon, '>MAX<');
@@ -523,7 +523,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-max'
                     && data_get($params, 'DATA.ID') === 'channel:'.$channel->id
-                    && data_get($params, 'DATA.NAME') === 'Герман-4 ABC MAX bot')
+                    && data_get($params, 'DATA.NAME') === 'Герман-4 MAX bot')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
@@ -741,7 +741,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'Герман-4 ABC Telegram bot')
+                    && ($params['NAME'] ?? null) === 'Герман-4 Telegram bot')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
@@ -821,8 +821,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'Герман-4 ABC Telegram bot'
-                    && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 ABC Telegram bot')
+                    && ($params['NAME'] ?? null) === 'Герман-4 Telegram bot'
+                    && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 Telegram bot')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
@@ -920,7 +920,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'Новое имя ABC Telegram bot'
+                    && ($params['NAME'] ?? null) === 'Новое имя Telegram bot'
                     && ($params['ICON']['COLOR'] ?? null) === '#2AABEE')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
@@ -929,7 +929,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && ($params['ID'] ?? null) === 'abc_max_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'Новое имя ABC MAX bot'
+                    && ($params['NAME'] ?? null) === 'Новое имя MAX bot'
                     && ($params['ICON']['COLOR'] ?? null) === '#7C3AED')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
@@ -938,7 +938,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
                     && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-telegram'
-                    && ($params['DATA']['NAME'] ?? null) === 'Новое имя ABC Telegram bot')
+                    && ($params['DATA']['NAME'] ?? null) === 'Новое имя Telegram bot')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
@@ -946,7 +946,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.connector.data.set'
                     && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-max'
-                    && ($params['DATA']['NAME'] ?? null) === 'Новое имя ABC MAX bot')
+                    && ($params['DATA']['NAME'] ?? null) === 'Новое имя MAX bot')
                 ->andReturn($this->bitrixResponse(true, true));
         });
 

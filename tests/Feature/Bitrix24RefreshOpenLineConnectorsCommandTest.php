@@ -67,7 +67,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     return $method === 'imconnector.register'
                         && $usedConnection->is($connection)
                         && $params['ID'] === 'abc_telegram'
-                        && $params['NAME'] === 'Имя из админки ABC Telegram bot'
+                        && $params['NAME'] === 'Имя из админки Telegram bot'
                         && $params['ICON']['COLOR'] === '#2AABEE'
                         && $params['ICON_DISABLED']['COLOR'] === '#99ADB3'
                         && str_contains($this->decodedSvgDataImage($params['ICON']['DATA_IMAGE'] ?? null), 'path fill="white"');
@@ -81,7 +81,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     && $params['CONNECTOR'] === 'abc_telegram'
                     && $params['LINE'] === '5'
                     && $params['DATA']['ID'] === 'channel:'.$channel->id
-                    && $params['DATA']['NAME'] === 'Имя из админки ABC Telegram bot')
+                    && $params['DATA']['NAME'] === 'Имя из админки Telegram bot')
                 ->andReturn($this->bitrixResponse(true, true));
         });
 
@@ -109,7 +109,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             profileOverrides: [
                 'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
                 'max_connector_code' => 'abc_max',
-                'max_source_id' => 'ABC_MAX_DEV',
+                'max_source_id' => 'ABRIKOSOFF_MAX',
             ],
         );
         $profile = $connection->profile()->firstOrFail();
@@ -128,7 +128,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
             'connector_code' => 'abc_max',
             'line_id' => '7',
-            'source_id' => 'ABC_MAX_DEV',
+            'source_id' => 'ABRIKOSOFF_MAX',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
@@ -142,7 +142,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(function (string $method, array $params): bool {
                     return $method === 'imconnector.register'
                         && $params['ID'] === 'abc_max'
-                        && $params['NAME'] === 'Имя из админки ABC MAX bot'
+                        && $params['NAME'] === 'Имя из админки MAX bot'
                         && $params['ICON']['COLOR'] === '#7C3AED'
                         && str_contains($this->decodedSvgDataImage($params['ICON']['DATA_IMAGE'] ?? null), '>MAX<');
                 })
@@ -154,7 +154,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     && $params['CONNECTOR'] === 'abc_max'
                     && $params['LINE'] === '7'
                     && $params['DATA']['ID'] === 'channel:'.$channel->id
-                    && $params['DATA']['NAME'] === 'Имя из админки ABC MAX bot')
+                    && $params['DATA']['NAME'] === 'Имя из админки MAX bot')
                 ->andReturn($this->bitrixResponse(true, true));
         });
 
@@ -274,7 +274,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && $params['ID'] === 'abc_max'
-                    && $params['NAME'] === 'Имя из админки ABC MAX bot')
+                    && $params['NAME'] === 'Имя из админки MAX bot')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
@@ -284,7 +284,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     && $params['CONNECTOR'] === 'abc_max'
                     && $params['LINE'] === '7'
                     && $params['DATA']['ID'] === 'channel:'.$maxChannel->id
-                    && $params['DATA']['NAME'] === 'Имя из админки ABC MAX bot')
+                    && $params['DATA']['NAME'] === 'Имя из админки MAX bot')
                 ->andReturn($this->bitrixResponse(true, true));
         });
 
