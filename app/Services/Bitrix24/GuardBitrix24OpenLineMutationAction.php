@@ -77,6 +77,55 @@ class GuardBitrix24OpenLineMutationAction
         );
     }
 
+    /**
+     * @throws Bitrix24OpenLineMutationGuardException
+     */
+    public function assertVerifiedBindingChatIsActiveForContact(
+        Contact $rootContact,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        string $expectedResolvedBitrixChatId,
+    ): void {
+        $activeChatRows = $this->lookupActiveChatRows($rootContact, $connection);
+        $matchedConnectorId = null;
+
+        foreach ($activeChatRows as $chat) {
+            if ($this->extractChatId($chat) !== $expectedResolvedBitrixChatId) {
+                continue;
+            }
+
+            $matchedConnectorId = $this->extractConnectorId($chat) ?? 'null';
+
+            if ($matchedConnectorId === $route->connectorCode) {
+                return;
+            }
+
+            break;
+        }
+
+        if ($matchedConnectorId !== null) {
+            throw new Bitrix24OpenLineMutationGuardException(
+                sprintf(
+                    'Bitrix24 Open Lines verified binding preflight failed: expected chat id [%s] is active, but connector [%s] does not match expected connector [%s].',
+                    $expectedResolvedBitrixChatId,
+                    $matchedConnectorId,
+                    $route->connectorCode,
+                ),
+                Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            );
+        }
+
+        throw new Bitrix24OpenLineMutationGuardException(
+            sprintf(
+                'Bitrix24 Open Lines verified binding preflight failed: expected chat id [%s] is not active for CONTACT [%s] and connector [%s].',
+                $expectedResolvedBitrixChatId,
+                (string) $rootContact->bitrix24_contact_id,
+                $route->connectorCode,
+            ),
+            Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+        );
+    }
+
     private function hasLegacyOpenLineExportHistory(Dialog $dialog): bool
     {
         return Bitrix24MessageExport::query()
