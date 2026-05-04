@@ -14,6 +14,9 @@
 
 | Key | Value |
 | --- | --- |
+| `APP_ENV` | `production` |
+| `APP_DEBUG` | `false` |
+| `APP_FAKER_LOCALE` | `ru_RU` |
 | `BITRIX24_PORTAL_DOMAIN` | `crm.alexlesley.biz` |
 | `APP_URL` | `https://project2.abrikosoff.ru` |
 | `BITRIX24_INSTALL_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/install` |
