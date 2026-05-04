@@ -1385,7 +1385,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
     }
 
-    public function test_manual_reply_falls_back_to_legacy_transport_when_session_open_is_denied(): void
+    public function test_manual_reply_does_not_fall_back_to_legacy_transport_when_session_open_is_denied(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM);
@@ -1393,7 +1393,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
-            'text' => 'Fallback в legacy transport',
+            'text' => 'Не создавать дубль через legacy transport',
         ]);
 
         Http::fake([
@@ -1404,36 +1404,29 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'error' => 'ACCESS_DENIED',
                 'error_description' => 'Вы не можете открыть этот разговор, т.к. у вас недостаточно прав.',
             ], 200),
-            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
-                'result' => [
-                    'DATA' => [
-                        'RESULT' => [
-                            [
-                                'session' => [
-                                    'CHAT_ID' => 'legacy-chat-300',
-                                ],
-                            ],
-                        ],
-                    ],
-                ],
-            ], 200),
         ]);
 
-        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24OpenLinesManualReplyExportException was not thrown.');
+        } catch (Bitrix24OpenLinesManualReplyExportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED, $exception->failureCode);
+            $this->assertFalse($exception->failureUncertain);
+        }
 
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $message->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
-            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
-            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => 'legacy-chat-300',
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            'resolved_bitrix_chat_id' => null,
             'bitrix_remote_message_id' => null,
-            'failure_code' => null,
+            'failure_code' => Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
             'failure_uncertain' => false,
         ]);
 
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.open.json');
-        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
     }
 
