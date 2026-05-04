@@ -29,6 +29,7 @@
 | `BITRIX24_OPENLINES_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/openlines` |
 | `BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASH` | required, from current Bitrix box `application_token` |
 | `BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASHES` | optional multi-token replacement for the single hash |
+| `BITRIX24_FAKE_HAPPY_PATH_ENABLED` | `false` |
 | `BITRIX24_TELEGRAM_LINE_ID` | `32` |
 | `BITRIX24_MAX_LINE_ID` | `31` |
 | `BITRIX24_TELEGRAM_CONNECTOR_CODE` | `abrikosoff_telegram` |
