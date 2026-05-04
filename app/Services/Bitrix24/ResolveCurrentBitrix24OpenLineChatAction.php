@@ -6,6 +6,7 @@ use App\Data\Bitrix24\Bitrix24CurrentOpenLineChatData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Data\Bitrix24\Bitrix24RestResponseData;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Services\Contacts\ResolveRootContactAction;
@@ -24,19 +25,87 @@ class ResolveCurrentBitrix24OpenLineChatAction
         Bitrix24OpenLinesRouteData $route,
         Bitrix24Connection $connection,
     ): ?Bitrix24CurrentOpenLineChatData {
+        $candidates = $this->resolveCandidates($dialog, $route, $connection);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        // Multiple IMOL rows can point to the same Abrikosoff dialog; prefer the
+        // chat Bitrix24 actually selected for the latest successful legacy send.
+        $preferredExportedChatId = $this->latestSuccessfulLegacyExportChatId($dialog, $candidates);
+
+        if ($preferredExportedChatId !== null) {
+            foreach ($candidates as $candidate) {
+                if ($candidate['chat_id'] === $preferredExportedChatId) {
+                    return new Bitrix24CurrentOpenLineChatData(
+                        userCode: $candidate['user_code'],
+                        chatId: $candidate['chat_id'],
+                    );
+                }
+            }
+        }
+
+        usort(
+            $candidates,
+            static fn (array $left, array $right): int => (int) $left['chat_id'] <=> (int) $right['chat_id'],
+        );
+
+        $current = $candidates[0];
+
+        return new Bitrix24CurrentOpenLineChatData(
+            userCode: $current['user_code'],
+            chatId: $current['chat_id'],
+        );
+    }
+
+    public function handleMatchingChatId(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        string $chatId,
+    ): ?Bitrix24CurrentOpenLineChatData {
+        $chatId = $this->positiveIntegerString($chatId);
+
+        if ($chatId === null) {
+            return null;
+        }
+
+        foreach ($this->resolveCandidates($dialog, $route, $connection) as $candidate) {
+            if ($candidate['chat_id'] !== $chatId) {
+                continue;
+            }
+
+            return new Bitrix24CurrentOpenLineChatData(
+                userCode: $candidate['user_code'],
+                chatId: $candidate['chat_id'],
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * @return list<array{chat_id: string, user_code: string}>
+     */
+    private function resolveCandidates(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+    ): array {
         $dialog->loadMissing('contact');
 
         $contact = $dialog->contact;
 
         if (! $contact instanceof Contact) {
-            return null;
+            return [];
         }
 
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $bitrix24ContactId = $this->positiveIntegerString($rootContact->bitrix24_contact_id);
 
         if ($bitrix24ContactId === null) {
-            return null;
+            return [];
         }
 
         $expectedConnectorChatId = $this->resolveLiveChatKeyAction->handle($dialog);
@@ -73,21 +142,38 @@ class ResolveCurrentBitrix24OpenLineChatAction
             ];
         }
 
-        if ($candidates === []) {
+        return $candidates;
+    }
+
+    /**
+     * @param  list<array{chat_id: string, user_code: string}>  $candidates
+     */
+    private function latestSuccessfulLegacyExportChatId(Dialog $dialog, array $candidates): ?string
+    {
+        $candidateChatIds = array_values(array_unique(array_map(
+            static fn (array $candidate): string => $candidate['chat_id'],
+            $candidates,
+        )));
+
+        if ($candidateChatIds === []) {
             return null;
         }
 
-        usort(
-            $candidates,
-            static fn (array $left, array $right): int => (int) $left['chat_id'] <=> (int) $right['chat_id'],
-        );
+        $chatId = Bitrix24MessageExport::query()
+            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
+            ->where('messages.dialog_id', $dialog->id)
+            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
+            ->whereIn('bitrix24_message_exports.resolved_bitrix_chat_id', $candidateChatIds)
+            ->where(function ($query): void {
+                $query->where('bitrix24_message_exports.transport_method', Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES)
+                    ->orWhereNull('bitrix24_message_exports.transport_method');
+            })
+            ->orderByDesc('bitrix24_message_exports.exported_at')
+            ->orderByDesc('bitrix24_message_exports.id')
+            ->value('bitrix24_message_exports.resolved_bitrix_chat_id');
 
-        $current = $candidates[0];
-
-        return new Bitrix24CurrentOpenLineChatData(
-            userCode: $current['user_code'],
-            chatId: $current['chat_id'],
-        );
+        return $this->positiveIntegerString($chatId);
     }
 
     /**
