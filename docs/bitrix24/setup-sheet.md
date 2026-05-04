@@ -37,6 +37,12 @@
 | `BITRIX24_DEFAULT_ASSIGNED_USER_ID` | `1` |
 | `BITRIX24_DEFAULT_DEAL_CATEGORY_ID` | `22` |
 | `BITRIX24_DEFAULT_DEAL_STAGE_ID` | `C22:NEW` |
+| `BITRIX24_NAME_SOURCE_AUTOMATIC_ID` | `7178` |
+| `BITRIX24_NAME_SOURCE_SELF_REPORTED_ID` | `7179` |
+| `BITRIX24_NAME_SOURCE_TRAINING_VERIFIED_ID` | `7180` |
+| `BITRIX24_GENDER_MALE_ID` | `4653` |
+| `BITRIX24_GENDER_FEMALE_ID` | `4655` |
+| `BITRIX24_GENDER_UNKNOWN_ID` | `5815` |
 
 `owner_profile_key = staging` в box package остаётся текущим Laravel
 `Bitrix24Profile.profile_key`; production определяется portal domain и callback
