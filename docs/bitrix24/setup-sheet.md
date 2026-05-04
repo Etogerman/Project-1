@@ -19,6 +19,10 @@
 | `APP_FAKER_LOCALE` | `ru_RU` |
 | `BITRIX24_PORTAL_DOMAIN` | `crm.alexlesley.biz` |
 | `BITRIX24_APP_NAME` | `Abrikosoff Connector` |
+| `BITRIX24_CLIENT_ID` | required, from production Bitrix24 app |
+| `BITRIX24_CLIENT_SECRET` | required, from production Bitrix24 app |
+| `BITRIX24_APP_CODE` | required, from production Bitrix24 app |
+| `BITRIX24_AUTH_SERVER_URL` | `https://oauth.bitrix.info` |
 | `APP_URL` | `https://project2.abrikosoff.ru` |
 | `BITRIX24_INSTALL_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/install` |
 | `BITRIX24_EVENTS_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/events` |
