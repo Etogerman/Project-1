@@ -2,8 +2,10 @@
 
 namespace App\Services\Bitrix24;
 
-use App\Data\Bots\AutoReplyDeliveryResult;
+use App\Data\Bitrix24\Bitrix24CurrentOpenLineChatData;
 use App\Data\Bitrix24\Bitrix24OpenLinesOperatorMessageData;
+use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
+use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotDialogTextSendResult;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Jobs\ProcessBitrix24WebhookEventJob;
@@ -13,29 +15,52 @@ use App\Models\Bitrix24WebhookEvent;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Dialogs\MessageChronology;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\JoinClause;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class ProcessBitrix24OpenLinesWebhookAction
 {
     private const BLOCKED_DIALOG_FEEDBACK_TEXT = 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
+
     private const BLOCKED_DIALOG_PHASE_ENTITY_TYPE = 'openlines_blocked_attempt';
+
     private const DELIVERY_PHASE_ENTITY_TYPE = 'openlines_delivery_phase';
+
     private const BLOCKED_DIALOG_FEEDBACK_SENT_OPERATION = 'openlines_blocked_feedback_sent';
+
     private const BLOCKED_DIALOG_FEEDBACK_FAILED_OPERATION = 'openlines_blocked_feedback_failed';
+
     private const BLOCKED_DIALOG_ACK_SENT_OPERATION = 'openlines_blocked_feedback_ack_sent';
+
     private const BLOCKED_DIALOG_ACK_FAILED_OPERATION = 'openlines_blocked_feedback_ack_failed';
+
     private const DELIVERY_SENT_OPERATION = 'openlines_message_delivery_sent';
+
     private const DELIVERY_RESUMED_OPERATION = 'openlines_message_delivery_resumed';
+
     private const EXACT_ECHO_SKIPPED_OPERATION = 'openlines_exact_echo_skipped';
+
     private const DELAYED_RECHECK_SCHEDULED_OPERATION = 'openlines_delayed_recheck_scheduled';
+
     private const DELAYED_RECHECK_CONFIRMED_ECHO_OPERATION = 'openlines_delayed_recheck_confirmed_echo';
+
     private const DELAYED_RECHECK_FELL_THROUGH_OPERATION = 'openlines_delayed_recheck_fell_through';
+
     private const DELAYED_RECHECK_ACK_FAILED_OPERATION = 'openlines_delayed_recheck_ack_failed';
+
+    private const STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION = 'openlines_stale_chat_ignored';
+
     private const ECHO_RECHECK_DELAY_SECONDS = 2;
+
     private const ECHO_CANDIDATE_FRESH_WINDOW_SECONDS = 10;
+
     private const ECHO_RESULT_NONE = 'none';
+
     private const ECHO_RESULT_SKIPPED = 'skipped';
+
     private const ECHO_RESULT_DEFERRED = 'deferred';
 
     public function __construct(
@@ -43,6 +68,8 @@ class ProcessBitrix24OpenLinesWebhookAction
         private readonly HandleBitrix24OpenLinesSessionClosedAction $handleBitrix24OpenLinesSessionClosedAction,
         private readonly ResolveDialogByBitrix24LiveChatKeyAction $resolveDialogByBitrix24LiveChatKeyAction,
         private readonly ResolveBitrix24OpenLinesRouteAction $resolveBitrix24OpenLinesRouteAction,
+        private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentBitrix24ConnectionAction,
+        private readonly ResolveCurrentBitrix24OpenLineChatAction $resolveCurrentBitrix24OpenLineChatAction,
         private readonly IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
         private readonly DeliverBitrix24OpenLinesMessageToMessengerAction $deliverBitrix24OpenLinesMessageToMessengerAction,
         private readonly SendBitrix24OpenLinesBlockedDialogFeedbackAction $sendBitrix24OpenLinesBlockedDialogFeedbackAction,
@@ -105,7 +132,11 @@ class ProcessBitrix24OpenLinesWebhookAction
                     throw new Bitrix24ApiException('Bitrix24 Open Lines dialog is not ready for live bridge processing.');
                 }
 
-                $this->assertMatchesCurrentRuntimeRoute($dialog, $messageData);
+                $route = $this->assertMatchesCurrentRuntimeRoute($dialog, $messageData);
+
+                if ($this->ignoreStaleOpenLineMessageIfNeeded($event, $dialog, $messageData, $route)) {
+                    continue;
+                }
 
                 $providerEventKey = 'bitrix24-openlines:'.$messageData->bitrixMessageId;
                 $existingMessage = Message::query()
@@ -255,7 +286,7 @@ class ProcessBitrix24OpenLinesWebhookAction
     private function assertMatchesCurrentRuntimeRoute(
         Dialog $dialog,
         Bitrix24OpenLinesOperatorMessageData $messageData,
-    ): void {
+    ): Bitrix24OpenLinesRouteData {
         $route = $this->resolveBitrix24OpenLinesRouteAction->handleIncomingCallback(
             $dialog,
             $messageData->connectorCode,
@@ -279,6 +310,70 @@ class ProcessBitrix24OpenLinesWebhookAction
                 $dialog->id,
             ));
         }
+
+        return $route;
+    }
+
+    private function ignoreStaleOpenLineMessageIfNeeded(
+        Bitrix24WebhookEvent $event,
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        Bitrix24OpenLinesRouteData $route,
+    ): bool {
+        $currentChat = $this->resolveCurrentBitrix24OpenLineChatAction->handle(
+            $dialog,
+            $route,
+            $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle(),
+        );
+
+        if (! $currentChat instanceof Bitrix24CurrentOpenLineChatData) {
+            return false;
+        }
+
+        $this->syncCurrentOpenLineBinding($dialog, $currentChat);
+
+        if ($messageData->sourceBitrixChatId === null || $messageData->sourceBitrixChatId === $currentChat->chatId) {
+            return false;
+        }
+
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: self::STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION,
+            status: Bitrix24SyncLog::STATUS_SKIPPED,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog->id,
+                'chat_id' => $messageData->chatId,
+                'source_bitrix_chat_id' => $messageData->sourceBitrixChatId,
+                'current_bitrix_chat_id' => $currentChat->chatId,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+                'connector_code' => $messageData->connectorCode,
+                'line_id' => $messageData->lineId,
+            ],
+            connection: $event->connection,
+            entityType: 'openlines_webhook_event',
+            entityId: (string) $event->id,
+        );
+
+        return true;
+    }
+
+    private function syncCurrentOpenLineBinding(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void
+    {
+        if (
+            $dialog->bitrix24_open_line_user_code_override === $currentChat->userCode
+            && $dialog->bitrix24_open_line_resolved_chat_id_override === $currentChat->chatId
+            && $dialog->bitrix24_open_line_binding_verified_at !== null
+        ) {
+            return;
+        }
+
+        $dialog->forceFill([
+            'bitrix24_open_line_user_code_override' => $currentChat->userCode,
+            'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ])->save();
     }
 
     private function ignoreRouteMismatchEvent(
@@ -481,8 +576,7 @@ class ProcessBitrix24OpenLinesWebhookAction
     private function buildDeliveryPhaseFingerprint(
         Bitrix24WebhookEvent $event,
         Bitrix24OpenLinesOperatorMessageData $messageData,
-    ): string
-    {
+    ): string {
         return hash('sha256', implode('|', [
             (string) ($event->connection_id ?? ''),
             (string) $event->portal_domain,
@@ -670,7 +764,7 @@ class ProcessBitrix24OpenLinesWebhookAction
             ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
             ->where('transport_method', $transportMethod)
             ->where('bitrix_remote_message_id', $bitrixMessageId)
-            ->whereHas('message', function (\Illuminate\Database\Eloquent\Builder $query) use ($dialog): void {
+            ->whereHas('message', function (Builder $query) use ($dialog): void {
                 $query
                     ->where('dialog_id', $dialog->id)
                     ->where('direction', Message::DIRECTION_OUTBOUND)
@@ -710,7 +804,7 @@ class ProcessBitrix24OpenLinesWebhookAction
 
         $candidateMessages = Message::query()
             ->select('messages.*')
-            ->join('bitrix24_message_exports as live_exports', function (\Illuminate\Database\Query\JoinClause $join): void {
+            ->join('bitrix24_message_exports as live_exports', function (JoinClause $join): void {
                 $join
                     ->on('live_exports.message_id', '=', 'messages.id')
                     ->where('live_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
@@ -720,7 +814,7 @@ class ProcessBitrix24OpenLinesWebhookAction
             ->where('messages.direction', Message::DIRECTION_OUTBOUND)
             ->where('messages.message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)
             ->whereRaw($this->messageChronology->sqlSortAt('messages').' >= ?', [$freshAfter])
-            ->tap(fn (\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder => $this->messageChronology->applyLatestOrder($query))
+            ->tap(fn (Builder $query): Builder => $this->messageChronology->applyLatestOrder($query))
             ->get()
             ->filter(fn (Message $candidate): bool => $this->normalizeEchoText($candidate->text) === $normalizedBitrixText)
             ->values();
@@ -732,7 +826,7 @@ class ProcessBitrix24OpenLinesWebhookAction
         return $candidateMessages->first();
     }
 
-    private function scheduleDelayedRecheck(Bitrix24WebhookEvent $event): ?\Illuminate\Support\Carbon
+    private function scheduleDelayedRecheck(Bitrix24WebhookEvent $event): ?Carbon
     {
         $scheduledAt = now()->addSeconds(self::ECHO_RECHECK_DELAY_SECONDS);
 
@@ -968,5 +1062,4 @@ class ProcessBitrix24OpenLinesWebhookAction
             );
         }
     }
-
 }
