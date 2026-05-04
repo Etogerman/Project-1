@@ -109,13 +109,19 @@ class GuardBitrix24OpenLineMutationAction
         $activeChatRows = $this->lookupActiveChatRows($rootContact, $connection);
         $matchedConnectorId = null;
         $sameConnectorActiveChatId = null;
+        $newerSameConnectorActiveChatId = null;
+        $matchedExpectedConnectorChat = false;
 
         foreach ($activeChatRows as $chat) {
             $chatId = $this->extractChatId($chat);
             $connectorId = $this->extractConnectorId($chat);
 
             if ($connectorId === $route->connectorCode && $chatId !== $expectedResolvedBitrixChatId) {
-                $sameConnectorActiveChatId = $chatId;
+                $sameConnectorActiveChatId = $this->preferNewerChatId($sameConnectorActiveChatId, $chatId);
+
+                if ($this->isNewerChatId($chatId, $expectedResolvedBitrixChatId)) {
+                    $newerSameConnectorActiveChatId = $this->preferNewerChatId($newerSameConnectorActiveChatId, $chatId);
+                }
 
                 continue;
             }
@@ -127,12 +133,31 @@ class GuardBitrix24OpenLineMutationAction
             $matchedConnectorId = $connectorId;
 
             if ($matchedConnectorId === $route->connectorCode) {
-                return;
+                $matchedExpectedConnectorChat = true;
+
+                continue;
             }
 
             if ($matchedConnectorId !== null) {
                 break;
             }
+        }
+
+        if ($newerSameConnectorActiveChatId !== null) {
+            throw new Bitrix24OpenLineMutationGuardException(
+                sprintf(
+                    'Bitrix24 Open Lines verified binding preflight failed: expected chat id [%s] is not current for connector [%s]; newer active chat id [%s] was found.',
+                    $expectedResolvedBitrixChatId,
+                    $route->connectorCode,
+                    $newerSameConnectorActiveChatId,
+                ),
+                Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+                relatedChatId: $newerSameConnectorActiveChatId,
+            );
+        }
+
+        if ($matchedExpectedConnectorChat) {
+            return;
         }
 
         if ($sameConnectorActiveChatId !== null) {
@@ -455,6 +480,53 @@ class GuardBitrix24OpenLineMutationAction
         }
 
         return null;
+    }
+
+    private function preferNewerChatId(?string $current, string $candidate): string
+    {
+        if ($current === null) {
+            return $candidate;
+        }
+
+        $currentNumeric = $this->positiveIntegerString($current);
+        $candidateNumeric = $this->positiveIntegerString($candidate);
+
+        if ($candidateNumeric === null) {
+            return $current;
+        }
+
+        if ($currentNumeric === null) {
+            return $candidate;
+        }
+
+        return (int) $candidateNumeric > (int) $currentNumeric
+            ? $candidate
+            : $current;
+    }
+
+    private function isNewerChatId(string $candidate, string $expected): bool
+    {
+        $candidateNumeric = $this->positiveIntegerString($candidate);
+        $expectedNumeric = $this->positiveIntegerString($expected);
+
+        return $candidateNumeric !== null
+            && $expectedNumeric !== null
+            && (int) $candidateNumeric > (int) $expectedNumeric;
+    }
+
+    private function positiveIntegerString(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        if ($normalized === '' || ! ctype_digit($normalized) || (int) $normalized <= 0) {
+            return null;
+        }
+
+        return $normalized;
     }
 
     /**

@@ -2702,7 +2702,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
     }
 
-    public function test_live_export_resyncs_stale_verified_binding_before_mutating_send_when_active_current_chat_exists(): void
+    public function test_live_export_resyncs_stale_verified_binding_when_old_and_new_active_chats_exist(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(
@@ -2731,6 +2731,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
                 return Http::response([
                     'result' => [
+                        [
+                            'CHAT_ID' => '19',
+                            'CONNECTOR_ID' => 'abrikosoff_telegram',
+                        ],
                         [
                             'CHAT_ID' => '30',
                             'CONNECTOR_ID' => 'abrikosoff_telegram',
