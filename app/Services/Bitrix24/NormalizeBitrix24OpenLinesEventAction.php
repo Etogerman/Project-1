@@ -96,6 +96,13 @@ class NormalizeBitrix24OpenLinesEventAction
                     data_get($entry, 'chat.id') ?? data_get($entry, 'chat.ID'),
                     'chat.id',
                 ),
+                sourceBitrixChatId: $this->nullableScalarString(
+                    data_get($entry, 'im.chat_id')
+                        ?? data_get($entry, 'im.CHAT_ID')
+                        ?? data_get($entry, 'im.chatId')
+                        ?? data_get($entry, 'IM.chat_id')
+                        ?? data_get($entry, 'IM.CHAT_ID')
+                ),
                 bitrixMessageId: $this->resolveBitrixMessageId($entry),
                 text: $this->requiredScalarString(
                     data_get($entry, 'message.text') ?? data_get($entry, 'message.TEXT') ?? data_get($entry, 'text'),
@@ -217,5 +224,12 @@ class NormalizeBitrix24OpenLinesEventAction
         }
 
         return trim((string) $value);
+    }
+
+    private function nullableScalarString(mixed $value): ?string
+    {
+        $normalized = $this->scalarString($value);
+
+        return $normalized === '' ? null : $normalized;
     }
 }

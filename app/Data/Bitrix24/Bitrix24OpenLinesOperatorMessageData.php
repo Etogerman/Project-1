@@ -12,6 +12,7 @@ final readonly class Bitrix24OpenLinesOperatorMessageData
         public string $connectorCode,
         public string $lineId,
         public string $chatId,
+        public ?string $sourceBitrixChatId,
         public string $bitrixMessageId,
         public string $text,
         public array $im,

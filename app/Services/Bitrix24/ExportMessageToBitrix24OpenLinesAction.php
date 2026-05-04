@@ -33,6 +33,7 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
+        private readonly ResolveCurrentBitrix24OpenLineChatAction $resolveCurrentOpenLineChatAction,
         private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
     ) {}
 
@@ -546,6 +547,7 @@ class ExportMessageToBitrix24OpenLinesAction
                     $route,
                     $connection,
                     $expectedResolvedBitrixChatId,
+                    $dialogBinding?->userCode,
                 );
             }
         } catch (Bitrix24OpenLineMutationGuardException $exception) {
@@ -591,15 +593,17 @@ class ExportMessageToBitrix24OpenLinesAction
         $resolvedBitrixChatId = $this->extractLegacySessionChatId($response->result);
 
         if ($expectedResolvedBitrixChatId !== null && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
-            throw new Bitrix24LiveExportTransportException(
-                sprintf(
-                    'Bitrix24 Open Lines verified binding legacy export returned unexpected chat id [%s], expected [%s].',
-                    $resolvedBitrixChatId ?? 'null',
-                    $expectedResolvedBitrixChatId,
-                ),
-                failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
-                failureUncertain: true,
-            );
+            if (! $this->syncVerifiedBindingToCurrentChatAfterMismatch($dialog, $route, $connection, $resolvedBitrixChatId)) {
+                throw new Bitrix24LiveExportTransportException(
+                    sprintf(
+                        'Bitrix24 Open Lines verified binding legacy export returned unexpected chat id [%s], expected [%s].',
+                        $resolvedBitrixChatId ?? 'null',
+                        $expectedResolvedBitrixChatId,
+                    ),
+                    failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                    failureUncertain: true,
+                );
+            }
         }
 
         return $this->completeSuccessfulExport(
@@ -618,8 +622,35 @@ class ExportMessageToBitrix24OpenLinesAction
             responsePayload: $responsePayload + [
                 'result' => $response->result,
                 'rest_method' => $response->restMethod,
+                'verified_binding_resynced_after_chat_mismatch' => $expectedResolvedBitrixChatId !== null
+                    && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId,
             ],
         );
+    }
+
+    private function syncVerifiedBindingToCurrentChatAfterMismatch(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        ?string $resolvedBitrixChatId,
+    ): bool {
+        if ($this->positiveIntegerString($resolvedBitrixChatId) === null) {
+            return false;
+        }
+
+        $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+
+        if ($currentChat === null || $currentChat->chatId !== $resolvedBitrixChatId) {
+            return false;
+        }
+
+        $dialog->forceFill([
+            'bitrix24_open_line_user_code_override' => $currentChat->userCode,
+            'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ])->save();
+
+        return true;
     }
 
     private function resolveExpectedLegacyFallbackChatId(
@@ -672,6 +703,21 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         return null;
+    }
+
+    private function positiveIntegerString(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        if ($normalized === '' || ! ctype_digit($normalized) || (int) $normalized <= 0) {
+            return null;
+        }
+
+        return $normalized;
     }
 
     private function shouldApplyLegacyFallbackSignature(Message $message): bool

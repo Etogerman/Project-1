@@ -104,22 +104,60 @@ class GuardBitrix24OpenLineMutationAction
         Bitrix24OpenLinesRouteData $route,
         Bitrix24Connection $connection,
         string $expectedResolvedBitrixChatId,
+        ?string $expectedUserCode = null,
     ): void {
         $activeChatRows = $this->lookupActiveChatRows($rootContact, $connection);
         $matchedConnectorId = null;
+        $sameConnectorActiveChatId = null;
 
         foreach ($activeChatRows as $chat) {
-            if ($this->extractChatId($chat) !== $expectedResolvedBitrixChatId) {
+            $chatId = $this->extractChatId($chat);
+            $connectorId = $this->extractConnectorId($chat);
+
+            if ($connectorId === $route->connectorCode && $chatId !== $expectedResolvedBitrixChatId) {
+                $sameConnectorActiveChatId = $chatId;
+
                 continue;
             }
 
-            $matchedConnectorId = $this->extractConnectorId($chat) ?? 'null';
+            if ($chatId !== $expectedResolvedBitrixChatId) {
+                continue;
+            }
+
+            $matchedConnectorId = $connectorId;
 
             if ($matchedConnectorId === $route->connectorCode) {
                 return;
             }
 
-            break;
+            if ($matchedConnectorId !== null) {
+                break;
+            }
+        }
+
+        if ($sameConnectorActiveChatId !== null) {
+            throw new Bitrix24OpenLineMutationGuardException(
+                sprintf(
+                    'Bitrix24 Open Lines verified binding preflight failed: expected chat id [%s] is not current for connector [%s]; active chat id [%s] was found.',
+                    $expectedResolvedBitrixChatId,
+                    $route->connectorCode,
+                    $sameConnectorActiveChatId,
+                ),
+                Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            );
+        }
+
+        if (
+            $expectedUserCode !== null
+            && $this->verifiedBindingDialogMatchesContact(
+                $rootContact,
+                $route,
+                $connection,
+                $expectedResolvedBitrixChatId,
+                $expectedUserCode,
+            )
+        ) {
+            return;
         }
 
         if ($matchedConnectorId !== null) {
@@ -143,6 +181,58 @@ class GuardBitrix24OpenLineMutationAction
             ),
             Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
         );
+    }
+
+    private function verifiedBindingDialogMatchesContact(
+        Contact $rootContact,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        string $expectedResolvedBitrixChatId,
+        string $expectedUserCode,
+    ): bool {
+        $binding = $this->resolveDialogBindingAction->parseUserCode($expectedUserCode);
+
+        if (
+            $binding === null
+            || $binding->connectorCode !== $route->connectorCode
+            || $binding->lineId !== $route->lineId
+        ) {
+            return false;
+        }
+
+        try {
+            $response = $this->bitrix24ApiClient->call(
+                'imopenlines.dialog.get',
+                ['USER_CODE' => $binding->userCode],
+                connection: $connection,
+                transportRetry: false,
+            );
+        } catch (Bitrix24ApiException $exception) {
+            throw new Bitrix24OpenLineMutationGuardException(
+                'Bitrix24 Open Lines verified binding dialog lookup failed before mutating export.',
+                Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+                false,
+                $exception,
+            );
+        }
+
+        if (! $response->successful || ! is_array($response->result)) {
+            if ($response->httpStatus !== null && $response->httpStatus >= 500) {
+                throw new Bitrix24OpenLineMutationGuardException(
+                    sprintf(
+                        'Bitrix24 Open Lines verified binding dialog lookup failed: %s',
+                        $response->errorMessage ?? 'Unknown error.',
+                    ),
+                    Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+                    false,
+                );
+            }
+
+            return false;
+        }
+
+        return $this->extractChatId($response->result) === $expectedResolvedBitrixChatId
+            && $this->chatBelongsToContact($response->result, (string) $rootContact->bitrix24_contact_id);
     }
 
     private function hasLegacyOpenLineExportHistory(Dialog $dialog): bool
@@ -364,5 +454,32 @@ class GuardBitrix24OpenLineMutationAction
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $chat
+     */
+    private function chatBelongsToContact(array $chat, string $bitrix24ContactId): bool
+    {
+        $entityData = $chat['ENTITY_DATA_2']
+            ?? $chat['entity_data_2']
+            ?? data_get($chat, 'chat.ENTITY_DATA_2')
+            ?? data_get($chat, 'chat.entity_data_2');
+
+        if (! is_scalar($entityData)) {
+            return false;
+        }
+
+        $parts = array_values(array_map('trim', explode('|', (string) $entityData)));
+
+        foreach ($parts as $index => $part) {
+            if (strtoupper($part) !== 'CONTACT') {
+                continue;
+            }
+
+            return ($parts[$index + 1] ?? null) === $bitrix24ContactId;
+        }
+
+        return false;
     }
 }
