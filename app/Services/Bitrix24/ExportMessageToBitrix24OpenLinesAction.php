@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Data\Bitrix24\Bitrix24CurrentOpenLineChatData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
@@ -542,13 +543,35 @@ class ExportMessageToBitrix24OpenLinesAction
             );
 
             if ($expectedResolvedBitrixChatId !== null) {
-                $this->guardOpenLineMutationAction->assertVerifiedBindingChatIsActiveForContact(
-                    $rootContact,
-                    $route,
-                    $connection,
-                    $expectedResolvedBitrixChatId,
-                    $dialogBinding?->userCode,
-                );
+                try {
+                    $this->guardOpenLineMutationAction->assertVerifiedBindingChatIsActiveForContact(
+                        $rootContact,
+                        $route,
+                        $connection,
+                        $expectedResolvedBitrixChatId,
+                        $dialogBinding?->userCode,
+                    );
+                } catch (Bitrix24OpenLineMutationGuardException $exception) {
+                    if (! $this->syncVerifiedBindingToCurrentChatBeforeSend($dialog, $route, $connection, $expectedResolvedBitrixChatId, $exception)) {
+                        throw $exception;
+                    }
+
+                    $dialog->refresh();
+                    $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
+                    $expectedResolvedBitrixChatId = $dialogBinding?->resolvedBitrixChatId;
+
+                    if ($expectedResolvedBitrixChatId === null) {
+                        throw $exception;
+                    }
+
+                    $this->guardOpenLineMutationAction->assertVerifiedBindingChatIsActiveForContact(
+                        $rootContact,
+                        $route,
+                        $connection,
+                        $expectedResolvedBitrixChatId,
+                        $dialogBinding?->userCode,
+                    );
+                }
             }
         } catch (Bitrix24OpenLineMutationGuardException $exception) {
             throw new Bitrix24LiveExportTransportException(
@@ -628,6 +651,53 @@ class ExportMessageToBitrix24OpenLinesAction
         );
     }
 
+    private function syncVerifiedBindingToCurrentChatBeforeSend(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        string $expectedResolvedBitrixChatId,
+        Bitrix24OpenLineMutationGuardException $exception,
+    ): bool {
+        if (! $this->isStaleVerifiedBindingGuardFailure($exception)) {
+            return false;
+        }
+
+        $activeChatId = $this->positiveIntegerString($exception->relatedChatId);
+
+        if ($activeChatId === null) {
+            return false;
+        }
+
+        try {
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+        } catch (Bitrix24ApiException $lookupException) {
+            throw new Bitrix24OpenLineMutationGuardException(
+                'Bitrix24 Open Lines verified binding current chat lookup failed before mutating export.',
+                Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+                false,
+                $lookupException,
+            );
+        }
+
+        if (
+            $currentChat === null
+            || $currentChat->chatId !== $activeChatId
+            || $currentChat->chatId === $expectedResolvedBitrixChatId
+        ) {
+            return false;
+        }
+
+        $this->syncVerifiedBindingToCurrentChat($dialog, $currentChat);
+
+        return true;
+    }
+
+    private function isStaleVerifiedBindingGuardFailure(Bitrix24OpenLineMutationGuardException $exception): bool
+    {
+        return $exception->failureCode === Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED
+            && $exception->relatedChatId !== null;
+    }
+
     private function syncVerifiedBindingToCurrentChatAfterMismatch(
         Dialog $dialog,
         Bitrix24OpenLinesRouteData $route,
@@ -638,19 +708,33 @@ class ExportMessageToBitrix24OpenLinesAction
             return false;
         }
 
-        $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+        try {
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+        } catch (Bitrix24ApiException $exception) {
+            throw new Bitrix24LiveExportTransportException(
+                'Bitrix24 Open Lines verified binding post-send lookup outcome is uncertain.',
+                failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                failureUncertain: true,
+                previous: $exception,
+            );
+        }
 
         if ($currentChat === null || $currentChat->chatId !== $resolvedBitrixChatId) {
             return false;
         }
 
+        $this->syncVerifiedBindingToCurrentChat($dialog, $currentChat);
+
+        return true;
+    }
+
+    private function syncVerifiedBindingToCurrentChat(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void
+    {
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $currentChat->userCode,
             'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
             'bitrix24_open_line_binding_verified_at' => now(),
         ])->save();
-
-        return true;
     }
 
     private function resolveExpectedLegacyFallbackChatId(

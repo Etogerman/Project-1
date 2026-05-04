@@ -144,6 +144,7 @@ class GuardBitrix24OpenLineMutationAction
                     $sameConnectorActiveChatId,
                 ),
                 Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+                relatedChatId: $sameConnectorActiveChatId,
             );
         }
 

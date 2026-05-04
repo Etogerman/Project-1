@@ -11,6 +11,7 @@ final class Bitrix24OpenLineMutationGuardException extends Bitrix24ApiException
         public readonly string $failureCode,
         public readonly bool $failureUncertain = false,
         ?Throwable $previous = null,
+        public readonly ?string $relatedChatId = null,
     ) {
         parent::__construct($message, 0, $previous);
     }
