@@ -65,6 +65,10 @@ class GuardBitrix24OpenLineMutationAction
             return;
         }
 
+        if ($this->canCreateControlledOpenLineForContact($rootContact)) {
+            return;
+        }
+
         throw new Bitrix24OpenLineMutationGuardException(
             sprintf(
                 'Bitrix24 Open Lines Telegram export is blocked: CONTACT [%s] already has Open Line history for connector [%s], line [%s], dialog [%s], but no active same-connector CRM chat. Verified binding is required before mutating export.',
@@ -75,6 +79,21 @@ class GuardBitrix24OpenLineMutationAction
             ),
             Bitrix24MessageExport::FAILURE_OPEN_LINE_HISTORY_REQUIRES_BINDING,
         );
+    }
+
+    private function canCreateControlledOpenLineForContact(Contact $rootContact): bool
+    {
+        $bitrix24ContactId = $rootContact->bitrix24_contact_id;
+
+        if (! is_scalar($bitrix24ContactId)) {
+            return false;
+        }
+
+        $normalized = trim((string) $bitrix24ContactId);
+
+        return $normalized !== ''
+            && ctype_digit($normalized)
+            && (int) $normalized > 0;
     }
 
     /**
