@@ -18,6 +18,7 @@
 | `APP_DEBUG` | `false` |
 | `APP_FAKER_LOCALE` | `ru_RU` |
 | `BITRIX24_PORTAL_DOMAIN` | `crm.alexlesley.biz` |
+| `BITRIX24_APP_NAME` | `Abrikosoff Connector` |
 | `APP_URL` | `https://project2.abrikosoff.ru` |
 | `BITRIX24_INSTALL_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/install` |
 | `BITRIX24_EVENTS_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/events` |
@@ -69,7 +70,11 @@ setup-runbook на staging или другом real integration target:
 
 | Key | Value |
 | --- | --- |
+| `APP_ENV` | `staging` |
+| `APP_DEBUG` | `false` |
+| `APP_FAKER_LOCALE` | `ru_RU` |
 | `BITRIX24_PORTAL_DOMAIN` | `stagecrm.fvds.ru` |
+| `BITRIX24_APP_NAME` | `Abrikosoff Connector` |
 | `BITRIX24_CLIENT_ID` | set in local `.env`, do not commit |
 | `BITRIX24_CLIENT_SECRET` | set in local `.env`, do not commit |
 | `BITRIX24_APP_CODE` | set in local `.env`, do not commit |
@@ -93,6 +98,9 @@ setup-runbook на staging или другом real integration target:
   - `/callbacks/bitrix24/openlines`
 - The current stable staging host is `project-1-staging-r4mo1y.laravel.cloud`.
 - Do not reuse the temporary `Abrikosoff Probe` source as a production `SOURCE_ID`.
+- Do not use obsolete `fake-*` connector placeholders for real staging or
+  production Open Lines. Current connector codes are `abrikosoff_telegram` and
+  `abrikosoff_max`.
 - Telegram and MAX must use different `connector_code` values.
 - Telegram and MAX must use different Open Lines.
 - Текущий подтверждённый Open Lines mapping фиксирован: Telegram `30`, MAX `31`.
