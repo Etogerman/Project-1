@@ -2552,9 +2552,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === 'legacy-user-5'
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Сообщение в старую ОЛ';
         });
-        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json'
-            && $request['CRM_ENTITY_TYPE'] === 'CONTACT'
-            && $request['ACTIVE_ONLY'] === 'Y');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
     }
 
     public function test_live_export_uses_verified_binding_when_active_lookup_is_empty_but_dialog_lookup_matches_contact(): void
@@ -2582,6 +2580,16 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::fake([
             'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
                 'result' => [],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => [
+                    'IM' => [
+                        [
+                            'VALUE' => 'imol|'.$userCode,
+                            'VALUE_TYPE' => 'IMOL',
+                        ],
+                    ],
+                ],
             ], 200),
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
@@ -2633,8 +2641,126 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
                 && ($payload['LINE'] ?? null) === 'line-telegram'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
-                && ($payload['MESSAGES'][0]['user']['id'] ?? null) === '19'
-                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Клиент пишет в актуальную ОЛ';
+            && ($payload['MESSAGES'][0]['user']['id'] ?? null) === '19'
+            && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Клиент пишет в актуальную ОЛ';
+        });
+    }
+
+    public function test_live_export_resyncs_stale_verified_binding_when_active_lookup_is_empty_but_current_history_has_newer_chat(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_TELEGRAM,
+            contactAttributes: [
+                'bitrix24_contact_id' => '9',
+            ],
+        );
+        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|23', $dialog->id);
+
+        $dialog->forceFill([
+            'bitrix24_open_line_user_code_override' => $oldUserCode,
+            'bitrix24_open_line_resolved_chat_id_override' => '19',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ])->save();
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Bitrix active lookup пустой, но история знает новую ОЛ',
+        ]);
+
+        Http::fake(function (Request $request) use ($oldUserCode, $newUserCode) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
+                return Http::response([
+                    'result' => [],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
+                return Http::response([
+                    'result' => [
+                        'IM' => [
+                            [
+                                'VALUE' => 'imol|'.$oldUserCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                            [
+                                'VALUE' => 'imol|'.$newUserCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                $userCode = (string) $request['USER_CODE'];
+                $chatId = match ($userCode) {
+                    $oldUserCode => '19',
+                    $newUserCode => '30',
+                    default => null,
+                };
+
+                if ($chatId === null) {
+                    return Http::response(['error' => 'NOT_FOUND'], 404);
+                }
+
+                return Http::response([
+                    'result' => [
+                        'id' => $chatId,
+                        'entity_id' => $userCode,
+                        'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return Http::response([
+                    'result' => [
+                        'DATA' => [
+                            'RESULT' => [
+                                [
+                                    'session' => [
+                                        'CHAT_ID' => '30',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame($newUserCode, $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('30', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => '30',
+            'failure_code' => null,
+            'failure_uncertain' => false,
+        ]);
+
+        Http::assertSent(function (Request $request) use ($dialog): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['user']['id'] ?? null) === '23'
+                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Bitrix active lookup пустой, но история знает новую ОЛ';
         });
     }
 
@@ -2826,7 +2952,130 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             return ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === '23'
-                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Bitrix уже показывает новую активную ОЛ';
+            && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Bitrix уже показывает новую активную ОЛ';
+        });
+    }
+
+    public function test_live_export_uses_current_verified_binding_when_active_lookup_returns_only_older_chat(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_TELEGRAM,
+            contactAttributes: [
+                'bitrix24_contact_id' => '9',
+            ],
+        );
+        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|23', $dialog->id);
+
+        $dialog->forceFill([
+            'bitrix24_open_line_user_code_override' => $newUserCode,
+            'bitrix24_open_line_resolved_chat_id_override' => '30',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ])->save();
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Bitrix active lookup вернул только старую ОЛ',
+        ]);
+
+        Http::fake(function (Request $request) use ($oldUserCode, $newUserCode) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
+                return Http::response([
+                    'result' => [
+                        [
+                            'CHAT_ID' => '19',
+                            'CONNECTOR_ID' => 'abrikosoff_telegram',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
+                return Http::response([
+                    'result' => [
+                        'IM' => [
+                            [
+                                'VALUE' => 'imol|'.$oldUserCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                            [
+                                'VALUE' => 'imol|'.$newUserCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                $userCode = (string) $request['USER_CODE'];
+                $chatId = match ($userCode) {
+                    $oldUserCode => '19',
+                    $newUserCode => '30',
+                    default => null,
+                };
+
+                if ($chatId === null) {
+                    return Http::response(['error' => 'NOT_FOUND'], 404);
+                }
+
+                return Http::response([
+                    'result' => [
+                        'id' => $chatId,
+                        'entity_id' => $userCode,
+                        'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return Http::response([
+                    'result' => [
+                        'DATA' => [
+                            'RESULT' => [
+                                [
+                                    'session' => [
+                                        'CHAT_ID' => '30',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame($newUserCode, $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('30', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => '30',
+            'failure_code' => null,
+            'failure_uncertain' => false,
+        ]);
+
+        Http::assertSent(function (Request $request) use ($dialog): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['user']['id'] ?? null) === '23'
+                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Bitrix active lookup вернул только старую ОЛ';
         });
     }
 
@@ -2878,6 +3127,13 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     'IM' => [],
                 ],
             ], 200),
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 23,
+                    'entity_id' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
+                ],
+            ], 200),
         ]);
 
         try {
@@ -2926,33 +3182,65 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'text' => 'Post-send lookup failed after mutating request',
         ]);
 
-        Http::fake([
-            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
-                'result' => [
-                    [
-                        'CHAT_ID' => '23',
-                        'CONNECTOR_ID' => 'abrikosoff_telegram',
+        $contactLookupCount = 0;
+
+        Http::fake(function (Request $request) use (&$contactLookupCount) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
+                return Http::response([
+                    'result' => [
+                        [
+                            'CHAT_ID' => '23',
+                            'CONNECTOR_ID' => 'abrikosoff_telegram',
+                        ],
                     ],
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
-                'result' => [
-                    'DATA' => [
-                        'RESULT' => [
-                            [
-                                'session' => [
-                                    'CHAT_ID' => '26',
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
+                $contactLookupCount++;
+
+                if ($contactLookupCount === 1) {
+                    return Http::response([
+                        'result' => [
+                            'IM' => [],
+                        ],
+                    ], 200);
+                }
+
+                return Http::response([
+                    'error' => 'TEMPORARY_ERROR',
+                    'error_description' => 'Contact lookup temporarily unavailable.',
+                ], 503);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                return Http::response([
+                    'result' => [
+                        'id' => 23,
+                        'entity_id' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                        'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return Http::response([
+                    'result' => [
+                        'DATA' => [
+                            'RESULT' => [
+                                [
+                                    'session' => [
+                                        'CHAT_ID' => '26',
+                                    ],
                                 ],
                             ],
                         ],
                     ],
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
-                'error' => 'TEMPORARY_ERROR',
-                'error_description' => 'Contact lookup temporarily unavailable.',
-            ], 503),
-        ]);
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
 
         try {
             app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);

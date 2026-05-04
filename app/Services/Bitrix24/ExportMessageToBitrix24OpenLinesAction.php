@@ -545,6 +545,7 @@ class ExportMessageToBitrix24OpenLinesAction
             if ($expectedResolvedBitrixChatId !== null) {
                 try {
                     $this->guardOpenLineMutationAction->assertVerifiedBindingChatIsActiveForContact(
+                        $dialog,
                         $rootContact,
                         $route,
                         $connection,
@@ -565,6 +566,7 @@ class ExportMessageToBitrix24OpenLinesAction
                     }
 
                     $this->guardOpenLineMutationAction->assertVerifiedBindingChatIsActiveForContact(
+                        $dialog,
                         $rootContact,
                         $route,
                         $connection,
