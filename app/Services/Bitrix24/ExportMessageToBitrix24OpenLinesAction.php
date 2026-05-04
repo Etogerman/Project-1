@@ -485,16 +485,9 @@ class ExportMessageToBitrix24OpenLinesAction
     private function shouldFallbackToLegacyManualReplyTransport(
         Bitrix24OpenLinesManualReplyExportException $exception,
     ): bool {
-        if ($exception->failureUncertain) {
-            return false;
-        }
-
-        return in_array($exception->failureCode, [
-            Bitrix24MessageExport::FAILURE_SESSION_OPEN_UNAVAILABLE,
-            Bitrix24MessageExport::FAILURE_SESSION_OPEN_FAILED,
-            Bitrix24MessageExport::FAILURE_CHAT_ACCESS_DENIED,
-            Bitrix24MessageExport::FAILURE_CHAT_USER_ADD_FAILED,
-        ], true);
+        // Falling back to imconnector.send.messages after the service-actor path
+        // already failed can create duplicate Bitrix24 IMOL users for one dialog.
+        return false;
     }
 
     /**
