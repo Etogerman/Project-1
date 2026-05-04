@@ -34,9 +34,9 @@
 | `BITRIX24_MAX_LINE_ID` | `31` |
 | `BITRIX24_TELEGRAM_CONNECTOR_CODE` | `abrikosoff_telegram` |
 | `BITRIX24_MAX_CONNECTOR_CODE` | `abrikosoff_max` |
-| `default_assigned_user_id` | `1` |
-| `default_deal_category_id` | `22` |
-| `default_deal_stage_id` | `C22:NEW` |
+| `BITRIX24_DEFAULT_ASSIGNED_USER_ID` | `1` |
+| `BITRIX24_DEFAULT_DEAL_CATEGORY_ID` | `22` |
+| `BITRIX24_DEFAULT_DEAL_STAGE_ID` | `C22:NEW` |
 
 `owner_profile_key = staging` в box package остаётся текущим Laravel
 `Bitrix24Profile.profile_key`; production определяется portal domain и callback
