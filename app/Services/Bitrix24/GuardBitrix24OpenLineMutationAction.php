@@ -109,10 +109,6 @@ class GuardBitrix24OpenLineMutationAction
         string $expectedResolvedBitrixChatId,
         ?string $expectedUserCode = null,
     ): void {
-        if ($route->platform !== Channel::PLATFORM_TELEGRAM) {
-            return;
-        }
-
         $activeChatRows = $this->lookupActiveChatRows($rootContact, $connection);
         $matchedConnectorId = null;
         $sameConnectorActiveChatId = null;
