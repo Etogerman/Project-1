@@ -51,7 +51,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 
-        $probePayload = $this->resolveRetryAfterSyncProbePayload($retryAfterSync, $rootContact->bitrix24_contact_id);
+        $probePayload = $this->resolveExplicitContactProbePayload($retryAfterSync, $rootContact->bitrix24_contact_id);
 
         return [
             'CONNECTOR' => $route->connectorCode,
@@ -187,16 +187,20 @@ class BuildBitrix24OpenLinesMessagePayloadAction
      *     message?: array<string, array<string, string>>
      * }
      */
-    private function resolveRetryAfterSyncProbePayload(bool $retryAfterSync, mixed $bitrix24ContactId): array
+    private function resolveExplicitContactProbePayload(bool $retryAfterSync, mixed $bitrix24ContactId): array
     {
-        if (! $retryAfterSync) {
+        $contactId = $this->nullableString($bitrix24ContactId);
+
+        if ($contactId === null || ! ctype_digit($contactId) || (int) $contactId <= 0) {
             return [];
         }
 
-        $contactId = $this->nullableString($bitrix24ContactId);
+        $messageParams = [
+            'crm_contact_id_probe' => $contactId,
+        ];
 
-        if ($contactId === null) {
-            return [];
+        if ($retryAfterSync) {
+            $messageParams['retry_after_sync_probe'] = 'Y';
         }
 
         return [
@@ -204,10 +208,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
                 'crm_contact_id' => $contactId,
             ],
             'message' => [
-                'params' => [
-                    'crm_contact_id_probe' => $contactId,
-                    'retry_after_sync_probe' => 'Y',
-                ],
+                'params' => $messageParams,
             ],
         ];
     }
