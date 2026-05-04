@@ -164,10 +164,10 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|6',
+            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
-        $this->assertSame('8', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
 
         $this->assertDatabaseMissing('messages', [
@@ -212,7 +212,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                 'LINE' => 'line-telegram',
                 'DATA' => [[
                     'im' => [
-                        'chat_id' => 8,
+                        'chat_id' => 23,
                         'message_id' => 615,
                     ],
                     'chat' => [
@@ -232,10 +232,10 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|6',
+            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|15',
             $dialog->bitrix24_open_line_user_code_override,
         );
-        $this->assertSame('8', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
 
         $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
