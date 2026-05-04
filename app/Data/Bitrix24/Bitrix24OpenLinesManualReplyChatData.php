@@ -10,5 +10,7 @@ final readonly class Bitrix24OpenLinesManualReplyChatData
         public bool $trustedReusableSource = false,
         public ?string $crmEntityType = null,
         public ?string $crmEntityId = null,
+        public ?int $ownerUserId = null,
+        public bool $reactivatedFromInactiveBinding = false,
     ) {}
 }
