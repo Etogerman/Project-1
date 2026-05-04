@@ -8,6 +8,7 @@ use App\Data\Bitrix24\Bitrix24RestResponseData;
 use App\Models\Bitrix24Connection;
 use App\Models\Contact;
 use App\Models\Dialog;
+use App\Services\Contacts\ResolveRootContactAction;
 
 class ResolveCurrentBitrix24OpenLineChatAction
 {
@@ -15,6 +16,7 @@ class ResolveCurrentBitrix24OpenLineChatAction
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
         private readonly ResolveBitrix24LiveChatKeyAction $resolveLiveChatKeyAction,
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
+        private readonly ResolveRootContactAction $resolveRootContactAction,
     ) {}
 
     public function handle(
@@ -30,7 +32,8 @@ class ResolveCurrentBitrix24OpenLineChatAction
             return null;
         }
 
-        $bitrix24ContactId = $this->positiveIntegerString($contact->bitrix24_contact_id);
+        $rootContact = $this->resolveRootContactAction->handle($contact);
+        $bitrix24ContactId = $this->positiveIntegerString($rootContact->bitrix24_contact_id);
 
         if ($bitrix24ContactId === null) {
             return null;
