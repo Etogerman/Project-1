@@ -2,6 +2,8 @@
 
 namespace Database\Factories;
 
+use App\Models\Channel;
+use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -20,12 +22,20 @@ class DialogFactory extends Factory
     {
         return [
             'current_contact_identity_id' => ContactIdentity::factory(),
-            'contact_id' => fn (array $attributes): int => ContactIdentity::query()
-                ->findOrFail($attributes['current_contact_identity_id'])
-                ->contact_id,
-            'channel_id' => fn (array $attributes): int => ContactIdentity::query()
-                ->findOrFail($attributes['current_contact_identity_id'])
-                ->channel_id,
+            'contact_id' => function (array $attributes): mixed {
+                $identityId = $attributes['current_contact_identity_id'] ?? null;
+
+                return is_int($identityId) || is_string($identityId)
+                    ? ContactIdentity::query()->findOrFail($identityId)->contact_id
+                    : Contact::factory();
+            },
+            'channel_id' => function (array $attributes): mixed {
+                $identityId = $attributes['current_contact_identity_id'] ?? null;
+
+                return is_int($identityId) || is_string($identityId)
+                    ? ContactIdentity::query()->findOrFail($identityId)->channel_id
+                    : Channel::factory();
+            },
             'stage' => null,
             'manual_reply_dismissed_source_message_id' => null,
             'bot_subscription_status' => null,
@@ -45,11 +55,21 @@ class DialogFactory extends Factory
     public function withoutCurrentIdentity(): static
     {
         return $this->state(function (array $attributes): array {
-            $identity = ContactIdentity::query()->findOrFail($attributes['current_contact_identity_id']);
+            $identityId = $attributes['current_contact_identity_id'] ?? null;
+
+            if (is_int($identityId) || is_string($identityId)) {
+                $identity = ContactIdentity::query()->findOrFail($identityId);
+
+                return [
+                    'contact_id' => $identity->contact_id,
+                    'channel_id' => $identity->channel_id,
+                    'current_contact_identity_id' => null,
+                ];
+            }
 
             return [
-                'contact_id' => $identity->contact_id,
-                'channel_id' => $identity->channel_id,
+                'contact_id' => $attributes['contact_id'] ?? Contact::factory(),
+                'channel_id' => $attributes['channel_id'] ?? Channel::factory(),
                 'current_contact_identity_id' => null,
             ];
         });

@@ -22,6 +22,18 @@ return [
             'component' => 'abrikosoff:imconnector.telegram',
             'line_id' => '32',
             'line_name' => 'ABR Телеграм бот <bot-name>',
+            'lines' => [
+                '32' => [
+                    'line_name' => 'ABR Телеграм бот <bot-name>',
+                    'owner_profile_key' => 'staging',
+                    'owner_callback_base_url' => 'https://project2.abrikosoff.ru',
+                ],
+                '33' => [
+                    'line_name' => 'ABR Телеграм бот <second-bot-name>',
+                    'owner_profile_key' => 'staging',
+                    'owner_callback_base_url' => 'https://project2.abrikosoff.ru',
+                ],
+            ],
             'color' => '#27A7E7',
             'label' => 'TG',
         ],
@@ -30,6 +42,13 @@ return [
             'component' => 'abrikosoff:imconnector.max',
             'line_id' => '31',
             'line_name' => 'ABR MAX бот <bot-name>',
+            'lines' => [
+                '31' => [
+                    'line_name' => 'ABR MAX бот <bot-name>',
+                    'owner_profile_key' => 'staging',
+                    'owner_callback_base_url' => 'https://project2.abrikosoff.ru',
+                ],
+            ],
             'color' => '#7B4DFF',
             'label' => 'MX',
         ],

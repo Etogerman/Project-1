@@ -73,14 +73,12 @@ final class Runtime
             return null;
         }
 
-        $meta = self::connectorMeta($connectorCode);
-
         return [
             'connector_id' => $connectorCode,
             'id' => $lineId,
             'url' => self::laravelOpenlinesCallbackUrl(),
             'url_im' => self::laravelOpenlinesCallbackUrl(),
-            'name' => (string) ($meta['line_name'] ?? $meta['name'] ?? $connectorCode),
+            'name' => self::lineName($connectorCode, $lineId),
             'picture' => [
                 'url' => self::svgDataUri($connectorCode, false),
             ],
@@ -240,6 +238,10 @@ final class Runtime
             return;
         }
 
+        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+            return;
+        }
+
         $status = \Bitrix\ImConnector\Status::getInstance($connectorCode, $lineId);
         $status->setActive(true);
         $status->setConnection(true);
@@ -249,9 +251,14 @@ final class Runtime
         self::clearLineCache($lineId);
     }
 
-    public static function lineName(string $connectorCode): string
+    public static function lineName(string $connectorCode, ?string $lineId = null): string
     {
         $meta = self::connectorMeta($connectorCode);
+        $lineMeta = self::connectorLineMeta($connectorCode, (string) $lineId);
+
+        if (is_array($lineMeta) && isset($lineMeta['line_name'])) {
+            return (string) $lineMeta['line_name'];
+        }
 
         return (string) ($meta['line_name'] ?? $meta['name'] ?? $connectorCode);
     }
@@ -265,7 +272,11 @@ final class Runtime
     {
         [$connectorCode, $lineId, $data] = self::extractImconnectorMessageEvent($args);
 
-        if ($connectorCode === '' || ! self::supportsConnector($connectorCode)) {
+        if ($connectorCode === '' || $lineId === '' || ! self::supportsConnector($connectorCode)) {
+            return;
+        }
+
+        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
             return;
         }
 
@@ -320,7 +331,7 @@ final class Runtime
     private static function resolveConnectorByLineId(string $lineId): ?string
     {
         foreach (self::connectors() as $connectorCode => $meta) {
-            if (trim((string) ($meta['line_id'] ?? '')) === trim($lineId)) {
+            if (self::connectorHasLine($meta, $lineId)) {
                 return (string) $connectorCode;
             }
         }
@@ -371,6 +382,55 @@ final class Runtime
         }
 
         return $meta;
+    }
+
+    /**
+     * @param  array<string, mixed>  $meta
+     */
+    private static function connectorHasLine(array $meta, string $lineId): bool
+    {
+        return self::connectorLineMetaFromMeta($meta, $lineId) !== null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private static function connectorLineMeta(string $connectorCode, string $lineId): ?array
+    {
+        if ($lineId === '') {
+            return null;
+        }
+
+        return self::connectorLineMetaFromMeta(self::connectorMeta($connectorCode), $lineId);
+    }
+
+    /**
+     * @param  array<string, mixed>  $meta
+     * @return array<string, mixed>|null
+     */
+    private static function connectorLineMetaFromMeta(array $meta, string $lineId): ?array
+    {
+        $lineId = trim($lineId);
+
+        if ($lineId === '') {
+            return null;
+        }
+
+        $lines = self::normalizeArray($meta['lines'] ?? []);
+
+        foreach ($lines as $configuredLineId => $lineMeta) {
+            if (trim((string) $configuredLineId) !== $lineId) {
+                continue;
+            }
+
+            return is_array($lineMeta) ? $lineMeta : [];
+        }
+
+        if (trim((string) ($meta['line_id'] ?? '')) === $lineId) {
+            return $meta;
+        }
+
+        return null;
     }
 
     /**
@@ -662,10 +722,10 @@ final class Runtime
         }
 
         if ($lineId === '') {
-            $lineId = trim((string) self::cfg(sprintf('connectors.%s.line_id', $connectorCode), ''));
+            return null;
         }
 
-        if ($lineId === '') {
+        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
             return null;
         }
 

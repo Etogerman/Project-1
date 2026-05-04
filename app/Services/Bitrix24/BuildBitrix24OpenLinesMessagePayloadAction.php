@@ -17,6 +17,8 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         private readonly CollectBitrix24ContactPhonesAction $collectBitrix24ContactPhonesAction,
         private readonly ResolveBitrix24LiveChatKeyAction $resolveBitrix24LiveChatKeyAction,
         private readonly MessageChronology $messageChronology,
+        private readonly BuildBitrix24OpenLinesExternalUserIdAction $buildExternalUserIdAction,
+        private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
     ) {}
 
     /**
@@ -27,8 +29,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         Bitrix24OpenLinesRouteData $route,
         bool $retryAfterSync = false,
         bool $applyLegacyFallbackSignature = false,
-    ): array
-    {
+    ): array {
         $message->loadMissing([
             'dialog.channel',
             'dialog.currentContactIdentity',
@@ -43,12 +44,13 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $identity = $dialog->currentContactIdentity ?? $message->contactIdentity;
         $timestamp = $this->messageChronology->resolveSortAt($message);
         $text = $this->resolveMessageText($message, $channel, $applyLegacyFallbackSignature);
-        $chatKey = $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
-        $userId = $this->resolveUserId($channel, $identity?->external_user_id, $rootContact->id);
+        $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
+        $chatKey = $dialogBinding?->connectorChatId ?? $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
+        $userId = $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 
-        $probePayload = $this->resolveRetryAfterSyncProbePayload($retryAfterSync, $rootContact->bitrix24_contact_id);
+        $probePayload = $this->resolveExplicitContactProbePayload($retryAfterSync, $rootContact->bitrix24_contact_id);
 
         return [
             'CONNECTOR' => $route->connectorCode,
@@ -156,15 +158,6 @@ class BuildBitrix24OpenLinesMessagePayloadAction
             && data_get($message->raw_payload, 'update_type') === 'bot_started';
     }
 
-    private function resolveUserId(Channel $channel, ?string $externalUserId, int $rootContactId): string
-    {
-        if (filled($externalUserId)) {
-            return $channel->platform.':'.$externalUserId;
-        }
-
-        return 'contact:'.$rootContactId;
-    }
-
     /**
      * @return array<string, string>
      */
@@ -193,16 +186,20 @@ class BuildBitrix24OpenLinesMessagePayloadAction
      *     message?: array<string, array<string, string>>
      * }
      */
-    private function resolveRetryAfterSyncProbePayload(bool $retryAfterSync, mixed $bitrix24ContactId): array
+    private function resolveExplicitContactProbePayload(bool $retryAfterSync, mixed $bitrix24ContactId): array
     {
-        if (! $retryAfterSync) {
+        $contactId = $this->nullableString($bitrix24ContactId);
+
+        if ($contactId === null || ! ctype_digit($contactId) || (int) $contactId <= 0) {
             return [];
         }
 
-        $contactId = $this->nullableString($bitrix24ContactId);
+        $messageParams = [
+            'crm_contact_id_probe' => $contactId,
+        ];
 
-        if ($contactId === null) {
-            return [];
+        if ($retryAfterSync) {
+            $messageParams['retry_after_sync_probe'] = 'Y';
         }
 
         return [
@@ -210,10 +207,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
                 'crm_contact_id' => $contactId,
             ],
             'message' => [
-                'params' => [
-                    'crm_contact_id_probe' => $contactId,
-                    'retry_after_sync_probe' => 'Y',
-                ],
+                'params' => $messageParams,
             ],
         ];
     }

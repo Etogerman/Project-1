@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
-use App\Models\ChannelActivityLog;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -28,6 +27,17 @@ class ChannelWebhookRegistrationTest extends TestCase
 
     public function test_admin_can_register_telegram_webhook_from_filament_resource(): void
     {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
                 ->push([
@@ -41,18 +51,13 @@ class ChannelWebhookRegistrationTest extends TestCase
                         'first_name' => 'Staging Bot',
                         'username' => 'stagin_g_1_bot',
                     ],
+                ], 200)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'url' => "https://connector.example/webhooks/telegram/{$channel->id}",
+                    ],
                 ], 200),
-        ]);
-
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'credentials' => [
-                'token' => 'telegram-token',
-            ],
         ]);
 
         Livewire::actingAs($admin)
@@ -67,6 +72,8 @@ class ChannelWebhookRegistrationTest extends TestCase
         $this->assertSame('stagin_g_1_bot', $channel->bot_username);
         $this->assertSame('Staging Bot', $channel->bot_name);
         $this->assertSame('https://t.me/stagin_g_1_bot', $channel->getBotProfileUrl());
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $channel->webhook_status);
 
         Http::assertSent(function ($request) use ($channel): bool {
             return $request->url() === 'https://api.telegram.org/bottelegram-token/setWebhook'
@@ -76,6 +83,7 @@ class ChannelWebhookRegistrationTest extends TestCase
         });
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getMe');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getWebhookInfo');
 
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
@@ -98,6 +106,13 @@ class ChannelWebhookRegistrationTest extends TestCase
                 ], 200)
                 ->push([
                     'subscription' => [],
+                ], 200)
+                ->push([
+                    'subscriptions' => [
+                        [
+                            'url' => 'https://connector.example/webhooks/max/1',
+                        ],
+                    ],
                 ], 200),
             'https://platform-api.max.ru/subscriptions?url=https%3A%2F%2Fold.example%2Fwebhook' => Http::response([], 200),
             'https://platform-api.max.ru/me' => Http::response([
@@ -114,6 +129,7 @@ class ChannelWebhookRegistrationTest extends TestCase
             'is_admin' => true,
         ]);
         $channel = Channel::factory()->create([
+            'id' => 1,
             'platform' => Channel::PLATFORM_MAX,
             'credentials' => [
                 'token' => 'max-token',
@@ -132,6 +148,10 @@ class ChannelWebhookRegistrationTest extends TestCase
         $this->assertSame('max_stage_bot', $channel->bot_username);
         $this->assertSame('Стейджинг-1', $channel->bot_name);
         $this->assertSame('https://max.ru/max_stage_bot', $channel->getBotProfileUrl());
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::WEBHOOK_STATUS_INSTALLED, $channel->webhook_status);
+        $this->assertSame("https://connector.example/webhooks/max/{$channel->id}", $channel->expected_webhook_url);
+        $this->assertSame("https://connector.example/webhooks/max/{$channel->id}", $channel->provider_webhook_url);
 
         Http::assertSent(function ($request) use ($channel): bool {
             if ($request->method() !== 'POST' || $request->url() !== 'https://platform-api.max.ru/subscriptions') {

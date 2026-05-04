@@ -111,31 +111,32 @@ class ResolveContactDisplayNameActionTest extends TestCase
             'last_name' => null,
             'name' => null,
         ]);
-        $channel = Channel::factory()->create();
+        $staleChannel = Channel::factory()->create();
+        $freshChannel = Channel::factory()->create();
         $staleIdentity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
+            'channel_id' => $staleChannel->id,
+            'platform' => $staleChannel->platform,
             'external_user_id' => 'stale-user',
             'external_username' => 'stale_user',
         ]);
         $freshIdentity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
+            'channel_id' => $freshChannel->id,
+            'platform' => $freshChannel->platform,
             'external_user_id' => 'fresh-user',
             'external_username' => 'fresh_user',
         ]);
 
         Dialog::factory()->create([
             'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
+            'channel_id' => $staleChannel->id,
             'current_contact_identity_id' => $staleIdentity->id,
             'last_message_at' => now()->subDay(),
         ]);
         Dialog::factory()->create([
             'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
+            'channel_id' => $freshChannel->id,
             'current_contact_identity_id' => $freshIdentity->id,
             'last_message_at' => now(),
         ]);
@@ -150,32 +151,33 @@ class ResolveContactDisplayNameActionTest extends TestCase
             'last_name' => null,
             'name' => null,
         ]);
-        $channel = Channel::factory()->create();
+        $globalChannel = Channel::factory()->create();
+        $dialogChannel = Channel::factory()->create();
         $globalIdentity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
+            'channel_id' => $globalChannel->id,
+            'platform' => $globalChannel->platform,
             'external_user_id' => 'global-user',
             'display_name' => 'Глобальное имя',
         ]);
         $dialogIdentity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'platform' => $channel->platform,
+            'channel_id' => $dialogChannel->id,
+            'platform' => $dialogChannel->platform,
             'external_user_id' => 'dialog-user',
             'display_name' => 'Имя текущего диалога',
         ]);
 
         Dialog::factory()->create([
             'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
+            'channel_id' => $globalChannel->id,
             'current_contact_identity_id' => $globalIdentity->id,
             'last_message_at' => now(),
         ]);
 
         $dialog = Dialog::factory()->create([
             'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
+            'channel_id' => $dialogChannel->id,
             'current_contact_identity_id' => $dialogIdentity->id,
             'last_message_at' => now()->subMinute(),
         ]);

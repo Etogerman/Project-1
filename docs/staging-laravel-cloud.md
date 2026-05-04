@@ -45,6 +45,7 @@ Use Laravel Cloud for staging:
 - `APP_NAME="Abrikosoff Connector"`
 - `APP_ENV=staging`
 - `APP_DEBUG=false`
+- `APP_FAKER_LOCALE=ru_RU`
 - `APP_URL=https://<generated-staging-domain>`
 - `APP_KEY=<new random application key>`
 - `DB_CONNECTION=pgsql`
@@ -55,9 +56,9 @@ Use Laravel Cloud for staging:
 
 Database host, port, database, username, and password should come from the attached managed PostgreSQL service.
 
-`.env.staging.example` не является полным integration baseline для real Bitrix24 acceptance.
-Для real Bitrix24 integration flow staging должен дополнительно нести текущую runtime-required env matrix из
-`config/bitrix24.php`, `config/services.php` и readiness-check из
+`.env.staging.example` фиксирует текущие не-секретные staging defaults для
+real Bitrix24 integration flow. Секреты и portal-specific tokens всё равно
+нужно задавать вручную в Laravel Cloud и сверять через readiness-check из
 [BuildBitrix24SetupReportAction.php](/Users/abrikosov/Documents/Проект-1/app/Services/Bitrix24/BuildBitrix24SetupReportAction.php).
 
 ## Обязательные env для real Bitrix24 integration flow
@@ -66,11 +67,12 @@ Database host, port, database, username, and password should come from the attac
 Bitrix24 integration target:
 
 - `YANDEX_GEOCODER_API_KEY=<real key>`
-- `BITRIX24_PORTAL_DOMAIN=crm.alexlesley.biz`
+- `BITRIX24_PORTAL_DOMAIN=stagecrm.fvds.ru`
+- `BITRIX24_APP_NAME="Abrikosoff Connector"`
 - `BITRIX24_CLIENT_ID=<real client id>`
 - `BITRIX24_CLIENT_SECRET=<real client secret>`
 - `BITRIX24_APP_CODE=<real Bitrix24 application code>`
-- `BITRIX24_AUTH_SERVER_URL=<real trusted OAuth host>`
+- `BITRIX24_AUTH_SERVER_URL=https://oauth.bitrix.info`
 - `BITRIX24_INSTALL_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/install`
 - `BITRIX24_EVENTS_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/events`
 - `BITRIX24_OPENLINES_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/openlines`

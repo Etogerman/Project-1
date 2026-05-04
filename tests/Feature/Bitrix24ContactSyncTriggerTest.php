@@ -174,6 +174,11 @@ class Bitrix24ContactSyncTriggerTest extends TestCase
         ]);
 
         $updated = app(UpdateContactProfileAction::class)->handle($contact, [
+            'last_name' => null,
+            'gender' => null,
+            'birth_date' => null,
+            'age_years' => null,
+            'age_range' => '24_29',
             'city' => 'Москва',
             'country' => 'Россия',
             'region' => 'Московская область',

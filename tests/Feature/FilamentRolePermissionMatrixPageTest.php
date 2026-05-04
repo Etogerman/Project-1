@@ -31,7 +31,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
         ]);
 
         $this->actingAs($superadmin)
-            ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
+            ->get(RolePermissionMatrix::getUrl(panel: 'admin'))
             ->assertOk()
             ->assertSee('Права доступа')
             ->assertSee('Раздел и действия')
@@ -47,6 +47,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->assertSee('Администратор')
             ->assertSee('Сотрудник')
             ->assertSee('Создание и редактирование')
+            ->assertSee('Настройка маршрутов')
             ->assertSee('Создание, редактирование и архивация')
             ->assertSee('Сохранить')
             ->assertSee('Отмена')
@@ -93,7 +94,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->update(['granted' => false]);
 
         $this->actingAs($superadmin)
-            ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
+            ->get(RolePermissionMatrix::getUrl(panel: 'admin'))
             ->assertOk()
             ->assertSee('data-state-key="contacts.view:employee:disabled"', false);
     }
@@ -160,7 +161,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
         ]);
 
         $this->actingAs($employee)
-            ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
+            ->get(RolePermissionMatrix::getUrl(panel: 'admin'))
             ->assertForbidden();
     }
 
@@ -173,7 +174,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
+            ->get(RolePermissionMatrix::getUrl(panel: 'admin'))
             ->assertForbidden();
     }
 
@@ -194,7 +195,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'users.edit', true);
 
         $this->actingAs($employee)
-            ->get(RolePermissionMatrix::getUrl(panel: Filament::getPanel('admin')))
+            ->get(RolePermissionMatrix::getUrl(panel: 'admin'))
             ->assertForbidden();
     }
 

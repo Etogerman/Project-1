@@ -9,6 +9,7 @@ use App\Jobs\ProcessDeferredParameterAutoReplyJob;
 use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\AutoReplyRule;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
@@ -63,8 +64,9 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
             ], 200),
         ]);
 
-        $this->makeActiveConnection();
+        $connection = $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
+        $this->makeOpenLineRoute($connection, $channel);
 
         $storedResult = app(StoreInboundMessageAction::class)->handle(
             $channel,
@@ -153,8 +155,9 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
             ], 200),
         ]);
 
-        $this->makeActiveConnection();
+        $connection = $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
+        $this->makeOpenLineRoute($connection, $channel);
 
         $storedResult = app(StoreInboundMessageAction::class)->handle(
             $channel,
@@ -170,10 +173,11 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         $dialog = Dialog::query()->findOrFail($storedResult->message->dialog_id);
         $contact = Contact::query()->findOrFail($storedResult->message->contact_id);
 
-        $this->qualifyContactForSync($contact);
         $dialog->forceFill([
             'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
         ])->save();
+
+        $this->qualifyContactForSync($contact);
 
         AutoReplyRule::factory()->forChannel($channel)->create([
             'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
@@ -244,7 +248,9 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
 
         config()->set('bitrix24.features.fake_happy_path_enabled', true);
 
+        $connection = $this->makeActiveConnection();
         $channel = $this->makeMaxChannel();
+        $this->makeOpenLineRoute($connection, $channel);
 
         $storedResult = app(StoreInboundMessageAction::class)->handle(
             $channel,
@@ -262,7 +268,6 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         $dialog = Dialog::query()->findOrFail($storedResult->message->dialog_id);
         $contact = Contact::query()->findOrFail($storedResult->message->contact_id);
 
-        $this->qualifyContactForSync($contact);
         $dialog->forceFill([
             'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
         ])->save();
@@ -290,6 +295,7 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         $storedResult->message->refresh();
         $this->assertNotNull($storedResult->message->auto_reply_sent_at);
 
+        $this->qualifyContactForSync($contact);
         $this->runSyncJob($contact);
 
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($storedResult): bool {
@@ -316,6 +322,7 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         $outbound = Message::query()
             ->where('reply_to_message_id', $storedResult->message->id)
             ->where('message_kind', Message::KIND_OUTBOUND_AUTO_REPLY)
+            ->where('text', 'MAX delayed fake reply')
             ->firstOrFail();
 
         $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_ACTIVE, $dialog->bitrix24_live_status);
@@ -361,6 +368,23 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         ], $overrides));
     }
 
+    private function makeOpenLineRoute(Bitrix24Connection $connection, Channel $channel): Bitrix24OpenLineRoute
+    {
+        $profile = $connection->profile()->firstOrFail();
+
+        return Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => $profile->openLinesConnectorCodeForPlatform($channel->platform),
+            'line_id' => $profile->openLinesLineIdForPlatform($channel->platform),
+            'source_id' => $profile->sourceIdForPlatform($channel->platform),
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+    }
+
     private function makeInboundUserMessage(
         Channel $channel,
         string $providerEventKey,
@@ -389,6 +413,7 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
                 ],
             ],
             receivedAt: $receivedAt,
+            messageParameter: $messageParameter,
         );
     }
 

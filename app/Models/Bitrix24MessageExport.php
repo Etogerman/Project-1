@@ -40,6 +40,12 @@ class Bitrix24MessageExport extends Model
 
     public const FAILURE_MESSAGE_SEND_FAILED = 'message_send_failed';
 
+    public const FAILURE_VERIFIED_BINDING_CRM_MESSAGE_ADD_UNAVAILABLE = 'verified_binding_crm_message_add_unavailable';
+
+    public const FAILURE_OPEN_LINE_HISTORY_REQUIRES_BINDING = 'openline_history_requires_binding';
+
+    public const FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED = 'openline_guard_lookup_failed';
+
     public const FAILURE_FAILED_UNCERTAIN = 'failed_uncertain';
 
     /**

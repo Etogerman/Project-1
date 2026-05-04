@@ -10,6 +10,29 @@ Bitrix24 staging-порталу через отдельный `dev-*` profile.
 2. не описывает production setup;
 3. фиксирует практический bootstrap-путь для разработчика.
 
+## Роль локального Bitrix24-контура в проверках
+
+Локальный Abrikosoff Connector может быть подключён к Bitrix24 staging-порталу
+через отдельный `dev-*` profile. Такой контур считается первым местом для
+воспроизведения и проверки интеграционных ошибок до выхода в общий `staging`.
+
+Для изменений в Open Lines, connector registration, callbacks, ручных ответах,
+live export, contact/deal sync и других Bitrix24 runtime-path действует порядок:
+
+1. сначала воспроизвести проблему локально на `dev-*` profile;
+2. затем исправить код локально;
+3. затем подтвердить локально, что проблема больше не воспроизводится;
+4. только после этого идти в общий `staging` как в подтверждающий smoke-контур.
+
+Если локальный контур не готов, не подключён к Bitrix24 или не может проверить
+конкретный побочный эффект, это нужно явно назвать как blocker перед переходом
+в `staging`.
+
+Для мутирующих проверок, например отправки сообщений в Open Lines или проверки
+методов, которые могут создать новую ОЛ, сначала используйте отдельный тестовый
+контакт, тестовый диалог и test-only линию текущего `dev-*` profile. Не
+используйте общий `staging`-контакт как первую попытку воспроизведения.
+
 ## Что нужно заранее
 
 Перед началом убедитесь, что у вас есть:
@@ -21,7 +44,7 @@ Bitrix24 staging-порталу через отдельный `dev-*` profile.
 
 По умолчанию staging-портал проекта:
 
-- `portal_domain`: `crm.alexlesley.biz`
+- `portal_domain`: `stagecrm.fvds.ru`
 
 ## Важные правила
 
@@ -59,7 +82,8 @@ Bitrix24 staging-порталу через отдельный `dev-*` profile.
 сохраните:
 
 1. `client_id`
-2. `application_code`
+2. `client_secret`
+3. `application_code`
 
 Не переиспользуйте приложение от `staging` или другого разработчика.
 
@@ -72,6 +96,13 @@ Bitrix24 staging-порталу через отдельный `dev-*` profile.
 php artisan bitrix24:dev-profile-bootstrap dev-german-main https://german-main.trycloudflare.com \
   --client-id=ВАШ_CLIENT_ID \
   --application-code=ВАШ_APPLICATION_CODE
+```
+
+В локальном `.env` для OAuth также должен быть задан:
+
+```env
+BITRIX24_CLIENT_SECRET=ВАШ_CLIENT_SECRET
+BITRIX24_AUTH_SERVER_URL=https://oauth.bitrix.info
 ```
 
 Команда напечатает:

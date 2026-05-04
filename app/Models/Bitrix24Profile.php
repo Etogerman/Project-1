@@ -67,6 +67,11 @@ class Bitrix24Profile extends Model
         return $this->hasMany(Bitrix24Connection::class, 'profile_id');
     }
 
+    public function openLineRoutes(): HasMany
+    {
+        return $this->hasMany(Bitrix24OpenLineRoute::class);
+    }
+
     public function installCallbackUrl(): string
     {
         return $this->buildCallbackUrl(self::INSTALL_CALLBACK_PATH);

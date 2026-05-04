@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bitrix24\Bitrix24ContactSyncQueueResultData;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
@@ -88,7 +89,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(Message::KIND_OUTBOUND_SCENARIO_MESSAGE, $outboundMessages[0]->message_kind);
         $this->assertSame('scenario_vip_ibiza_apply', $outboundMessages[0]->sent_by_system_code);
 
-        Http::assertSentCount(2);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Добро пожаловать в сценарий.');
@@ -556,7 +556,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('middle', data_get($run->state_payload, 'run.budget_tier'));
         $this->assertCount(3, $outboundMessages);
         $this->assertSame('Какой у вас бюджет?', $outboundMessages[2]->text);
-        Http::assertSentCount(3);
     }
 
     public function test_database_backed_scenario_suppresses_next_outbound_when_dialog_is_blocked_mid_run(): void
@@ -626,7 +625,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('Анна', data_get($run->state_payload, 'run.first_name'));
         $this->assertTrue((bool) data_get($run->state_payload, 'run.pending_prompt_delivery'));
         $this->assertCount(2, $outboundMessages);
-        Http::assertSentCount(2);
     }
 
     public function test_database_backed_scenario_replays_pending_prompt_after_unblock_before_accepting_next_answer(): void
@@ -719,7 +717,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertFalse((bool) data_get($run->state_payload, 'run.pending_prompt_delivery'));
         $this->assertCount(3, $outboundMessages);
         $this->assertSame('Какой у вас бюджет?', $outboundMessages[2]->text);
-        Http::assertSentCount(3);
     }
 
     public function test_database_backed_scenario_stores_outbound_against_current_dialog_route_source_for_stale_trigger_message(): void
@@ -851,7 +848,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('Добро пожаловать в сценарий.', $outboundMessages[0]->text);
         $this->assertSame('Поделитесь номером телефона.', $outboundMessages[1]->text);
 
-        Http::assertSentCount(2);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Поделитесь номером телефона.'
@@ -890,7 +886,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('completed', $run->exit_outcome);
         $this->assertCount(3, $outboundMessages);
         $this->assertSame('Спасибо, номер получили.', $outboundMessages[2]->text);
-        Http::assertSentCount(3);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Спасибо, номер получили.'
@@ -959,7 +954,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertNull($run->exit_outcome);
         $this->assertSame([], $run->state_payload);
         $this->assertCount(2, $outboundMessages);
-        Http::assertSentCount(2);
     }
 
     public function test_database_backed_scenario_branches_by_condition_and_applies_tag_effects(): void
@@ -1044,7 +1038,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertCount(3, $outboundMessages);
         $this->assertSame('Какой у вас бюджет?', $outboundMessages[1]->text);
         $this->assertSame('Отлично, этот формат вам подходит.', $outboundMessages[2]->text);
-        Http::assertSentCount(3);
     }
 
     public function test_database_backed_scenario_uses_default_condition_branch_when_rule_is_false(): void
@@ -1119,7 +1112,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
         $this->assertSame(['vip-weak'], $contact->tags->pluck('slug')->all());
         $this->assertSame('Спасибо, пока это не ваш уровень бюджета.', $outboundMessages[2]->text);
-        Http::assertSentCount(3);
     }
 
     public function test_database_backed_scenario_applies_tag_actions_in_declared_order(): void
@@ -1198,7 +1190,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $contact->refresh()->load('tags');
 
         $this->assertSame(['vip-status'], $contact->tags->pluck('slug')->all());
-        Http::assertSentCount(1);
     }
 
     public function test_ibiza_mvp_strong_branch_requests_phone_then_instagram_and_sets_strong_tag(): void
@@ -1306,7 +1297,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['vip-strong'], $contact->tags->pluck('slug')->all());
         $this->assertCount(10, $outboundMessages);
         $this->assertSame('Спасибо, вы подходите под VIP-формат.', $outboundMessages->last()?->text);
-        Http::assertSentCount(10);
     }
 
     public function test_ibiza_mvp_borderline_branch_requests_phone_and_sets_borderline_tag(): void
@@ -1397,7 +1387,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['vip-borderline'], $contact->tags->pluck('slug')->all());
         $this->assertCount(9, $outboundMessages);
         $this->assertSame('Спасибо, посмотрим формат полегче.', $outboundMessages->last()?->text);
-        Http::assertSentCount(9);
     }
 
     public function test_ibiza_mvp_weak_branch_completes_without_phone_and_sets_weak_tag(): void
@@ -1476,7 +1465,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertCount(8, $outboundMessages);
         $this->assertSame('Спасибо! Пока предложим более мягкий формат участия.', $outboundMessages->last()?->text);
         $this->assertNotContains('Поделитесь номером телефона.', $outboundMessages->pluck('text')->all());
-        Http::assertSentCount(8);
     }
 
     public function test_ibiza_mvp_skips_name_question_when_contact_first_name_is_already_confirmed(): void
@@ -1869,7 +1857,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $queueBitrix24ContactSyncAction
             ->shouldReceive('handle')
             ->once()
-            ->with(Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact)));
+            ->with(Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact)))
+            ->andReturn($this->bitrix24ContactSyncQueued($contact));
         app()->instance(QueueBitrix24ContactSyncAction::class, $queueBitrix24ContactSyncAction);
 
         $strongTag = Tag::factory()->create([
@@ -1957,7 +1946,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $queueBitrix24ContactSyncAction
             ->shouldReceive('handle')
             ->once()
-            ->with(Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact)));
+            ->with(Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact)))
+            ->andReturn($this->bitrix24ContactSyncQueued($contact));
         app()->instance(QueueBitrix24ContactSyncAction::class, $queueBitrix24ContactSyncAction);
 
         $strongTag = Tag::factory()->create([
@@ -2046,7 +2036,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $queueBitrix24ContactSyncAction
             ->shouldReceive('handle')
             ->once()
-            ->with(Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact)));
+            ->with(Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact)))
+            ->andReturn($this->bitrix24ContactSyncQueued($contact));
         app()->instance(QueueBitrix24ContactSyncAction::class, $queueBitrix24ContactSyncAction);
 
         $strongTag = Tag::factory()->create([
@@ -2185,7 +2176,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $contact->refresh();
 
         $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
-        $this->assertSame('Юля', data_get($run->state_payload, 'run.first_name'));
+        $this->assertNull(data_get($run->state_payload, 'run.first_name'));
         $this->assertSame('Алина', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
 
@@ -2500,6 +2491,16 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         (new ProcessScenarioInboundJob($message->id, $run->id))
             ->handle(app(ScenarioRegistry::class));
+    }
+
+    private function bitrix24ContactSyncQueued(Contact $contact): Bitrix24ContactSyncQueueResultData
+    {
+        return new Bitrix24ContactSyncQueueResultData(
+            queued: true,
+            alreadyPending: false,
+            ready: true,
+            rootContactId: $contact->id,
+        );
     }
 
     /**

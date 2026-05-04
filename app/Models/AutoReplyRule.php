@@ -2,11 +2,11 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Schema;
@@ -343,9 +343,9 @@ class AutoReplyRule extends Model
             ? $this->channel
             : Channel::query()->find($this->channel_id);
 
-        if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_TELEGRAM) {
+        if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_TELEGRAM || ! $channel->isBotConnection()) {
             throw ValidationException::withMessages([
-                'telegram_button_type' => 'Кнопка "Поделиться номером телефона" доступна только для Telegram-каналов.',
+                'telegram_button_type' => 'Кнопка "Поделиться номером телефона" доступна только для Telegram bot-каналов.',
             ]);
         }
     }
@@ -394,7 +394,7 @@ class AutoReplyRule extends Model
         }
 
         $buttonType = match ($channel->platform) {
-            Channel::PLATFORM_TELEGRAM => $this->telegram_button_type === self::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE
+            Channel::PLATFORM_TELEGRAM => $channel->isBotConnection() && $this->telegram_button_type === self::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE
                 ? 'share_contact'
                 : null,
             Channel::PLATFORM_MAX => $this->max_button_type === self::MAX_BUTTON_TYPE_REQUEST_PHONE

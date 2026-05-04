@@ -113,6 +113,7 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
             'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
                 'result' => [
                     'CODE' => 'local.app.code',
+                    'NAME' => 'Герман-4',
                 ],
             ]),
         ]);
@@ -135,6 +136,7 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
         $this->assertSame($profile->id, $connection->profile_id);
         $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
         $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
+        $this->assertSame('Герман-4', $connection->application_name);
         $this->assertSame('access-token-1', $connection->access_token_encrypted);
         $this->assertSame('refresh-token-1', $connection->refresh_token_encrypted);
         $this->assertSame(['crm', 'im'], $connection->scope);
@@ -158,6 +160,7 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
 
         $this->assertSame(1, Bitrix24Connection::query()->count());
         $connection->refresh();
+        $this->assertSame('Герман-4', $connection->application_name);
         $this->assertSame('access-token-2', $connection->access_token_encrypted);
         $this->assertSame('refresh-token-2', $connection->refresh_token_encrypted);
         $this->assertSame(hash('sha256', 'install-callback-token'), $connection->application_token_hash);
@@ -174,6 +177,11 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
             'https://crm.alexlesley.biz/rest/app.info.json' => Http::response([
                 'result' => [
                     'CODE' => 'local.app.code',
+                    'LANG' => [
+                        'ru' => [
+                            'NAME' => 'Герман-4 из языка',
+                        ],
+                    ],
                 ],
             ]),
         ]);
@@ -193,6 +201,7 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
         $this->assertSame($profile->id, $connection->profile_id);
         $this->assertSame('crm.alexlesley.biz', $connection->portal_domain);
         $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
+        $this->assertSame('Герман-4 из языка', $connection->application_name);
         $this->assertSame('access-token', $connection->access_token_encrypted);
         $this->assertSame('refresh-token', $connection->refresh_token_encrypted);
     }

@@ -33,7 +33,6 @@ class ResolveDialogRouteSourceActionTest extends TestCase
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
-            'external_chat_id' => null,
         ]);
 
         DB::table('channels')

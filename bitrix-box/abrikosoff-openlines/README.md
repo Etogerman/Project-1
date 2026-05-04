@@ -91,6 +91,23 @@ require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/include/abrikosoff_
 - `portal_domain`
 - `openlines_callback_url`
 
+Текущий production handoff:
+
+- `portal_domain = crm.alexlesley.biz`
+- `openlines_callback_url = https://project2.abrikosoff.ru/callbacks/bitrix24/openlines`
+- `owner_profile_key = staging`
+- `owner_callback_base_url = https://project2.abrikosoff.ru`
+
+`owner_profile_key = staging` — это существующий Laravel `Bitrix24Profile.profile_key`,
+а не признак staging-окружения. Production-контур отделяется через
+`portal_domain = crm.alexlesley.biz` и production callback base URL.
+
+Перед production deploy Laravel runtime должен иметь hash этого
+`application_token` в одном из env:
+
+- `BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASH`
+- `BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASHES`
+
 И зафиксировать line metadata:
 
 - `abrikosoff_telegram.line_id = 32`

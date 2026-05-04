@@ -9,7 +9,7 @@ class ChannelWebhookUrlGenerator
 {
     public function for(Channel $channel): string
     {
-        $baseUrl = rtrim((string) config('app.url'), '/');
+        $baseUrl = $this->baseUrl();
 
         if ($baseUrl === '') {
             throw new InvalidArgumentException('Не задан APP_URL для генерации webhook URL.');
@@ -22,6 +22,11 @@ class ChannelWebhookUrlGenerator
         };
 
         return $baseUrl.$path;
+    }
+
+    protected function baseUrl(): string
+    {
+        return rtrim((string) config('app.url'), '/');
     }
 
     public function ensureHttps(Channel $channel): string

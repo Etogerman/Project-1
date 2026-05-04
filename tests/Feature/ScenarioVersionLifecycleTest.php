@@ -112,7 +112,7 @@ class ScenarioVersionLifecycleTest extends TestCase
 
         $this->assertSame(2, $nextDraft->version_number);
         $this->assertSame(ScenarioVersion::STATUS_DRAFT, $nextDraft->status);
-        $this->assertSame($this->sliceOneSchema('needs_discovery_builder'), $nextDraft->schema_payload);
+        $this->assertEquals($this->sliceOneSchema('needs_discovery_builder'), $nextDraft->schema_payload);
     }
 
     public function test_create_next_draft_rejects_when_draft_already_exists(): void

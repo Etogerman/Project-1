@@ -14,6 +14,8 @@ final readonly class DialogRouteStatusData
 
     public const CODE_MISSING_TOKEN = 'missing_token';
 
+    public const CODE_CHANNEL_NOT_CONNECTED = 'channel_not_connected';
+
     public const CODE_MISSING_CHAT_ID = 'missing_chat_id';
 
     public const CODE_MISSING_ROUTE_SOURCE = 'missing_route_source';

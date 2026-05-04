@@ -15,6 +15,7 @@ use App\Services\Dialogs\UpdateDialogStageAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -45,6 +46,7 @@ class DialogStageStepCTest extends TestCase
             'current_contact_identity_id' => $identity->id,
             'external_chat_id' => 'stage-chat-1',
             'stage' => Dialog::STAGE_PHONE_RECEIVED,
+            'phone_confirmed_at' => $lastMessageAt,
             'last_message_at' => $lastMessageAt,
             'last_outbound_at' => $lastOutboundAt,
         ]);
@@ -252,6 +254,11 @@ class DialogStageStepCTest extends TestCase
             'is_active' => true,
             'is_admin' => false,
         ]);
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'dialogs.edit')
+            ->update(['granted' => false]);
+
         $channel = Channel::factory()->create();
         $contact = Contact::factory()->create();
         $identity = ContactIdentity::factory()->create([

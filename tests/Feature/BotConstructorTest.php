@@ -58,7 +58,7 @@ class BotConstructorTest extends TestCase
 
         $this->actingAs($employee)
             ->get(BotConstructor::getUrl())
-            ->assertForbidden();
+            ->assertRedirect('/admin/login');
     }
 
     public function test_admin_can_create_and_save_green_start_block(): void
@@ -228,10 +228,15 @@ class BotConstructorTest extends TestCase
             ->where('id', $channel->id)
             ->update(['credentials' => 'broken-encrypted-value']);
 
-        $this->actingAs($admin)
-            ->get(BotConstructor::getUrl())
-            ->assertOk()
-            ->assertSee('Ошибка настроек');
+        $component = Livewire::actingAs($admin)
+            ->test(BotConstructor::class);
+
+        $options = $component->instance()->channelOptions();
+
+        $this->assertCount(1, $options);
+        $this->assertSame('Ошибка настроек', $options[0]['status']);
+        $this->assertStringContainsString('Ошибка настроек', $options[0]['label']);
+        $this->assertFalse($options[0]['is_ready']);
 
         $this->assertFalse($channel->fresh()->isReadyForConstructorAutoReplies());
     }

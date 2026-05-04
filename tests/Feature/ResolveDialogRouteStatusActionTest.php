@@ -39,6 +39,57 @@ class ResolveDialogRouteStatusActionTest extends TestCase
         $this->assertTrue(app(CanSendThroughDialogAction::class)->handle($dialog));
     }
 
+    public function test_resolve_dialog_route_status_marks_disconnected_telegram_channel(): void
+    {
+        $dialog = $this->createDialog(
+            channelAttributes: [
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'credentials' => ['token' => 'telegram-token'],
+                'connection_status' => Channel::CONNECTION_STATUS_NOT_CONNECTED,
+                'webhook_status' => Channel::WEBHOOK_STATUS_NOT_INSTALLED,
+                'connection_checked_at' => now(),
+                'connection_error_message' => 'Webhook установлен не на эту админку',
+            ],
+            dialogAttributes: [
+                'external_chat_id' => 'telegram-disconnected-chat',
+            ],
+        );
+
+        $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog);
+
+        $this->assertSame(DialogRouteStatusData::CODE_CHANNEL_NOT_CONNECTED, $status->code);
+        $this->assertSame('Канал не подключен', $status->label);
+        $this->assertSame('danger', $status->tone);
+        $this->assertFalse($status->isSendable);
+        $this->assertSame('Webhook установлен не на эту админку', $status->blockedReason);
+        $this->assertFalse(app(CanSendThroughDialogAction::class)->handle($dialog));
+    }
+
+    public function test_resolve_dialog_route_status_keeps_stale_successful_telegram_check_sendable(): void
+    {
+        $dialog = $this->createDialog(
+            channelAttributes: [
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'credentials' => ['token' => 'telegram-token'],
+                'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+                'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+                'connection_checked_at' => now()->subMinutes(3),
+                'connection_error_message' => null,
+            ],
+            dialogAttributes: [
+                'external_chat_id' => 'telegram-stale-chat',
+            ],
+        );
+
+        $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog);
+
+        $this->assertSame(DialogRouteStatusData::CODE_READY, $status->code);
+        $this->assertSame('Маршрут готов', $status->label);
+        $this->assertTrue($status->isSendable);
+        $this->assertNull($status->blockedReason);
+        $this->assertTrue(app(CanSendThroughDialogAction::class)->handle($dialog));
+    }
+
     public function test_resolve_dialog_route_status_marks_missing_telegram_chat_id(): void
     {
         $dialog = $this->createDialog(
@@ -325,6 +376,12 @@ class ResolveDialogRouteStatusActionTest extends TestCase
             'credentials' => ['token' => 'default-token'],
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'is_active' => true,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now(),
+            'connection_error_message' => null,
+            'provider_webhook_url' => null,
+            'expected_webhook_url' => null,
         ], $channelAttributes));
         $identity = ContactIdentity::factory()->create(array_merge([
             'contact_id' => $contact->id,

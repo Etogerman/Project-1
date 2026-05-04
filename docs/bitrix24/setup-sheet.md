@@ -10,14 +10,50 @@
 3. используется как короткий reference перед staging/integration проверками и
    ручными setup-операциями.
 
-## Frozen constants
+## Production handoff values
 
 | Key | Value |
 | --- | --- |
-| `portal_domain` | `crm.alexlesley.biz` |
-| `default_assigned_user_id` | `1` |
-| `default_deal_category_id` | `22` |
-| `default_deal_stage_id` | `C22:NEW` |
+| `APP_ENV` | `production` |
+| `APP_DEBUG` | `false` |
+| `APP_FAKER_LOCALE` | `ru_RU` |
+| `BITRIX24_PORTAL_DOMAIN` | `crm.alexlesley.biz` |
+| `BITRIX24_APP_NAME` | `Abrikosoff Connector` |
+| `BITRIX24_CLIENT_ID` | required, from production Bitrix24 app |
+| `BITRIX24_CLIENT_SECRET` | required, from production Bitrix24 app |
+| `BITRIX24_APP_CODE` | required, from production Bitrix24 app |
+| `BITRIX24_AUTH_SERVER_URL` | `https://oauth.bitrix.info` |
+| `APP_URL` | `https://project2.abrikosoff.ru` |
+| `BITRIX24_INSTALL_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/install` |
+| `BITRIX24_EVENTS_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/events` |
+| `BITRIX24_OPENLINES_CALLBACK_URL` | `https://project2.abrikosoff.ru/callbacks/bitrix24/openlines` |
+| `BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASH` | required, from current Bitrix box `application_token` |
+| `BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASHES` | optional multi-token replacement for the single hash |
+| `BITRIX24_FAKE_HAPPY_PATH_ENABLED` | `false` |
+| `BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED` | `false` |
+| `BITRIX24_REVERSE_SYNC_ENABLED` | `false` |
+| `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_ENABLED` | `false` |
+| `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_DELAY_SECONDS` | `90` |
+| `BITRIX24_TELEGRAM_LINE_ID` | `32` |
+| `BITRIX24_MAX_LINE_ID` | `31` |
+| `BITRIX24_TELEGRAM_CONNECTOR_CODE` | `abrikosoff_telegram` |
+| `BITRIX24_MAX_CONNECTOR_CODE` | `abrikosoff_max` |
+| `BITRIX24_DEFAULT_ASSIGNED_USER_ID` | `1` |
+| `BITRIX24_DEFAULT_DEAL_CATEGORY_ID` | `22` |
+| `BITRIX24_DEFAULT_DEAL_STAGE_ID` | `C22:NEW` |
+| `BITRIX24_NAME_SOURCE_AUTOMATIC_ID` | `7178` |
+| `BITRIX24_NAME_SOURCE_SELF_REPORTED_ID` | `7179` |
+| `BITRIX24_NAME_SOURCE_TRAINING_VERIFIED_ID` | `7180` |
+| `BITRIX24_GENDER_MALE_ID` | `4653` |
+| `BITRIX24_GENDER_FEMALE_ID` | `4655` |
+| `BITRIX24_GENDER_UNKNOWN_ID` | `5815` |
+
+`owner_profile_key = staging` в box package остаётся текущим Laravel
+`Bitrix24Profile.profile_key`; production определяется portal domain и callback
+base URL, а не этим именем profile.
+
+Перед production deploy эти значения нужно сверить в Laravel Cloud Production
+и в коробочном `config.php`; одного наличия строк в репозитории недостаточно.
 
 ## Existing Bitrix24 contact fields
 
@@ -42,17 +78,22 @@
 | Alternate last name | `UF_CRM_ABRIKOSOFF_ALT_LAST_NAME` |
 | Name conflict flag | `UF_CRM_ABRIKOSOFF_NAME_CONFLICT` |
 
-## Подтверждённые интеграционные значения
+## Staging integration values
 
 Заполните их в `.env` или deployment environment перед использованием этого
 setup-runbook на staging или другом real integration target:
 
 | Key | Value |
 | --- | --- |
+| `APP_ENV` | `staging` |
+| `APP_DEBUG` | `false` |
+| `APP_FAKER_LOCALE` | `ru_RU` |
+| `BITRIX24_PORTAL_DOMAIN` | `stagecrm.fvds.ru` |
+| `BITRIX24_APP_NAME` | `Abrikosoff Connector` |
 | `BITRIX24_CLIENT_ID` | set in local `.env`, do not commit |
 | `BITRIX24_CLIENT_SECRET` | set in local `.env`, do not commit |
 | `BITRIX24_APP_CODE` | set in local `.env`, do not commit |
-| `BITRIX24_AUTH_SERVER_URL` | set in local `.env`, do not commit |
+| `BITRIX24_AUTH_SERVER_URL` | `https://oauth.bitrix.info` |
 | `BITRIX24_INSTALL_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/install` |
 | `BITRIX24_EVENTS_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/events` |
 | `BITRIX24_OPENLINES_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/openlines` |
@@ -62,6 +103,10 @@ setup-runbook на staging или другом real integration target:
 | `BITRIX24_MAX_LINE_ID` | `31` |
 | `BITRIX24_TELEGRAM_CONNECTOR_CODE` | `abrikosoff_telegram` |
 | `BITRIX24_MAX_CONNECTOR_CODE` | `abrikosoff_max` |
+| `BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED` | `false` |
+| `BITRIX24_REVERSE_SYNC_ENABLED` | `false` |
+| `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_ENABLED` | `false` |
+| `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_DELAY_SECONDS` | `90` |
 
 ## Important rules
 
@@ -72,6 +117,9 @@ setup-runbook на staging или другом real integration target:
   - `/callbacks/bitrix24/openlines`
 - The current stable staging host is `project-1-staging-r4mo1y.laravel.cloud`.
 - Do not reuse the temporary `Abrikosoff Probe` source as a production `SOURCE_ID`.
+- Do not use obsolete `fake-*` connector placeholders for real staging or
+  production Open Lines. Current connector codes are `abrikosoff_telegram` and
+  `abrikosoff_max`.
 - Telegram and MAX must use different `connector_code` values.
 - Telegram and MAX must use different Open Lines.
 - Текущий подтверждённый Open Lines mapping фиксирован: Telegram `30`, MAX `31`.

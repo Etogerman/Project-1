@@ -58,6 +58,13 @@ return [
         'max_line_id' => env('BITRIX24_MAX_LINE_ID'),
         'telegram_connector_code' => env('BITRIX24_TELEGRAM_CONNECTOR_CODE'),
         'max_connector_code' => env('BITRIX24_MAX_CONNECTOR_CODE'),
+        'runtime_application_token_hashes' => array_values(array_filter(array_map(
+            static fn (string $hash): string => trim($hash),
+            explode(',', (string) env(
+                'BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASHES',
+                env('BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASH', ''),
+            )),
+        ))),
         'service_user_id' => (int) env('BITRIX24_OPENLINES_SERVICE_USER_ID', 0),
         'session_finish_event_names' => [
             'OnSessionFinish',

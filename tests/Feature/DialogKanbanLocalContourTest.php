@@ -92,7 +92,6 @@ class DialogKanbanLocalContourTest extends TestCase
             'is_active' => true,
             'is_admin' => false,
         ]);
-        $assignee->givePermissionTo('contacts.assign');
 
         Livewire::withQueryParams([
             'channel' => (string) $channel->id,
@@ -111,7 +110,6 @@ class DialogKanbanLocalContourTest extends TestCase
     public function test_kanban_card_view_link_contains_back_to_filtered_slice(): void
     {
         $admin = $this->createAdmin();
-        $channel = Channel::factory()->create();
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Срез канбана',
             'stage' => Dialog::STAGE_NEW_DIALOG,
@@ -119,13 +117,13 @@ class DialogKanbanLocalContourTest extends TestCase
 
         $response = $this->actingAs($admin)->get(
             DialogResource::getUrl('kanban').'?'.http_build_query([
-                'channel' => (string) $channel->id,
+                'channel' => (string) $dialog->channel_id,
                 'route' => 'ready',
             ]),
         );
 
         $expectedBackTo = DialogResource::getUrl('kanban').'?'.http_build_query([
-            'channel' => (string) $channel->id,
+            'channel' => (string) $dialog->channel_id,
             'route' => 'ready',
         ]);
         $expectedViewUrl = DialogResource::getUrl('view', ['record' => $dialog]).'?'.http_build_query([
@@ -155,7 +153,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ]))
             ->assertOk()
             ->assertSee('Вернуться в канбан')
-            ->assertSee($backTo, false);
+            ->assertSee($backTo);
     }
 
     public function test_dialog_resource_navigation_url_remembers_last_kanban_slice(): void
@@ -175,7 +173,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->get($expectedUrl)
             ->assertOk();
 
-        $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
+        $this->assertSameUrlIgnoringQueryOrder($expectedUrl, DialogResource::getNavigationUrl());
     }
 
     public function test_dialog_resource_navigation_url_is_remembered_on_initial_table_get(): void
@@ -198,7 +196,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->get($expectedUrl)
             ->assertOk();
 
-        $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
+        $this->assertSameUrlIgnoringQueryOrder($expectedUrl, DialogResource::getNavigationUrl());
     }
 
     public function test_kanban_filters_can_be_reset_to_base_slice(): void
@@ -262,7 +260,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->get($expectedUrl)
             ->assertOk();
 
-        $this->assertSame($expectedUrl, DialogResource::getNavigationUrl());
+        $this->assertSameUrlIgnoringQueryOrder($expectedUrl, DialogResource::getNavigationUrl());
     }
 
     public function test_dialog_resource_navigation_url_updates_after_table_filter_is_removed(): void
@@ -446,6 +444,35 @@ class DialogKanbanLocalContourTest extends TestCase
         ]);
     }
 
+    private function assertSameUrlIgnoringQueryOrder(string $expectedUrl, string $actualUrl): void
+    {
+        $this->assertSame(parse_url($expectedUrl, PHP_URL_SCHEME), parse_url($actualUrl, PHP_URL_SCHEME));
+        $this->assertSame(parse_url($expectedUrl, PHP_URL_HOST), parse_url($actualUrl, PHP_URL_HOST));
+        $this->assertSame(parse_url($expectedUrl, PHP_URL_PORT), parse_url($actualUrl, PHP_URL_PORT));
+        $this->assertSame(parse_url($expectedUrl, PHP_URL_PATH), parse_url($actualUrl, PHP_URL_PATH));
+
+        parse_str((string) parse_url($expectedUrl, PHP_URL_QUERY), $expectedQuery);
+        parse_str((string) parse_url($actualUrl, PHP_URL_QUERY), $actualQuery);
+        $this->sortQueryParameters($expectedQuery);
+        $this->sortQueryParameters($actualQuery);
+
+        $this->assertSame($expectedQuery, $actualQuery);
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     */
+    private function sortQueryParameters(array &$query): void
+    {
+        ksort($query);
+
+        foreach ($query as &$value) {
+            if (is_array($value)) {
+                $this->sortQueryParameters($value);
+            }
+        }
+    }
+
     /**
      * @param  array{
      *     contactName?:string,
@@ -464,6 +491,7 @@ class DialogKanbanLocalContourTest extends TestCase
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
+            'display_name' => $overrides['contactName'] ?? 'Контакт канбана',
             'external_username' => 'kanban_user_'.$contact->id,
         ]);
         $lastMessageAt = $overrides['lastMessageAt'] ?? now()->subMinute();
