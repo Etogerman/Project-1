@@ -79,7 +79,7 @@ class ResolveCurrentBitrix24OpenLineChatAction
 
         usort(
             $candidates,
-            static fn (array $left, array $right): int => (int) $right['chat_id'] <=> (int) $left['chat_id'],
+            static fn (array $left, array $right): int => (int) $left['chat_id'] <=> (int) $right['chat_id'],
         );
 
         $current = $candidates[0];

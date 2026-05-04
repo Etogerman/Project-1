@@ -535,6 +535,16 @@ class ExportMessageToBitrix24OpenLinesAction
         $rootContact = Contact::query()->findOrFail($rootContactId);
 
         try {
+            if (
+                $dialogBinding === null
+                && $this->hasLegacyOpenLineExportHistory($dialog)
+                && $this->syncMissingBindingToCurrentChatBeforeSend($dialog, $route, $connection)
+            ) {
+                $dialog->refresh();
+                $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
+                $expectedResolvedBitrixChatId = $dialogBinding?->resolvedBitrixChatId;
+            }
+
             $this->guardOpenLineMutationAction->handle(
                 $dialog,
                 $rootContact,
@@ -653,6 +663,31 @@ class ExportMessageToBitrix24OpenLinesAction
         );
     }
 
+    private function syncMissingBindingToCurrentChatBeforeSend(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+    ): bool {
+        try {
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+        } catch (Bitrix24ApiException $exception) {
+            throw new Bitrix24OpenLineMutationGuardException(
+                'Bitrix24 Open Lines missing binding current chat lookup failed before mutating export.',
+                Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+                false,
+                $exception,
+            );
+        }
+
+        if (! $currentChat instanceof Bitrix24CurrentOpenLineChatData) {
+            return false;
+        }
+
+        $this->syncVerifiedBindingToCurrentChat($dialog, $currentChat);
+
+        return true;
+    }
+
     private function syncVerifiedBindingToCurrentChatBeforeSend(
         Dialog $dialog,
         Bitrix24OpenLinesRouteData $route,
@@ -737,6 +772,20 @@ class ExportMessageToBitrix24OpenLinesAction
             'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
             'bitrix24_open_line_binding_verified_at' => now(),
         ])->save();
+    }
+
+    private function hasLegacyOpenLineExportHistory(Dialog $dialog): bool
+    {
+        return Bitrix24MessageExport::query()
+            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
+            ->where('messages.dialog_id', $dialog->id)
+            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
+            ->where(function ($query): void {
+                $query->where('bitrix24_message_exports.transport_method', Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES)
+                    ->orWhereNull('bitrix24_message_exports.transport_method');
+            })
+            ->exists();
     }
 
     private function resolveExpectedLegacyFallbackChatId(

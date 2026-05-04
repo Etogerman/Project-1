@@ -46,8 +46,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $text = $this->resolveMessageText($message, $channel, $applyLegacyFallbackSignature);
         $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
         $chatKey = $dialogBinding?->connectorChatId ?? $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
-        $userId = $dialogBinding?->connectorUserId
-            ?? $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
+        $userId = $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 
