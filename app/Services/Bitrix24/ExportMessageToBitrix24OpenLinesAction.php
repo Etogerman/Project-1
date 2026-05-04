@@ -747,15 +747,6 @@ class ExportMessageToBitrix24OpenLinesAction
 
         try {
             $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
-
-            if ($currentChat?->chatId !== $resolvedBitrixChatId) {
-                $currentChat = $this->resolveCurrentOpenLineChatAction->handleMatchingChatId(
-                    $dialog,
-                    $route,
-                    $connection,
-                    $resolvedBitrixChatId,
-                );
-            }
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24LiveExportTransportException(
                 'Bitrix24 Open Lines verified binding post-send lookup outcome is uncertain.',

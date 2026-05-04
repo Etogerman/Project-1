@@ -6,7 +6,6 @@ use App\Data\Bitrix24\Bitrix24CurrentOpenLineChatData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Data\Bitrix24\Bitrix24RestResponseData;
 use App\Models\Bitrix24Connection;
-use App\Models\Bitrix24MessageExport;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Services\Contacts\ResolveRootContactAction;
@@ -29,21 +28,6 @@ class ResolveCurrentBitrix24OpenLineChatAction
 
         if ($candidates === []) {
             return null;
-        }
-
-        // Multiple IMOL rows can point to the same Abrikosoff dialog; prefer the
-        // chat Bitrix24 actually selected for the latest successful legacy send.
-        $preferredExportedChatId = $this->latestSuccessfulLegacyExportChatId($dialog, $candidates);
-
-        if ($preferredExportedChatId !== null) {
-            foreach ($candidates as $candidate) {
-                if ($candidate['chat_id'] === $preferredExportedChatId) {
-                    return new Bitrix24CurrentOpenLineChatData(
-                        userCode: $candidate['user_code'],
-                        chatId: $candidate['chat_id'],
-                    );
-                }
-            }
         }
 
         usort(
@@ -143,37 +127,6 @@ class ResolveCurrentBitrix24OpenLineChatAction
         }
 
         return $candidates;
-    }
-
-    /**
-     * @param  list<array{chat_id: string, user_code: string}>  $candidates
-     */
-    private function latestSuccessfulLegacyExportChatId(Dialog $dialog, array $candidates): ?string
-    {
-        $candidateChatIds = array_values(array_unique(array_map(
-            static fn (array $candidate): string => $candidate['chat_id'],
-            $candidates,
-        )));
-
-        if ($candidateChatIds === []) {
-            return null;
-        }
-
-        $chatId = Bitrix24MessageExport::query()
-            ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
-            ->where('messages.dialog_id', $dialog->id)
-            ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
-            ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_EXPORTED)
-            ->whereIn('bitrix24_message_exports.resolved_bitrix_chat_id', $candidateChatIds)
-            ->where(function ($query): void {
-                $query->where('bitrix24_message_exports.transport_method', Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES)
-                    ->orWhereNull('bitrix24_message_exports.transport_method');
-            })
-            ->orderByDesc('bitrix24_message_exports.exported_at')
-            ->orderByDesc('bitrix24_message_exports.id')
-            ->value('bitrix24_message_exports.resolved_bitrix_chat_id');
-
-        return $this->positiveIntegerString($chatId);
     }
 
     /**
