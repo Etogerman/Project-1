@@ -51,6 +51,12 @@ class BackfillBitrix24ConnectionProfilesAction
             $updates['default_deal_stage_id'] = $profile->default_deal_stage_id ?: (string) config('bitrix24.defaults.deal_stage_id', 'C22:NEW');
         }
 
+        foreach ($this->crmSchemaBackfillValues($profile) as $column => $value) {
+            if (Schema::hasColumn('bitrix24_profiles', $column)) {
+                $updates[$column] = $value;
+            }
+        }
+
         $profile->forceFill($updates);
 
         if (! $profile->exists || $profile->isDirty()) {
@@ -144,6 +150,34 @@ class BackfillBitrix24ConnectionProfilesAction
         }
 
         return mb_strtolower(trim($trimmed, "/ \t\n\r\0\x0B"));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function crmSchemaBackfillValues(Bitrix24Profile $profile): array
+    {
+        return [
+            'crm_field_name_source' => $profile->crm_field_name_source ?: config('bitrix24.fields.name_source'),
+            'crm_field_age_exact' => $profile->crm_field_age_exact ?: config('bitrix24.fields.age_exact'),
+            'crm_field_gender' => $profile->crm_field_gender ?: config('bitrix24.fields.gender'),
+            'crm_field_age_range' => $profile->crm_field_age_range ?: config('bitrix24.fields.age_range'),
+            'crm_field_contact_id' => $profile->crm_field_contact_id ?: config('bitrix24.fields.contact_id'),
+            'crm_field_channel_id' => $profile->crm_field_channel_id ?: config('bitrix24.fields.channel_id'),
+            'crm_field_channel_name' => $profile->crm_field_channel_name ?: config('bitrix24.fields.channel_name'),
+            'crm_field_platform' => $profile->crm_field_platform ?: config('bitrix24.fields.platform'),
+            'crm_field_bot_code' => $profile->crm_field_bot_code ?: config('bitrix24.fields.bot_code'),
+            'crm_field_bot_name' => $profile->crm_field_bot_name ?: config('bitrix24.fields.bot_name'),
+            'crm_field_alt_first_name' => $profile->crm_field_alt_first_name ?: config('bitrix24.fields.alt_first_name'),
+            'crm_field_alt_last_name' => $profile->crm_field_alt_last_name ?: config('bitrix24.fields.alt_last_name'),
+            'crm_field_name_conflict' => $profile->crm_field_name_conflict ?: config('bitrix24.fields.name_conflict'),
+            'crm_name_source_automatic_id' => $profile->crm_name_source_automatic_id ?? (int) config('bitrix24.values.name_source.automatic_information_id'),
+            'crm_name_source_self_reported_id' => $profile->crm_name_source_self_reported_id ?? (int) config('bitrix24.values.name_source.self_reported_id'),
+            'crm_name_source_training_verified_id' => $profile->crm_name_source_training_verified_id ?? (int) config('bitrix24.values.name_source.training_verified_id'),
+            'crm_gender_male_id' => $profile->crm_gender_male_id ?? (int) config('bitrix24.values.gender.male_id'),
+            'crm_gender_female_id' => $profile->crm_gender_female_id ?? (int) config('bitrix24.values.gender.female_id'),
+            'crm_gender_unknown_id' => $profile->crm_gender_unknown_id ?? (int) config('bitrix24.values.gender.unknown_id'),
+        ];
     }
 
     private function nullableString(mixed $value): ?string

@@ -35,16 +35,16 @@ trait InteractsWithBitrix24RuntimeProfile
                 'callback_base_url' => $callbackBaseUrl,
                 'telegram_source_id' => array_key_exists('telegram_source_id', $profileOverrides)
                     ? $profileOverrides['telegram_source_id']
-                    : 'ABC_TELEGRAM',
+                    : (config('bitrix24.sources.telegram_id') ?: 'ABC_TELEGRAM'),
                 'max_source_id' => array_key_exists('max_source_id', $profileOverrides)
                     ? $profileOverrides['max_source_id']
-                    : 'ABC_MAX',
+                    : (config('bitrix24.sources.max_id') ?: 'ABC_MAX'),
                 'telegram_connector_code' => array_key_exists('telegram_connector_code', $profileOverrides)
                     ? $profileOverrides['telegram_connector_code']
-                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? 'abc_telegram' : null),
+                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? (config('bitrix24.openlines.telegram_connector_code') ?: 'abc_telegram') : null),
                 'max_connector_code' => array_key_exists('max_connector_code', $profileOverrides)
                     ? $profileOverrides['max_connector_code']
-                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? 'abc_max' : null),
+                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? (config('bitrix24.openlines.max_connector_code') ?: 'abc_max') : null),
             ],
         );
 

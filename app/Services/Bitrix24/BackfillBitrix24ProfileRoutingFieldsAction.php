@@ -46,6 +46,12 @@ class BackfillBitrix24ProfileRoutingFieldsAction
             $updates['default_deal_stage_id'] = $this->resolveBackfillValue($profile->default_deal_stage_id, config('bitrix24.defaults.deal_stage_id'));
         }
 
+        foreach ($this->crmSchemaBackfillValues($profile) as $column => $value) {
+            if (Schema::hasColumn('bitrix24_profiles', $column)) {
+                $updates[$column] = $value;
+            }
+        }
+
         $updates = array_filter($updates, static fn (mixed $value): bool => $value !== null);
 
         if ($updates === []) {
@@ -81,6 +87,34 @@ class BackfillBitrix24ProfileRoutingFieldsAction
         $integer = (int) $configValue;
 
         return $integer >= 0 ? $integer : null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function crmSchemaBackfillValues(Bitrix24Profile $profile): array
+    {
+        return [
+            'crm_field_name_source' => $this->resolveBackfillValue($profile->crm_field_name_source, config('bitrix24.fields.name_source')),
+            'crm_field_age_exact' => $this->resolveBackfillValue($profile->crm_field_age_exact, config('bitrix24.fields.age_exact')),
+            'crm_field_gender' => $this->resolveBackfillValue($profile->crm_field_gender, config('bitrix24.fields.gender')),
+            'crm_field_age_range' => $this->resolveBackfillValue($profile->crm_field_age_range, config('bitrix24.fields.age_range')),
+            'crm_field_contact_id' => $this->resolveBackfillValue($profile->crm_field_contact_id, config('bitrix24.fields.contact_id')),
+            'crm_field_channel_id' => $this->resolveBackfillValue($profile->crm_field_channel_id, config('bitrix24.fields.channel_id')),
+            'crm_field_channel_name' => $this->resolveBackfillValue($profile->crm_field_channel_name, config('bitrix24.fields.channel_name')),
+            'crm_field_platform' => $this->resolveBackfillValue($profile->crm_field_platform, config('bitrix24.fields.platform')),
+            'crm_field_bot_code' => $this->resolveBackfillValue($profile->crm_field_bot_code, config('bitrix24.fields.bot_code')),
+            'crm_field_bot_name' => $this->resolveBackfillValue($profile->crm_field_bot_name, config('bitrix24.fields.bot_name')),
+            'crm_field_alt_first_name' => $this->resolveBackfillValue($profile->crm_field_alt_first_name, config('bitrix24.fields.alt_first_name')),
+            'crm_field_alt_last_name' => $this->resolveBackfillValue($profile->crm_field_alt_last_name, config('bitrix24.fields.alt_last_name')),
+            'crm_field_name_conflict' => $this->resolveBackfillValue($profile->crm_field_name_conflict, config('bitrix24.fields.name_conflict')),
+            'crm_name_source_automatic_id' => $this->resolveIntegerBackfillValue($profile->crm_name_source_automatic_id, config('bitrix24.values.name_source.automatic_information_id')),
+            'crm_name_source_self_reported_id' => $this->resolveIntegerBackfillValue($profile->crm_name_source_self_reported_id, config('bitrix24.values.name_source.self_reported_id')),
+            'crm_name_source_training_verified_id' => $this->resolveIntegerBackfillValue($profile->crm_name_source_training_verified_id, config('bitrix24.values.name_source.training_verified_id')),
+            'crm_gender_male_id' => $this->resolveIntegerBackfillValue($profile->crm_gender_male_id, config('bitrix24.values.gender.male_id')),
+            'crm_gender_female_id' => $this->resolveIntegerBackfillValue($profile->crm_gender_female_id, config('bitrix24.values.gender.female_id')),
+            'crm_gender_unknown_id' => $this->resolveIntegerBackfillValue($profile->crm_gender_unknown_id, config('bitrix24.values.gender.unknown_id')),
+        ];
     }
 
     private function nullableString(mixed $value): ?string

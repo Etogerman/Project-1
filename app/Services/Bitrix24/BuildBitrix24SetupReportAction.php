@@ -49,15 +49,6 @@ class BuildBitrix24SetupReportAction
             ),
         ];
 
-        foreach ((array) ($config['fields'] ?? []) as $fieldKey => $fieldValue) {
-            $checks[] = $this->buildRequiredValueCheck(
-                key: 'fields.'.$fieldKey,
-                label: 'Field code: '.$fieldKey,
-                value: (string) $fieldValue,
-                notes: 'Must stay frozen for the Bitrix24 CRM mapping contract.',
-            );
-        }
-
         return new Bitrix24SetupReportResult(
             checks: $checks,
             frozenValues: $this->buildFrozenValues($config, $profiles->all()),
@@ -305,6 +296,7 @@ class BuildBitrix24SetupReportAction
             $checks[] = $this->buildProfileTypeCheck($profile);
             $checks[] = $this->buildCallbackMatrixCheck($profile);
             $checks = array_merge($checks, $this->buildProfileRoutingChecks($profile));
+            $checks = array_merge($checks, $this->buildProfileCrmSchemaChecks($profile));
         }
 
         return $checks;
@@ -412,6 +404,78 @@ class BuildBitrix24SetupReportAction
     }
 
     /**
+     * @return list<array{key: string, label: string, value: string, status: string, required: bool, notes: string}>
+     */
+    private function buildProfileCrmSchemaChecks(Bitrix24Profile $profile): array
+    {
+        $prefix = 'profiles.'.$profile->profile_key.'.crm_schema';
+        $checks = [];
+        $fields = $profile->effectiveCrmFields();
+        $values = $profile->effectiveCrmValues();
+        $fieldLabels = [
+            'name_source' => 'Name source field',
+            'age_exact' => 'Age exact field',
+            'gender' => 'Gender field',
+            'age_range' => 'Age range field',
+            'contact_id' => 'Contact ID field',
+            'channel_id' => 'Channel ID field',
+            'channel_name' => 'Channel name field',
+            'platform' => 'Platform field',
+            'bot_code' => 'Bot code field',
+            'bot_name' => 'Bot name field',
+            'alt_first_name' => 'Alt first name field',
+            'alt_last_name' => 'Alt last name field',
+            'name_conflict' => 'Name conflict field',
+        ];
+        $enumLabels = [
+            'values.name_source.automatic_information_id' => [
+                'label' => 'Name source automatic ID',
+                'value' => $values['name_source']['automatic_information_id'] ?? null,
+            ],
+            'values.name_source.self_reported_id' => [
+                'label' => 'Name source self reported ID',
+                'value' => $values['name_source']['self_reported_id'] ?? null,
+            ],
+            'values.name_source.training_verified_id' => [
+                'label' => 'Name source training verified ID',
+                'value' => $values['name_source']['training_verified_id'] ?? null,
+            ],
+            'values.gender.male_id' => [
+                'label' => 'Gender male ID',
+                'value' => $values['gender']['male_id'] ?? null,
+            ],
+            'values.gender.female_id' => [
+                'label' => 'Gender female ID',
+                'value' => $values['gender']['female_id'] ?? null,
+            ],
+            'values.gender.unknown_id' => [
+                'label' => 'Gender unknown ID',
+                'value' => $values['gender']['unknown_id'] ?? null,
+            ],
+        ];
+
+        foreach ($fieldLabels as $fieldKey => $label) {
+            $checks[] = $this->buildRequiredValueCheck(
+                key: $prefix.'.fields.'.$fieldKey,
+                label: sprintf('Profile `%s` %s', $profile->profile_key, $label),
+                value: (string) ($fields[$fieldKey] ?? ''),
+                notes: 'Stored on the Bitrix24 profile; empty profile value temporarily falls back to .env.',
+            );
+        }
+
+        foreach ($enumLabels as $key => $meta) {
+            $checks[] = $this->buildIntegerValueCheck(
+                key: $prefix.'.'.$key,
+                label: sprintf('Profile `%s` %s', $profile->profile_key, $meta['label']),
+                value: $meta['value'],
+                notes: 'Stored on the Bitrix24 profile; empty profile value temporarily falls back to .env.',
+            );
+        }
+
+        return $checks;
+    }
+
+    /**
      * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
      */
     private function buildLineReadinessCheck(
@@ -465,16 +529,12 @@ class BuildBitrix24SetupReportAction
      */
     private function buildFrozenValues(array $config, array $profiles): array
     {
-        $frozenValues = [
-            $this->frozenValue('values.name_source', 'automatic_information_id', (string) data_get($config, 'values.name_source.automatic_information_id', '')),
-            $this->frozenValue('values.name_source', 'self_reported_id', (string) data_get($config, 'values.name_source.self_reported_id', '')),
-            $this->frozenValue('values.name_source', 'training_verified_id', (string) data_get($config, 'values.name_source.training_verified_id', '')),
-            $this->frozenValue('values.gender', 'male_id', (string) data_get($config, 'values.gender.male_id', '')),
-            $this->frozenValue('values.gender', 'female_id', (string) data_get($config, 'values.gender.female_id', '')),
-            $this->frozenValue('values.gender', 'unknown_id', (string) data_get($config, 'values.gender.unknown_id', '')),
-        ];
+        $frozenValues = [];
 
         foreach ($profiles as $profile) {
+            $profileFields = $profile->effectiveCrmFields();
+            $profileValues = $profile->effectiveCrmValues();
+
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.portal_domain', $profile->portal_domain);
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.profile_type', $profile->profile_type);
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.callback_base_url', $profile->callback_base_url);
@@ -485,6 +545,16 @@ class BuildBitrix24SetupReportAction
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.default_assigned_user_id', (string) $profile->effectiveDefaultAssignedUserId());
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.default_deal_category_id', (string) $profile->effectiveDefaultDealCategoryId());
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.default_deal_stage_id', $profile->effectiveDefaultDealStageId());
+
+            foreach ($profileFields as $key => $value) {
+                $frozenValues[] = $this->frozenValue('profile_crm_fields', $profile->profile_key.'.'.$key, $this->stringifyFrozenValue($value));
+            }
+
+            foreach ($profileValues as $group => $items) {
+                foreach ($items as $key => $value) {
+                    $frozenValues[] = $this->frozenValue('profile_crm_values', $profile->profile_key.'.'.$group.'.'.$key, $this->stringifyFrozenValue($value));
+                }
+            }
         }
 
         $routes = Bitrix24OpenLineRoute::query()
@@ -512,10 +582,6 @@ class BuildBitrix24SetupReportAction
             }
 
             $frozenValues[] = $this->frozenValue('openlines', $key, $this->stringifyFrozenValue($value));
-        }
-
-        foreach ((array) ($config['fields'] ?? []) as $key => $value) {
-            $frozenValues[] = $this->frozenValue('fields', $key, $this->stringifyFrozenValue($value));
         }
 
         return $frozenValues;
@@ -793,6 +859,24 @@ class BuildBitrix24SetupReportAction
 
         if ($trimmed !== $expected) {
             return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_MISSING, true, 'Expected '.$expected.'. '.$notes);
+        }
+
+        return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_OK, true, $notes);
+    }
+
+    /**
+     * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
+     */
+    private function buildIntegerValueCheck(string $key, string $label, mixed $value, string $notes): array
+    {
+        $trimmed = is_scalar($value) ? trim((string) $value) : '';
+
+        if ($trimmed === '') {
+            return $this->check($key, $label, '—', Bitrix24SetupReportResult::STATUS_MISSING, true, $notes);
+        }
+
+        if (! ctype_digit($trimmed)) {
+            return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_MISSING, true, 'Expected non-negative integer value. '.$notes);
         }
 
         return $this->check($key, $label, $trimmed, Bitrix24SetupReportResult::STATUS_OK, true, $notes);

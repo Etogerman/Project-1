@@ -41,7 +41,7 @@ class ViewBitrix24Connection extends ViewRecord
     ];
 
     /**
-     * @var array{telegram_source_id:string,max_source_id:string,telegram_connector_code:string,max_connector_code:string,default_assigned_user_id:string,default_deal_category_id:string,default_deal_stage_id:string}
+     * @var array<string, string>
      */
     public array $profileSettingsForm = [
         'telegram_source_id' => '',
@@ -51,6 +51,25 @@ class ViewBitrix24Connection extends ViewRecord
         'default_assigned_user_id' => '',
         'default_deal_category_id' => '',
         'default_deal_stage_id' => '',
+        'crm_field_name_source' => '',
+        'crm_field_age_exact' => '',
+        'crm_field_gender' => '',
+        'crm_field_age_range' => '',
+        'crm_field_contact_id' => '',
+        'crm_field_channel_id' => '',
+        'crm_field_channel_name' => '',
+        'crm_field_platform' => '',
+        'crm_field_bot_code' => '',
+        'crm_field_bot_name' => '',
+        'crm_field_alt_first_name' => '',
+        'crm_field_alt_last_name' => '',
+        'crm_field_name_conflict' => '',
+        'crm_name_source_automatic_id' => '',
+        'crm_name_source_self_reported_id' => '',
+        'crm_name_source_training_verified_id' => '',
+        'crm_gender_male_id' => '',
+        'crm_gender_female_id' => '',
+        'crm_gender_unknown_id' => '',
     ];
 
     public ?string $openLineRouteErrorMessage = null;
@@ -455,6 +474,14 @@ class ViewBitrix24Connection extends ViewRecord
             return;
         }
 
+        foreach ($this->profileIntegerSettingLabels() as $field => $label) {
+            if ($this->filledButInvalidInteger($this->profileSettingsForm[$field] ?? '')) {
+                $this->failProfileSettingsSave($label.' должен быть числом.');
+
+                return;
+            }
+        }
+
         $profile->fill([
             'telegram_source_id' => $this->nullableFormValue(trim((string) ($this->profileSettingsForm['telegram_source_id'] ?? ''))),
             'max_source_id' => $this->nullableFormValue(trim((string) ($this->profileSettingsForm['max_source_id'] ?? ''))),
@@ -463,6 +490,25 @@ class ViewBitrix24Connection extends ViewRecord
             'default_assigned_user_id' => $assignedUserId,
             'default_deal_category_id' => $dealCategoryId,
             'default_deal_stage_id' => $dealStageId,
+            'crm_field_name_source' => $this->nullableProfileString('crm_field_name_source'),
+            'crm_field_age_exact' => $this->nullableProfileString('crm_field_age_exact'),
+            'crm_field_gender' => $this->nullableProfileString('crm_field_gender'),
+            'crm_field_age_range' => $this->nullableProfileString('crm_field_age_range'),
+            'crm_field_contact_id' => $this->nullableProfileString('crm_field_contact_id'),
+            'crm_field_channel_id' => $this->nullableProfileString('crm_field_channel_id'),
+            'crm_field_channel_name' => $this->nullableProfileString('crm_field_channel_name'),
+            'crm_field_platform' => $this->nullableProfileString('crm_field_platform'),
+            'crm_field_bot_code' => $this->nullableProfileString('crm_field_bot_code'),
+            'crm_field_bot_name' => $this->nullableProfileString('crm_field_bot_name'),
+            'crm_field_alt_first_name' => $this->nullableProfileString('crm_field_alt_first_name'),
+            'crm_field_alt_last_name' => $this->nullableProfileString('crm_field_alt_last_name'),
+            'crm_field_name_conflict' => $this->nullableProfileString('crm_field_name_conflict'),
+            'crm_name_source_automatic_id' => $this->nullableIntegerProfileValue('crm_name_source_automatic_id'),
+            'crm_name_source_self_reported_id' => $this->nullableIntegerProfileValue('crm_name_source_self_reported_id'),
+            'crm_name_source_training_verified_id' => $this->nullableIntegerProfileValue('crm_name_source_training_verified_id'),
+            'crm_gender_male_id' => $this->nullableIntegerProfileValue('crm_gender_male_id'),
+            'crm_gender_female_id' => $this->nullableIntegerProfileValue('crm_gender_female_id'),
+            'crm_gender_unknown_id' => $this->nullableIntegerProfileValue('crm_gender_unknown_id'),
         ]);
         $profile->save();
 
@@ -520,6 +566,25 @@ class ViewBitrix24Connection extends ViewRecord
             'default_assigned_user_id' => $profile instanceof Bitrix24Profile && $profile->default_assigned_user_id !== null ? (string) $profile->default_assigned_user_id : '',
             'default_deal_category_id' => $profile instanceof Bitrix24Profile && $profile->default_deal_category_id !== null ? (string) $profile->default_deal_category_id : '',
             'default_deal_stage_id' => $profile instanceof Bitrix24Profile ? (string) ($profile->default_deal_stage_id ?? '') : '',
+            'crm_field_name_source' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_name_source ?? '') : '',
+            'crm_field_age_exact' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_age_exact ?? '') : '',
+            'crm_field_gender' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_gender ?? '') : '',
+            'crm_field_age_range' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_age_range ?? '') : '',
+            'crm_field_contact_id' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_contact_id ?? '') : '',
+            'crm_field_channel_id' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_channel_id ?? '') : '',
+            'crm_field_channel_name' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_channel_name ?? '') : '',
+            'crm_field_platform' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_platform ?? '') : '',
+            'crm_field_bot_code' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_bot_code ?? '') : '',
+            'crm_field_bot_name' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_bot_name ?? '') : '',
+            'crm_field_alt_first_name' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_alt_first_name ?? '') : '',
+            'crm_field_alt_last_name' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_alt_last_name ?? '') : '',
+            'crm_field_name_conflict' => $profile instanceof Bitrix24Profile ? (string) ($profile->crm_field_name_conflict ?? '') : '',
+            'crm_name_source_automatic_id' => $profile instanceof Bitrix24Profile && $profile->crm_name_source_automatic_id !== null ? (string) $profile->crm_name_source_automatic_id : '',
+            'crm_name_source_self_reported_id' => $profile instanceof Bitrix24Profile && $profile->crm_name_source_self_reported_id !== null ? (string) $profile->crm_name_source_self_reported_id : '',
+            'crm_name_source_training_verified_id' => $profile instanceof Bitrix24Profile && $profile->crm_name_source_training_verified_id !== null ? (string) $profile->crm_name_source_training_verified_id : '',
+            'crm_gender_male_id' => $profile instanceof Bitrix24Profile && $profile->crm_gender_male_id !== null ? (string) $profile->crm_gender_male_id : '',
+            'crm_gender_female_id' => $profile instanceof Bitrix24Profile && $profile->crm_gender_female_id !== null ? (string) $profile->crm_gender_female_id : '',
+            'crm_gender_unknown_id' => $profile instanceof Bitrix24Profile && $profile->crm_gender_unknown_id !== null ? (string) $profile->crm_gender_unknown_id : '',
         ];
     }
 
@@ -698,6 +763,16 @@ class ViewBitrix24Connection extends ViewRecord
         return $value === '' ? null : $value;
     }
 
+    protected function nullableProfileString(string $field): ?string
+    {
+        return $this->nullableFormValue(trim((string) ($this->profileSettingsForm[$field] ?? '')));
+    }
+
+    protected function nullableIntegerProfileValue(string $field): ?int
+    {
+        return $this->nullableIntegerFormValue((string) ($this->profileSettingsForm[$field] ?? ''));
+    }
+
     protected function nullableIntegerFormValue(string $value): ?int
     {
         $trimmed = trim($value);
@@ -714,6 +789,21 @@ class ViewBitrix24Connection extends ViewRecord
         $trimmed = trim((string) $value);
 
         return $trimmed !== '' && ! ctype_digit($trimmed);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function profileIntegerSettingLabels(): array
+    {
+        return [
+            'crm_name_source_automatic_id' => 'Name source automatic ID',
+            'crm_name_source_self_reported_id' => 'Name source self reported ID',
+            'crm_name_source_training_verified_id' => 'Name source training verified ID',
+            'crm_gender_male_id' => 'Gender male ID',
+            'crm_gender_female_id' => 'Gender female ID',
+            'crm_gender_unknown_id' => 'Gender unknown ID',
+        ];
     }
 
     protected function failOpenLineRouteSave(string $message): void

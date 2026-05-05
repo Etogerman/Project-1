@@ -43,12 +43,12 @@
 | Default assigned user ID | stored in Bitrix24 profile settings in admin; `BITRIX24_DEFAULT_ASSIGNED_USER_ID` is a temporary fallback |
 | Default deal category ID | stored in Bitrix24 profile settings in admin; `BITRIX24_DEFAULT_DEAL_CATEGORY_ID` is a temporary fallback |
 | Default deal stage ID | stored in Bitrix24 profile settings in admin; `BITRIX24_DEFAULT_DEAL_STAGE_ID` is a temporary fallback |
-| `BITRIX24_NAME_SOURCE_AUTOMATIC_ID` | `7178` |
-| `BITRIX24_NAME_SOURCE_SELF_REPORTED_ID` | `7179` |
-| `BITRIX24_NAME_SOURCE_TRAINING_VERIFIED_ID` | `7180` |
-| `BITRIX24_GENDER_MALE_ID` | `4653` |
-| `BITRIX24_GENDER_FEMALE_ID` | `4655` |
-| `BITRIX24_GENDER_UNKNOWN_ID` | `5815` |
+| Name source automatic ID | stored in Bitrix24 profile settings in admin; `BITRIX24_NAME_SOURCE_AUTOMATIC_ID` is a temporary fallback |
+| Name source self reported ID | stored in Bitrix24 profile settings in admin; `BITRIX24_NAME_SOURCE_SELF_REPORTED_ID` is a temporary fallback |
+| Name source training verified ID | stored in Bitrix24 profile settings in admin; `BITRIX24_NAME_SOURCE_TRAINING_VERIFIED_ID` is a temporary fallback |
+| Gender male ID | stored in Bitrix24 profile settings in admin; `BITRIX24_GENDER_MALE_ID` is a temporary fallback |
+| Gender female ID | stored in Bitrix24 profile settings in admin; `BITRIX24_GENDER_FEMALE_ID` is a temporary fallback |
+| Gender unknown ID | stored in Bitrix24 profile settings in admin; `BITRIX24_GENDER_UNKNOWN_ID` is a temporary fallback |
 
 `owner_profile_key = staging` в box package остаётся текущим Laravel
 `Bitrix24Profile.profile_key`; production определяется portal domain и callback
@@ -57,7 +57,12 @@ base URL, а не этим именем profile.
 Перед production deploy эти значения нужно сверить в Laravel Cloud Production
 и в коробочном `config.php`; одного наличия строк в репозитории недостаточно.
 
-## Existing Bitrix24 contact fields
+## Bitrix24 contact field-code settings
+
+Эти значения хранятся в настройках профиля Bitrix24 в админке. Переменные
+`BITRIX24_FIELD_*` остаются только временным fallback-ом для старых окружений.
+
+### Existing Bitrix24 contact fields
 
 | Purpose | Field code |
 | --- | --- |
@@ -65,7 +70,7 @@ base URL, а не этим именем profile.
 | Exact age | `UF_CRM_1606901533` |
 | Gender | `UF_CRM_5EEB7355C13B1` |
 
-## Required Abrikosoff contact fields
+### Required contact fields
 
 | Purpose | Recommended field code |
 | --- | --- |

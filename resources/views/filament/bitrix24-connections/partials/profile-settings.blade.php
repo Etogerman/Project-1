@@ -109,6 +109,92 @@
                     </label>
                 </div>
 
+                <div class="ac-bitrix-profile-form-heading">CRM поля Bitrix24</div>
+
+                <div class="ac-route-config-grid">
+                    <label class="ac-route-field">
+                        <span>Name source field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_name_source" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Age exact field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_age_exact" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Gender field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_gender" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Age range field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_age_range" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Contact ID field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_contact_id" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Channel ID field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_channel_id" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Channel name field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_channel_name" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Platform field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_platform" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Bot code field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_bot_code" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Bot name field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_bot_name" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Alt first name field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_alt_first_name" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Alt last name field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_alt_last_name" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Name conflict field</span>
+                        <input type="text" wire:model.live="profileSettingsForm.crm_field_name_conflict" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                </div>
+
+                <div class="ac-bitrix-profile-form-heading">CRM значения enum</div>
+
+                <div class="ac-route-config-grid">
+                    <label class="ac-route-field">
+                        <span>Name automatic ID</span>
+                        <input type="text" inputmode="numeric" wire:model.live="profileSettingsForm.crm_name_source_automatic_id" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Name self reported ID</span>
+                        <input type="text" inputmode="numeric" wire:model.live="profileSettingsForm.crm_name_source_self_reported_id" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Name training ID</span>
+                        <input type="text" inputmode="numeric" wire:model.live="profileSettingsForm.crm_name_source_training_verified_id" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Gender male ID</span>
+                        <input type="text" inputmode="numeric" wire:model.live="profileSettingsForm.crm_gender_male_id" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Gender female ID</span>
+                        <input type="text" inputmode="numeric" wire:model.live="profileSettingsForm.crm_gender_female_id" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                    <label class="ac-route-field">
+                        <span>Gender unknown ID</span>
+                        <input type="text" inputmode="numeric" wire:model.live="profileSettingsForm.crm_gender_unknown_id" @disabled(! $this->canEditProfileSettings()) />
+                    </label>
+                </div>
+
                 @if ($this->canEditProfileSettings())
                     <x-filament::button
                         type="button"

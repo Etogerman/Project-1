@@ -86,6 +86,42 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_setup_report_reads_crm_schema_from_profile_settings(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile([
+            'crm_field_gender' => 'UF_CRM_PROFILE_GENDER',
+            'crm_gender_male_id' => 9001,
+        ]);
+        $this->createActiveConnection($profile);
+
+        $report = app(BuildBitrix24SetupReportAction::class)->handle();
+        $checks = collect($report->checks);
+        $frozenValues = collect($report->frozenValues);
+
+        $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
+        $this->assertSame(
+            'UF_CRM_PROFILE_GENDER',
+            $checks->firstWhere('key', 'profiles.staging.crm_schema.fields.gender')['value'] ?? null,
+        );
+        $this->assertSame(
+            '9001',
+            $checks->firstWhere('key', 'profiles.staging.crm_schema.values.gender.male_id')['value'] ?? null,
+        );
+        $this->assertSame(
+            'UF_CRM_PROFILE_GENDER',
+            $frozenValues
+                ->where('group', 'profile_crm_fields')
+                ->firstWhere('label', 'staging.gender')['value'] ?? null,
+        );
+        $this->assertSame(
+            '9001',
+            $frozenValues
+                ->where('group', 'profile_crm_values')
+                ->firstWhere('label', 'staging.gender.male_id')['value'] ?? null,
+        );
+    }
+
     public function test_command_accepts_active_telegram_route_instead_of_profile_telegram_line_id(): void
     {
         $this->seedReadyConfig();

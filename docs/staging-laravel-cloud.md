@@ -90,6 +90,8 @@ Bitrix24 profile values are configured in admin after deploy:
 - Default assigned user ID: `1`
 - Default deal category ID: `22`
 - Default deal stage ID: `C22:NEW`
+- CRM field codes: `Name source`, `Age exact`, `Gender`, `Age range`, `Contact ID`, `Channel ID`, `Channel name`, `Platform`, `Bot code`, `Bot name`, `Alt first name`, `Alt last name`, `Name conflict`
+- CRM enum IDs: name-source values and gender values
 
 LINE_ID открытых линий не задаются в `.env`. Их нужно заполнить в админке на
 конкретных маршрутах каналов:

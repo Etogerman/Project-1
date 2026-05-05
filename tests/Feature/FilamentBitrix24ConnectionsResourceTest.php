@@ -946,6 +946,44 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
     }
 
+    public function test_superadmin_can_save_profile_crm_schema_settings(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.schema.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee('CRM поля Bitrix24')
+            ->assertSee('CRM значения enum')
+            ->set('profileSettingsForm.crm_field_name_source', ' UF_CRM_ABC_NAME_SOURCE ')
+            ->set('profileSettingsForm.crm_field_gender', ' UF_CRM_ABC_GENDER ')
+            ->set('profileSettingsForm.crm_field_contact_id', ' UF_CRM_ABC_CONTACT_ID ')
+            ->set('profileSettingsForm.crm_name_source_self_reported_id', '9002')
+            ->set('profileSettingsForm.crm_gender_male_id', '9001')
+            ->call('saveProfileSettings')
+            ->assertSet('profileSettingsErrorMessage', null)
+            ->assertSet('profileSettingsForm.crm_field_name_source', 'UF_CRM_ABC_NAME_SOURCE')
+            ->assertSet('profileSettingsForm.crm_field_gender', 'UF_CRM_ABC_GENDER')
+            ->assertSet('profileSettingsForm.crm_field_contact_id', 'UF_CRM_ABC_CONTACT_ID')
+            ->assertSet('profileSettingsForm.crm_name_source_self_reported_id', '9002')
+            ->assertSet('profileSettingsForm.crm_gender_male_id', '9001');
+
+        $this->assertDatabaseHas('bitrix24_profiles', [
+            'id' => $profile->id,
+            'crm_field_name_source' => 'UF_CRM_ABC_NAME_SOURCE',
+            'crm_field_gender' => 'UF_CRM_ABC_GENDER',
+            'crm_field_contact_id' => 'UF_CRM_ABC_CONTACT_ID',
+            'crm_name_source_self_reported_id' => 9002,
+            'crm_gender_male_id' => 9001,
+        ]);
+    }
+
     public function test_employee_with_bitrix24_edit_cannot_save_application_name(): void
     {
         $employee = User::factory()->create([

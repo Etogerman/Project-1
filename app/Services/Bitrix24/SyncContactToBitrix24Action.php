@@ -2,8 +2,8 @@
 
 namespace App\Services\Bitrix24;
 
-use App\Data\Bitrix24\Bitrix24ContactUpdatePlanData;
 use App\Data\Bitrix24\Bitrix24ContactMatchResultData;
+use App\Data\Bitrix24\Bitrix24ContactUpdatePlanData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Contact;
@@ -28,6 +28,7 @@ class SyncContactToBitrix24Action
         private readonly ComputeBitrix24ContactSyncFingerprintAction $computeBitrix24ContactSyncFingerprintAction,
         private readonly LogBitrix24ApiCallAction $logApiCallAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
+        private readonly ResolveBitrix24ProfileSchemaAction $resolveProfileSchemaAction,
     ) {}
 
     public function handle(Contact|int $contact): Contact
@@ -153,8 +154,7 @@ class SyncContactToBitrix24Action
         Contact $contact,
         string $bitrix24ContactId,
         Bitrix24Connection $connection,
-    ): Contact
-    {
+    ): Contact {
         $remoteSnapshot = $this->fetchRemoteContact($contact, $bitrix24ContactId, $connection);
 
         $linkedContact = $this->linkBitrix24ContactAction->handle($contact, $bitrix24ContactId);
@@ -211,8 +211,7 @@ class SyncContactToBitrix24Action
         Contact $contact,
         ?array $remoteSnapshot = null,
         ?Bitrix24Connection $connection = null,
-    ): Contact
-    {
+    ): Contact {
         $bitrix24ContactId = (string) $contact->bitrix24_contact_id;
         $remoteSnapshot ??= $this->fetchRemoteContact($contact, $bitrix24ContactId, $connection);
         $updatePlan = $this->buildBitrix24ContactUpdatePayloadAction->handle($contact, $remoteSnapshot);
@@ -344,33 +343,24 @@ class SyncContactToBitrix24Action
      */
     private function computeCreateFingerprint(array $payload): string
     {
-        $nameSourceField = config('bitrix24.fields.name_source');
-        $ageExactField = config('bitrix24.fields.age_exact');
-        $ageRangeField = config('bitrix24.fields.age_range');
-        $genderField = config('bitrix24.fields.gender');
-        $contactIdField = config('bitrix24.fields.contact_id');
-        $channelIdField = config('bitrix24.fields.channel_id');
-        $channelNameField = config('bitrix24.fields.channel_name');
-        $platformField = config('bitrix24.fields.platform');
-        $botCodeField = config('bitrix24.fields.bot_code');
-        $botNameField = config('bitrix24.fields.bot_name');
+        $fields = $this->resolveProfileSchemaAction->fields();
 
         return $this->computeBitrix24ContactSyncFingerprintAction->handle([
             'name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['NAME'] ?? null),
             'last_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['LAST_NAME'] ?? null),
-            'name_source_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$nameSourceField] ?? null),
-            'age_exact' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$ageExactField] ?? null),
-            'age_range' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$ageRangeField] ?? null),
-            'gender_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$genderField] ?? null),
+            'name_source_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['name_source']] ?? null),
+            'age_exact' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['age_exact']] ?? null),
+            'age_range' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['age_range']] ?? null),
+            'gender_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['gender']] ?? null),
             'address_city' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['ADDRESS_CITY'] ?? null),
             'address_country' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['ADDRESS_COUNTRY'] ?? null),
             'source_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload['SOURCE_ID'] ?? null),
-            'contact_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$contactIdField] ?? null),
-            'channel_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$channelIdField] ?? null),
-            'channel_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$channelNameField] ?? null),
-            'platform' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$platformField] ?? null),
-            'bot_code' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$botCodeField] ?? null),
-            'bot_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$botNameField] ?? null),
+            'contact_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['contact_id']] ?? null),
+            'channel_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['channel_id']] ?? null),
+            'channel_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['channel_name']] ?? null),
+            'platform' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['platform']] ?? null),
+            'bot_code' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['bot_code']] ?? null),
+            'bot_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($payload[$fields['bot_name']] ?? null),
             'alt_first_name' => null,
             'alt_last_name' => null,
             'phones' => $this->bitrix24ContactPayloadNormalizer->normalizePhonePayload($payload['PHONE'] ?? []),
@@ -415,8 +405,7 @@ class SyncContactToBitrix24Action
         Contact $contact,
         string $bitrix24ContactId,
         ?Bitrix24Connection $connection = null,
-    ): array
-    {
+    ): array {
         $remoteSnapshot = $this->fetchBitrix24ContactAction->handle($bitrix24ContactId, $connection);
 
         $this->logApiCallAction->handle(

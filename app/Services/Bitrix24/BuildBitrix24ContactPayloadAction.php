@@ -12,6 +12,7 @@ class BuildBitrix24ContactPayloadAction
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly CollectBitrix24ContactPhonesAction $collectContactPhonesAction,
         private readonly ResolveBitrix24ContactSourceAction $resolveContactSourceAction,
+        private readonly ResolveBitrix24ProfileSchemaAction $resolveProfileSchemaAction,
     ) {}
 
     /**
@@ -23,6 +24,7 @@ class BuildBitrix24ContactPayloadAction
         $primaryIdentity = $rootContact->primaryIdentity()->with('channel')->first();
         $channel = $primaryIdentity?->channel;
         $sourceId = $this->resolveContactSourceAction->handle($rootContact);
+        $fields = $this->resolveProfileSchemaAction->fields();
         $nameSourceId = $this->resolveNameSourceId($rootContact);
         $phones = $this->collectContactPhonesAction->handle($rootContact);
 
@@ -36,16 +38,16 @@ class BuildBitrix24ContactPayloadAction
             'ADDRESS_CITY' => $this->nullableString($rootContact->city),
             'ADDRESS_COUNTRY' => $this->nullableString($rootContact->country),
             'SOURCE_ID' => $sourceId,
-            config('bitrix24.fields.name_source') => $nameSourceId,
-            config('bitrix24.fields.age_exact') => $rootContact->effective_age_years,
-            config('bitrix24.fields.age_range') => $this->nullableString($rootContact->age_range),
-            config('bitrix24.fields.gender') => $this->resolveGenderFieldValue($rootContact->gender),
-            config('bitrix24.fields.contact_id') => (string) $rootContact->id,
-            config('bitrix24.fields.channel_id') => (string) $channel->id,
-            config('bitrix24.fields.channel_name') => $this->nullableString($channel->name),
-            config('bitrix24.fields.platform') => $this->nullableString($channel->platform),
-            config('bitrix24.fields.bot_code') => $this->resolveBotCode($channel),
-            config('bitrix24.fields.bot_name') => $this->resolveBotName($channel),
+            $fields['name_source'] => $nameSourceId,
+            $fields['age_exact'] => $rootContact->effective_age_years,
+            $fields['age_range'] => $this->nullableString($rootContact->age_range),
+            $fields['gender'] => $this->resolveGenderFieldValue($rootContact->gender),
+            $fields['contact_id'] => (string) $rootContact->id,
+            $fields['channel_id'] => (string) $channel->id,
+            $fields['channel_name'] => $this->nullableString($channel->name),
+            $fields['platform'] => $this->nullableString($channel->platform),
+            $fields['bot_code'] => $this->resolveBotCode($channel),
+            $fields['bot_name'] => $this->resolveBotName($channel),
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
 
         if ($phones !== []) {
@@ -83,20 +85,24 @@ class BuildBitrix24ContactPayloadAction
 
     private function resolveGenderFieldValue(?string $gender): ?int
     {
+        $values = $this->resolveProfileSchemaAction->values();
+
         return match ($gender) {
-            'male' => (int) config('bitrix24.values.gender.male_id'),
-            'female' => (int) config('bitrix24.values.gender.female_id'),
-            'unknown' => (int) config('bitrix24.values.gender.unknown_id'),
+            'male' => $values['gender']['male_id'],
+            'female' => $values['gender']['female_id'],
+            'unknown' => $values['gender']['unknown_id'],
             default => null,
         };
     }
 
     private function resolveNameSourceId(Contact $contact): ?int
     {
+        $values = $this->resolveProfileSchemaAction->values();
+
         return match ($contact->first_name_source) {
-            Contact::FIRST_NAME_SOURCE_AUTO => (int) config('bitrix24.values.name_source.automatic_information_id'),
-            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => (int) config('bitrix24.values.name_source.self_reported_id'),
-            Contact::FIRST_NAME_SOURCE_MANUAL => (int) config('bitrix24.values.name_source.training_verified_id'),
+            Contact::FIRST_NAME_SOURCE_AUTO => $values['name_source']['automatic_information_id'],
+            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => $values['name_source']['self_reported_id'],
+            Contact::FIRST_NAME_SOURCE_MANUAL => $values['name_source']['training_verified_id'],
             default => null,
         };
     }

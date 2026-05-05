@@ -2590,6 +2590,13 @@
         background: var(--ac-surface-strong);
     }
 
+    .ac-bitrix-profile-form-heading {
+        color: var(--ac-text);
+        font-size: 0.72rem;
+        font-weight: 850;
+        line-height: 1.2;
+    }
+
     @media (max-width: 1180px) {
         .ac-bitrix-overview-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
