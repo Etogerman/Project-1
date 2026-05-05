@@ -94,7 +94,28 @@ class ExportMessageToBitrix24OpenLinesAction
                 );
             }
 
-            if ($this->shouldUseServiceActorManualReplyPath($message)) {
+            if ($this->shouldUseControlledConnectorMirrorManualReplyPath($message, $route)) {
+                return $this->exportViaLegacyTransport(
+                    message: $message,
+                    dialog: $dialog,
+                    rootContactId: $rootContact->id,
+                    bitrix24ContactId: $bitrix24ContactId,
+                    connectorCode: $route->connectorCode,
+                    lineId: $route->lineId,
+                    routeId: $route->routeId,
+                    retryAfterSync: $retryAfterSync,
+                    operation: 'openlines_manual_reply_exported_connector_mirror',
+                    connection: $this->resolveCurrentConnectionAction->handle(),
+                    applyLegacyFallbackSignature: true,
+                    requireExpectedResolvedBitrixChatId: true,
+                    allowPostSendBindingResync: false,
+                    responsePayload: [
+                        'controlled_manual_reply_connector_mirror' => true,
+                    ],
+                );
+            }
+
+            if ($this->shouldUseServiceActorManualReplyPath($message, $route)) {
                 $manualReplyConnection = $this->resolveCurrentConnectionAction->handle();
 
                 try {
@@ -473,7 +494,12 @@ class ExportMessageToBitrix24OpenLinesAction
         return sprintf('fake-live-dialog-%d', $dialog->id);
     }
 
-    private function shouldUseServiceActorManualReplyPath(Message $message): bool
+    private function shouldUseControlledConnectorMirrorManualReplyPath(Message $message, Bitrix24OpenLinesRouteData $route): bool
+    {
+        return $message->message_kind === Message::KIND_OUTBOUND_MANUAL_REPLY;
+    }
+
+    private function shouldUseServiceActorManualReplyPath(Message $message, Bitrix24OpenLinesRouteData $route): bool
     {
         if ($message->message_kind !== Message::KIND_OUTBOUND_MANUAL_REPLY) {
             return false;
@@ -506,6 +532,8 @@ class ExportMessageToBitrix24OpenLinesAction
         ?Bitrix24Connection $connection = null,
         bool $applyLegacyFallbackSignature = false,
         ?string $expectedResolvedBitrixChatId = null,
+        bool $requireExpectedResolvedBitrixChatId = false,
+        bool $allowPostSendBindingResync = true,
         array $responsePayload = [],
     ): Message {
         $route = new Bitrix24OpenLinesRouteData(
@@ -530,7 +558,7 @@ class ExportMessageToBitrix24OpenLinesAction
         try {
             if (
                 $dialogBinding === null
-                && $this->hasLegacyOpenLineExportHistory($dialog)
+                && ($requireExpectedResolvedBitrixChatId || $this->hasLegacyOpenLineExportHistory($dialog))
                 && $this->syncMissingBindingToCurrentChatBeforeSend($dialog, $route, $connection)
             ) {
                 $dialog->refresh();
@@ -587,6 +615,13 @@ class ExportMessageToBitrix24OpenLinesAction
             );
         }
 
+        if ($requireExpectedResolvedBitrixChatId && $expectedResolvedBitrixChatId === null) {
+            throw new Bitrix24LiveExportTransportException(
+                'Bitrix24 Open Lines controlled manual reply connector mirror requires a confirmed current chat id before mutating export.',
+                failureCode: Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            );
+        }
+
         $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle(
             $message,
             $route,
@@ -595,7 +630,12 @@ class ExportMessageToBitrix24OpenLinesAction
         );
 
         try {
-            $response = $this->bitrix24ApiClient->call('imconnector.send.messages', $payload, $connection);
+            $response = $this->bitrix24ApiClient->call(
+                'imconnector.send.messages',
+                $payload,
+                connection: $connection,
+                transportRetry: false,
+            );
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24LiveExportTransportException(
                 'Bitrix24 Open Lines live export transport outcome is uncertain.',
@@ -621,7 +661,10 @@ class ExportMessageToBitrix24OpenLinesAction
         $resolvedBitrixChatId = $this->extractLegacySessionChatId($response->result);
 
         if ($expectedResolvedBitrixChatId !== null && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
-            if (! $this->syncVerifiedBindingToCurrentChatAfterMismatch($dialog, $route, $connection, $resolvedBitrixChatId)) {
+            if (
+                ! $allowPostSendBindingResync
+                || ! $this->syncVerifiedBindingToCurrentChatAfterMismatch($dialog, $route, $connection, $resolvedBitrixChatId)
+            ) {
                 throw new Bitrix24LiveExportTransportException(
                     sprintf(
                         'Bitrix24 Open Lines verified binding legacy export returned unexpected chat id [%s], expected [%s].',
