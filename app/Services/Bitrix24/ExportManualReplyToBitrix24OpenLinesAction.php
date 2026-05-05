@@ -63,21 +63,36 @@ class ExportManualReplyToBitrix24OpenLinesAction
             );
 
             if (! $resolvedChat instanceof Bitrix24OpenLinesManualReplyChatData) {
-                throw new Bitrix24OpenLinesManualReplyExportException(
-                    'Bitrix24 Open Lines verified dialog binding could not be resolved.',
-                    Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+                if (! $this->syncVerifiedBindingToResolvedCurrentChatBeforeSend(
+                    $dialog,
+                    $route,
+                    $connection,
+                    $dialogBinding->resolvedBitrixChatId,
+                    allowSameChatId: true,
+                )) {
+                    throw new Bitrix24OpenLinesManualReplyExportException(
+                        'Bitrix24 Open Lines verified dialog binding could not be resolved.',
+                        Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+                    );
+                }
+
+                $resolvedChat = $this->resolveVerifiedBindingChatAfterCurrentChatSync(
+                    $dialog,
+                    $rootContact,
+                    $route,
+                    $connection,
+                );
+            } else {
+                $resolvedChat = $this->preflightVerifiedBindingChatBeforeSend(
+                    $dialog,
+                    $rootContact,
+                    $route,
+                    $connection,
+                    $dialogBinding->resolvedBitrixChatId,
+                    $dialogBinding->userCode,
+                    $resolvedChat,
                 );
             }
-
-            $resolvedChat = $this->preflightVerifiedBindingChatBeforeSend(
-                $dialog,
-                $rootContact,
-                $route,
-                $connection,
-                $dialogBinding->resolvedBitrixChatId,
-                $dialogBinding->userCode,
-                $resolvedChat,
-            );
 
             try {
                 return $this->sendMessage(
@@ -205,6 +220,20 @@ class ExportManualReplyToBitrix24OpenLinesAction
             }
         }
 
+        return $this->resolveVerifiedBindingChatAfterCurrentChatSync(
+            $dialog,
+            $rootContact,
+            $route,
+            $connection,
+        );
+    }
+
+    private function resolveVerifiedBindingChatAfterCurrentChatSync(
+        Dialog $dialog,
+        Contact $rootContact,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+    ): Bitrix24OpenLinesManualReplyChatData {
         $dialog->refresh();
         $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
 
@@ -262,6 +291,23 @@ class ExportManualReplyToBitrix24OpenLinesAction
             return false;
         }
 
+        return $this->syncVerifiedBindingToResolvedCurrentChatBeforeSend(
+            $dialog,
+            $route,
+            $connection,
+            $expectedResolvedBitrixChatId,
+            requiredCurrentChatId: $activeChatId,
+        );
+    }
+
+    private function syncVerifiedBindingToResolvedCurrentChatBeforeSend(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        string $expectedResolvedBitrixChatId,
+        ?string $requiredCurrentChatId = null,
+        bool $allowSameChatId = false,
+    ): bool {
         try {
             $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
         } catch (Bitrix24ApiException $lookupException) {
@@ -275,8 +321,8 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
         if (
             ! $currentChat instanceof Bitrix24CurrentOpenLineChatData
-            || $currentChat->chatId !== $activeChatId
-            || $currentChat->chatId === $expectedResolvedBitrixChatId
+            || ($requiredCurrentChatId !== null && $currentChat->chatId !== $requiredCurrentChatId)
+            || (! $allowSameChatId && $currentChat->chatId === $expectedResolvedBitrixChatId)
         ) {
             return false;
         }
