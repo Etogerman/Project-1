@@ -14,13 +14,13 @@ class AbrikosoffImconnectorMaxComponent extends CBitrixComponent
     {
         $lineId = trim((string) ($this->arParams['LINE'] ?? ''));
 
-        Runtime::markConnectorReady('abrikosoff_max', $lineId);
+        Runtime::markConnectorReady('abc_max', $lineId);
 
         $this->arResult = [
             'LINE_ID' => $lineId,
-            'LINE_NAME' => Runtime::lineName('abrikosoff_max', $lineId),
-            'CALLBACK_URL' => Runtime::laravelOpenlinesCallbackUrlForLine('abrikosoff_max', $lineId),
-            'CONNECTOR_CODE' => 'abrikosoff_max',
+            'LINE_NAME' => Runtime::lineName('abc_max', $lineId),
+            'CALLBACK_URL' => Runtime::laravelOpenlinesCallbackUrlForLine('abc_max', $lineId),
+            'CONNECTOR_CODE' => 'abc_max',
         ];
 
         $this->includeComponentTemplate();

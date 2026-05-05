@@ -13,9 +13,9 @@ use Bitrix\Main\Web\HttpClient;
 
 final class Runtime
 {
-    private const TELEGRAM_CONNECTOR = 'abrikosoff_telegram';
+    private const TELEGRAM_CONNECTOR = 'abc_telegram';
 
-    private const MAX_CONNECTOR = 'abrikosoff_max';
+    private const MAX_CONNECTOR = 'abc_max';
 
     /**
      * @var array<string, mixed>|null

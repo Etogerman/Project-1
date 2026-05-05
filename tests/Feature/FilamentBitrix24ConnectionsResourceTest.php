@@ -207,7 +207,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'portal_domain' => $profile->portal_domain,
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($firstChannel),
-            'connector_code' => 'abrikosoff_telegram',
+            'connector_code' => 'abc_telegram',
             'line_id' => 'line-one',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
@@ -280,7 +280,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         Livewire::actingAs($employee)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
-            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abrikosoff_telegram')
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram')
             ->set("openLineRouteForms.{$channel->id}.line_id", 'line-editable')
             ->set("openLineRouteForms.{$channel->id}.source_id", 'source-editable')
             ->call('saveOpenLineRoute', $channel->id)
@@ -292,7 +292,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'portal_domain' => 'crm.edit.test',
             'profile_key' => 'staging',
             'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
-            'connector_code' => 'abrikosoff_telegram',
+            'connector_code' => 'abc_telegram',
             'line_id' => 'line-editable',
             'line_owner_key' => 'crm.edit.test#line-editable',
             'source_id' => 'source-editable',
@@ -327,7 +327,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'portal_domain' => $profile->portal_domain,
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($firstChannel),
-            'connector_code' => 'abrikosoff_telegram',
+            'connector_code' => 'abc_telegram',
             'line_id' => 'shared-line',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
@@ -335,7 +335,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->set("openLineRouteForms.{$secondChannel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
-            ->set("openLineRouteForms.{$secondChannel->id}.connector_code", 'abrikosoff_max')
+            ->set("openLineRouteForms.{$secondChannel->id}.connector_code", 'abc_max')
             ->set("openLineRouteForms.{$secondChannel->id}.line_id", 'shared-line')
             ->call('saveOpenLineRoute', $secondChannel->id)
             ->assertSet('openLineRouteErrorMessage', 'Открытая линия уже занята другим рабочим маршрутом.');
@@ -364,7 +364,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
-            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abrikosoff_telegram_account')
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram_account')
             ->set("openLineRouteForms.{$channel->id}.line_id", 'account-line')
             ->call('saveOpenLineRoute', $channel->id)
             ->assertSet('openLineRouteErrorMessage', 'Telegram account пока нельзя сделать рабочим маршрутом открытых линий.');

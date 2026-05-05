@@ -17,7 +17,7 @@ return [
     ],
 
     'connectors' => [
-        'abrikosoff_telegram' => [
+        'abc_telegram' => [
             'name' => 'Abrikosoff Telegram',
             'component' => 'abrikosoff:imconnector.telegram',
             'line_id' => '32',
@@ -37,7 +37,7 @@ return [
             'color' => '#27A7E7',
             'label' => 'TG',
         ],
-        'abrikosoff_max' => [
+        'abc_max' => [
             'name' => 'Abrikosoff MAX',
             'component' => 'abrikosoff:imconnector.max',
             'line_id' => '31',

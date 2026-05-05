@@ -14,13 +14,13 @@ class AbrikosoffImconnectorTelegramComponent extends CBitrixComponent
     {
         $lineId = trim((string) ($this->arParams['LINE'] ?? ''));
 
-        Runtime::markConnectorReady('abrikosoff_telegram', $lineId);
+        Runtime::markConnectorReady('abc_telegram', $lineId);
 
         $this->arResult = [
             'LINE_ID' => $lineId,
-            'LINE_NAME' => Runtime::lineName('abrikosoff_telegram', $lineId),
-            'CALLBACK_URL' => Runtime::laravelOpenlinesCallbackUrlForLine('abrikosoff_telegram', $lineId),
-            'CONNECTOR_CODE' => 'abrikosoff_telegram',
+            'LINE_NAME' => Runtime::lineName('abc_telegram', $lineId),
+            'CALLBACK_URL' => Runtime::laravelOpenlinesCallbackUrlForLine('abc_telegram', $lineId),
+            'CONNECTOR_CODE' => 'abc_telegram',
         ];
 
         $this->includeComponentTemplate();

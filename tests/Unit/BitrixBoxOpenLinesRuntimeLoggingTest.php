@@ -33,7 +33,7 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
 
         $this->assertSame(
             'https://local-ngrok.example.test/callbacks/bitrix24/openlines',
-            $this->callbackUrlForLine('abrikosoff_telegram', '9'),
+            $this->callbackUrlForLine('abc_telegram', '9'),
         );
 
         $lineInfo = Runtime::onInfoLine('9');
@@ -54,7 +54,7 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
 
         $this->assertSame(
             'https://staging.example.test/callbacks/bitrix24/openlines',
-            $this->callbackUrlForLine('abrikosoff_telegram', '9'),
+            $this->callbackUrlForLine('abc_telegram', '9'),
         );
     }
 
@@ -70,7 +70,7 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
 
         $this->assertSame(
             'https://local-ngrok.example.test/callbacks/bitrix24/openlines',
-            $this->callbackUrlForLine('abrikosoff_telegram', '9'),
+            $this->callbackUrlForLine('abc_telegram', '9'),
         );
     }
 
@@ -83,7 +83,7 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
                 'application_token' => 'application-token-secret-456',
             ],
             'data' => [
-                'CONNECTOR' => 'abrikosoff_telegram',
+                'CONNECTOR' => 'abc_telegram',
                 'LINE' => '32',
                 'DATA' => [[
                     'message' => [
@@ -168,7 +168,7 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
                 'application_token' => 'application-token',
             ],
             'connectors' => [
-                'abrikosoff_telegram' => [
+                'abc_telegram' => [
                     'name' => 'Abrikosoff Telegram',
                     'component' => 'abrikosoff:imconnector.telegram',
                     'line_id' => '2',
@@ -180,7 +180,7 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
                         ],
                     ] + $telegramLines,
                 ],
-                'abrikosoff_max' => [
+                'abc_max' => [
                     'name' => 'Abrikosoff MAX',
                     'component' => 'abrikosoff:imconnector.max',
                     'line_id' => '3',

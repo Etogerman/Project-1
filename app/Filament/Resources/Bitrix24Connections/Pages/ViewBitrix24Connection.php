@@ -492,7 +492,7 @@ class ViewBitrix24Connection extends ViewRecord
     {
         return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
             Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => (string) ($profile->openLinesConnectorCodeForPlatform(Channel::PLATFORM_TELEGRAM) ?? ''),
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => 'abrikosoff_telegram_account',
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => 'abc_telegram_account',
             Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => (string) ($profile->openLinesConnectorCodeForPlatform(Channel::PLATFORM_MAX) ?? ''),
             default => '',
         };
