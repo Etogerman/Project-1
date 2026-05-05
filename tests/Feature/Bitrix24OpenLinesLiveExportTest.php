@@ -870,6 +870,97 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.operator.answer.json');
     }
 
+    public function test_manual_reply_uses_active_deal_binding_from_open_line_dialog_without_operator_takeover(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_MAX,
+            contactAttributes: [
+                'bitrix24_contact_id' => '71034',
+            ],
+            dialogAttributes: [
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|abrikosoff-dialog:396|101154',
+                'bitrix24_open_line_resolved_chat_id_override' => '162490',
+                'bitrix24_open_line_binding_verified_at' => now(),
+            ],
+        );
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Ручной ответ через активную сделку ОЛ',
+        ]);
+
+        Http::fake(function (Request $request) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
+                return Http::response([
+                    'result' => [
+                        [
+                            'CHAT_ID' => '162490',
+                            'CONNECTOR_ID' => 'abrikosoff_max',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
+                return Http::response([
+                    'result' => [
+                        'IM' => [
+                            [
+                                'VALUE' => 'imol|abrikosoff_max|line-max|abrikosoff-dialog:396|101154',
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                return Http::response([
+                    'result' => [
+                        'id' => '162490',
+                        'entity_data_1' => 'Y|DEAL|136062|N|N|972928|1777930425|0|0|0',
+                        'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|71034|DEAL|136062',
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json') {
+                return Http::response([
+                    'result' => [
+                        'MESSAGE_ID' => '10301253',
+                    ],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMOPENLINES_CRM_MESSAGE_ADD,
+            'resolved_bitrix_chat_id' => '162490',
+            'resolved_crm_entity_type' => 'DEAL',
+            'resolved_crm_entity_id' => '136062',
+            'bitrix_remote_message_id' => '10301253',
+        ]);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json'
+            && $request['CHAT_ID'] === '162490'
+            && $request['USER_ID'] === 321
+            && $request['CRM_ENTITY_TYPE'] === 'DEAL'
+            && $request['CRM_ENTITY'] === '136062'
+            && $request['MESSAGE'] === 'Ручной ответ через активную сделку ОЛ');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.start.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.operator.answer.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+    }
+
     public function test_manual_reply_binding_failure_does_not_fallback_to_new_session(): void
     {
         $this->makeActiveConnection();
