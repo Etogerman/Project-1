@@ -5,6 +5,7 @@ namespace App\Services\Bitrix24;
 use App\Data\Bitrix24\Bitrix24LiveMessageExportQueueResultData;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Models\Bitrix24MessageExport;
+use App\Models\Bitrix24SyncLog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Support\Str;
@@ -12,11 +13,13 @@ use Illuminate\Support\Str;
 class QueueBitrix24LiveMessageExportAction
 {
     public const UNCLAIMED_PENDING_RECOVERY_SECONDS = 120;
+
     private const DELAYED_PENDING_RECOVERY_BUFFER_SECONDS = 5;
 
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly IsMessageReadyForBitrix24LiveExportAction $isMessageReadyForBitrix24LiveExportAction,
+        private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
     ) {}
 
     public function handle(Message|int $message, bool $retryAfterSync = false): Bitrix24LiveMessageExportQueueResultData
@@ -105,9 +108,14 @@ class QueueBitrix24LiveMessageExportAction
             ],
         );
 
-        ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)->afterCommit();
+        $this->logLiveExportQueued($message, $rootContact->id, $retryAfterSync, $liveBatchUuid, $existingExport);
+
+        ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)
+            ->onQueue(ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME)
+            ->afterCommit();
         // The delayed recovery path must survive a failed afterCommit handoff of the immediate job.
         ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)
+            ->onQueue(ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME)
             ->delay(now()->addSeconds(
                 self::UNCLAIMED_PENDING_RECOVERY_SECONDS + self::DELAYED_PENDING_RECOVERY_BUFFER_SECONDS
             ))
@@ -148,5 +156,39 @@ class QueueBitrix24LiveMessageExportAction
             && blank($export->live_claim_uuid)
             && $export->updated_at !== null
             && $export->updated_at->lte(now()->subSeconds(self::UNCLAIMED_PENDING_RECOVERY_SECONDS));
+    }
+
+    private function logLiveExportQueued(
+        Message $message,
+        int $rootContactId,
+        bool $retryAfterSync,
+        string $liveBatchUuid,
+        ?Bitrix24MessageExport $existingExport,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'openlines_live_export_queued',
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'message_id' => $message->id,
+                'dialog_id' => $message->dialog_id,
+                'contact_id' => $message->contact_id,
+                'root_contact_id' => $rootContactId,
+                'channel_id' => $message->channel_id,
+                'direction' => $message->direction,
+                'message_kind' => $message->message_kind,
+                'message_created_at' => $message->created_at?->toISOString(),
+                'retry_after_sync' => $retryAfterSync,
+                'live_batch_uuid' => $liveBatchUuid,
+                'previous_export_status' => $existingExport?->export_status,
+                'previous_live_batch_uuid' => $existingExport?->live_batch_uuid,
+                'queued_at' => now()->toISOString(),
+                'queue_connection' => config('queue.default'),
+                'queue_name' => ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME,
+            ],
+            entityType: 'message',
+            entityId: (string) $message->id,
+            fingerprint: 'openlines-live-export-queued:'.$liveBatchUuid,
+        );
     }
 }

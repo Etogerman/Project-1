@@ -1995,8 +1995,18 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                 'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($dialog->channel),
                 'connector_code' => $connectorCode,
                 'line_id' => $lineId,
+                'source_id' => $dialog->channel->platform === Channel::PLATFORM_MAX
+                    ? $profile->max_source_id
+                    : $profile->telegram_source_id,
                 'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             ]);
+        } else {
+            $route->forceFill([
+                'source_id' => $dialog->channel->platform === Channel::PLATFORM_MAX
+                    ? $profile->max_source_id
+                    : $profile->telegram_source_id,
+                'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            ])->save();
         }
 
         $dialog->forceFill([

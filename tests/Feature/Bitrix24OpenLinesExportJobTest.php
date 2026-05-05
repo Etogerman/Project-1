@@ -49,7 +49,26 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
         $job = new ExportMessageToBitrix24OpenLinesJob(messageId: $message->id, retryAfterSync: true, liveBatchUuid: $liveBatchUuid);
         $job->handle($action, app(LogBitrix24ApiCallAction::class));
 
-        $this->assertDatabaseCount('bitrix24_sync_logs', 0);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'openlines_live_export_job_started',
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
+            'fingerprint' => 'openlines-live-export-job-started:'.$liveBatchUuid,
+        ]);
+
+        $syncLog = Bitrix24SyncLog::query()
+            ->where('operation', 'openlines_live_export_job_started')
+            ->firstOrFail();
+
+        $this->assertSame($message->id, $syncLog->request_payload['message_id'] ?? null);
+        $this->assertSame($message->dialog_id, $syncLog->request_payload['dialog_id'] ?? null);
+        $this->assertSame($message->contact_id, $syncLog->request_payload['contact_id'] ?? null);
+        $this->assertTrue($syncLog->request_payload['retry_after_sync'] ?? false);
+        $this->assertSame($liveBatchUuid, $syncLog->request_payload['live_batch_uuid'] ?? null);
+        $this->assertSame(config('queue.default'), $syncLog->request_payload['queue_connection'] ?? null);
+        $this->assertSame(ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME, $syncLog->request_payload['queue_name'] ?? null);
     }
 
     public function test_job_logs_critical_and_persists_domain_failure_when_export_throws(): void

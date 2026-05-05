@@ -123,7 +123,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($storedResult): bool {
             return $job->messageId === $storedResult->message->id
-                && $job->retryAfterSync === false;
+                && $job->retryAfterSync === false
+                && $job->queue === ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME;
         });
 
         $this->assertDatabaseHas('bitrix24_message_exports', [
@@ -132,6 +133,27 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
         ]);
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'openlines_live_export_queued',
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+            'entity_type' => 'message',
+            'entity_id' => (string) $storedResult->message->id,
+        ]);
+
+        $syncLog = Bitrix24SyncLog::query()
+            ->where('operation', 'openlines_live_export_queued')
+            ->firstOrFail();
+
+        $this->assertSame($storedResult->message->id, $syncLog->request_payload['message_id'] ?? null);
+        $this->assertSame($storedResult->message->dialog_id, $syncLog->request_payload['dialog_id'] ?? null);
+        $this->assertSame($storedResult->message->contact_id, $syncLog->request_payload['contact_id'] ?? null);
+        $this->assertSame($storedResult->message->channel_id, $syncLog->request_payload['channel_id'] ?? null);
+        $this->assertFalse($syncLog->request_payload['retry_after_sync'] ?? true);
+        $this->assertNotEmpty($syncLog->request_payload['live_batch_uuid'] ?? null);
+        $this->assertSame(config('queue.default'), $syncLog->request_payload['queue_connection'] ?? null);
+        $this->assertSame(ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME, $syncLog->request_payload['queue_name'] ?? null);
     }
 
     public function test_outbound_store_actions_queue_live_export_jobs(): void
@@ -4744,6 +4766,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message, &$immediateBatchUuid): bool {
                 if (
                     $job->messageId !== $message->id
+                    || $job->queue !== ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME
                     || $job->delay !== null
                     || $job->afterCommit !== true
                     || blank($job->liveBatchUuid)
@@ -4758,6 +4781,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($message, $now, $immediateBatchUuid): bool {
                 return $job->messageId === $message->id
+                    && $job->queue === ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME
                     && $job->delay instanceof Carbon
                     && $job->afterCommit === false
                     && $job->delay->equalTo($now->copy()->addSeconds(
@@ -5242,8 +5266,18 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($dialog->channel),
                 'connector_code' => $connectorCode,
                 'line_id' => $lineId,
+                'source_id' => $dialog->channel->platform === Channel::PLATFORM_MAX
+                    ? $profile->max_source_id
+                    : $profile->telegram_source_id,
                 'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             ]);
+        } else {
+            $route->forceFill([
+                'source_id' => $dialog->channel->platform === Channel::PLATFORM_MAX
+                    ? $profile->max_source_id
+                    : $profile->telegram_source_id,
+                'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            ])->save();
         }
 
         $dialog->forceFill([

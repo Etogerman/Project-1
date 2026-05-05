@@ -2797,11 +2797,11 @@
     }
 
     .ac-route-col-config {
-        width: 18rem;
+        width: 24rem;
     }
 
     .ac-route-col-diagnostics {
-        width: 10rem;
+        width: 12rem;
     }
 
     .ac-route-col-action {
@@ -2855,7 +2855,7 @@
 
     @media (max-width: 1180px) {
         .ac-bitrix-table--routes {
-            min-width: 760px;
+            min-width: 940px;
         }
 
         .ac-route-col-channel {
@@ -2863,11 +2863,11 @@
         }
 
         .ac-route-col-config {
-            width: 18rem;
+            width: 24rem;
         }
 
         .ac-route-col-diagnostics {
-            width: 10rem;
+            width: 12rem;
         }
     }
 

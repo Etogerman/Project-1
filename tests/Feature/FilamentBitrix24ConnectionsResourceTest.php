@@ -444,6 +444,14 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['LINE'] ?? null) === 'line-777'
                     && ($params['ACTIVE'] ?? null) === '1')
                 ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === 'line-777'
+                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_TELEGRAM_DEV_GERMAN_MAIN')
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         Livewire::actingAs($superadmin)
@@ -541,6 +549,14 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-max'
                     && ($params['ACTIVE'] ?? null) === '1')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === 'line-max'
+                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_MAX_DEV_GERMAN_MAIN')
                 ->andReturn($this->bitrixResponse(true, true));
         });
 
@@ -686,6 +702,14 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.activate'
                     && ($params['LINE'] ?? null) === 'line-existing')
                 ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === 'line-existing'
+                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_TELEGRAM_DEV_GERMAN_MAIN')
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         Livewire::actingAs($superadmin)
@@ -738,7 +762,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
-        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel, $connection): void {
             $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
             $mock->shouldReceive('call')
                 ->never()
@@ -752,8 +776,27 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['NAME'] ?? null) === 'Герман-4 Telegram bot')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
-            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
-            $mock->shouldNotReceive('call')->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && ($params['LINE'] ?? null) === 'line-existing'
+                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id.':connector:abc_telegram_dev_german_main:line:line-existing')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.activate'
+                    && $usedConnection->is($connection)
+                    && ($params['LINE'] ?? null) === 'line-existing')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === 'line-existing')
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         Livewire::actingAs($superadmin)
@@ -807,7 +850,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
-        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel, $connection): void {
             $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
             $mock->shouldReceive('call')
                 ->never()
@@ -822,8 +865,27 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 Telegram bot')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
-            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
-            $mock->shouldNotReceive('call')->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && ($params['LINE'] ?? null) === 'line-existing'
+                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id.':connector:abc_telegram_dev_german_main:line:line-existing')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.activate'
+                    && $usedConnection->is($connection)
+                    && ($params['LINE'] ?? null) === 'line-existing')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === 'line-existing')
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         Livewire::actingAs($superadmin)
@@ -898,9 +960,23 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->never()
                 ->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
             $mock->shouldReceive('call')
-                ->never()
-                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
-            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
+                ->twice()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && in_array($params['LINE'] ?? null, ['line-telegram', 'line-max'], true))
+                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldReceive('call')
+                ->twice()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.activate'
+                    && $usedConnection->is($connection)
+                    && in_array($params['LINE'] ?? null, ['line-telegram', 'line-max'], true))
+                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldReceive('call')
+                ->twice()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && in_array($params['CONFIG_ID'] ?? null, ['line-telegram', 'line-max'], true))
+                ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
                 ->once()
@@ -1059,8 +1135,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'credentials' => ['token' => 'telegram-token'],
         ]);
 
-        $cards = collect(Livewire::actingAs($superadmin)
-            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+        $component = Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()]);
+
+        $cards = collect($component
             ->instance()
             ->getOpenLineRouteCards())
             ->keyBy('channel_id');
@@ -1089,8 +1167,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'credentials' => ['token' => 'telegram-token'],
         ]);
 
-        $cards = collect(Livewire::actingAs($superadmin)
-            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+        $component = Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()]);
+
+        $cards = collect($component
             ->instance()
             ->getOpenLineRouteCards())
             ->keyBy('channel_id');
@@ -1130,8 +1210,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'credentials' => ['token' => 'telegram-token'],
         ]);
 
-        $cards = collect(Livewire::actingAs($superadmin)
-            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+        $component = Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()]);
+
+        $cards = collect($component
             ->instance()
             ->getOpenLineRouteCards())
             ->keyBy('channel_id');

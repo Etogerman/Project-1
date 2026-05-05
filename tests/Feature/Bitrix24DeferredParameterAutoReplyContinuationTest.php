@@ -17,7 +17,6 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;

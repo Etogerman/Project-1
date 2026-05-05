@@ -90,6 +90,7 @@ class AutoSetupBitrix24OpenLineRouteAction
             $this->registerConnector($connection, $profile, $channel, $connectorCode);
             $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId);
             $this->activateConnector($connection, $connectorCode, $lineId);
+            $this->syncOpenLineConfig($connection, $profile, $channel, $lineId, $sourceId);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->saveRoute(
                 route: $route,
@@ -141,6 +142,7 @@ class AutoSetupBitrix24OpenLineRouteAction
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
             $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
             $this->activateConnector($connection, (string) $route->connector_code, (string) $route->line_id);
+            $this->syncOpenLineConfig($connection, $profile, $channel, (string) $route->line_id, (string) $route->source_id);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -271,13 +273,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         string $sourceId,
     ): string {
         $response = $this->apiClient->call('imopenlines.config.add', [
-            'PARAMS' => [
-                'LINE_NAME' => $this->buildLineName($profile, $channel),
-                'ACTIVE' => 'Y',
-                'CRM' => 'Y',
-                'CRM_CREATE' => 'deal',
-                'CRM_SOURCE' => $sourceId,
-            ],
+            'PARAMS' => $this->openLineConfigParams($profile, $channel, $sourceId),
         ], $connection);
 
         $this->assertSuccessfulResponse($response, 'Не удалось создать открытую линию в Bitrix24.');
@@ -287,6 +283,38 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         return trim((string) $response->result);
+    }
+
+    private function syncOpenLineConfig(
+        Bitrix24Connection $connection,
+        Bitrix24Profile $profile,
+        Channel $channel,
+        string $lineId,
+        string $sourceId,
+    ): void {
+        $response = $this->apiClient->call('imopenlines.config.update', [
+            'CONFIG_ID' => $lineId,
+            'PARAMS' => $this->openLineConfigParams($profile, $channel, $sourceId),
+        ], $connection);
+
+        $this->assertSuccessfulBooleanResult($response, 'Не удалось синхронизировать настройки открытой линии Bitrix24.');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function openLineConfigParams(
+        Bitrix24Profile $profile,
+        Channel $channel,
+        string $sourceId,
+    ): array {
+        return [
+            'LINE_NAME' => $this->buildLineName($profile, $channel),
+            'ACTIVE' => 'Y',
+            'CRM' => 'Y',
+            'CRM_CREATE' => 'deal',
+            'CRM_SOURCE' => $sourceId,
+        ];
     }
 
     private function registerConnector(
