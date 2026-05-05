@@ -57,6 +57,8 @@ class ProcessBitrix24OpenLinesWebhookAction
 
     private const ECHO_CANDIDATE_FRESH_WINDOW_SECONDS = 10;
 
+    private const VERIFIED_BINDING_FAST_PATH_WINDOW_SECONDS = 1800;
+
     private const ECHO_RESULT_NONE = 'none';
 
     private const ECHO_RESULT_SKIPPED = 'skipped';
@@ -320,6 +322,10 @@ class ProcessBitrix24OpenLinesWebhookAction
         Bitrix24OpenLinesOperatorMessageData $messageData,
         Bitrix24OpenLinesRouteData $route,
     ): bool {
+        if ($this->messageMatchesFreshVerifiedBinding($dialog, $messageData)) {
+            return false;
+        }
+
         $connection = $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle();
 
         if ($messageData->sourceBitrixChatId !== null) {
@@ -376,21 +382,63 @@ class ProcessBitrix24OpenLinesWebhookAction
         return true;
     }
 
+    private function messageMatchesFreshVerifiedBinding(
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+    ): bool {
+        $sourceChatId = $this->positiveIntegerString($messageData->sourceBitrixChatId);
+        $verifiedChatId = $this->positiveIntegerString($dialog->bitrix24_open_line_resolved_chat_id_override);
+
+        if (
+            $sourceChatId === null
+            || $verifiedChatId === null
+            || $sourceChatId !== $verifiedChatId
+            || $dialog->bitrix24_open_line_binding_verified_at === null
+        ) {
+            return false;
+        }
+
+        return $dialog->bitrix24_open_line_binding_verified_at->greaterThanOrEqualTo(
+            now()->subSeconds(self::VERIFIED_BINDING_FAST_PATH_WINDOW_SECONDS)
+        );
+    }
+
     private function syncCurrentOpenLineBinding(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void
     {
+        $verifiedAt = now();
+
         if (
             $dialog->bitrix24_open_line_user_code_override === $currentChat->userCode
             && $dialog->bitrix24_open_line_resolved_chat_id_override === $currentChat->chatId
             && $dialog->bitrix24_open_line_binding_verified_at !== null
         ) {
+            $dialog->forceFill([
+                'bitrix24_open_line_binding_verified_at' => $verifiedAt,
+            ])->save();
+
             return;
         }
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $currentChat->userCode,
             'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
-            'bitrix24_open_line_binding_verified_at' => now(),
+            'bitrix24_open_line_binding_verified_at' => $verifiedAt,
         ])->save();
+    }
+
+    private function positiveIntegerString(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        if ($normalized === '' || ! ctype_digit($normalized) || (int) $normalized <= 0) {
+            return null;
+        }
+
+        return $normalized;
     }
 
     private function ignoreRouteMismatchEvent(
