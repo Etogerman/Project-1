@@ -631,9 +631,14 @@ class Channel extends Model
         $this->forceFill($attributes);
 
         if (! $this->hasUnreadableCredentials()) {
-            $this->saveQuietly();
+            try {
+                $this->saveQuietly();
 
-            return;
+                return;
+            } catch (DecryptException) {
+                // Fall through to a direct operational-state update when legacy
+                // encrypted credentials cannot be compared during dirty checks.
+            }
         }
 
         if ($this->usesTimestamps()) {

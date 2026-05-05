@@ -2,14 +2,76 @@
 
 namespace Tests\Unit;
 
+use Abrikosoff\BitrixBox\OpenLines\Runtime;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use ReflectionProperty;
 
 class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
 {
     public static function setUpBeforeClass(): void
     {
         require_once dirname(__DIR__, 2).'/bitrix-box/abrikosoff-openlines/local/php_interface/include/abrikosoff_openlines/src/Runtime.php';
+    }
+
+    protected function tearDown(): void
+    {
+        $this->setRuntimeConfig(null);
+
+        parent::tearDown();
+    }
+
+    public function test_openlines_callback_url_for_line_uses_owner_callback_base_url(): void
+    {
+        $this->setRuntimeConfig($this->runtimeConfig([
+            '9' => [
+                'line_name' => 'Local Telegram',
+                'owner_profile_key' => 'dev-local',
+                'owner_callback_base_url' => 'https://local-ngrok.example.test',
+            ],
+        ]));
+
+        $this->assertSame(
+            'https://local-ngrok.example.test/callbacks/bitrix24/openlines',
+            $this->callbackUrlForLine('abrikosoff_telegram', '9'),
+        );
+
+        $lineInfo = Runtime::onInfoLine('9');
+
+        $this->assertIsArray($lineInfo);
+        $this->assertSame('https://local-ngrok.example.test/callbacks/bitrix24/openlines', $lineInfo['url']);
+        $this->assertSame('https://local-ngrok.example.test/callbacks/bitrix24/openlines', $lineInfo['url_im']);
+    }
+
+    public function test_openlines_callback_url_for_line_falls_back_to_global_url(): void
+    {
+        $this->setRuntimeConfig($this->runtimeConfig([
+            '9' => [
+                'line_name' => 'Local Telegram without owner URL',
+                'owner_profile_key' => 'dev-local',
+            ],
+        ]));
+
+        $this->assertSame(
+            'https://staging.example.test/callbacks/bitrix24/openlines',
+            $this->callbackUrlForLine('abrikosoff_telegram', '9'),
+        );
+    }
+
+    public function test_openlines_callback_url_for_line_does_not_duplicate_callback_path(): void
+    {
+        $this->setRuntimeConfig($this->runtimeConfig([
+            '9' => [
+                'line_name' => 'Local Telegram',
+                'owner_profile_key' => 'dev-local',
+                'owner_callback_base_url' => 'https://local-ngrok.example.test/callbacks/bitrix24/openlines',
+            ],
+        ]));
+
+        $this->assertSame(
+            'https://local-ngrok.example.test/callbacks/bitrix24/openlines',
+            $this->callbackUrlForLine('abrikosoff_telegram', '9'),
+        );
     }
 
     public function test_callback_failure_log_message_does_not_expose_secrets_or_message_text(): void
@@ -63,7 +125,7 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
     private function callbackFailureLogMessage(array $payload, string $body): string
     {
         $method = new ReflectionMethod(
-            \Abrikosoff\BitrixBox\OpenLines\Runtime::class,
+            Runtime::class,
             'openLinesCallbackFailureLogMessage',
         );
 
@@ -75,5 +137,72 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
             500,
             "curl failed\nwith newline",
         );
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $config
+     */
+    private function setRuntimeConfig(?array $config): void
+    {
+        $property = new ReflectionProperty(
+            Runtime::class,
+            'config',
+        );
+
+        $property->setValue(null, $config);
+    }
+
+    /**
+     * @param  array<string, array<string, string>>  $telegramLines
+     * @return array<string, mixed>
+     */
+    private function runtimeConfig(array $telegramLines): array
+    {
+        return [
+            'laravel' => [
+                'openlines_callback_url' => 'https://staging.example.test/callbacks/bitrix24/openlines',
+            ],
+            'auth' => [
+                'portal_domain' => 'stagecrm.fvds.ru',
+                'member_id' => 'member-id',
+                'application_token' => 'application-token',
+            ],
+            'connectors' => [
+                'abrikosoff_telegram' => [
+                    'name' => 'Abrikosoff Telegram',
+                    'component' => 'abrikosoff:imconnector.telegram',
+                    'line_id' => '2',
+                    'lines' => [
+                        '2' => [
+                            'line_name' => 'Staging Telegram',
+                            'owner_profile_key' => 'staging',
+                            'owner_callback_base_url' => 'https://staging.example.test',
+                        ],
+                    ] + $telegramLines,
+                ],
+                'abrikosoff_max' => [
+                    'name' => 'Abrikosoff MAX',
+                    'component' => 'abrikosoff:imconnector.max',
+                    'line_id' => '3',
+                    'lines' => [
+                        '3' => [
+                            'line_name' => 'Staging MAX',
+                            'owner_profile_key' => 'staging',
+                            'owner_callback_base_url' => 'https://staging.example.test',
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    private function callbackUrlForLine(string $connectorCode, string $lineId): string
+    {
+        $method = new ReflectionMethod(
+            Runtime::class,
+            'laravelOpenlinesCallbackUrlForLine',
+        );
+
+        return (string) $method->invoke(null, $connectorCode, $lineId);
     }
 }

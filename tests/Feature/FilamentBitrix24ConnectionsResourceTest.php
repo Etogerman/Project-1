@@ -462,7 +462,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $profile->refresh();
 
         $this->assertSame('abc_telegram_dev_german_main', $profile->telegram_connector_code);
-        $this->assertSame('line-777', $profile->telegram_line_id);
+        $this->assertNull($profile->telegram_line_id);
         $this->assertSame('ABC_TELEGRAM_DEV_GERMAN_MAIN', $profile->telegram_source_id);
     }
 
@@ -560,7 +560,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $profile->refresh();
 
         $this->assertSame('abc_max_dev_german_main', $profile->max_connector_code);
-        $this->assertSame('line-max', $profile->max_line_id);
+        $this->assertNull($profile->max_line_id);
         $this->assertSame('ABC_MAX_DEV_GERMAN_MAIN', $profile->max_source_id);
     }
 

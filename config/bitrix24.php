@@ -54,8 +54,6 @@ return [
     ],
 
     'openlines' => [
-        'telegram_line_id' => env('BITRIX24_TELEGRAM_LINE_ID'),
-        'max_line_id' => env('BITRIX24_MAX_LINE_ID'),
         'telegram_connector_code' => env('BITRIX24_TELEGRAM_CONNECTOR_CODE'),
         'max_connector_code' => env('BITRIX24_MAX_CONNECTOR_CODE'),
         'runtime_application_token_hashes' => array_values(array_filter(array_map(

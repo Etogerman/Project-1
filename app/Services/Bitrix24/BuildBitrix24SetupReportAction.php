@@ -167,10 +167,13 @@ class BuildBitrix24SetupReportAction
                     $profile->profile_key,
                 ),
             ),
-            $this->buildTelegramLineReadinessCheck(
+            $this->buildLineReadinessCheck(
                 key: 'runtime.current_profile.telegram_line_id',
                 label: 'Current runtime Telegram LINE_ID',
                 profile: $profile,
+                profileField: 'telegram_line_id',
+                channelType: Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+                platformLabel: 'Telegram',
             ),
             $this->buildRequiredValueCheck(
                 key: 'runtime.current_profile.max_connector_code',
@@ -181,14 +184,13 @@ class BuildBitrix24SetupReportAction
                     $profile->profile_key,
                 ),
             ),
-            $this->buildRequiredValueCheck(
+            $this->buildLineReadinessCheck(
                 key: 'runtime.current_profile.max_line_id',
                 label: 'Current runtime MAX LINE_ID',
-                value: (string) ($profile->max_line_id ?? ''),
-                notes: sprintf(
-                    'Current runtime profile `%s` must carry a MAX LINE_ID for covered Slice 3A Open Lines routing.',
-                    $profile->profile_key,
-                ),
+                profile: $profile,
+                profileField: 'max_line_id',
+                channelType: Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+                platformLabel: 'MAX',
             ),
         ];
     }
@@ -369,10 +371,13 @@ class BuildBitrix24SetupReportAction
                 value: (string) ($profile->telegram_connector_code ?? ''),
                 notes: 'full_live profiles require a Telegram connector_code for Open Lines routing.',
             ),
-            $this->buildTelegramLineReadinessCheck(
+            $this->buildLineReadinessCheck(
                 key: $prefix.'.telegram_line_id',
                 label: sprintf('Profile `%s` Telegram LINE_ID', $profile->profile_key),
                 profile: $profile,
+                profileField: 'telegram_line_id',
+                channelType: Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+                platformLabel: 'Telegram',
             ),
             $this->buildRequiredValueCheck(
                 key: $prefix.'.max_connector_code',
@@ -380,11 +385,13 @@ class BuildBitrix24SetupReportAction
                 value: (string) ($profile->max_connector_code ?? ''),
                 notes: 'full_live profiles require a MAX connector_code for Open Lines routing.',
             ),
-            $this->buildRequiredValueCheck(
+            $this->buildLineReadinessCheck(
                 key: $prefix.'.max_line_id',
                 label: sprintf('Profile `%s` MAX LINE_ID', $profile->profile_key),
-                value: (string) ($profile->max_line_id ?? ''),
-                notes: 'full_live profiles require a MAX LINE_ID for Open Lines routing.',
+                profile: $profile,
+                profileField: 'max_line_id',
+                channelType: Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+                platformLabel: 'MAX',
             ),
             $this->buildDistinctValuePairCheck(
                 key: $prefix.'.connector_code_distinct',
@@ -401,24 +408,17 @@ class BuildBitrix24SetupReportAction
     /**
      * @return array{key: string, label: string, value: string, status: string, required: bool, notes: string}
      */
-    private function buildTelegramLineReadinessCheck(string $key, string $label, Bitrix24Profile $profile): array
-    {
-        $profileLineId = $this->nullableString($profile->telegram_line_id);
-
-        if ($profileLineId !== null) {
-            return $this->check(
-                $key,
-                $label,
-                $profileLineId,
-                Bitrix24SetupReportResult::STATUS_OK,
-                true,
-                'Telegram LINE_ID is configured directly on the profile.',
-            );
-        }
-
+    private function buildLineReadinessCheck(
+        string $key,
+        string $label,
+        Bitrix24Profile $profile,
+        string $profileField,
+        string $channelType,
+        string $platformLabel,
+    ): array {
         $routeLineIds = Bitrix24OpenLineRoute::query()
             ->where('bitrix24_profile_id', $profile->id)
-            ->where('channel_type', Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT)
+            ->where('channel_type', $channelType)
             ->where('status', Bitrix24OpenLineRoute::STATUS_ACTIVE)
             ->whereNotNull('line_id')
             ->pluck('line_id')
@@ -435,7 +435,20 @@ class BuildBitrix24SetupReportAction
                 implode(', ', $routeLineIds),
                 Bitrix24SetupReportResult::STATUS_OK,
                 true,
-                'Telegram Open Lines routing is configured through active channel routes.',
+                $platformLabel.' Open Lines routing is configured through active channel routes.',
+            );
+        }
+
+        $profileLineId = $this->nullableString($profile->{$profileField} ?? null);
+
+        if ($profileLineId !== null) {
+            return $this->check(
+                $key,
+                $label,
+                $profileLineId,
+                Bitrix24SetupReportResult::STATUS_OK,
+                true,
+                $platformLabel.' LINE_ID is configured directly on the profile legacy fallback.',
             );
         }
 
@@ -446,8 +459,10 @@ class BuildBitrix24SetupReportAction
             Bitrix24SetupReportResult::STATUS_MISSING,
             true,
             sprintf(
-                'Current runtime profile `%s` must carry a Telegram LINE_ID or at least one active Telegram bot Open Lines route.',
+                'Current runtime profile `%s` must carry a %s LINE_ID legacy fallback or at least one active %s Open Lines route.',
                 $profile->profile_key,
+                $platformLabel,
+                $platformLabel,
             ),
         );
     }
@@ -479,8 +494,20 @@ class BuildBitrix24SetupReportAction
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.max_source_id', $this->stringifyFrozenValue($profile->max_source_id));
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.telegram_connector_code', $this->stringifyFrozenValue($profile->telegram_connector_code));
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.max_connector_code', $this->stringifyFrozenValue($profile->max_connector_code));
-            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.telegram_line_id', $this->stringifyFrozenValue($profile->telegram_line_id));
-            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.max_line_id', $this->stringifyFrozenValue($profile->max_line_id));
+        }
+
+        $routes = Bitrix24OpenLineRoute::query()
+            ->orderBy('profile_key')
+            ->orderBy('channel_id')
+            ->get();
+
+        foreach ($routes as $route) {
+            $routePrefix = sprintf('%s.channel_%d.%s', $route->profile_key, $route->channel_id, $route->channel_type);
+
+            $frozenValues[] = $this->frozenValue('openline_routes', $routePrefix.'.status', $this->stringifyFrozenValue($route->status));
+            $frozenValues[] = $this->frozenValue('openline_routes', $routePrefix.'.connector_code', $this->stringifyFrozenValue($route->connector_code));
+            $frozenValues[] = $this->frozenValue('openline_routes', $routePrefix.'.line_id', $this->stringifyFrozenValue($route->line_id));
+            $frozenValues[] = $this->frozenValue('openline_routes', $routePrefix.'.source_id', $this->stringifyFrozenValue($route->source_id));
         }
 
         foreach ((array) ($config['openlines'] ?? []) as $key => $value) {

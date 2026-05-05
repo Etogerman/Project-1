@@ -31,8 +31,6 @@ class BackfillBitrix24ProfileRoutingFieldsAction
             'max_source_id' => $this->resolveBackfillValue($profile->max_source_id, config('bitrix24.sources.max_id')),
             'telegram_connector_code' => $this->resolveBackfillValue($profile->telegram_connector_code, config('bitrix24.openlines.telegram_connector_code')),
             'max_connector_code' => $this->resolveBackfillValue($profile->max_connector_code, config('bitrix24.openlines.max_connector_code')),
-            'telegram_line_id' => $this->resolveBackfillValue($profile->telegram_line_id, config('bitrix24.openlines.telegram_line_id')),
-            'max_line_id' => $this->resolveBackfillValue($profile->max_line_id, config('bitrix24.openlines.max_line_id')),
         ], static fn (mixed $value): bool => $value !== null);
 
         if ($updates === []) {

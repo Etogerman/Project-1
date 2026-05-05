@@ -427,12 +427,10 @@ class AutoSetupBitrix24OpenLineRouteAction
         $fields = match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
             Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => [
                 'telegram_connector_code' => $connectorCode,
-                'telegram_line_id' => $lineId,
                 'telegram_source_id' => $sourceId,
             ],
             Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => [
                 'max_connector_code' => $connectorCode,
-                'max_line_id' => $lineId,
                 'max_source_id' => $sourceId,
             ],
             default => [],

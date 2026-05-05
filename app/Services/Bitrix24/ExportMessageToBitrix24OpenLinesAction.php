@@ -108,7 +108,6 @@ class ExportMessageToBitrix24OpenLinesAction
                     connection: $this->resolveCurrentConnectionAction->handle(),
                     applyLegacyFallbackSignature: true,
                     requireExpectedResolvedBitrixChatId: true,
-                    allowPostSendBindingResync: false,
                     responsePayload: [
                         'controlled_manual_reply_connector_mirror' => true,
                     ],
@@ -360,6 +359,7 @@ class ExportMessageToBitrix24OpenLinesAction
 
     /**
      * @param  array<string, mixed>  $responsePayload
+     * @param  array<string, mixed>  $requestPayload
      */
     private function completeSuccessfulExport(
         Message $message,
@@ -378,6 +378,7 @@ class ExportMessageToBitrix24OpenLinesAction
         ?string $bitrixRemoteMessageId = null,
         ?string $resolvedCrmEntityType = null,
         ?string $resolvedCrmEntityId = null,
+        array $requestPayload = [],
     ): Message {
         $previousLiveStatus = $dialog->bitrix24_live_status;
         $fakeHappyPathEnabled = $this->fakeHappyPathEnabled();
@@ -420,7 +421,7 @@ class ExportMessageToBitrix24OpenLinesAction
                 'line_id' => $lineId,
                 'retry_after_sync' => $retryAfterSync,
                 'fake_mode' => $fakeHappyPathEnabled,
-            ],
+            ] + $requestPayload,
             responsePayload: $responsePayload,
             connection: null,
             entityType: 'message',
@@ -501,11 +502,7 @@ class ExportMessageToBitrix24OpenLinesAction
 
     private function shouldUseServiceActorManualReplyPath(Message $message, Bitrix24OpenLinesRouteData $route): bool
     {
-        if ($message->message_kind !== Message::KIND_OUTBOUND_MANUAL_REPLY) {
-            return false;
-        }
-
-        return (int) config('bitrix24.openlines.service_user_id', 0) > 0;
+        return false;
     }
 
     private function shouldFallbackToLegacyManualReplyTransport(
@@ -628,6 +625,7 @@ class ExportMessageToBitrix24OpenLinesAction
             $retryAfterSync,
             $applyLegacyFallbackSignature,
         );
+        $payloadChatId = $this->nonEmptyScalarString(data_get($payload, 'MESSAGES.0.chat.id'));
 
         try {
             $response = $this->bitrix24ApiClient->call(
@@ -695,8 +693,45 @@ class ExportMessageToBitrix24OpenLinesAction
                 'rest_method' => $response->restMethod,
                 'verified_binding_resynced_after_chat_mismatch' => $expectedResolvedBitrixChatId !== null
                     && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId,
-            ],
+            ] + $this->resolveLegacyExportAuditResponsePayload($operation, $resolvedBitrixChatId),
+            requestPayload: $this->resolveLegacyExportAuditRequestPayload(
+                $operation,
+                $payloadChatId,
+                $expectedResolvedBitrixChatId,
+            ),
         );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveLegacyExportAuditRequestPayload(
+        string $operation,
+        ?string $payloadChatId,
+        ?string $expectedResolvedBitrixChatId,
+    ): array {
+        if ($operation !== 'openlines_manual_reply_exported_connector_mirror') {
+            return [];
+        }
+
+        return [
+            'payload_chat_id' => $payloadChatId,
+            'expected_current_chat_id' => $expectedResolvedBitrixChatId,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveLegacyExportAuditResponsePayload(string $operation, ?string $resolvedBitrixChatId): array
+    {
+        if ($operation !== 'openlines_manual_reply_exported_connector_mirror') {
+            return [];
+        }
+
+        return [
+            'returned_session_chat_id' => $resolvedBitrixChatId,
+        ];
     }
 
     private function syncMissingBindingToCurrentChatBeforeSend(
@@ -742,7 +777,12 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         try {
-            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handleMatchingChatId(
+                $dialog,
+                $route,
+                $connection,
+                $activeChatId,
+            ) ?? $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
         } catch (Bitrix24ApiException $lookupException) {
             throw new Bitrix24OpenLineMutationGuardException(
                 'Bitrix24 Open Lines verified binding current chat lookup failed before mutating export.',
@@ -782,7 +822,12 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         try {
-            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handleMatchingChatId(
+                $dialog,
+                $route,
+                $connection,
+                $resolvedBitrixChatId,
+            ) ?? $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24LiveExportTransportException(
                 'Bitrix24 Open Lines verified binding post-send lookup outcome is uncertain.',
@@ -889,6 +934,17 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         return $normalized;
+    }
+
+    private function nonEmptyScalarString(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        return $normalized === '' ? null : $normalized;
     }
 
     private function shouldApplyLegacyFallbackSignature(Message $message): bool

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -16,6 +17,13 @@ class Bitrix24OpenLineRoutesBackfillTest extends TestCase
 {
     use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Bitrix24Profile::query()->delete();
+    }
 
     public function test_backfill_creates_legacy_route_from_old_profile_fields_and_pins_dialogs(): void
     {

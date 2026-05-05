@@ -127,15 +127,25 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
-    public function test_openlines_operator_message_from_noncanonical_bitrix_chat_is_ignored_when_canonical_chat_exists(): void
+    public function test_openlines_operator_message_rebinds_to_valid_source_chat_even_when_higher_history_chat_exists(): void
     {
         $connection = $this->makeActiveConnection();
         $dialog = $this->makeDialogContactNumeric($this->createTelegramLiveDialog());
 
-        Http::fake($this->currentOpenLineLookupFakes($dialog, [
+        Http::fake(array_merge($this->currentOpenLineLookupFakes($dialog, [
             '6' => 8,
             '15' => 23,
             '19' => 26,
+        ]), [
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 7200,
+                ],
+            ]),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
         ]));
 
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
@@ -164,25 +174,31 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|15',
             $dialog->bitrix24_open_line_user_code_override,
         );
-        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
 
-        $this->assertDatabaseMissing('messages', [
+        $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
             'provider_event_key' => 'bitrix24-openlines:614',
+            'external_message_id' => '7200',
+            'text' => '2',
         ]);
-        $this->assertDatabaseHas('bitrix24_sync_logs', [
+
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
             'operation' => 'openlines_stale_chat_ignored',
             'entity_type' => 'openlines_webhook_event',
             'entity_id' => (string) $event->id,
-            'status' => 'skipped',
         ]);
 
-        Http::assertNotSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://api.telegram.org/'));
-        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
+        Http::assertSent(function (Request $request): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage'
+                && $request['chat_id'] === 'telegram-chat-100'
+                && $request['text'] === '2';
+        });
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
     }
 
     public function test_openlines_operator_message_uses_canonical_chat_when_higher_chat_belongs_to_another_contact(): void

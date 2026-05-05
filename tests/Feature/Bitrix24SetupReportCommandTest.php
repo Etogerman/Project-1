@@ -7,6 +7,7 @@ use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
+use App\Services\Bitrix24\BuildBitrix24SetupReportAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -111,11 +112,46 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
-        $this->artisan('bitrix24:setup-report')
-            ->expectsOutputToContain('Current runtime Telegram LINE_ID')
-            ->expectsOutputToContain('line-from-route')
-            ->expectsOutputToContain('Bitrix24 setup is ready for the integration foundation stage.')
-            ->assertSuccessful();
+        $report = app(BuildBitrix24SetupReportAction::class)->handle();
+
+        $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
+        $this->assertSame(
+            'line-from-route',
+            collect($report->checks)->firstWhere('key', 'runtime.current_profile.telegram_line_id')['value'] ?? null,
+        );
+    }
+
+    public function test_command_accepts_active_max_route_instead_of_profile_max_line_id(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile([
+            'max_line_id' => null,
+        ]);
+        $this->createActiveConnection($profile);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => $profile->max_connector_code,
+            'line_id' => 'line-max-from-route',
+            'source_id' => $profile->max_source_id,
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+
+        $report = app(BuildBitrix24SetupReportAction::class)->handle();
+
+        $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
+        $this->assertSame(
+            'line-max-from-route',
+            collect($report->checks)->firstWhere('key', 'runtime.current_profile.max_line_id')['value'] ?? null,
+        );
     }
 
     public function test_command_fails_when_current_runtime_callbacks_do_not_resolve_to_single_profile(): void
@@ -213,6 +249,10 @@ class Bitrix24SetupReportCommandTest extends TestCase
 
     private function seedReadyConfig(string $callbackBaseUrl = 'https://project.example.com'): void
     {
+        Bitrix24OpenLineRoute::query()->delete();
+        Bitrix24Connection::query()->delete();
+        Bitrix24Profile::query()->delete();
+
         $callbackBaseUrl = rtrim($callbackBaseUrl, '/');
 
         config()->set('bitrix24', array_replace_recursive(config('bitrix24'), [

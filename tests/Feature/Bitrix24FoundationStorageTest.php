@@ -6,8 +6,8 @@ use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
-use App\Services\Bitrix24\BackfillBitrix24ProfileRoutingFieldsAction;
 use App\Services\Bitrix24\BackfillBitrix24ConnectionProfilesAction;
+use App\Services\Bitrix24\BackfillBitrix24ProfileRoutingFieldsAction;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
 use App\Services\Bitrix24\NormalizeBitrix24ProfileCallbackBaseUrlsAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24CallbackBaseUrlAction;
@@ -500,7 +500,7 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertTrue(app(ResolveCurrentBitrix24ProfileAction::class)->handle()->is($profile));
     }
 
-    public function test_backfill_profile_routing_fields_assigns_current_runtime_profile_from_legacy_config(): void
+    public function test_backfill_profile_routing_fields_assigns_non_line_values_from_legacy_config(): void
     {
         $profile = Bitrix24Profile::query()->create([
             'portal_domain' => 'crm.alexlesley.biz',
@@ -530,8 +530,8 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertSame('ABRIKOSOFF_MAX', $profile->max_source_id);
         $this->assertSame('abrikosoff_telegram', $profile->telegram_connector_code);
         $this->assertSame('abrikosoff_max', $profile->max_connector_code);
-        $this->assertSame('line-telegram', $profile->telegram_line_id);
-        $this->assertSame('line-max', $profile->max_line_id);
+        $this->assertNull($profile->telegram_line_id);
+        $this->assertNull($profile->max_line_id);
     }
 
     public function test_current_runtime_selector_fails_when_configured_callbacks_resolve_to_different_base_urls(): void

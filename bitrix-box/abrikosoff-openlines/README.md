@@ -91,6 +91,13 @@ require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/include/abrikosoff_
 - `portal_domain`
 - `openlines_callback_url`
 
+`openlines_callback_url` остаётся глобальным fallback URL. Если одна коробка
+Bitrix обслуживает несколько Laravel-контуров, для каждой линии нужно добавить
+entry в `connectors.*.lines` и заполнить `owner_callback_base_url`. Для такой
+линии `OnInfoLine` и operator message callbacks будут отправляться на:
+
+- `{owner_callback_base_url}/callbacks/bitrix24/openlines`
+
 Текущий production handoff:
 
 - `portal_domain = crm.alexlesley.biz`
