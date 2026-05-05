@@ -38,6 +38,10 @@ return [
         'deals_sync_enabled' => (bool) env('BITRIX24_DEALS_SYNC_ENABLED', false),
         'openlines_enabled' => (bool) env('BITRIX24_OPENLINES_ENABLED', false),
         'fake_happy_path_enabled' => (bool) env('BITRIX24_FAKE_HAPPY_PATH_ENABLED', false),
+        'fast_inbound_export_enabled' => filter_var(
+            env('BITRIX24_OPENLINES_FAST_INBOUND_EXPORT_ENABLED', env('APP_ENV') === 'local'),
+            FILTER_VALIDATE_BOOL,
+        ),
         'timeline_history_import_enabled' => (bool) env('BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED', false),
         'reverse_sync_enabled' => (bool) env('BITRIX24_REVERSE_SYNC_ENABLED', false),
     ],

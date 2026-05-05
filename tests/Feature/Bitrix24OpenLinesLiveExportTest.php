@@ -60,6 +60,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         config()->set('bitrix24.application.client_id', 'local.app');
         config()->set('bitrix24.application.client_secret', 'local.secret');
         config()->set('bitrix24.features.openlines_enabled', true);
+        config()->set('bitrix24.features.fast_inbound_export_enabled', false);
         config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
         config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
         config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
@@ -1638,6 +1639,84 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 && ($payload['MESSAGES'][0]['message']['id'] ?? null) === 'abrikosoff-message:'.$message->id
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Привет в Open Lines';
         });
+    }
+
+    public function test_inbound_client_fast_path_skips_guard_lookups_and_syncs_returned_binding(): void
+    {
+        config()->set('bitrix24.features.fast_inbound_export_enabled', true);
+
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(contactAttributes: [
+            'first_name' => 'Герман',
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Быстрый входящий путь',
+        ]);
+
+        Http::fake(function (Request $request) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return Http::response([
+                    'result' => [
+                        'DATA' => [
+                            'RESULT' => [
+                                [
+                                    'user' => '15',
+                                    'session' => [
+                                        'CHAT_ID' => '23',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected preflight request'], 500);
+        });
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertSame('abrikosoff-dialog:'.$dialog->id, $dialog->bitrix24_live_chat_id);
+        $this->assertSame('abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|15', $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => '23',
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_live_export_fast_path_exported',
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
+        ]);
+
+        Http::assertSent(function (Request $request) use ($dialog): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
+                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Быстрый входящий путь';
+        });
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.start.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.operator.answer.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
     }
 
     public function test_live_export_connector_transport_does_not_retry_mutating_send_on_server_error(): void
