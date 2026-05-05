@@ -39,14 +39,20 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $admin = $this->makeAdmin();
         $connection = $this->makeConnection();
 
+        $this->assertSame('Настройки', Bitrix24ConnectionResource::getNavigationGroup());
+
         $this->actingAs($admin)
             ->get(Bitrix24ConnectionResource::getUrl('index'))
             ->assertOk()
-            ->assertSee('Bitrix24')
+            ->assertSee('Настройки Bitrix24')
+            ->assertSee('Подключение, маршруты открытых линий, callback-и и sync-логи.')
+            ->assertSee('Открыть настройки')
             ->assertSee($connection->portal_domain);
 
         Livewire::actingAs($admin)
             ->test(ListBitrix24Connections::class)
+            ->assertSee('Настройки Bitrix24')
+            ->assertSee('Открыть настройки')
             ->assertCanSeeTableRecords([$connection]);
     }
 
@@ -125,7 +131,9 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(Bitrix24ConnectionResource::getUrl('view', ['record' => $connection]))
             ->assertOk()
+            ->assertSee('Настройки Bitrix24')
             ->assertSee('crm.example.test')
+            ->assertSee('маршруты открытых линий')
             ->assertSee('Token refresh failed.')
             ->assertSee('Последние callback-и')
             ->assertSee('ONCRMCONTACTUPDATE')

@@ -14,17 +14,17 @@ use App\Services\Bitrix24\DisconnectBitrix24ConnectionLocallyAction;
 use App\Services\Bitrix24\ResetBitrix24ConnectionLocallyAction;
 use BackedEnum;
 use Filament\Actions\Action;
-use Filament\Infolists\Components\TextEntry;
-use Filament\Notifications\Notification;
 use Filament\Infolists\Components\ViewEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
-use Filament\Tables\Enums\RecordActionsPosition;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
 use Throwable;
@@ -34,17 +34,17 @@ class Bitrix24ConnectionResource extends Resource
 {
     protected static ?string $model = Bitrix24Connection::class;
 
-    protected static ?string $modelLabel = 'Подключение Bitrix24';
+    protected static ?string $modelLabel = 'Настройка Bitrix24';
 
-    protected static ?string $pluralModelLabel = 'Подключения Bitrix24';
+    protected static ?string $pluralModelLabel = 'Настройки Bitrix24';
 
-    protected static ?string $navigationLabel = 'Bitrix24';
+    protected static ?string $navigationLabel = 'Настройки Bitrix24';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Настройки';
 
     protected static ?int $navigationSort = 15;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedDocumentText;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
 
     public static function getRecordTitle(?Model $record): ?string
     {
@@ -184,9 +184,9 @@ class Bitrix24ConnectionResource extends Resource
             ])
             ->columnManager()
             ->deferColumnManager(false)
-            ->columnManagerWidth(\Filament\Support\Enums\Width::Medium)
+            ->columnManagerWidth(Width::Medium)
             ->columnManagerTriggerAction(
-                fn (\Filament\Actions\Action $action): \Filament\Actions\Action => $action
+                fn (Action $action): Action => $action
                     ->tooltip('Столбцы')
                     ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
             )

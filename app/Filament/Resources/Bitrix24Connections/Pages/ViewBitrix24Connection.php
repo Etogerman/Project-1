@@ -52,17 +52,26 @@ class ViewBitrix24Connection extends ViewRecord
 
     public function getTitle(): string|Htmlable
     {
-        return 'Bitrix24';
+        return 'Настройки Bitrix24';
     }
 
     public function getHeading(): string|Htmlable
     {
-        return 'Bitrix24';
+        return 'Настройки Bitrix24';
     }
 
     public function getSubheading(): ?string
     {
-        return null;
+        $record = $this->getRecord();
+
+        if (! $record instanceof Bitrix24Connection) {
+            return null;
+        }
+
+        return sprintf(
+            '%s: подключение, маршруты открытых линий, callback-и и sync-логи.',
+            $record->portal_domain,
+        );
     }
 
     /**
