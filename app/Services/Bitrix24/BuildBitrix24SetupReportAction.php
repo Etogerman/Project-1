@@ -47,27 +47,6 @@ class BuildBitrix24SetupReportAction
                 value: (string) data_get($config, 'oauth.server_url', ''),
                 notes: 'Required while token refresh and install validation still trust the global OAuth host.',
             ),
-            $this->buildNumericCheck(
-                key: 'defaults.assigned_user_id',
-                label: 'Default assigned user ID',
-                value: (string) data_get($config, 'defaults.assigned_user_id', ''),
-                expected: '1',
-                notes: 'Discovery fixed user 1 as the default assignee.',
-            ),
-            $this->buildNumericCheck(
-                key: 'defaults.deal_category_id',
-                label: 'Default deal category ID',
-                value: (string) data_get($config, 'defaults.deal_category_id', ''),
-                expected: '22',
-                notes: 'Discovery fixed category 22 for Abrikosoff deals.',
-            ),
-            $this->buildRequiredValueCheck(
-                key: 'defaults.deal_stage_id',
-                label: 'Default deal stage ID',
-                value: (string) data_get($config, 'defaults.deal_stage_id', ''),
-                notes: 'Discovery fixed C22:NEW for new Abrikosoff deals.',
-                expected: 'C22:NEW',
-            ),
         ];
 
         foreach ((array) ($config['fields'] ?? []) as $fieldKey => $fieldValue) {
@@ -168,10 +147,9 @@ class BuildBitrix24SetupReportAction
                 ),
             ),
             $this->buildLineReadinessCheck(
-                key: 'runtime.current_profile.telegram_line_id',
-                label: 'Current runtime Telegram LINE_ID',
+                key: 'runtime.openline_routes.telegram_line_ids',
+                label: 'Current runtime active Telegram route LINE_ID values',
                 profile: $profile,
-                profileField: 'telegram_line_id',
                 channelType: Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
                 platformLabel: 'Telegram',
             ),
@@ -185,10 +163,9 @@ class BuildBitrix24SetupReportAction
                 ),
             ),
             $this->buildLineReadinessCheck(
-                key: 'runtime.current_profile.max_line_id',
-                label: 'Current runtime MAX LINE_ID',
+                key: 'runtime.openline_routes.max_line_ids',
+                label: 'Current runtime active MAX route LINE_ID values',
                 profile: $profile,
-                profileField: 'max_line_id',
                 channelType: Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
                 platformLabel: 'MAX',
             ),
@@ -219,7 +196,7 @@ class BuildBitrix24SetupReportAction
         $profileKeys = [];
         $callbackBaseUrls = [];
         $fullLiveConnectorCodes = [];
-        $fullLiveLineIds = [];
+        $fullLiveRouteLineIds = [];
 
         foreach ($profiles as $profile) {
             $profileIdentity = $profile->portal_domain.'|'.$profile->profile_key;
@@ -244,14 +221,22 @@ class BuildBitrix24SetupReportAction
                 $fullLiveConnectorCodes[$profile->portal_domain.'|'.$normalized] = ($fullLiveConnectorCodes[$profile->portal_domain.'|'.$normalized] ?? 0) + 1;
             }
 
-            $profileLineIds = array_values(array_unique(array_filter([
-                $this->nullableString($profile->telegram_line_id),
-                $this->nullableString($profile->max_line_id),
-            ])));
+        }
 
-            foreach ($profileLineIds as $lineId) {
-                $fullLiveLineIds[$profile->portal_domain.'|'.$lineId] = ($fullLiveLineIds[$profile->portal_domain.'|'.$lineId] ?? 0) + 1;
+        $routes = Bitrix24OpenLineRoute::query()
+            ->usable()
+            ->whereNotNull('line_id')
+            ->get(['portal_domain', 'line_id']);
+
+        foreach ($routes as $route) {
+            $lineId = $this->nullableString($route->line_id);
+
+            if ($lineId === null) {
+                continue;
             }
+
+            $key = $route->portal_domain.'|'.$lineId;
+            $fullLiveRouteLineIds[$key] = ($fullLiveRouteLineIds[$key] ?? 0) + 1;
         }
 
         return [
@@ -274,10 +259,10 @@ class BuildBitrix24SetupReportAction
             ),
             $this->buildDuplicateCountCheck(
                 key: 'profiles.full_live_line_id_unique',
-                label: 'Unique full_live LINE_ID values per portal',
-                duplicates: array_filter($fullLiveLineIds, fn (int $count): bool => $count > 1),
-                duplicateNotes: 'Two full_live profiles cannot share the same LINE_ID within one portal.',
-                okNotes: 'No full_live LINE_ID collisions detected.',
+                label: 'Unique usable Open Lines route LINE_ID values per portal',
+                duplicates: array_filter($fullLiveRouteLineIds, fn (int $count): bool => $count > 1),
+                duplicateNotes: 'Two usable channel routes cannot share the same LINE_ID within one portal.',
+                okNotes: 'No usable route LINE_ID collisions detected.',
             ),
         ];
     }
@@ -335,8 +320,10 @@ class BuildBitrix24SetupReportAction
         if ($profile->profile_type === Bitrix24Profile::TYPE_CRM_ONLY) {
             $hasOpenLinesRouting = $this->nullableString($profile->telegram_connector_code) !== null
                 || $this->nullableString($profile->max_connector_code) !== null
-                || $this->nullableString($profile->telegram_line_id) !== null
-                || $this->nullableString($profile->max_line_id) !== null;
+                || Bitrix24OpenLineRoute::query()
+                    ->where('bitrix24_profile_id', $profile->id)
+                    ->usable()
+                    ->exists();
 
             return [$this->check(
                 $prefix.'.openlines_forbidden',
@@ -347,7 +334,7 @@ class BuildBitrix24SetupReportAction
                     : Bitrix24SetupReportResult::STATUS_OK,
                 true,
                 $hasOpenLinesRouting
-                    ? 'crm_only profiles must not carry Open Lines connector_code or LINE_ID values.'
+                    ? 'crm_only profiles must not carry Open Lines connector_code values or usable channel routes.'
                     : 'crm_only profile correctly forbids Open Lines routing.',
             )];
         }
@@ -372,10 +359,9 @@ class BuildBitrix24SetupReportAction
                 notes: 'full_live profiles require a Telegram connector_code for Open Lines routing.',
             ),
             $this->buildLineReadinessCheck(
-                key: $prefix.'.telegram_line_id',
-                label: sprintf('Profile `%s` Telegram LINE_ID', $profile->profile_key),
+                key: $prefix.'.telegram_route_line_ids',
+                label: sprintf('Profile `%s` active Telegram route LINE_ID values', $profile->profile_key),
                 profile: $profile,
-                profileField: 'telegram_line_id',
                 channelType: Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
                 platformLabel: 'Telegram',
             ),
@@ -386,10 +372,9 @@ class BuildBitrix24SetupReportAction
                 notes: 'full_live profiles require a MAX connector_code for Open Lines routing.',
             ),
             $this->buildLineReadinessCheck(
-                key: $prefix.'.max_line_id',
-                label: sprintf('Profile `%s` MAX LINE_ID', $profile->profile_key),
+                key: $prefix.'.max_route_line_ids',
+                label: sprintf('Profile `%s` active MAX route LINE_ID values', $profile->profile_key),
                 profile: $profile,
-                profileField: 'max_line_id',
                 channelType: Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
                 platformLabel: 'MAX',
             ),
@@ -402,6 +387,27 @@ class BuildBitrix24SetupReportAction
                 duplicateNotes: 'Telegram and MAX connector_code values must be different for a full_live profile.',
                 okNotes: 'Telegram and MAX connector_code values are distinct.',
             ),
+            $this->buildNumericCheck(
+                key: $prefix.'.default_assigned_user_id',
+                label: sprintf('Profile `%s` Default assigned user ID', $profile->profile_key),
+                value: (string) $profile->effectiveDefaultAssignedUserId(),
+                expected: '1',
+                notes: 'Stored on the Bitrix24 profile; empty profile value temporarily falls back to .env.',
+            ),
+            $this->buildNumericCheck(
+                key: $prefix.'.default_deal_category_id',
+                label: sprintf('Profile `%s` Default deal category ID', $profile->profile_key),
+                value: (string) $profile->effectiveDefaultDealCategoryId(),
+                expected: '22',
+                notes: 'Stored on the Bitrix24 profile; empty profile value temporarily falls back to .env.',
+            ),
+            $this->buildRequiredValueCheck(
+                key: $prefix.'.default_deal_stage_id',
+                label: sprintf('Profile `%s` Default deal stage ID', $profile->profile_key),
+                value: $profile->effectiveDefaultDealStageId(),
+                notes: 'Stored on the Bitrix24 profile; empty profile value temporarily falls back to .env.',
+                expected: 'C22:NEW',
+            ),
         ];
     }
 
@@ -412,7 +418,6 @@ class BuildBitrix24SetupReportAction
         string $key,
         string $label,
         Bitrix24Profile $profile,
-        string $profileField,
         string $channelType,
         string $platformLabel,
     ): array {
@@ -439,19 +444,6 @@ class BuildBitrix24SetupReportAction
             );
         }
 
-        $profileLineId = $this->nullableString($profile->{$profileField} ?? null);
-
-        if ($profileLineId !== null) {
-            return $this->check(
-                $key,
-                $label,
-                $profileLineId,
-                Bitrix24SetupReportResult::STATUS_OK,
-                true,
-                $platformLabel.' LINE_ID is configured directly on the profile legacy fallback.',
-            );
-        }
-
         return $this->check(
             $key,
             $label,
@@ -459,9 +451,8 @@ class BuildBitrix24SetupReportAction
             Bitrix24SetupReportResult::STATUS_MISSING,
             true,
             sprintf(
-                'Current runtime profile `%s` must carry a %s LINE_ID legacy fallback or at least one active %s Open Lines route.',
+                'Profile `%s` must have at least one active %s channel route with LINE_ID. LINE_ID is configured per channel route, not on the profile.',
                 $profile->profile_key,
-                $platformLabel,
                 $platformLabel,
             ),
         );
@@ -475,9 +466,6 @@ class BuildBitrix24SetupReportAction
     private function buildFrozenValues(array $config, array $profiles): array
     {
         $frozenValues = [
-            $this->frozenValue('defaults', 'assigned_user_id', (string) data_get($config, 'defaults.assigned_user_id', '')),
-            $this->frozenValue('defaults', 'deal_category_id', (string) data_get($config, 'defaults.deal_category_id', '')),
-            $this->frozenValue('defaults', 'deal_stage_id', (string) data_get($config, 'defaults.deal_stage_id', '')),
             $this->frozenValue('values.name_source', 'automatic_information_id', (string) data_get($config, 'values.name_source.automatic_information_id', '')),
             $this->frozenValue('values.name_source', 'self_reported_id', (string) data_get($config, 'values.name_source.self_reported_id', '')),
             $this->frozenValue('values.name_source', 'training_verified_id', (string) data_get($config, 'values.name_source.training_verified_id', '')),
@@ -494,6 +482,9 @@ class BuildBitrix24SetupReportAction
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.max_source_id', $this->stringifyFrozenValue($profile->max_source_id));
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.telegram_connector_code', $this->stringifyFrozenValue($profile->telegram_connector_code));
             $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.max_connector_code', $this->stringifyFrozenValue($profile->max_connector_code));
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.default_assigned_user_id', (string) $profile->effectiveDefaultAssignedUserId());
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.default_deal_category_id', (string) $profile->effectiveDefaultDealCategoryId());
+            $frozenValues[] = $this->frozenValue('profiles', $profile->profile_key.'.default_deal_stage_id', $profile->effectiveDefaultDealStageId());
         }
 
         $routes = Bitrix24OpenLineRoute::query()

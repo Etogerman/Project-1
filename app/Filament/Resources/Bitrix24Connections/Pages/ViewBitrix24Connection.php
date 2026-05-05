@@ -40,7 +40,22 @@ class ViewBitrix24Connection extends ViewRecord
         'application_name' => '',
     ];
 
+    /**
+     * @var array{telegram_source_id:string,max_source_id:string,telegram_connector_code:string,max_connector_code:string,default_assigned_user_id:string,default_deal_category_id:string,default_deal_stage_id:string}
+     */
+    public array $profileSettingsForm = [
+        'telegram_source_id' => '',
+        'max_source_id' => '',
+        'telegram_connector_code' => '',
+        'max_connector_code' => '',
+        'default_assigned_user_id' => '',
+        'default_deal_category_id' => '',
+        'default_deal_stage_id' => '',
+    ];
+
     public ?string $openLineRouteErrorMessage = null;
+
+    public ?string $profileSettingsErrorMessage = null;
 
     public function mount(int|string $record): void
     {
@@ -48,6 +63,7 @@ class ViewBitrix24Connection extends ViewRecord
 
         $this->reloadOpenLineRouteForms();
         $this->reloadApplicationNameForm();
+        $this->reloadProfileSettingsForm();
     }
 
     public function getTitle(): string|Htmlable
@@ -161,6 +177,15 @@ class ViewBitrix24Connection extends ViewRecord
         return $user instanceof User
             && $user->isSuperadmin()
             && $this->getRecord() instanceof Bitrix24Connection;
+    }
+
+    public function canEditProfileSettings(): bool
+    {
+        $user = auth()->user();
+
+        return $user instanceof User
+            && $user->isSuperadmin()
+            && $this->getBitrix24Profile() instanceof Bitrix24Profile;
     }
 
     /**
@@ -402,6 +427,56 @@ class ViewBitrix24Connection extends ViewRecord
             ->send();
     }
 
+    public function saveProfileSettings(): void
+    {
+        abort_unless($this->canEditProfileSettings(), 403);
+
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            $this->failProfileSettingsSave('Профиль Bitrix24 не найден.');
+
+            return;
+        }
+
+        $assignedUserId = $this->nullableIntegerFormValue($this->profileSettingsForm['default_assigned_user_id'] ?? '');
+        $dealCategoryId = $this->nullableIntegerFormValue($this->profileSettingsForm['default_deal_category_id'] ?? '');
+        $dealStageId = $this->nullableFormValue(trim((string) ($this->profileSettingsForm['default_deal_stage_id'] ?? '')));
+
+        if ($this->filledButInvalidInteger($this->profileSettingsForm['default_assigned_user_id'] ?? '')) {
+            $this->failProfileSettingsSave('Default assigned user ID должен быть числом.');
+
+            return;
+        }
+
+        if ($this->filledButInvalidInteger($this->profileSettingsForm['default_deal_category_id'] ?? '')) {
+            $this->failProfileSettingsSave('Default deal category ID должен быть числом.');
+
+            return;
+        }
+
+        $profile->fill([
+            'telegram_source_id' => $this->nullableFormValue(trim((string) ($this->profileSettingsForm['telegram_source_id'] ?? ''))),
+            'max_source_id' => $this->nullableFormValue(trim((string) ($this->profileSettingsForm['max_source_id'] ?? ''))),
+            'telegram_connector_code' => $this->nullableFormValue(trim((string) ($this->profileSettingsForm['telegram_connector_code'] ?? ''))),
+            'max_connector_code' => $this->nullableFormValue(trim((string) ($this->profileSettingsForm['max_connector_code'] ?? ''))),
+            'default_assigned_user_id' => $assignedUserId,
+            'default_deal_category_id' => $dealCategoryId,
+            'default_deal_stage_id' => $dealStageId,
+        ]);
+        $profile->save();
+
+        $this->profileSettingsErrorMessage = null;
+        $this->getRecord()->refresh();
+        $this->reloadProfileSettingsForm();
+        $this->reloadOpenLineRouteForms();
+
+        Notification::make()
+            ->success()
+            ->title('Настройки профиля Bitrix24 сохранены')
+            ->send();
+    }
+
     public function reloadOpenLineRouteForms(): void
     {
         $profile = $this->getBitrix24Profile();
@@ -430,6 +505,21 @@ class ViewBitrix24Connection extends ViewRecord
 
         $this->applicationNameForm = [
             'application_name' => $record instanceof Bitrix24Connection ? (string) $record->application_name : '',
+        ];
+    }
+
+    public function reloadProfileSettingsForm(): void
+    {
+        $profile = $this->getBitrix24Profile();
+
+        $this->profileSettingsForm = [
+            'telegram_source_id' => $profile instanceof Bitrix24Profile ? (string) ($profile->telegram_source_id ?? '') : '',
+            'max_source_id' => $profile instanceof Bitrix24Profile ? (string) ($profile->max_source_id ?? '') : '',
+            'telegram_connector_code' => $profile instanceof Bitrix24Profile ? (string) ($profile->telegram_connector_code ?? '') : '',
+            'max_connector_code' => $profile instanceof Bitrix24Profile ? (string) ($profile->max_connector_code ?? '') : '',
+            'default_assigned_user_id' => $profile instanceof Bitrix24Profile && $profile->default_assigned_user_id !== null ? (string) $profile->default_assigned_user_id : '',
+            'default_deal_category_id' => $profile instanceof Bitrix24Profile && $profile->default_deal_category_id !== null ? (string) $profile->default_deal_category_id : '',
+            'default_deal_stage_id' => $profile instanceof Bitrix24Profile ? (string) ($profile->default_deal_stage_id ?? '') : '',
         ];
     }
 
@@ -608,6 +698,24 @@ class ViewBitrix24Connection extends ViewRecord
         return $value === '' ? null : $value;
     }
 
+    protected function nullableIntegerFormValue(string $value): ?int
+    {
+        $trimmed = trim($value);
+
+        if ($trimmed === '') {
+            return null;
+        }
+
+        return ctype_digit($trimmed) ? (int) $trimmed : null;
+    }
+
+    protected function filledButInvalidInteger(mixed $value): bool
+    {
+        $trimmed = trim((string) $value);
+
+        return $trimmed !== '' && ! ctype_digit($trimmed);
+    }
+
     protected function failOpenLineRouteSave(string $message): void
     {
         $this->openLineRouteErrorMessage = $message;
@@ -620,6 +728,16 @@ class ViewBitrix24Connection extends ViewRecord
 
     protected function failApplicationNameSave(string $message): void
     {
+        Notification::make()
+            ->danger()
+            ->title($message)
+            ->send();
+    }
+
+    protected function failProfileSettingsSave(string $message): void
+    {
+        $this->profileSettingsErrorMessage = $message;
+
         Notification::make()
             ->danger()
             ->title($message)

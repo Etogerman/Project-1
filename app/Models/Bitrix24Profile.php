@@ -39,8 +39,17 @@ class Bitrix24Profile extends Model
         'max_source_id',
         'telegram_connector_code',
         'max_connector_code',
-        'telegram_line_id',
-        'max_line_id',
+        'default_assigned_user_id',
+        'default_deal_category_id',
+        'default_deal_stage_id',
+    ];
+
+    /**
+     * @var array<string, string>
+     */
+    protected $casts = [
+        'default_assigned_user_id' => 'integer',
+        'default_deal_category_id' => 'integer',
     ];
 
     public function setCallbackBaseUrlAttribute(mixed $value): void
@@ -126,13 +135,22 @@ class Bitrix24Profile extends Model
         };
     }
 
-    public function openLinesLineIdForPlatform(string $platform): ?string
+    public function effectiveDefaultAssignedUserId(): int
     {
-        return match ($platform) {
-            Channel::PLATFORM_TELEGRAM => $this->nullableRoutingValue($this->telegram_line_id),
-            Channel::PLATFORM_MAX => $this->nullableRoutingValue($this->max_line_id),
-            default => null,
-        };
+        return $this->nullableInteger($this->default_assigned_user_id)
+            ?? (int) config('bitrix24.defaults.assigned_user_id', 1);
+    }
+
+    public function effectiveDefaultDealCategoryId(): int
+    {
+        return $this->nullableInteger($this->default_deal_category_id)
+            ?? (int) config('bitrix24.defaults.deal_category_id', 22);
+    }
+
+    public function effectiveDefaultDealStageId(): string
+    {
+        return $this->nullableRoutingValue($this->default_deal_stage_id)
+            ?? (string) config('bitrix24.defaults.deal_stage_id', 'C22:NEW');
     }
 
     private function buildCallbackUrl(string $path): string
@@ -149,6 +167,17 @@ class Bitrix24Profile extends Model
         $trimmed = trim((string) $value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    private function nullableInteger(mixed $value): ?int
+    {
+        if (! is_numeric($value)) {
+            return null;
+        }
+
+        $integer = (int) $value;
+
+        return $integer >= 0 ? $integer : null;
     }
 
     public static function normalizeCallbackBaseUrl(?string $value): ?string

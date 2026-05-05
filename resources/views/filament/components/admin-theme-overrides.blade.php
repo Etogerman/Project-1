@@ -2568,6 +2568,28 @@
         background: var(--ac-surface-strong);
     }
 
+    .ac-bitrix-profile-settings {
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .ac-bitrix-profile-grid {
+        display: grid;
+        grid-template-columns: minmax(16rem, 0.85fr) minmax(0, 1.15fr);
+        gap: 0.9rem;
+        align-items: start;
+    }
+
+    .ac-bitrix-profile-form {
+        display: grid;
+        gap: 0.75rem;
+        min-width: 0;
+        padding: 0.85rem;
+        border: 1px solid var(--ac-border);
+        border-radius: 12px;
+        background: var(--ac-surface-strong);
+    }
+
     @media (max-width: 1180px) {
         .ac-bitrix-overview-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2576,6 +2598,12 @@
 
     @media (max-width: 720px) {
         .ac-bitrix-overview-grid {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+
+    @media (max-width: 980px) {
+        .ac-bitrix-profile-grid {
             grid-template-columns: minmax(0, 1fr);
         }
     }
@@ -2599,7 +2627,7 @@
     }
 
     .ac-bitrix-table--routes {
-        min-width: 1320px;
+        min-width: 0;
     }
 
     .ac-bitrix-table--callbacks,
@@ -2716,6 +2744,10 @@
         text-align: right;
     }
 
+    .ac-bitrix-readonly-note--route-help {
+        text-align: left;
+    }
+
     .ac-bitrix-filters {
         display: flex;
         flex-wrap: wrap;
@@ -2750,47 +2782,92 @@
     }
 
     .ac-route-col-channel {
-        width: 18rem;
+        width: 10.5rem;
     }
 
     .ac-route-col-type {
-        width: 8.5rem;
+        width: 6rem;
     }
 
-    .ac-route-col-state {
-        width: 9.5rem;
+    .ac-route-col-config {
+        width: 18rem;
     }
 
-    .ac-route-col-status {
+    .ac-route-col-diagnostics {
         width: 10rem;
-    }
-
-    .ac-route-col-connector {
-        width: 15rem;
-    }
-
-    .ac-route-col-line {
-        width: 9.5rem;
-    }
-
-    .ac-route-col-source {
-        width: 10rem;
-    }
-
-    .ac-route-col-id {
-        width: 5.5rem;
-    }
-
-    .ac-route-col-owner {
-        width: 15rem;
-    }
-
-    .ac-route-col-error {
-        width: 12rem;
     }
 
     .ac-route-col-action {
-        width: 9.5rem;
+        width: 6rem;
+    }
+
+    .ac-route-config-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.45rem;
+    }
+
+    .ac-route-field {
+        display: grid;
+        min-width: 0;
+        gap: 0.18rem;
+    }
+
+    .ac-route-field > span,
+    .ac-route-diagnostic-line > span {
+        color: var(--ac-text-soft);
+        font-size: 0.62rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        line-height: 1.1;
+        text-transform: uppercase;
+    }
+
+    .ac-route-diagnostics {
+        display: grid;
+        min-width: 0;
+        gap: 0.32rem;
+    }
+
+    .ac-route-diagnostic-line {
+        display: grid;
+        min-width: 0;
+        gap: 0.08rem;
+    }
+
+    .ac-route-diagnostic-line > strong {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--ac-text-muted);
+        font-size: 0.7rem;
+        font-weight: 700;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    @media (max-width: 1180px) {
+        .ac-bitrix-table--routes {
+            min-width: 760px;
+        }
+
+        .ac-route-col-channel {
+            width: 10rem;
+        }
+
+        .ac-route-col-config {
+            width: 18rem;
+        }
+
+        .ac-route-col-diagnostics {
+            width: 10rem;
+        }
+    }
+
+    @media (max-width: 760px) {
+        .ac-route-config-grid {
+            grid-template-columns: minmax(0, 1fr);
+        }
     }
 
     .ac-kanban-filters-shell__header {

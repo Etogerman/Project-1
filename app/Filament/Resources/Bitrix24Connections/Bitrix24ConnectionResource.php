@@ -67,6 +67,14 @@ class Bitrix24ConnectionResource extends Resource
                             ->columnSpanFull(),
                     ])
                     ->columnSpanFull(),
+                Section::make('Профиль Bitrix24')
+                    ->schema([
+                        ViewEntry::make('profile_settings')
+                            ->hiddenLabel()
+                            ->view('filament.bitrix24-connections.partials.profile-settings')
+                            ->columnSpanFull(),
+                    ])
+                    ->columnSpanFull(),
                 Section::make('Маршруты открытых линий')
                     ->schema([
                         ViewEntry::make('open_line_routes')

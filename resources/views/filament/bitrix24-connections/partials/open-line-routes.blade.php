@@ -19,19 +19,17 @@
             Каналы связи ещё не созданы.
         </div>
     @else
+        <p class="ac-bitrix-readonly-note ac-bitrix-readonly-note--route-help">
+            LINE_ID задаётся для конкретного канала. Если подключено несколько Telegram-ботов, у каждого должна быть отдельная строка маршрута.
+        </p>
+
         <div class="ac-bitrix-table-shell">
             <table class="ac-bitrix-table ac-bitrix-table--routes">
                 <colgroup>
                     <col class="ac-route-col-channel">
                     <col class="ac-route-col-type">
-                    <col class="ac-route-col-state">
-                    <col class="ac-route-col-status">
-                    <col class="ac-route-col-connector">
-                    <col class="ac-route-col-line">
-                    <col class="ac-route-col-source">
-                    <col class="ac-route-col-id">
-                    <col class="ac-route-col-owner">
-                    <col class="ac-route-col-error">
+                    <col class="ac-route-col-config">
+                    <col class="ac-route-col-diagnostics">
                     <col class="ac-route-col-action">
                 </colgroup>
 
@@ -39,14 +37,8 @@
                     <tr>
                         <th scope="col">Канал</th>
                         <th scope="col">Тип</th>
-                        <th scope="col">Состояние</th>
-                        <th scope="col">Статус</th>
-                        <th scope="col">Код соединителя</th>
-                        <th scope="col">Открытая линия</th>
-                        <th scope="col">CRM source</th>
-                        <th scope="col">Route ID</th>
-                        <th scope="col">Владелец линии</th>
-                        <th scope="col">Ошибка</th>
+                        <th scope="col">Маршрут</th>
+                        <th scope="col">Диагностика</th>
                         <th scope="col">Действие</th>
                     </tr>
                 </thead>
@@ -63,62 +55,72 @@
                                 <span data-tone="info" class="ac-pill">{{ $item['channel_type_label'] }}</span>
                             </td>
                             <td>
-                                <span data-tone="{{ $item['route_status_tone'] }}" class="ac-pill">
-                                    {{ $item['route_status_label'] }}
-                                </span>
-                            </td>
-                            <td>
-                                <select
-                                    aria-label="Статус маршрута {{ $item['channel_title'] }}"
-                                    wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.status"
-                                    class="ac-select ac-bitrix-table__control"
-                                    @disabled(! $canEdit)
-                                >
-                                    @foreach ($statusOptions as $value => $label)
-                                        <option value="{{ $value }}">{{ $label }}</option>
-                                    @endforeach
-                                </select>
-                            </td>
-                            <td>
-                                <input
-                                    aria-label="Код соединителя {{ $item['channel_title'] }}"
-                                    type="text"
-                                    wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.connector_code"
-                                    class="ac-input ac-bitrix-table__control"
-                                    @disabled(! $canEdit)
-                                />
-                            </td>
-                            <td>
-                                <input
-                                    aria-label="Открытая линия {{ $item['channel_title'] }}"
-                                    type="text"
-                                    wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.line_id"
-                                    class="ac-input ac-bitrix-table__control"
-                                    @disabled(! $canEdit)
-                                />
-                            </td>
-                            <td>
-                                <input
-                                    aria-label="CRM source {{ $item['channel_title'] }}"
-                                    type="text"
-                                    wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.source_id"
-                                    class="ac-input ac-bitrix-table__control"
-                                    @disabled(! $canEdit)
-                                />
-                            </td>
-                            <td>
-                                <div class="ac-bitrix-cell-clip" title="{{ $item['route_id'] ?? '—' }}">
-                                    {{ $item['route_id'] ?? '—' }}
+                                <div class="ac-route-config-grid">
+                                    <label class="ac-route-field">
+                                        <span>Статус</span>
+                                        <select
+                                            aria-label="Статус маршрута {{ $item['channel_title'] }}"
+                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.status"
+                                            class="ac-select ac-bitrix-table__control"
+                                            @disabled(! $canEdit)
+                                        >
+                                            @foreach ($statusOptions as $value => $label)
+                                                <option value="{{ $value }}">{{ $label }}</option>
+                                            @endforeach
+                                        </select>
+                                    </label>
+
+                                    <label class="ac-route-field">
+                                        <span>Код соединителя</span>
+                                        <input
+                                            aria-label="Код соединителя {{ $item['channel_title'] }}"
+                                            type="text"
+                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.connector_code"
+                                            class="ac-input ac-bitrix-table__control"
+                                            @disabled(! $canEdit)
+                                        />
+                                    </label>
+
+                                    <label class="ac-route-field">
+                                        <span>LINE_ID</span>
+                                        <input
+                                            aria-label="LINE_ID {{ $item['channel_title'] }}"
+                                            type="text"
+                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.line_id"
+                                            class="ac-input ac-bitrix-table__control"
+                                            @disabled(! $canEdit)
+                                        />
+                                    </label>
+
+                                    <label class="ac-route-field">
+                                        <span>CRM source</span>
+                                        <input
+                                            aria-label="CRM source {{ $item['channel_title'] }}"
+                                            type="text"
+                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.source_id"
+                                            class="ac-input ac-bitrix-table__control"
+                                            @disabled(! $canEdit)
+                                        />
+                                    </label>
                                 </div>
                             </td>
                             <td>
-                                <div class="ac-bitrix-cell-clip" title="{{ $item['line_owner_label'] }}">
-                                    {{ $item['line_owner_label'] }}
-                                </div>
-                            </td>
-                            <td>
-                                <div class="ac-bitrix-cell-clip" title="{{ $item['last_error_message'] }}">
-                                    {{ $item['last_error_message'] }}
+                                <div class="ac-route-diagnostics">
+                                    <span data-tone="{{ $item['route_status_tone'] }}" class="ac-pill">
+                                        {{ $item['route_status_label'] }}
+                                    </span>
+                                    <div class="ac-route-diagnostic-line">
+                                        <span>Route ID</span>
+                                        <strong>{{ $item['route_id'] ?? '—' }}</strong>
+                                    </div>
+                                    <div class="ac-route-diagnostic-line" title="{{ $item['line_owner_label'] }}">
+                                        <span>Владелец</span>
+                                        <strong>{{ $item['line_owner_label'] }}</strong>
+                                    </div>
+                                    <div class="ac-route-diagnostic-line" title="{{ $item['last_error_message'] }}">
+                                        <span>Ошибка</span>
+                                        <strong>{{ $item['last_error_message'] }}</strong>
+                                    </div>
                                 </div>
                             </td>
                             <td class="ac-bitrix-action-cell">

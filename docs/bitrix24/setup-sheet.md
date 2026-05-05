@@ -34,13 +34,15 @@
 | `BITRIX24_REVERSE_SYNC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_DELAY_SECONDS` | `90` |
-| `BITRIX24_TELEGRAM_LINE_ID` | `32` |
-| `BITRIX24_MAX_LINE_ID` | `31` |
-| `BITRIX24_TELEGRAM_CONNECTOR_CODE` | `abrikosoff_telegram` |
-| `BITRIX24_MAX_CONNECTOR_CODE` | `abrikosoff_max` |
-| `BITRIX24_DEFAULT_ASSIGNED_USER_ID` | `1` |
-| `BITRIX24_DEFAULT_DEAL_CATEGORY_ID` | `22` |
-| `BITRIX24_DEFAULT_DEAL_STAGE_ID` | `C22:NEW` |
+| Telegram LINE_ID | stored in the active Telegram channel route in admin |
+| MAX LINE_ID | stored in the active MAX channel route in admin |
+| Telegram SOURCE_ID | stored in Bitrix24 profile settings in admin; `BITRIX24_TELEGRAM_SOURCE_ID` is a temporary fallback |
+| MAX SOURCE_ID | stored in Bitrix24 profile settings in admin; `BITRIX24_MAX_SOURCE_ID` is a temporary fallback |
+| Telegram connector_code | stored in Bitrix24 profile settings in admin; route rows copy it per channel |
+| MAX connector_code | stored in Bitrix24 profile settings in admin; route rows copy it per channel |
+| Default assigned user ID | stored in Bitrix24 profile settings in admin; `BITRIX24_DEFAULT_ASSIGNED_USER_ID` is a temporary fallback |
+| Default deal category ID | stored in Bitrix24 profile settings in admin; `BITRIX24_DEFAULT_DEAL_CATEGORY_ID` is a temporary fallback |
+| Default deal stage ID | stored in Bitrix24 profile settings in admin; `BITRIX24_DEFAULT_DEAL_STAGE_ID` is a temporary fallback |
 | `BITRIX24_NAME_SOURCE_AUTOMATIC_ID` | `7178` |
 | `BITRIX24_NAME_SOURCE_SELF_REPORTED_ID` | `7179` |
 | `BITRIX24_NAME_SOURCE_TRAINING_VERIFIED_ID` | `7180` |
@@ -97,12 +99,12 @@ setup-runbook на staging или другом real integration target:
 | `BITRIX24_INSTALL_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/install` |
 | `BITRIX24_EVENTS_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/events` |
 | `BITRIX24_OPENLINES_CALLBACK_URL` | `https://project-1-staging-r4mo1y.laravel.cloud/callbacks/bitrix24/openlines` |
-| `BITRIX24_TELEGRAM_SOURCE_ID` | `ABRIKOSOFF_TELEGRAM` |
-| `BITRIX24_MAX_SOURCE_ID` | `ABRIKOSOFF_MAX` |
-| `BITRIX24_TELEGRAM_LINE_ID` | `30` |
-| `BITRIX24_MAX_LINE_ID` | `31` |
-| `BITRIX24_TELEGRAM_CONNECTOR_CODE` | `abrikosoff_telegram` |
-| `BITRIX24_MAX_CONNECTOR_CODE` | `abrikosoff_max` |
+| Telegram SOURCE_ID | `ABC_TELEGRAM`, stored in Bitrix24 profile settings in admin |
+| MAX SOURCE_ID | `ABC_MAX`, stored in Bitrix24 profile settings in admin |
+| Telegram LINE_ID | stored in the active Telegram channel route in admin |
+| MAX LINE_ID | stored in the active MAX channel route in admin |
+| Telegram connector_code | `abc_telegram`, stored in Bitrix24 profile settings in admin |
+| MAX connector_code | `abc_max`, stored in Bitrix24 profile settings in admin |
 | `BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED` | `false` |
 | `BITRIX24_REVERSE_SYNC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_ENABLED` | `false` |
@@ -118,11 +120,11 @@ setup-runbook на staging или другом real integration target:
 - The current stable staging host is `project-1-staging-r4mo1y.laravel.cloud`.
 - Do not reuse the temporary `Abrikosoff Probe` source as a production `SOURCE_ID`.
 - Do not use obsolete `fake-*` connector placeholders for real staging or
-  production Open Lines. Current connector codes are `abrikosoff_telegram` and
-  `abrikosoff_max`.
+  production Open Lines. Current base connector codes are `abc_telegram` and
+  `abc_max`; dev profile variants use the same `abc_*` prefix.
 - Telegram and MAX must use different `connector_code` values.
 - Telegram and MAX must use different Open Lines.
-- Текущий подтверждённый Open Lines mapping фиксирован: Telegram `30`, MAX `31`.
+- Open Lines LINE_ID values are configured per concrete channel route in admin, not in `.env`.
 - `user_id = 1` is frozen as the default assignee for contacts, deals, and manual-review tasks.
 
 ## Readiness check

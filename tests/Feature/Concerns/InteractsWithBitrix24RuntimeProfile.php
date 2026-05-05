@@ -35,24 +35,27 @@ trait InteractsWithBitrix24RuntimeProfile
                 'callback_base_url' => $callbackBaseUrl,
                 'telegram_source_id' => array_key_exists('telegram_source_id', $profileOverrides)
                     ? $profileOverrides['telegram_source_id']
-                    : 'ABRIKOSOFF_TELEGRAM',
+                    : 'ABC_TELEGRAM',
                 'max_source_id' => array_key_exists('max_source_id', $profileOverrides)
                     ? $profileOverrides['max_source_id']
-                    : 'ABRIKOSOFF_MAX',
+                    : 'ABC_MAX',
                 'telegram_connector_code' => array_key_exists('telegram_connector_code', $profileOverrides)
                     ? $profileOverrides['telegram_connector_code']
-                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? 'abrikosoff_telegram' : null),
+                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? 'abc_telegram' : null),
                 'max_connector_code' => array_key_exists('max_connector_code', $profileOverrides)
                     ? $profileOverrides['max_connector_code']
-                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? 'abrikosoff_max' : null),
-                'telegram_line_id' => array_key_exists('telegram_line_id', $profileOverrides)
-                    ? $profileOverrides['telegram_line_id']
-                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? 'line-telegram' : null),
-                'max_line_id' => array_key_exists('max_line_id', $profileOverrides)
-                    ? $profileOverrides['max_line_id']
-                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? 'line-max' : null),
+                    : ($profileType === Bitrix24Profile::TYPE_FULL_LIVE ? 'abc_max' : null),
             ],
         );
+
+        $legacyLineOverrides = array_intersect_key($profileOverrides, array_flip([
+            'telegram_line_id',
+            'max_line_id',
+        ]));
+
+        if ($legacyLineOverrides !== []) {
+            $profile->forceFill($legacyLineOverrides)->save();
+        }
 
         if ($useForCurrentRuntime) {
             $this->configureCurrentBitrix24RuntimeProfile($profile);

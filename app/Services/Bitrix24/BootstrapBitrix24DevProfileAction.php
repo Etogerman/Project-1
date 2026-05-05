@@ -4,6 +4,7 @@ namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24DevProfileBootstrapResultData;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Support\Collection;
@@ -36,6 +37,12 @@ class BootstrapBitrix24DevProfileAction
             throw new Bitrix24DevProfileBootstrapException('callback_base_url must be a valid absolute URL.');
         }
 
+        if ($telegramLineId !== null || $maxLineId !== null) {
+            throw new Bitrix24DevProfileBootstrapException(
+                'LINE_ID is configured per concrete channel route in the Bitrix24 admin page, not on the Bitrix24 profile.',
+            );
+        }
+
         $resolvedPortalDomain = $this->resolvePortalDomain($portalDomain);
         $existingProfile = Bitrix24Profile::query()
             ->where('portal_domain', $resolvedPortalDomain)
@@ -53,8 +60,6 @@ class BootstrapBitrix24DevProfileAction
 
         $resolvedClientId = $this->resolvePersistedValue($clientId, $existingProfile?->client_id);
         $resolvedApplicationCode = $this->resolvePersistedValue($applicationCode, $existingProfile?->application_code);
-        $resolvedTelegramLineId = $this->resolvePersistedValue($telegramLineId, $existingProfile?->telegram_line_id);
-        $resolvedMaxLineId = $this->resolvePersistedValue($maxLineId, $existingProfile?->max_line_id);
         $resolvedDisplayName = $this->resolveDisplayName($displayName, $existingProfile?->display_name, $profileKey);
 
         $telegramSourceId = $this->buildSourceId($profileKey, 'TELEGRAM');
@@ -81,26 +86,6 @@ class BootstrapBitrix24DevProfileAction
                 'application_code',
                 $resolvedApplicationCode,
                 'Bitrix app application_code',
-            );
-        }
-
-        if ($telegramLineId !== null) {
-            $this->assertPortalFieldIsAvailable(
-                $otherProfiles,
-                $resolvedPortalDomain,
-                'telegram_line_id',
-                $resolvedTelegramLineId,
-                'Telegram LINE_ID',
-            );
-        }
-
-        if ($maxLineId !== null) {
-            $this->assertPortalFieldIsAvailable(
-                $otherProfiles,
-                $resolvedPortalDomain,
-                'max_line_id',
-                $resolvedMaxLineId,
-                'MAX LINE_ID',
             );
         }
 
@@ -150,8 +135,9 @@ class BootstrapBitrix24DevProfileAction
                 'max_source_id' => $maxSourceId,
                 'telegram_connector_code' => $telegramConnectorCode,
                 'max_connector_code' => $maxConnectorCode,
-                'telegram_line_id' => $resolvedTelegramLineId,
-                'max_line_id' => $resolvedMaxLineId,
+                'default_assigned_user_id' => (int) config('bitrix24.defaults.assigned_user_id', 1),
+                'default_deal_category_id' => (int) config('bitrix24.defaults.deal_category_id', 22),
+                'default_deal_stage_id' => (string) config('bitrix24.defaults.deal_stage_id', 'C22:NEW'),
             ],
         );
 
@@ -313,6 +299,14 @@ class BootstrapBitrix24DevProfileAction
         $verifiedConnection = $activeConnections->count() === 1
             ? $activeConnections->first()
             : null;
+        $telegramRouteLineIds = $this->activeRouteLineIds(
+            $profile,
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+        );
+        $maxRouteLineIds = $this->activeRouteLineIds(
+            $profile,
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+        );
 
         return [
             $this->check(
@@ -353,17 +347,16 @@ class BootstrapBitrix24DevProfileAction
                 $profile->max_connector_code,
                 'Bootstrap must persist a deterministic MAX connector_code.',
             ),
-            $this->requiredCheck(
-                'Telegram LINE_ID',
-                $profile->telegram_line_id,
-                'Create the Telegram Open Line in Bitrix and rerun the command with --telegram-line-id.',
+            $this->requiredRouteLineIdsCheck(
+                'Active Telegram channel routes have LINE_ID',
+                $telegramRouteLineIds,
+                'Configure Telegram LINE_ID on concrete channel routes in the Bitrix24 admin page.',
             ),
-            $this->requiredCheck(
-                'MAX LINE_ID',
-                $profile->max_line_id,
-                'Create the MAX Open Line in Bitrix and rerun the command with --max-line-id.',
+            $this->requiredRouteLineIdsCheck(
+                'Active MAX channel routes have LINE_ID',
+                $maxRouteLineIds,
+                'Configure MAX LINE_ID on concrete channel routes in the Bitrix24 admin page.',
             ),
-            $this->distinctLineIdsCheck($profile),
             $this->uniquePortalValueCheck(
                 $portalProfiles,
                 'Bitrix app client_id is unique within portal',
@@ -406,35 +399,21 @@ class BootstrapBitrix24DevProfileAction
                 $profile->max_connector_code,
                 'MAX connector_code must stay unique per profile on the same portal.',
             ),
-            $this->uniquePortalValueCheck(
-                $portalProfiles,
-                'Telegram LINE_ID is unique within portal',
-                'telegram_line_id',
-                $profile->telegram_line_id,
-                'Telegram LINE_ID must stay unique per profile on the same portal.',
-            ),
-            $this->uniquePortalValueCheck(
-                $portalProfiles,
-                'MAX LINE_ID is unique within portal',
-                'max_line_id',
-                $profile->max_line_id,
-                'MAX LINE_ID must stay unique per profile on the same portal.',
-            ),
             $this->activeInstallConnectionCheck($profile, $activeConnections),
             $this->installedConnectionClientIdCheck($profile, $verifiedConnection),
             $this->installCallbackIngressCheck($profile, $verifiedConnection, $callbackBaseUrlRotated),
             $this->bitrixAppProbeCheck($profile, $verifiedConnection),
-            $this->bitrixLineProbeCheck(
-                'Telegram LINE_ID exists on Bitrix',
-                $profile->telegram_line_id,
+            $this->bitrixRouteLineProbeCheck(
+                'Telegram route LINE_ID values exist on Bitrix',
+                $telegramRouteLineIds,
                 $verifiedConnection,
-                'Telegram LINE_ID can be verified only after one active install connection is attached to the profile.',
+                'Telegram route LINE_ID values can be verified only after one active install connection is attached to the profile.',
             ),
-            $this->bitrixLineProbeCheck(
-                'MAX LINE_ID exists on Bitrix',
-                $profile->max_line_id,
+            $this->bitrixRouteLineProbeCheck(
+                'MAX route LINE_ID values exist on Bitrix',
+                $maxRouteLineIds,
                 $verifiedConnection,
-                'MAX LINE_ID can be verified only after one active install connection is attached to the profile.',
+                'MAX route LINE_ID values can be verified only after one active install connection is attached to the profile.',
             ),
         ];
     }
@@ -461,7 +440,7 @@ class BootstrapBitrix24DevProfileAction
                 $profile->profile_key,
             ),
             sprintf(
-                'Record the resulting LINE_ID values in Bitrix and rerun this command with --telegram-line-id and --max-line-id.',
+                'Record the resulting LINE_ID values on concrete channel routes in the Bitrix24 admin page, then rerun this command.',
             ),
             sprintf(
                 'Expected routing values are Telegram SOURCE_ID `%s`, MAX SOURCE_ID `%s`, Telegram connector_code `%s`, MAX connector_code `%s`.',
@@ -636,39 +615,45 @@ class BootstrapBitrix24DevProfileAction
     }
 
     /**
+     * @return list<string>
+     */
+    private function activeRouteLineIds(Bitrix24Profile $profile, string $channelType): array
+    {
+        return Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->getKey())
+            ->where('channel_type', $channelType)
+            ->where('status', Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->whereNotNull('line_id')
+            ->pluck('line_id')
+            ->map(fn (mixed $lineId): string => trim((string) $lineId))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<string>  $lineIds
      * @return array{label: string, required: bool, status: string, value: string, notes: string}
      */
-    private function distinctLineIdsCheck(Bitrix24Profile $profile): array
+    private function requiredRouteLineIdsCheck(string $label, array $lineIds, string $missingNotes): array
     {
-        $telegramLineId = $this->nullableString($profile->telegram_line_id);
-        $maxLineId = $this->nullableString($profile->max_line_id);
-
-        if ($telegramLineId === null || $maxLineId === null) {
+        if ($lineIds === []) {
             return $this->check(
-                'Telegram and MAX use different LINE_ID values',
+                $label,
                 '',
-                Bitrix24DevProfileBootstrapResultData::STATUS_WARNING,
-                false,
-                'Both LINE_ID values must be filled before the command can confirm separate Open Lines.',
-            );
-        }
-
-        if ($telegramLineId === $maxLineId) {
-            return $this->check(
-                'Telegram and MAX use different LINE_ID values',
-                $telegramLineId,
                 Bitrix24DevProfileBootstrapResultData::STATUS_MISSING,
                 true,
-                'Telegram and MAX must use separate Open Lines; one shared LINE_ID is not allowed.',
+                $missingNotes,
             );
         }
 
         return $this->check(
-            'Telegram and MAX use different LINE_ID values',
-            sprintf('%s != %s', $telegramLineId, $maxLineId),
+            $label,
+            implode(', ', $lineIds),
             Bitrix24DevProfileBootstrapResultData::STATUS_OK,
             true,
-            'Telegram and MAX are routed through separate Open Lines.',
+            'LINE_ID values are configured on active channel routes.',
         );
     }
 
@@ -851,57 +836,59 @@ class BootstrapBitrix24DevProfileAction
     }
 
     /**
+     * @param  list<string>  $lineIds
      * @return array{label: string, required: bool, status: string, value: string, notes: string}
      */
-    private function bitrixLineProbeCheck(
+    private function bitrixRouteLineProbeCheck(
         string $label,
-        ?string $lineId,
+        array $lineIds,
         ?Bitrix24Connection $connection,
         string $unverifiedNotes,
     ): array {
-        $required = $connection instanceof Bitrix24Connection && filled($lineId);
-        $resolvedLineId = $this->nullableString($lineId);
+        $required = $connection instanceof Bitrix24Connection && $lineIds !== [];
 
         if (! $required) {
             return $this->check(
                 $label,
-                $resolvedLineId,
+                implode(', ', $lineIds),
                 Bitrix24DevProfileBootstrapResultData::STATUS_WARNING,
                 false,
                 $unverifiedNotes,
             );
         }
 
-        try {
-            $response = $this->bitrix24ApiClient->call('imopenlines.config.get', [
-                'CONFIG_ID' => $resolvedLineId,
-            ], $connection);
-        } catch (Throwable $exception) {
-            return $this->check(
-                $label,
-                $resolvedLineId,
-                Bitrix24DevProfileBootstrapResultData::STATUS_MISSING,
-                true,
-                'The Open Lines probe failed: '.$exception->getMessage(),
-            );
-        }
+        foreach ($lineIds as $lineId) {
+            try {
+                $response = $this->bitrix24ApiClient->call('imopenlines.config.get', [
+                    'CONFIG_ID' => $lineId,
+                ], $connection);
+            } catch (Throwable $exception) {
+                return $this->check(
+                    $label,
+                    $lineId,
+                    Bitrix24DevProfileBootstrapResultData::STATUS_MISSING,
+                    true,
+                    'The Open Lines probe failed: '.$exception->getMessage(),
+                );
+            }
 
-        if (! $response->successful || ! $this->lineProbeMatches($response->result, $resolvedLineId)) {
-            return $this->check(
-                $label,
-                $resolvedLineId,
-                Bitrix24DevProfileBootstrapResultData::STATUS_MISSING,
-                true,
-                'Bitrix did not confirm this LINE_ID through imopenlines.config.get.',
-            );
+            if (! $response->successful || ! $this->lineProbeMatches($response->result, $lineId)) {
+                return $this->check(
+                    $label,
+                    $lineId,
+                    Bitrix24DevProfileBootstrapResultData::STATUS_MISSING,
+                    true,
+                    'Bitrix did not confirm this LINE_ID through imopenlines.config.get.',
+                );
+            }
         }
 
         return $this->check(
             $label,
-            $resolvedLineId,
+            implode(', ', $lineIds),
             Bitrix24DevProfileBootstrapResultData::STATUS_OK,
             true,
-            'Bitrix confirmed this Open Lines configuration through imopenlines.config.get.',
+            'Bitrix confirmed all Open Lines configurations through imopenlines.config.get.',
         );
     }
 

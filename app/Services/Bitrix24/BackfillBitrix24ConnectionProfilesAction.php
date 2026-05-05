@@ -4,6 +4,7 @@ namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
+use Illuminate\Support\Facades\Schema;
 
 class BackfillBitrix24ConnectionProfilesAction
 {
@@ -30,13 +31,27 @@ class BackfillBitrix24ConnectionProfilesAction
         $profileClientId = $profile->exists ? $profile->client_id : $clientId;
         $profileApplicationCode = $profile->exists ? $profile->application_code : $applicationCode;
 
-        $profile->forceFill([
+        $updates = [
             'profile_type' => $profile->profile_type ?: Bitrix24Profile::TYPE_FULL_LIVE,
             'display_name' => $profile->display_name ?: 'Staging',
             'client_id' => $profileClientId,
             'application_code' => $profileApplicationCode,
             'callback_base_url' => $callbackBaseUrl,
-        ]);
+        ];
+
+        if (Schema::hasColumn('bitrix24_profiles', 'default_assigned_user_id')) {
+            $updates['default_assigned_user_id'] = $profile->default_assigned_user_id ?? (int) config('bitrix24.defaults.assigned_user_id', 1);
+        }
+
+        if (Schema::hasColumn('bitrix24_profiles', 'default_deal_category_id')) {
+            $updates['default_deal_category_id'] = $profile->default_deal_category_id ?? (int) config('bitrix24.defaults.deal_category_id', 22);
+        }
+
+        if (Schema::hasColumn('bitrix24_profiles', 'default_deal_stage_id')) {
+            $updates['default_deal_stage_id'] = $profile->default_deal_stage_id ?: (string) config('bitrix24.defaults.deal_stage_id', 'C22:NEW');
+        }
+
+        $profile->forceFill($updates);
 
         if (! $profile->exists || $profile->isDirty()) {
             $profile->save();

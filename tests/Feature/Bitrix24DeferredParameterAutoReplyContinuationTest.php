@@ -817,7 +817,7 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
         }
 
         $connectorCode = $profile->openLinesConnectorCodeForPlatform($channel->platform);
-        $lineId = $profile->openLinesLineIdForPlatform($channel->platform);
+        $lineId = $channel->platform === Channel::PLATFORM_MAX ? 'line-max' : 'line-telegram';
 
         if (! filled($connectorCode) || ! filled($lineId)) {
             return null;

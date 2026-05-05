@@ -10,6 +10,7 @@ class BuildBitrix24DealPayloadAction
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ResolveBitrix24ContactSourceAction $resolveContactSourceAction,
+        private readonly ResolveCurrentBitrix24ProfileAction $resolveCurrentProfileAction,
     ) {}
 
     /**
@@ -29,12 +30,39 @@ class BuildBitrix24DealPayloadAction
 
         return [
             'TITLE' => $this->buildTitle($rootContact),
-            'CATEGORY_ID' => (int) config('bitrix24.defaults.deal_category_id', 22),
-            'STAGE_ID' => (string) config('bitrix24.defaults.deal_stage_id', 'C22:NEW'),
-            'ASSIGNED_BY_ID' => (int) config('bitrix24.defaults.assigned_user_id', 1),
+            'CATEGORY_ID' => $this->defaultDealCategoryId(),
+            'STAGE_ID' => $this->defaultDealStageId(),
+            'ASSIGNED_BY_ID' => $this->defaultAssignedUserId(),
             'CONTACT_ID' => $bitrix24ContactId,
             'SOURCE_ID' => $sourceId,
         ];
+    }
+
+    private function defaultAssignedUserId(): int
+    {
+        try {
+            return $this->resolveCurrentProfileAction->handle()->effectiveDefaultAssignedUserId();
+        } catch (Bitrix24ConnectionStateException) {
+            return (int) config('bitrix24.defaults.assigned_user_id', 1);
+        }
+    }
+
+    private function defaultDealCategoryId(): int
+    {
+        try {
+            return $this->resolveCurrentProfileAction->handle()->effectiveDefaultDealCategoryId();
+        } catch (Bitrix24ConnectionStateException) {
+            return (int) config('bitrix24.defaults.deal_category_id', 22);
+        }
+    }
+
+    private function defaultDealStageId(): string
+    {
+        try {
+            return $this->resolveCurrentProfileAction->handle()->effectiveDefaultDealStageId();
+        } catch (Bitrix24ConnectionStateException) {
+            return (string) config('bitrix24.defaults.deal_stage_id', 'C22:NEW');
+        }
     }
 
     private function buildTitle(Contact $contact): string

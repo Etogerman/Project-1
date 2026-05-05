@@ -73,18 +73,16 @@ class Bitrix24SetupReportCommandTest extends TestCase
             ->assertSuccessful();
     }
 
-    public function test_command_succeeds_when_single_profile_reuses_line_id_across_connectors(): void
+    public function test_command_succeeds_when_route_line_ids_are_stored_on_channel_routes(): void
     {
         $this->seedReadyConfig();
-        $profile = $this->createProfile([
-            'telegram_line_id' => 'shared-line',
-            'max_line_id' => 'shared-line',
-        ]);
+        $profile = $this->createProfile();
         $this->createActiveConnection($profile);
 
         $this->artisan('bitrix24:setup-report')
-            ->expectsOutputToContain('Unique full_live LINE_ID values per portal')
-            ->doesntExpectOutputToContain('Two full_live profiles cannot share the same LINE_ID within one portal.')
+            ->expectsOutputToContain('Unique usable Open Lines route LINE_ID values per portal')
+            ->expectsOutputToContain('Current runtime active Telegram route LINE_ID values')
+            ->expectsOutputToContain('Current runtime active MAX route LINE_ID values')
             ->assertSuccessful();
     }
 
@@ -92,32 +90,18 @@ class Bitrix24SetupReportCommandTest extends TestCase
     {
         $this->seedReadyConfig();
         $profile = $this->createProfile([
-            'telegram_line_id' => null,
+            'create_open_line_routes' => false,
         ]);
         $this->createActiveConnection($profile);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'connection_type' => Channel::CONNECTION_TYPE_BOT,
-        ]);
-
-        Bitrix24OpenLineRoute::query()->create([
-            'bitrix24_profile_id' => $profile->id,
-            'channel_id' => $channel->id,
-            'portal_domain' => $profile->portal_domain,
-            'profile_key' => $profile->profile_key,
-            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-            'connector_code' => $profile->telegram_connector_code,
-            'line_id' => 'line-from-route',
-            'source_id' => $profile->telegram_source_id,
-            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
-        ]);
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
 
         $report = app(BuildBitrix24SetupReportAction::class)->handle();
 
         $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
         $this->assertSame(
             'line-from-route',
-            collect($report->checks)->firstWhere('key', 'runtime.current_profile.telegram_line_id')['value'] ?? null,
+            collect($report->checks)->firstWhere('key', 'runtime.openline_routes.telegram_line_ids')['value'] ?? null,
         );
     }
 
@@ -125,32 +109,18 @@ class Bitrix24SetupReportCommandTest extends TestCase
     {
         $this->seedReadyConfig();
         $profile = $this->createProfile([
-            'max_line_id' => null,
+            'create_open_line_routes' => false,
         ]);
         $this->createActiveConnection($profile);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_MAX,
-            'connection_type' => Channel::CONNECTION_TYPE_BOT,
-        ]);
-
-        Bitrix24OpenLineRoute::query()->create([
-            'bitrix24_profile_id' => $profile->id,
-            'channel_id' => $channel->id,
-            'portal_domain' => $profile->portal_domain,
-            'profile_key' => $profile->profile_key,
-            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-            'connector_code' => $profile->max_connector_code,
-            'line_id' => 'line-max-from-route',
-            'source_id' => $profile->max_source_id,
-            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
-        ]);
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-telegram');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max-from-route');
 
         $report = app(BuildBitrix24SetupReportAction::class)->handle();
 
         $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
         $this->assertSame(
             'line-max-from-route',
-            collect($report->checks)->firstWhere('key', 'runtime.current_profile.max_line_id')['value'] ?? null,
+            collect($report->checks)->firstWhere('key', 'runtime.openline_routes.max_line_ids')['value'] ?? null,
         );
     }
 
@@ -172,8 +142,6 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'profile_type' => Bitrix24Profile::TYPE_CRM_ONLY,
             'telegram_connector_code' => null,
             'max_connector_code' => null,
-            'telegram_line_id' => null,
-            'max_line_id' => null,
         ]);
 
         $this->artisan('bitrix24:setup-report')
@@ -269,14 +237,12 @@ class Bitrix24SetupReportCommandTest extends TestCase
                 'openlines_url' => $callbackBaseUrl.'/callbacks/bitrix24/openlines',
             ],
             'sources' => [
-                'telegram_id' => 'ABRIKOSOFF_TELEGRAM',
-                'max_id' => 'ABRIKOSOFF_MAX',
+                'telegram_id' => 'ABC_TELEGRAM',
+                'max_id' => 'ABC_MAX',
             ],
             'openlines' => [
-                'telegram_line_id' => 'line-telegram',
-                'max_line_id' => 'line-max',
-                'telegram_connector_code' => 'abrikosoff_telegram',
-                'max_connector_code' => 'abrikosoff_max',
+                'telegram_connector_code' => 'abc_telegram',
+                'max_connector_code' => 'abc_max',
                 'session_finish_event_names' => ['OnSessionFinish'],
             ],
         ]));
@@ -287,7 +253,10 @@ class Bitrix24SetupReportCommandTest extends TestCase
      */
     private function createProfile(array $overrides = []): Bitrix24Profile
     {
-        return Bitrix24Profile::query()->create(array_replace([
+        $createOpenLineRoutes = (bool) ($overrides['create_open_line_routes'] ?? true);
+        unset($overrides['create_open_line_routes']);
+
+        $profile = Bitrix24Profile::query()->create(array_replace([
             'portal_domain' => 'crm.alexlesley.biz',
             'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
             'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
@@ -295,13 +264,18 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'client_id' => 'client-id',
             'application_code' => 'local.app.code',
             'callback_base_url' => 'https://project.example.com',
-            'telegram_source_id' => 'ABRIKOSOFF_TELEGRAM',
-            'max_source_id' => 'ABRIKOSOFF_MAX',
-            'telegram_connector_code' => 'abrikosoff_telegram',
-            'max_connector_code' => 'abrikosoff_max',
-            'telegram_line_id' => 'line-telegram',
-            'max_line_id' => 'line-max',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+            'max_source_id' => 'ABC_MAX',
+            'telegram_connector_code' => 'abc_telegram',
+            'max_connector_code' => 'abc_max',
         ], $overrides));
+
+        if ($createOpenLineRoutes && $profile->profile_type === Bitrix24Profile::TYPE_FULL_LIVE) {
+            $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-telegram');
+            $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+        }
+
+        return $profile;
     }
 
     private function createActiveConnection(Bitrix24Profile $profile): Bitrix24Connection
@@ -315,6 +289,30 @@ class Bitrix24SetupReportCommandTest extends TestCase
         ]);
     }
 
+    private function createOpenLineRoute(Bitrix24Profile $profile, string $platform, string $lineId): Bitrix24OpenLineRoute
+    {
+        $channel = Channel::factory()->create([
+            'platform' => $platform,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        return Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => $platform === Channel::PLATFORM_MAX
+                ? $profile->max_connector_code
+                : $profile->telegram_connector_code,
+            'line_id' => $lineId,
+            'source_id' => $platform === Channel::PLATFORM_MAX
+                ? $profile->max_source_id
+                : $profile->telegram_source_id,
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+    }
+
     private function insertRawProfile(string $callbackBaseUrl): void
     {
         DB::table('bitrix24_profiles')->insert([
@@ -325,12 +323,10 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'client_id' => 'client-id',
             'application_code' => 'local.app.code',
             'callback_base_url' => $callbackBaseUrl,
-            'telegram_source_id' => 'ABRIKOSOFF_TELEGRAM',
-            'max_source_id' => 'ABRIKOSOFF_MAX',
-            'telegram_connector_code' => 'abrikosoff_telegram',
-            'max_connector_code' => 'abrikosoff_max',
-            'telegram_line_id' => 'line-telegram',
-            'max_line_id' => 'line-max',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+            'max_source_id' => 'ABC_MAX',
+            'telegram_connector_code' => 'abc_telegram',
+            'max_connector_code' => 'abc_max',
             'created_at' => now(),
             'updated_at' => now(),
         ]);
