@@ -6,6 +6,7 @@ use App\Data\Bitrix24\Bitrix24CurrentOpenLineChatData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Contact;
 use App\Models\Dialog;
@@ -70,6 +71,8 @@ class ExportMessageToBitrix24OpenLinesAction
         if (! $liveExport instanceof Bitrix24MessageExport) {
             return $message->fresh() ?? $message;
         }
+
+        $route = null;
 
         try {
             $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
@@ -207,6 +210,8 @@ class ExportMessageToBitrix24OpenLinesAction
 
             throw $exception;
         } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->markRouteMisconfiguredOnInactiveLineFailure($route, $dialog, $exception);
+
             $this->markFailed(
                 $message,
                 $rootContact->id,
@@ -237,6 +242,53 @@ class ExportMessageToBitrix24OpenLinesAction
 
             throw $throwable;
         }
+    }
+
+    private function markRouteMisconfiguredOnInactiveLineFailure(
+        ?Bitrix24OpenLinesRouteData $route,
+        Dialog $dialog,
+        Bitrix24LiveExportTransportException $exception,
+    ): void {
+        if (! $this->isInactiveOpenLineFailure($exception)) {
+            return;
+        }
+
+        $routeId = $route?->routeId ?? $dialog->bitrix24_open_line_route_id;
+
+        if ($routeId === null) {
+            return;
+        }
+
+        $routeModel = Bitrix24OpenLineRoute::query()->find($routeId);
+
+        if (! $routeModel instanceof Bitrix24OpenLineRoute) {
+            return;
+        }
+
+        $routeModel->forceFill([
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            'last_error_message' => Str::limit($exception->getMessage(), 1000, ''),
+            'last_error_at' => now(),
+        ])->save();
+    }
+
+    private function isInactiveOpenLineFailure(Bitrix24LiveExportTransportException $exception): bool
+    {
+        if (
+            $exception->failureCode !== Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED
+            || $exception->failureUncertain
+        ) {
+            return false;
+        }
+
+        $message = Str::lower($exception->getMessage());
+
+        return Str::contains($message, [
+            'not_active_line',
+            'inactive or does not exist',
+            'неактивна',
+            'не существует',
+        ]);
     }
 
     private function markPending(Message $message, int $rootContactId, string $bitrix24ContactId, string $liveBatchUuid): void

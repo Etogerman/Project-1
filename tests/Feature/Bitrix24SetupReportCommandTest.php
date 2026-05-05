@@ -2,10 +2,15 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bitrix24\Bitrix24SetupReportResult;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
+use App\Models\Bitrix24SyncLog;
 use App\Models\Channel;
+use App\Models\Dialog;
+use App\Models\Message;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
 use App\Services\Bitrix24\BuildBitrix24SetupReportAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
@@ -139,6 +144,149 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'line-from-route',
             collect($report->checks)->firstWhere('key', 'runtime.openline_routes.telegram_line_ids')['value'] ?? null,
         );
+    }
+
+    public function test_command_fails_when_active_route_latest_export_reports_inactive_line(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile([
+            'create_open_line_routes' => false,
+        ]);
+        $this->createActiveConnection($profile);
+        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+        $this->createLiveExportForRoute($telegramRoute, [
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'failure_code' => Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            'failure_uncertain' => false,
+            'failure_reason' => 'Линия c таким ID неактивна или не существует',
+            'failed_at' => now(),
+        ]);
+
+        $report = app(BuildBitrix24SetupReportAction::class)->handle();
+        $check = collect($report->checks)->firstWhere('key', 'runtime.openline_routes.telegram_line_ids');
+
+        $this->assertTrue($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
+        $this->assertSame(Bitrix24SetupReportResult::STATUS_MISSING, $check['status'] ?? null);
+        $this->assertSame('line-from-route', $check['value'] ?? null);
+        $this->assertStringContainsString('inactive LINE_ID', $check['notes'] ?? '');
+    }
+
+    public function test_setup_report_ignores_old_inactive_line_failure_after_later_success(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile([
+            'create_open_line_routes' => false,
+        ]);
+        $this->createActiveConnection($profile);
+        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+        $this->createLiveExportForRoute($telegramRoute, [
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'failure_code' => Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            'failure_uncertain' => false,
+            'failure_reason' => 'NOT_ACTIVE_LINE',
+            'failed_at' => now()->subMinute(),
+            'created_at' => now()->subMinute(),
+            'updated_at' => now()->subMinute(),
+        ]);
+        $this->createLiveExportForRoute($telegramRoute, [
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+            'failure_code' => null,
+            'failure_uncertain' => false,
+            'failure_reason' => null,
+            'exported_at' => now(),
+        ]);
+
+        $report = app(BuildBitrix24SetupReportAction::class)->handle();
+        $check = collect($report->checks)->firstWhere('key', 'runtime.openline_routes.telegram_line_ids');
+
+        $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
+        $this->assertSame(Bitrix24SetupReportResult::STATUS_OK, $check['status'] ?? null);
+    }
+
+    public function test_command_fails_when_latest_send_log_reports_inactive_line_for_active_route(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile([
+            'create_open_line_routes' => false,
+        ]);
+        $this->createActiveConnection($profile);
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+
+        Bitrix24SyncLog::query()->create([
+            'direction' => Bitrix24SyncLog::DIRECTION_OUTBOUND,
+            'operation' => 'rest_call',
+            'entity_type' => 'rest_method',
+            'entity_id' => 'imconnector.send.messages',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'http_status' => 400,
+            'error_code' => 'NOT_ACTIVE_LINE',
+            'error_message' => 'Линия c таким ID неактивна или не существует',
+            'request_payload' => [
+                'params' => [
+                    'CONNECTOR' => 'abc_telegram',
+                    'LINE' => 'line-from-route',
+                ],
+            ],
+            'response_payload' => [
+                'error' => 'NOT_ACTIVE_LINE',
+                'error_description' => 'Линия c таким ID неактивна или не существует',
+            ],
+        ]);
+
+        $report = app(BuildBitrix24SetupReportAction::class)->handle();
+        $check = collect($report->checks)->firstWhere('key', 'runtime.openline_routes.telegram_line_ids');
+
+        $this->assertTrue($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
+        $this->assertSame(Bitrix24SetupReportResult::STATUS_MISSING, $check['status'] ?? null);
+        $this->assertSame('line-from-route', $check['value'] ?? null);
+        $this->assertStringContainsString('inactive LINE_ID', $check['notes'] ?? '');
+    }
+
+    public function test_setup_report_ignores_inactive_send_log_after_route_repair(): void
+    {
+        $this->seedReadyConfig();
+        $profile = $this->createProfile([
+            'create_open_line_routes' => false,
+        ]);
+        $this->createActiveConnection($profile);
+        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+
+        Bitrix24SyncLog::query()->forceCreate([
+            'direction' => Bitrix24SyncLog::DIRECTION_OUTBOUND,
+            'operation' => 'rest_call',
+            'entity_type' => 'rest_method',
+            'entity_id' => 'imconnector.send.messages',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'http_status' => 400,
+            'error_code' => 'NOT_ACTIVE_LINE',
+            'error_message' => 'Линия c таким ID неактивна или не существует',
+            'request_payload' => [
+                'params' => [
+                    'CONNECTOR' => 'abc_telegram',
+                    'LINE' => 'line-from-route',
+                ],
+            ],
+            'response_payload' => [
+                'error' => 'NOT_ACTIVE_LINE',
+            ],
+            'created_at' => now()->subMinute(),
+        ]);
+
+        $telegramRoute->forceFill([
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'last_error_message' => null,
+            'last_error_at' => null,
+        ])->save();
+
+        $report = app(BuildBitrix24SetupReportAction::class)->handle();
+        $check = collect($report->checks)->firstWhere('key', 'runtime.openline_routes.telegram_line_ids');
+
+        $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
+        $this->assertSame(Bitrix24SetupReportResult::STATUS_OK, $check['status'] ?? null);
     }
 
     public function test_command_accepts_active_max_route_instead_of_profile_max_line_id(): void
@@ -347,6 +495,32 @@ class Bitrix24SetupReportCommandTest extends TestCase
                 : $profile->telegram_source_id,
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $exportOverrides
+     */
+    private function createLiveExportForRoute(Bitrix24OpenLineRoute $route, array $exportOverrides): Bitrix24MessageExport
+    {
+        $dialog = Dialog::factory()->create([
+            'channel_id' => $route->channel_id,
+            'bitrix24_open_line_route_id' => $route->id,
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'channel_id' => $dialog->channel_id,
+        ]);
+
+        return Bitrix24MessageExport::query()->create(array_merge([
+            'message_id' => $message->id,
+            'contact_id' => $message->contact_id,
+            'bitrix24_contact_id' => 'B24-CONTACT-1',
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'failure_uncertain' => false,
+        ], $exportOverrides));
     }
 
     private function insertRawProfile(string $callbackBaseUrl): void

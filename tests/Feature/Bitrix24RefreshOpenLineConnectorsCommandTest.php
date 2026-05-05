@@ -19,7 +19,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
     use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
-    public function test_refreshes_telegram_bot_connector_registration_without_recreating_open_line(): void
+    public function test_refresh_repairs_telegram_bot_connector_binding_without_recreating_open_line(): void
     {
         config()->set('bitrix24.application.name', 'Герман-4');
 
@@ -51,15 +51,13 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'connector_code' => 'abc_telegram',
             'line_id' => '5',
             'source_id' => 'ABC_TELEGRAM_DEV',
-            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
             'last_error_message' => 'Старое предупреждение',
             'last_error_at' => now()->subMinute(),
         ]);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel, $connection): void {
             $mock->shouldNotReceive('call')->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
-            $mock->shouldNotReceive('call')->with('imconnector.activate', \Mockery::any(), \Mockery::any());
-            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
             $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
 
             $mock->shouldReceive('call')
@@ -75,6 +73,30 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 })
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(function (string $method, array $params, Bitrix24Connection $usedConnection) use ($channel, $connection): bool {
+                    return $method === 'imconnector.connector.data.set'
+                        && $usedConnection->is($connection)
+                        && $params['CONNECTOR'] === 'abc_telegram'
+                        && $params['LINE'] === '5'
+                        && $params['DATA']['ID'] === 'channel:'.$channel->id.':connector:abc_telegram:line:5'
+                        && $params['DATA']['NAME'] === 'Имя из админки Telegram bot';
+                })
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(function (string $method, array $params, Bitrix24Connection $usedConnection) use ($connection): bool {
+                    return $method === 'imconnector.activate'
+                        && $usedConnection->is($connection)
+                        && $params === [
+                            'CONNECTOR' => 'abc_telegram',
+                            'LINE' => '5',
+                            'ACTIVE' => '1',
+                        ];
+                })
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         $this->artisan('bitrix24:refresh-openline-connectors', [
@@ -82,6 +104,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         ])->assertSuccessful();
 
         $this->assertSame('Имя из админки', $connection->refresh()->application_name);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->refresh()->status);
         $this->assertSame('5', $route->refresh()->line_id);
         $this->assertSame('stagecrm.fvds.ru#5', $route->line_owner_key);
         $this->assertNull($route->last_error_message);
@@ -126,8 +149,6 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel): void {
             $mock->shouldNotReceive('call')->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
-            $mock->shouldNotReceive('call')->with('imconnector.activate', \Mockery::any(), \Mockery::any());
-            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
             $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
 
             $mock->shouldReceive('call')
@@ -141,6 +162,27 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 })
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(function (string $method, array $params): bool {
+                    return $method === 'imconnector.connector.data.set'
+                        && $params['CONNECTOR'] === 'abc_max'
+                        && $params['LINE'] === '7'
+                        && $params['DATA']['NAME'] === 'Имя из админки MAX bot';
+                })
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(function (string $method, array $params): bool {
+                    return $method === 'imconnector.activate'
+                        && $params === [
+                            'CONNECTOR' => 'abc_max',
+                            'LINE' => '7',
+                            'ACTIVE' => '1',
+                        ];
+                })
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         $this->artisan('bitrix24:refresh-openline-connectors', [
@@ -328,7 +370,22 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     && $params['NAME'] === 'Имя из админки MAX bot')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
-            $mock->shouldNotReceive('call')->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && $params['CONNECTOR'] === 'abc_max'
+                    && $params['LINE'] === '7')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.activate'
+                    && $usedConnection->is($connection)
+                    && $params['CONNECTOR'] === 'abc_max'
+                    && $params['LINE'] === '7'
+                    && $params['ACTIVE'] === '1')
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         $this->artisan('bitrix24:refresh-openline-connectors', [

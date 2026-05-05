@@ -771,6 +771,98 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.operator.answer.json');
     }
 
+    public function test_inactive_line_send_failure_marks_open_line_route_misconfigured(): void
+    {
+        $this->makeActiveConnection();
+        $userCode = 'abrikosoff_max|line-max|abrikosoff-dialog:396|101154';
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_MAX,
+            contactAttributes: [
+                'bitrix24_contact_id' => '71034',
+            ],
+            dialogAttributes: [
+                'bitrix24_open_line_user_code_override' => $userCode,
+                'bitrix24_open_line_resolved_chat_id_override' => '162490',
+                'bitrix24_open_line_binding_verified_at' => now(),
+            ],
+        );
+        $route = Bitrix24OpenLineRoute::query()->findOrFail($dialog->bitrix24_open_line_route_id);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Manual reply в неактивную линию',
+        ]);
+
+        Http::fake(function (Request $request) use ($userCode) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
+                return Http::response([
+                    'result' => [
+                        [
+                            'CHAT_ID' => '162490',
+                            'CONNECTOR_ID' => 'abrikosoff_max',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
+                return Http::response([
+                    'result' => [
+                        'IM' => [
+                            [
+                                'VALUE' => 'imol|'.$userCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                return Http::response([
+                    'result' => [
+                        'id' => '162490',
+                        'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|71034|DEAL|136062',
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return Http::response([
+                    'error' => 'NOT_ACTIVE_LINE',
+                    'error_description' => 'Линия c таким ID неактивна или не существует',
+                ], 400);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED, $exception->failureCode);
+            $this->assertFalse($exception->failureUncertain);
+        }
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertSame('Линия c таким ID неактивна или не существует', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
+        $this->assertNull($route->line_owner_key);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'failure_code' => Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            'failure_uncertain' => false,
+            'failure_reason' => 'Линия c таким ID неактивна или не существует',
+        ]);
+    }
+
     public function test_max_manual_reply_requires_confirmed_current_chat_before_connector_mirror_send(): void
     {
         $this->makeActiveConnection();

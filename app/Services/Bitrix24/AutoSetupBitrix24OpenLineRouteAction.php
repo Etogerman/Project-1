@@ -139,6 +139,8 @@ class AutoSetupBitrix24OpenLineRouteAction
             $this->assertCanRefreshConnectorRegistration($connection, $profile, $channel, $route);
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
+            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
+            $this->activateConnector($connection, (string) $route->connector_code, (string) $route->line_id);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -154,8 +156,10 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $route->forceFill([
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             'last_error_message' => null,
             'last_error_at' => null,
+            'updated_at' => now(),
         ])->save();
 
         return $route->refresh();
@@ -237,8 +241,12 @@ class AutoSetupBitrix24OpenLineRouteAction
             throw new Bitrix24OpenLineAutoSetupException('Обновление регистрации ОЛ сейчас доступно только для Telegram bot и MAX bot каналов.');
         }
 
-        if (! $route->isUsable()) {
-            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не активен или не содержит открытую линию.');
+        if (! in_array($route->status, [
+            Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            Bitrix24OpenLineRoute::STATUS_LEGACY,
+            Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ], true)) {
+            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не активен и не находится в состоянии ремонта.');
         }
 
         foreach ([

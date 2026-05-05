@@ -4,8 +4,11 @@ namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24SetupReportResult;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
+use App\Models\Bitrix24SyncLog;
+use Illuminate\Support\Str;
 
 class BuildBitrix24SetupReportAction
 {
@@ -485,11 +488,14 @@ class BuildBitrix24SetupReportAction
         string $channelType,
         string $platformLabel,
     ): array {
-        $routeLineIds = Bitrix24OpenLineRoute::query()
+        $routes = Bitrix24OpenLineRoute::query()
             ->where('bitrix24_profile_id', $profile->id)
             ->where('channel_type', $channelType)
             ->where('status', Bitrix24OpenLineRoute::STATUS_ACTIVE)
             ->whereNotNull('line_id')
+            ->get(['id', 'connector_code', 'line_id', 'status', 'last_error_message', 'updated_at']);
+
+        $routeLineIds = $routes
             ->pluck('line_id')
             ->map(fn (mixed $lineId): string => trim((string) $lineId))
             ->filter()
@@ -498,6 +504,24 @@ class BuildBitrix24SetupReportAction
             ->all();
 
         if ($routeLineIds !== []) {
+            $inactiveLineFailures = $this->latestInactiveLineFailuresByRoutes(
+                $routes->all(),
+            );
+
+            if ($inactiveLineFailures !== []) {
+                return $this->check(
+                    $key,
+                    $label,
+                    implode(', ', $routeLineIds),
+                    Bitrix24SetupReportResult::STATUS_MISSING,
+                    true,
+                    sprintf(
+                        '%s route has the latest live export failure from Bitrix24 inactive LINE_ID. Run connector refresh/repair before sending messages.',
+                        $platformLabel,
+                    ),
+                );
+            }
+
             return $this->check(
                 $key,
                 $label,
@@ -520,6 +544,125 @@ class BuildBitrix24SetupReportAction
                 $platformLabel,
             ),
         );
+    }
+
+    /**
+     * @param  list<Bitrix24OpenLineRoute>  $routes
+     * @return array<int, string>
+     */
+    private function latestInactiveLineFailuresByRoutes(array $routes): array
+    {
+        $failures = [];
+
+        foreach ($routes as $route) {
+            $routeId = (int) $route->id;
+
+            $latestExport = Bitrix24MessageExport::query()
+                ->select('bitrix24_message_exports.*')
+                ->join('messages', 'messages.id', '=', 'bitrix24_message_exports.message_id')
+                ->join('dialogs', 'dialogs.id', '=', 'messages.dialog_id')
+                ->where('dialogs.bitrix24_open_line_route_id', $routeId)
+                ->where('bitrix24_message_exports.export_mode', Bitrix24MessageExport::MODE_LIVE)
+                ->orderByDesc('bitrix24_message_exports.updated_at')
+                ->orderByDesc('bitrix24_message_exports.id')
+                ->first();
+
+            if (
+                $latestExport instanceof Bitrix24MessageExport
+                && $this->isInactiveLineFailure($latestExport)
+            ) {
+                if ($this->routeWasRepairedAfterFailure($route, $latestExport->failed_at ?? $latestExport->updated_at)) {
+                    continue;
+                }
+
+                $failures[$routeId] = (string) $latestExport->failure_reason;
+
+                continue;
+            }
+
+            $latestLog = $this->latestSendMessagesSyncLogForRoute($route);
+
+            if (
+                $latestLog instanceof Bitrix24SyncLog
+                && $this->isInactiveLineSyncLogFailure($latestLog)
+            ) {
+                if ($this->routeWasRepairedAfterFailure($route, $latestLog->created_at)) {
+                    continue;
+                }
+
+                $failures[$routeId] = (string) $latestLog->error_message;
+            }
+        }
+
+        return $failures;
+    }
+
+    private function routeWasRepairedAfterFailure(Bitrix24OpenLineRoute $route, mixed $failureAt): bool
+    {
+        if ($failureAt === null || $route->updated_at === null) {
+            return false;
+        }
+
+        return $route->status === Bitrix24OpenLineRoute::STATUS_ACTIVE
+            && blank($route->last_error_message)
+            && $route->updated_at->greaterThan($failureAt);
+    }
+
+    private function latestSendMessagesSyncLogForRoute(Bitrix24OpenLineRoute $route): ?Bitrix24SyncLog
+    {
+        $connectorCode = $this->nullableString($route->connector_code);
+        $lineId = $this->nullableString($route->line_id);
+
+        if ($connectorCode === null || $lineId === null) {
+            return null;
+        }
+
+        return Bitrix24SyncLog::query()
+            ->where('entity_id', 'imconnector.send.messages')
+            ->where('request_payload->params->CONNECTOR', $connectorCode)
+            ->where('request_payload->params->LINE', $lineId)
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function isInactiveLineFailure(Bitrix24MessageExport $export): bool
+    {
+        if (
+            $export->export_status !== Bitrix24MessageExport::STATUS_FAILED
+            || $export->failure_code !== Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED
+            || $export->failure_uncertain
+        ) {
+            return false;
+        }
+
+        $failureReason = Str::lower((string) $export->failure_reason);
+
+        return Str::contains($failureReason, [
+            'not_active_line',
+            'inactive or does not exist',
+            'неактивна',
+            'не существует',
+        ]);
+    }
+
+    private function isInactiveLineSyncLogFailure(Bitrix24SyncLog $log): bool
+    {
+        if ($log->status !== Bitrix24SyncLog::STATUS_FAILED) {
+            return false;
+        }
+
+        $failureReason = Str::lower(trim(implode(' ', array_filter([
+            $log->error_code,
+            $log->error_message,
+            json_encode($log->response_payload ?? [], JSON_UNESCAPED_UNICODE),
+        ]))));
+
+        return Str::contains($failureReason, [
+            'not_active_line',
+            'inactive or does not exist',
+            'неактивна',
+            'не существует',
+        ]);
     }
 
     /**
