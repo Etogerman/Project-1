@@ -717,6 +717,45 @@ class ExportMessageToBitrix24OpenLinesAction
 
         $resolvedBitrixChatId = $this->extractLegacySessionChatId($response->result);
         $connectorUserId = $this->extractLegacyConnectorUserId($response->result);
+
+        if ($resolvedBitrixChatId === null || $connectorUserId === null) {
+            $messageText = 'Bitrix24 Open Lines fast-path response is missing session chat id or connector user id.';
+
+            $this->logBitrix24ApiCallAction->handle(
+                direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+                operation: 'openlines_live_export_fast_path_unexpected_response',
+                status: Bitrix24SyncLog::STATUS_FAILED,
+                requestPayload: [
+                    'message_id' => $message->id,
+                    'dialog_id' => $dialog->id,
+                    'contact_id' => $rootContactId,
+                    'bitrix24_contact_id' => $bitrix24ContactId,
+                    'payload_chat_id' => $payloadChatId,
+                    'connector_code' => $route->connectorCode,
+                    'line_id' => $route->lineId,
+                    'retry_after_sync' => $retryAfterSync,
+                ],
+                responsePayload: [
+                    'result' => $response->result,
+                    'rest_method' => $response->restMethod,
+                    'fast_path' => true,
+                    'returned_session_chat_id' => $resolvedBitrixChatId,
+                    'returned_connector_user_id' => $connectorUserId,
+                ],
+                connection: $connection,
+                httpStatus: $response->httpStatus,
+                errorMessage: $messageText,
+                entityType: 'message',
+                entityId: (string) $message->id,
+            );
+
+            throw new Bitrix24LiveExportTransportException(
+                $messageText,
+                failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                failureUncertain: true,
+            );
+        }
+
         $bindingSynced = $this->syncInboundFastPathBindingFromResponse(
             $dialog,
             $route,

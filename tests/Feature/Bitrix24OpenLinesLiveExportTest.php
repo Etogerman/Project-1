@@ -1719,6 +1719,77 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
     }
 
+    public function test_inbound_client_fast_path_missing_session_chat_is_uncertain_without_fallback_send(): void
+    {
+        config()->set('bitrix24.features.fast_inbound_export_enabled', true);
+
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Fast-path ответ без CHAT_ID',
+        ]);
+        $sendCalls = 0;
+
+        Http::fake(function (Request $request) use (&$sendCalls) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                $sendCalls++;
+
+                return Http::response([
+                    'result' => [
+                        'DATA' => [
+                            'RESULT' => [
+                                [
+                                    'SUCCESS' => true,
+                                    'message' => [
+                                        'id' => 'abrikosoff-message-missing-chat',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected fallback request'], 500);
+        });
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
+            $this->assertTrue($exception->failureUncertain);
+            $this->assertStringContainsString('missing session chat id', $exception->getMessage());
+        }
+
+        $this->assertSame(1, $sendCalls);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => null,
+            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            'failure_uncertain' => true,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_live_export_fast_path_unexpected_response',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
+        ]);
+
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.session.start.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.operator.answer.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
+    }
+
     public function test_live_export_connector_transport_does_not_retry_mutating_send_on_server_error(): void
     {
         $this->makeActiveConnection();
