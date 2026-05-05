@@ -928,7 +928,10 @@ class ExportManualReplyToBitrix24OpenLinesAction
                     return null;
                 }
 
-                $crmBinding = $this->parseDialogCrmBinding($response->result['entity_data_2'] ?? null);
+                $crmBinding = $this->parseDialogCrmBinding(
+                    $response->result['entity_data_2'] ?? null,
+                    $response->result['entity_data_1'] ?? null,
+                );
 
                 if ($crmBinding === null) {
                     return null;
@@ -983,7 +986,10 @@ class ExportManualReplyToBitrix24OpenLinesAction
             return null;
         }
 
-        $crmBinding = $this->parseDialogCrmBinding($response->result['entity_data_2'] ?? null);
+        $crmBinding = $this->parseDialogCrmBinding(
+            $response->result['entity_data_2'] ?? null,
+            $response->result['entity_data_1'] ?? null,
+        );
 
         if ($crmBinding === null) {
             return null;
@@ -1001,7 +1007,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
     /**
      * @return array{CRM_ENTITY_TYPE: string, CRM_ENTITY: string}|null
      */
-    private function parseDialogCrmBinding(mixed $crmBinding): ?array
+    private function parseDialogCrmBinding(mixed $crmBinding, mixed $activeBinding = null): ?array
     {
         if (! is_scalar($crmBinding)) {
             return null;
@@ -1009,16 +1015,23 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
         $parts = array_map('trim', explode('|', (string) $crmBinding));
         $contactIds = [];
+        $dealIds = [];
 
         for ($index = 0; $index + 1 < count($parts); $index += 2) {
             $entityType = strtoupper($parts[$index]);
             $entityId = trim($parts[$index + 1]);
 
-            if ($entityType !== 'CONTACT' || $entityId === '' || $entityId === '0') {
+            if ($entityId === '' || $entityId === '0') {
                 continue;
             }
 
-            $contactIds[$entityId] = true;
+            if ($entityType === 'CONTACT') {
+                $contactIds[$entityId] = true;
+            }
+
+            if ($entityType === 'DEAL') {
+                $dealIds[$entityId] = true;
+            }
         }
 
         if ($contactIds === []) {
@@ -1029,9 +1042,57 @@ class ExportManualReplyToBitrix24OpenLinesAction
             return null;
         }
 
+        $activeCrmBinding = $this->parseActiveDialogCrmBinding($activeBinding);
+
+        if ($activeCrmBinding !== null) {
+            if (
+                $activeCrmBinding['CRM_ENTITY_TYPE'] === 'CONTACT'
+                && isset($contactIds[$activeCrmBinding['CRM_ENTITY']])
+            ) {
+                return $activeCrmBinding;
+            }
+
+            if (
+                $activeCrmBinding['CRM_ENTITY_TYPE'] === 'DEAL'
+                && isset($dealIds[$activeCrmBinding['CRM_ENTITY']])
+            ) {
+                return $activeCrmBinding;
+            }
+
+            return null;
+        }
+
         return [
             'CRM_ENTITY_TYPE' => 'CONTACT',
             'CRM_ENTITY' => array_key_first($contactIds),
+        ];
+    }
+
+    /**
+     * @return array{CRM_ENTITY_TYPE: string, CRM_ENTITY: string}|null
+     */
+    private function parseActiveDialogCrmBinding(mixed $activeBinding): ?array
+    {
+        if (! is_scalar($activeBinding)) {
+            return null;
+        }
+
+        $parts = array_map('trim', explode('|', (string) $activeBinding));
+
+        if (count($parts) < 3 || strtoupper($parts[0]) !== 'Y') {
+            return null;
+        }
+
+        $entityType = strtoupper($parts[1]);
+        $entityId = trim($parts[2]);
+
+        if (! in_array($entityType, ['CONTACT', 'DEAL'], true) || $entityId === '' || $entityId === '0') {
+            return null;
+        }
+
+        return [
+            'CRM_ENTITY_TYPE' => $entityType,
+            'CRM_ENTITY' => $entityId,
         ];
     }
 
