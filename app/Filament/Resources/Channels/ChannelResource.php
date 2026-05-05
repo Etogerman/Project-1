@@ -44,6 +44,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
+use InvalidArgumentException;
 use Throwable;
 use UnitEnum;
 
@@ -593,6 +594,12 @@ class ChannelResource extends Resource
                                 ->title('Webhook зарегистрирован')
                                 ->body('Секрет сохранён автоматически, webhook обновлён, данные бота синхронизированы.')
                                 ->send();
+                        } catch (InvalidArgumentException $throwable) {
+                            Notification::make()
+                                ->warning()
+                                ->title('Нужно проверить настройки канала')
+                                ->body($throwable->getMessage())
+                                ->send();
                         } catch (Throwable $throwable) {
                             report($throwable);
 
@@ -601,8 +608,6 @@ class ChannelResource extends Resource
                                 ->title('Не удалось зарегистрировать webhook')
                                 ->body($throwable->getMessage())
                                 ->send();
-
-                            throw $throwable;
                         }
                     }),
                 Action::make('checkConnection')
@@ -649,6 +654,12 @@ class ChannelResource extends Resource
                                 ->title('Канал проверен')
                                 ->body('Доступ к боту подтверждён, данные бота синхронизированы с платформой.')
                                 ->send();
+                        } catch (InvalidArgumentException $throwable) {
+                            Notification::make()
+                                ->warning()
+                                ->title('Нужно проверить настройки канала')
+                                ->body($throwable->getMessage())
+                                ->send();
                         } catch (Throwable $throwable) {
                             report($throwable);
 
@@ -657,8 +668,6 @@ class ChannelResource extends Resource
                                 ->title('Не удалось обновить данные бота')
                                 ->body($throwable->getMessage())
                                 ->send();
-
-                            throw $throwable;
                         }
                     }),
                 Action::make('manageScenarios')
