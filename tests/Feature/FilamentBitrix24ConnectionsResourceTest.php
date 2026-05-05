@@ -145,6 +145,69 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->assertDontSee('secret-refresh-token');
     }
 
+    public function test_bitrix24_connection_view_builds_bitrix_box_config_snippet(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'staging',
+            'callback_base_url' => 'https://local-ngrok.example.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $telegram = Channel::factory()->create([
+            'name' => 'Локальный Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $max = Channel::factory()->create([
+            'name' => 'Локальный MAX',
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $telegram->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($telegram),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '9',
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $max->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($max),
+            'connector_code' => 'abc_max',
+            'line_id' => '8',
+            'source_id' => 'ABC_MAX',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee('Bitrix-box line-level config для обратных сообщений')
+            ->assertSee('local/php_interface/include/abrikosoff_openlines/config.php');
+
+        $snippet = $component->instance()->getBitrixBoxConfigSnippet();
+
+        $this->assertIsString($snippet);
+        $this->assertStringNotContainsString('openlines_callback_url', $snippet);
+        $this->assertStringContainsString("'connectors' =>", $snippet);
+        $this->assertStringContainsString("'abc_telegram'", $snippet);
+        $this->assertStringContainsString('9 =>', $snippet);
+        $this->assertStringContainsString("'abc_max'", $snippet);
+        $this->assertStringContainsString('8 =>', $snippet);
+        $this->assertStringContainsString("'owner_callback_base_url' => 'https://local-ngrok.example.test'", $snippet);
+    }
+
     public function test_view_page_filters_webhook_events_and_sync_logs(): void
     {
         $admin = $this->makeAdmin();

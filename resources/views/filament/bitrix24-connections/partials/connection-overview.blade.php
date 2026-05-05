@@ -7,6 +7,7 @@
         ? $value->format('d.m.Y H:i:s')
         : '—';
     $formatText = static fn (mixed $value, string $empty = '—'): string => filled($value) ? (string) $value : $empty;
+    $bitrixBoxConfigSnippet = $this->getBitrixBoxConfigSnippet();
 @endphp
 
 @if ($record instanceof Bitrix24Connection)
@@ -126,4 +127,14 @@
             </table>
         </div>
     </div>
+
+    @if ($bitrixBoxConfigSnippet)
+        <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50/70 p-4 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/20 dark:text-amber-100">
+            <div class="mb-3 font-semibold">Bitrix-box line-level config для обратных сообщений</div>
+            <div class="mb-3 text-xs leading-5 text-amber-900 dark:text-amber-200">
+                Обновите только блок `connectors` в `local/php_interface/include/abrikosoff_openlines/config.php`. Глобальный `laravel.openlines_callback_url` не менять. Токены здесь не показываются.
+            </div>
+            <pre class="max-h-80 overflow-auto rounded-md border border-amber-200 bg-white p-3 text-xs leading-5 text-slate-900 dark:border-amber-500/30 dark:bg-slate-950 dark:text-slate-100">{{ $bitrixBoxConfigSnippet }}</pre>
+        </div>
+    @endif
 @endif

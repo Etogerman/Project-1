@@ -266,6 +266,52 @@ class ViewBitrix24Connection extends ViewRecord
             ->all();
     }
 
+    public function getBitrixBoxConfigSnippet(): ?string
+    {
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            return null;
+        }
+
+        $routes = Bitrix24OpenLineRoute::query()
+            ->with('channel')
+            ->where('bitrix24_profile_id', $profile->id)
+            ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
+            ->whereNotNull('connector_code')
+            ->whereNotNull('line_id')
+            ->orderBy('connector_code')
+            ->orderBy('line_id')
+            ->get();
+
+        if ($routes->isEmpty()) {
+            return null;
+        }
+
+        $connectors = [];
+
+        foreach ($routes as $route) {
+            $connectorCode = trim((string) $route->connector_code);
+            $lineId = trim((string) $route->line_id);
+
+            if ($connectorCode === '' || $lineId === '') {
+                continue;
+            }
+
+            $connectors[$connectorCode]['lines'][$lineId] = [
+                'line_name' => $this->bitrixBoxLineName($route),
+                'owner_profile_key' => $profile->profile_key,
+                'owner_callback_base_url' => $profile->callback_base_url,
+            ];
+        }
+
+        if ($connectors === []) {
+            return null;
+        }
+
+        return "'connectors' => ".var_export($connectors, true).",\n";
+    }
+
     public function saveOpenLineRoute(int|string $channelId): void
     {
         abort_unless($this->canEditOpenLineRoutes(), 403);
@@ -881,6 +927,17 @@ class ViewBitrix24Connection extends ViewRecord
             ->danger()
             ->title($message)
             ->send();
+    }
+
+    protected function bitrixBoxLineName(Bitrix24OpenLineRoute $route): string
+    {
+        $channelName = trim((string) ($route->channel?->name ?? ''));
+
+        if ($channelName === '') {
+            return 'Channel #'.$route->channel_id;
+        }
+
+        return sprintf('#%d %s', $route->channel_id, $channelName);
     }
 
     /**
