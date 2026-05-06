@@ -614,6 +614,15 @@ class ExportMessageToBitrix24OpenLinesAction
             return null;
         }
 
+        if (! $this->confirmFreshVerifiedBindingIsCurrentBeforeFastPath(
+            $dialog,
+            $route,
+            $connection,
+            $expectedResolvedBitrixChatId,
+        )) {
+            return null;
+        }
+
         $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle(
             $message,
             $route,
@@ -859,6 +868,31 @@ class ExportMessageToBitrix24OpenLinesAction
         $resolvedChatId = $this->positiveIntegerString($binding?->resolvedBitrixChatId);
 
         return $resolvedChatId === null ? null : $resolvedChatId;
+    }
+
+    private function confirmFreshVerifiedBindingIsCurrentBeforeFastPath(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        string $expectedResolvedBitrixChatId,
+    ): bool {
+        try {
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+        } catch (Bitrix24ApiException) {
+            return false;
+        }
+
+        if ($currentChat === null) {
+            return false;
+        }
+
+        if ($currentChat->chatId !== $expectedResolvedBitrixChatId) {
+            $this->syncVerifiedBindingToCurrentChat($dialog, $currentChat);
+
+            return false;
+        }
+
+        return true;
     }
 
     private function syncInboundFastPathBindingFromResponse(
@@ -1195,12 +1229,7 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         try {
-            $currentChat = $this->resolveCurrentOpenLineChatAction->handleMatchingChatId(
-                $dialog,
-                $route,
-                $connection,
-                $resolvedBitrixChatId,
-            ) ?? $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24LiveExportTransportException(
                 'Bitrix24 Open Lines verified binding post-send lookup outcome is uncertain.',
