@@ -6,7 +6,7 @@ use App\Models\Channel;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
- * @extends \Illuminate\Database\Eloquent\Factories\Factory<\App\Models\Channel>
+ * @extends Factory<Channel>
  */
 class ChannelFactory extends Factory
 {
@@ -17,9 +17,11 @@ class ChannelFactory extends Factory
      */
     public function definition(): array
     {
+        $platform = fake()->randomElement(array_keys(Channel::platformOptions()));
+
         return [
             'name' => fake()->company().' Bot',
-            'platform' => fake()->randomElement(array_keys(Channel::platformOptions())),
+            'platform' => $platform,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'credentials' => [
                 'token' => fake()->sha256(),
@@ -48,6 +50,7 @@ class ChannelFactory extends Factory
     {
         return $this->state(fn (): array => [
             'name' => fake()->company().' Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
             'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
             'credentials' => [],
             'bot_token_present' => false,

@@ -18,6 +18,7 @@ class BuildBitrix24ContactUpdatePayloadAction
         private readonly CollectBitrix24ContactPhonesAction $collectContactPhonesAction,
         private readonly MergeBitrix24ContactPhonesAction $mergeBitrix24ContactPhonesAction,
         private readonly ComputeBitrix24ContactSyncFingerprintAction $computeFingerprintAction,
+        private readonly ResolveBitrix24ProfileSchemaAction $resolveProfileSchemaAction,
     ) {}
 
     /**
@@ -28,6 +29,7 @@ class BuildBitrix24ContactUpdatePayloadAction
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $desiredBasePayload = $this->buildContactPayloadAction->handle($rootContact);
         $normalizedRemoteSnapshot = $this->normalizeBitrix24ContactSnapshotAction->handle($remoteSnapshot);
+        $fields = $this->resolveProfileSchemaAction->fields();
 
         $payload = [];
         $warnings = [];
@@ -39,9 +41,9 @@ class BuildBitrix24ContactUpdatePayloadAction
             [
                 'NAME' => 'name',
                 'LAST_NAME' => 'last_name',
-                config('bitrix24.fields.name_source') => 'name_source_id',
-                config('bitrix24.fields.alt_first_name') => 'alt_first_name',
-                config('bitrix24.fields.alt_last_name') => 'alt_last_name',
+                $fields['name_source'] => 'name_source_id',
+                $fields['alt_first_name'] => 'alt_first_name',
+                $fields['alt_last_name'] => 'alt_last_name',
             ],
         ));
         $warnings = array_merge($warnings, $nameResolution['warnings']);
@@ -51,7 +53,7 @@ class BuildBitrix24ContactUpdatePayloadAction
             $genderResolution['fields'],
             $normalizedRemoteSnapshot,
             [
-                config('bitrix24.fields.gender') => 'gender_id',
+                $fields['gender'] => 'gender_id',
             ],
         ));
         $warnings = array_merge($warnings, $genderResolution['warnings']);
@@ -61,24 +63,24 @@ class BuildBitrix24ContactUpdatePayloadAction
                 'NAME',
                 'LAST_NAME',
                 'PHONE',
-                config('bitrix24.fields.gender'),
-                config('bitrix24.fields.name_source'),
-                config('bitrix24.fields.alt_first_name'),
-                config('bitrix24.fields.alt_last_name'),
+                $fields['gender'],
+                $fields['name_source'],
+                $fields['alt_first_name'],
+                $fields['alt_last_name'],
             ])),
             $normalizedRemoteSnapshot,
             [
                 'ADDRESS_CITY' => 'address_city',
                 'ADDRESS_COUNTRY' => 'address_country',
                 'SOURCE_ID' => 'source_id',
-                config('bitrix24.fields.age_exact') => 'age_exact',
-                config('bitrix24.fields.age_range') => 'age_range',
-                config('bitrix24.fields.contact_id') => 'contact_id',
-                config('bitrix24.fields.channel_id') => 'channel_id',
-                config('bitrix24.fields.channel_name') => 'channel_name',
-                config('bitrix24.fields.platform') => 'platform',
-                config('bitrix24.fields.bot_code') => 'bot_code',
-                config('bitrix24.fields.bot_name') => 'bot_name',
+                $fields['age_exact'] => 'age_exact',
+                $fields['age_range'] => 'age_range',
+                $fields['contact_id'] => 'contact_id',
+                $fields['channel_id'] => 'channel_id',
+                $fields['channel_name'] => 'channel_name',
+                $fields['platform'] => 'platform',
+                $fields['bot_code'] => 'bot_code',
+                $fields['bot_name'] => 'bot_name',
             ],
         ));
 
@@ -98,21 +100,21 @@ class BuildBitrix24ContactUpdatePayloadAction
         $fingerprint = $this->computeFingerprintAction->handle([
             'name' => $nameResolution['resolved_first_name'],
             'last_name' => $nameResolution['resolved_last_name'],
-            'name_source_id' => isset($nameResolution['fields'][config('bitrix24.fields.name_source')])
-                ? (string) $nameResolution['fields'][config('bitrix24.fields.name_source')]
+            'name_source_id' => isset($nameResolution['fields'][$fields['name_source']])
+                ? (string) $nameResolution['fields'][$fields['name_source']]
                 : ($normalizedRemoteSnapshot['name_source_id'] ?? null),
-            'age_exact' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.age_exact')] ?? null),
-            'age_range' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.age_range')] ?? null),
+            'age_exact' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[$fields['age_exact']] ?? null),
+            'age_range' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[$fields['age_range']] ?? null),
             'gender_id' => $genderResolution['resolved_gender_id'],
             'address_city' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload['ADDRESS_CITY'] ?? null),
             'address_country' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload['ADDRESS_COUNTRY'] ?? null),
             'source_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload['SOURCE_ID'] ?? null),
-            'contact_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.contact_id')] ?? null),
-            'channel_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.channel_id')] ?? null),
-            'channel_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.channel_name')] ?? null),
-            'platform' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.platform')] ?? null),
-            'bot_code' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.bot_code')] ?? null),
-            'bot_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[config('bitrix24.fields.bot_name')] ?? null),
+            'contact_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[$fields['contact_id']] ?? null),
+            'channel_id' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[$fields['channel_id']] ?? null),
+            'channel_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[$fields['channel_name']] ?? null),
+            'platform' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[$fields['platform']] ?? null),
+            'bot_code' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[$fields['bot_code']] ?? null),
+            'bot_name' => $this->bitrix24ContactPayloadNormalizer->normalizeScalarValue($desiredBasePayload[$fields['bot_name']] ?? null),
             'alt_first_name' => $nameResolution['alt_first_name'],
             'alt_last_name' => $nameResolution['alt_last_name'],
             'phones' => $this->bitrix24ContactPayloadNormalizer->normalizePhonePayload($mergedPhones),

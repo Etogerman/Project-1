@@ -13,8 +13,8 @@ class Bitrix24DevProfileBootstrapCommand extends Command
         {callback_base_url : Current callback base URL, usually the active tunnel URL}
         {--client-id= : Bitrix app client_id for this profile}
         {--application-code= : Bitrix app application_code for this profile}
-        {--telegram-line-id= : Telegram LINE_ID after manual Open Lines setup}
-        {--max-line-id= : MAX LINE_ID after manual Open Lines setup}
+        {--telegram-line-id= : Deprecated; configure Telegram LINE_ID on concrete channel routes in admin}
+        {--max-line-id= : Deprecated; configure MAX LINE_ID on concrete channel routes in admin}
         {--display-name= : Optional operator-facing display name}
         {--portal-domain= : Portal domain override; defaults to bitrix24.portal_domain}';
 

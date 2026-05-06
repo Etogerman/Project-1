@@ -99,6 +99,10 @@ class RegisterChannelWebhookAction
         if (! array_key_exists($channel->platform, Channel::platformOptions())) {
             throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}].");
         }
+
+        if (! filled($channel->getToken())) {
+            throw new InvalidArgumentException('Заполните токен бота в настройках канала.');
+        }
     }
 
     protected function ensureWebhookSecret(Channel $channel): string

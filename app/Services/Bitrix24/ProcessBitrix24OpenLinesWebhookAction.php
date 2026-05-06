@@ -320,10 +320,11 @@ class ProcessBitrix24OpenLinesWebhookAction
         Bitrix24OpenLinesOperatorMessageData $messageData,
         Bitrix24OpenLinesRouteData $route,
     ): bool {
+        $connection = $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle();
         $currentChat = $this->resolveCurrentBitrix24OpenLineChatAction->handle(
             $dialog,
             $route,
-            $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle(),
+            $connection,
         );
 
         if (! $currentChat instanceof Bitrix24CurrentOpenLineChatData) {
@@ -361,18 +362,24 @@ class ProcessBitrix24OpenLinesWebhookAction
 
     private function syncCurrentOpenLineBinding(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void
     {
+        $verifiedAt = now();
+
         if (
             $dialog->bitrix24_open_line_user_code_override === $currentChat->userCode
             && $dialog->bitrix24_open_line_resolved_chat_id_override === $currentChat->chatId
             && $dialog->bitrix24_open_line_binding_verified_at !== null
         ) {
+            $dialog->forceFill([
+                'bitrix24_open_line_binding_verified_at' => $verifiedAt,
+            ])->save();
+
             return;
         }
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $currentChat->userCode,
             'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
-            'bitrix24_open_line_binding_verified_at' => now(),
+            'bitrix24_open_line_binding_verified_at' => $verifiedAt,
         ])->save();
     }
 

@@ -379,7 +379,7 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => $profile->openLinesConnectorCodeForPlatform($channel->platform),
-            'line_id' => $profile->openLinesLineIdForPlatform($channel->platform),
+            'line_id' => $channel->platform === Channel::PLATFORM_MAX ? 'line-max' : 'line-telegram',
             'source_id' => $profile->sourceIdForPlatform($channel->platform),
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);

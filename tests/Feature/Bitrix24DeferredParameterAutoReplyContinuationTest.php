@@ -17,7 +17,6 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
@@ -817,7 +816,7 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
         }
 
         $connectorCode = $profile->openLinesConnectorCodeForPlatform($channel->platform);
-        $lineId = $profile->openLinesLineIdForPlatform($channel->platform);
+        $lineId = $channel->platform === Channel::PLATFORM_MAX ? 'line-max' : 'line-telegram';
 
         if (! filled($connectorCode) || ! filled($lineId)) {
             return null;

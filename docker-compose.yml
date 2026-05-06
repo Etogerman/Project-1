@@ -85,7 +85,7 @@ services:
 
   ngrok:
     image: ngrok/ngrok:latest
-    command: http http://dev:8000 --url https://default.internal
+    command: http http://dev:8000 --url ${APP_URL:?APP_URL is required for ngrok}
     env_file:
       - path: .env
         required: false
