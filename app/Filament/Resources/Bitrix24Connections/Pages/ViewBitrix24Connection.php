@@ -27,6 +27,8 @@ class ViewBitrix24Connection extends ViewRecord
 {
     protected static string $resource = Bitrix24ConnectionResource::class;
 
+    private const STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION = 'openlines_stale_chat_ignored';
+
     public string $webhookEventCallbackTypeFilter = '';
 
     public string $webhookEventProcessingStatusFilter = '';
@@ -424,6 +426,7 @@ class ViewBitrix24Connection extends ViewRecord
                 $autoSetup = $this->resolveOpenLineAutoSetupState($profile, $channel, $route, $form);
                 $bindingDiagnostics = $this->resolveRouteBindingDiagnostics($route, $form);
                 $callbackDiagnostics = $this->resolveLatestOpenLinesCallbackDiagnostics($form);
+                $staleCallbackDiagnostics = $this->resolveLatestStaleOpenLinesCallbackDiagnostics($form);
 
                 return [
                     'channel_id' => $channel->id,
@@ -451,6 +454,10 @@ class ViewBitrix24Connection extends ViewRecord
                     'last_error_message' => filled($route?->last_error_message) ? (string) $route?->last_error_message : 'Ошибок не было',
                     'callback_diagnostic_label' => $callbackDiagnostics['label'],
                     'callback_diagnostic_tone' => $callbackDiagnostics['tone'],
+                    'stale_callback_visible' => $staleCallbackDiagnostics['visible'],
+                    'stale_callback_label' => $staleCallbackDiagnostics['label'],
+                    'stale_callback_tone' => $staleCallbackDiagnostics['tone'],
+                    'stale_callback_title' => $staleCallbackDiagnostics['title'],
                     'binding_diagnostic_label' => $bindingDiagnostics['label'],
                     'binding_diagnostic_tone' => $bindingDiagnostics['tone'],
                     'binding_diagnostic_can_reset' => $bindingDiagnostics['can_reset'],
@@ -1522,17 +1529,7 @@ class ViewBitrix24Connection extends ViewRecord
             ];
         }
 
-        $event = $record->webhookEvents()
-            ->where('callback_type', Bitrix24WebhookEvent::TYPE_OPENLINES)
-            ->orderByDesc('id')
-            ->limit(80)
-            ->get()
-            ->first(function (Bitrix24WebhookEvent $event) use ($connectorCode, $lineId): bool {
-                $payload = is_array($event->payload) ? $event->payload : [];
-
-                return (string) data_get($payload, 'data.CONNECTOR') === $connectorCode
-                    && (string) data_get($payload, 'data.LINE') === $lineId;
-            });
+        $event = $this->resolveLatestOpenLinesWebhookEvent($record, $connectorCode, $lineId);
 
         if (! $event instanceof Bitrix24WebhookEvent) {
             return [
@@ -1545,6 +1542,107 @@ class ViewBitrix24Connection extends ViewRecord
             'label' => 'Был '.$this->formatTimestamp($event->created_at),
             'tone' => 'success',
         ];
+    }
+
+    /**
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
+     * @return array{visible:bool,label:string,tone:string,title:string}
+     */
+    protected function resolveLatestStaleOpenLinesCallbackDiagnostics(array $form): array
+    {
+        $empty = [
+            'visible' => false,
+            'label' => '',
+            'tone' => 'gray',
+            'title' => '',
+        ];
+        $connectorCode = trim((string) ($form['connector_code'] ?? ''));
+        $lineId = trim((string) ($form['line_id'] ?? ''));
+
+        if ($connectorCode === '' || $lineId === '') {
+            return $empty;
+        }
+
+        $record = $this->getRecord();
+
+        if (! $record instanceof Bitrix24Connection) {
+            return $empty;
+        }
+
+        $event = $this->resolveLatestOpenLinesWebhookEvent($record, $connectorCode, $lineId);
+
+        if (! $event instanceof Bitrix24WebhookEvent) {
+            return $empty;
+        }
+
+        $log = $record->syncLogs()
+            ->where('operation', self::STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION)
+            ->orderByDesc('id')
+            ->limit(80)
+            ->get()
+            ->first(function (Bitrix24SyncLog $log) use ($event): bool {
+                $payload = is_array($log->request_payload) ? $log->request_payload : [];
+
+                return (string) data_get($payload, 'webhook_event_id') === (string) $event->id;
+            });
+
+        if (! $log instanceof Bitrix24SyncLog) {
+            return $empty;
+        }
+
+        $payload = is_array($log->request_payload) ? $log->request_payload : [];
+        $sourceChatId = trim((string) data_get($payload, 'source_bitrix_chat_id', ''));
+        $currentChatId = trim((string) data_get($payload, 'current_bitrix_chat_id', ''));
+        $dialogId = trim((string) data_get($payload, 'dialog_id', ''));
+        $bitrixMessageId = trim((string) data_get($payload, 'bitrix_message_id', ''));
+
+        $label = $sourceChatId !== '' && $currentChatId !== ''
+            ? sprintf('chat %s -> %s', $sourceChatId, $currentChatId)
+            : 'Ответ из старой ОЛ';
+        $titleParts = ['Ответ из старой ОЛ проигнорирован.'];
+
+        if ($sourceChatId !== '') {
+            $titleParts[] = 'Источник: chat '.$sourceChatId.'.';
+        }
+
+        if ($currentChatId !== '') {
+            $titleParts[] = 'Текущая ОЛ: chat '.$currentChatId.'.';
+        }
+
+        if ($dialogId !== '') {
+            $titleParts[] = 'Диалог #'.$dialogId.'.';
+        }
+
+        if ($bitrixMessageId !== '') {
+            $titleParts[] = 'Сообщение Bitrix #'.$bitrixMessageId.'.';
+        }
+
+        $titleParts[] = 'Защита не отправила сообщение в канал, чтобы не доставлять ответ из неактуального чата.';
+
+        return [
+            'visible' => true,
+            'label' => $label,
+            'tone' => 'danger',
+            'title' => implode(' ', $titleParts),
+        ];
+    }
+
+    protected function resolveLatestOpenLinesWebhookEvent(
+        Bitrix24Connection $record,
+        string $connectorCode,
+        string $lineId,
+    ): ?Bitrix24WebhookEvent {
+        return $record->webhookEvents()
+            ->where('callback_type', Bitrix24WebhookEvent::TYPE_OPENLINES)
+            ->orderByDesc('id')
+            ->limit(80)
+            ->get()
+            ->first(function (Bitrix24WebhookEvent $event) use ($connectorCode, $lineId): bool {
+                $payload = is_array($event->payload) ? $event->payload : [];
+
+                return (string) data_get($payload, 'data.CONNECTOR') === $connectorCode
+                    && (string) data_get($payload, 'data.LINE') === $lineId;
+            });
     }
 
     /**
