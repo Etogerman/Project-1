@@ -639,6 +639,22 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ],
         ]);
 
+        $this->makeWebhookEvent($connection, [
+            'callback_type' => Bitrix24WebhookEvent::TYPE_OPENLINES,
+            'event_name' => 'OnSendMessageCustom',
+            'processing_status' => Bitrix24WebhookEvent::STATUS_PROCESSED,
+            'payload' => [
+                'data' => [
+                    'CONNECTOR' => 'abc_telegram',
+                    'LINE' => '10',
+                    'DATA' => [[
+                        'chat' => ['id' => 'abrikosoff-dialog:24'],
+                        'im' => ['chat_id' => 26, 'message_id' => 923],
+                    ]],
+                ],
+            ],
+        ]);
+
         $component = Livewire::actingAs($admin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->assertSee('Старая ОЛ')

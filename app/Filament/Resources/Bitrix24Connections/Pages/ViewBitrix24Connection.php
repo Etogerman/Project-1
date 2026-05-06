@@ -1569,21 +1569,16 @@ class ViewBitrix24Connection extends ViewRecord
             return $empty;
         }
 
-        $event = $this->resolveLatestOpenLinesWebhookEvent($record, $connectorCode, $lineId);
-
-        if (! $event instanceof Bitrix24WebhookEvent) {
-            return $empty;
-        }
-
         $log = $record->syncLogs()
             ->where('operation', self::STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION)
             ->orderByDesc('id')
-            ->limit(80)
+            ->limit(120)
             ->get()
-            ->first(function (Bitrix24SyncLog $log) use ($event): bool {
+            ->first(function (Bitrix24SyncLog $log) use ($connectorCode, $lineId): bool {
                 $payload = is_array($log->request_payload) ? $log->request_payload : [];
 
-                return (string) data_get($payload, 'webhook_event_id') === (string) $event->id;
+                return trim((string) data_get($payload, 'connector_code', '')) === $connectorCode
+                    && trim((string) data_get($payload, 'line_id', '')) === $lineId;
             });
 
         if (! $log instanceof Bitrix24SyncLog) {
