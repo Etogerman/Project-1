@@ -278,6 +278,42 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertStringContainsString("'owner_callback_base_url' => 'https://local-ngrok.example.test'", $snippet);
     }
 
+    public function test_callback_owner_cannot_reuse_another_profile_callback_url(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.owner.test',
+            'callback_base_url' => 'https://owner-local.example.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $foreignProfile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.foreign.test',
+            'profile_key' => 'foreign',
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Foreign',
+            'callback_base_url' => 'https://foreign-profile.example.test',
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("callbackOwnerForms.{$owner->id}.callback_base_url", $foreignProfile->callback_base_url)
+            ->call('saveCallbackOwner', $owner->id)
+            ->assertSet('callbackOwnersErrorMessage', 'Такой callback URL уже используется другим профилем Bitrix24.');
+
+        $this->assertDatabaseHas('bitrix24_callback_owners', [
+            'id' => $owner->id,
+            'callback_base_url' => 'https://owner-local.example.test',
+        ]);
+        $this->assertDatabaseMissing('bitrix24_callback_owners', [
+            'id' => $owner->id,
+            'callback_base_url' => 'https://foreign-profile.example.test',
+        ]);
+    }
+
     public function test_view_page_filters_webhook_events_and_sync_logs(): void
     {
         $admin = $this->makeAdmin();

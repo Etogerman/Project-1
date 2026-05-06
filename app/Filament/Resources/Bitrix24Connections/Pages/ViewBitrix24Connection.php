@@ -382,7 +382,7 @@ class ViewBitrix24Connection extends ViewRecord
 
         return Bitrix24CallbackOwner::query()
             ->where('bitrix24_profile_id', $profile->id)
-            ->orderByRaw("case when owner_key = ? then 0 else 1 end", [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
+            ->orderByRaw('case when owner_key = ? then 0 else 1 end', [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
             ->orderBy('owner_key')
             ->get()
             ->map(fn (Bitrix24CallbackOwner $owner): array => [
@@ -603,6 +603,12 @@ class ViewBitrix24Connection extends ViewRecord
             return;
         }
 
+        if ($this->isCallbackBaseUrlUsedByAnotherProfile($profile, $callbackBaseUrl)) {
+            $this->failCallbackOwnerSave('Такой callback URL уже используется другим профилем Bitrix24.');
+
+            return;
+        }
+
         try {
             Bitrix24CallbackOwner::query()->updateOrCreate(
                 [
@@ -674,6 +680,12 @@ class ViewBitrix24Connection extends ViewRecord
 
         if ($callbackBaseUrl === null) {
             $this->failCallbackOwnerSave('Callback URL должен быть корректным URL.');
+
+            return;
+        }
+
+        if ($this->isCallbackBaseUrlUsedByAnotherProfile($profile, $callbackBaseUrl)) {
+            $this->failCallbackOwnerSave('Такой callback URL уже используется другим профилем Bitrix24.');
 
             return;
         }
@@ -1017,7 +1029,7 @@ class ViewBitrix24Connection extends ViewRecord
 
         $this->callbackOwnerForms = Bitrix24CallbackOwner::query()
             ->where('bitrix24_profile_id', $profile->id)
-            ->orderByRaw("case when owner_key = ? then 0 else 1 end", [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
+            ->orderByRaw('case when owner_key = ? then 0 else 1 end', [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
             ->orderBy('owner_key')
             ->get()
             ->mapWithKeys(fn (Bitrix24CallbackOwner $owner): array => [
@@ -1226,7 +1238,7 @@ class ViewBitrix24Connection extends ViewRecord
         $owner = Bitrix24CallbackOwner::query()
             ->where('bitrix24_profile_id', $profile->id)
             ->where('status', Bitrix24CallbackOwner::STATUS_ACTIVE)
-            ->orderByRaw("case when owner_key = ? then 0 else 1 end", [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
+            ->orderByRaw('case when owner_key = ? then 0 else 1 end', [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
             ->orderBy('owner_key')
             ->first();
 
@@ -1240,7 +1252,7 @@ class ViewBitrix24Connection extends ViewRecord
     {
         return Bitrix24CallbackOwner::query()
             ->where('bitrix24_profile_id', $profile->id)
-            ->orderByRaw("case when owner_key = ? then 0 else 1 end", [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
+            ->orderByRaw('case when owner_key = ? then 0 else 1 end', [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
             ->orderBy('owner_key')
             ->get()
             ->mapWithKeys(function (Bitrix24CallbackOwner $owner): array {
@@ -1668,6 +1680,14 @@ class ViewBitrix24Connection extends ViewRecord
             ->danger()
             ->title($message)
             ->send();
+    }
+
+    protected function isCallbackBaseUrlUsedByAnotherProfile(Bitrix24Profile $profile, string $callbackBaseUrl): bool
+    {
+        return Bitrix24Profile::query()
+            ->where('callback_base_url', $callbackBaseUrl)
+            ->whereKeyNot($profile->id)
+            ->exists();
     }
 
     protected function bitrixBoxLineName(Bitrix24OpenLineRoute $route): string
