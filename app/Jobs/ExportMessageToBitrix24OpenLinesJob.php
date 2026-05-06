@@ -16,7 +16,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
 {
     use Queueable;
 
-    public const QUEUE_NAME = 'bitrix-live';
+    public const QUEUE_NAME = 'default';
 
     public int $timeout = 60;
 
@@ -71,6 +71,13 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
         }
     }
 
+    public static function queueName(): string
+    {
+        $queueName = trim((string) config('bitrix24.openlines.live_export_queue', self::QUEUE_NAME));
+
+        return $queueName === '' ? self::QUEUE_NAME : $queueName;
+    }
+
     private function logJobStarted(Message $message, LogBitrix24ApiCallAction $logBitrix24ApiCallAction): void
     {
         $liveExport = Bitrix24MessageExport::query()
@@ -98,7 +105,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
                 'live_export_updated_at' => $liveExport?->updated_at?->toISOString(),
                 'job_started_at' => now()->toISOString(),
                 'queue_connection' => config('queue.default'),
-                'queue_name' => self::QUEUE_NAME,
+                'queue_name' => self::queueName(),
             ],
             entityType: 'message',
             entityId: (string) $message->id,

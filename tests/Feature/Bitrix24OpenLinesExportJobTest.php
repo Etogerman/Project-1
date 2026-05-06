@@ -68,7 +68,7 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
         $this->assertTrue($syncLog->request_payload['retry_after_sync'] ?? false);
         $this->assertSame($liveBatchUuid, $syncLog->request_payload['live_batch_uuid'] ?? null);
         $this->assertSame(config('queue.default'), $syncLog->request_payload['queue_connection'] ?? null);
-        $this->assertSame(ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME, $syncLog->request_payload['queue_name'] ?? null);
+        $this->assertSame(ExportMessageToBitrix24OpenLinesJob::queueName(), $syncLog->request_payload['queue_name'] ?? null);
     }
 
     public function test_job_logs_critical_and_persists_domain_failure_when_export_throws(): void

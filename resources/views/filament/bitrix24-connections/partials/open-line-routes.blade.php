@@ -93,6 +93,17 @@
                                     </label>
 
                                     <label class="ac-route-field">
+                                        <span>Имя ОЛ</span>
+                                        <input
+                                            aria-label="Имя ОЛ {{ $item['channel_title'] }}"
+                                            type="text"
+                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.line_name"
+                                            class="ac-input ac-bitrix-table__control"
+                                            @disabled(! $canEdit)
+                                        />
+                                    </label>
+
+                                    <label class="ac-route-field">
                                         <span>CRM source</span>
                                         <input
                                             aria-label="CRM source {{ $item['channel_title'] }}"

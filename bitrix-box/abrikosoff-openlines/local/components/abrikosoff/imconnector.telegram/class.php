@@ -13,14 +13,17 @@ class AbrikosoffImconnectorTelegramComponent extends CBitrixComponent
     public function executeComponent(): void
     {
         $lineId = trim((string) ($this->arParams['LINE'] ?? ''));
+        $connectorCode = Runtime::connectorCodeForComponentLine('abrikosoff:imconnector.telegram', $lineId);
 
-        Runtime::markConnectorReady('abc_telegram', $lineId);
+        if ($connectorCode !== null) {
+            Runtime::markConnectorReady($connectorCode, $lineId);
+        }
 
         $this->arResult = [
             'LINE_ID' => $lineId,
-            'LINE_NAME' => Runtime::lineName('abc_telegram', $lineId),
-            'CALLBACK_URL' => Runtime::laravelOpenlinesCallbackUrlForLine('abc_telegram', $lineId),
-            'CONNECTOR_CODE' => 'abc_telegram',
+            'LINE_NAME' => $connectorCode !== null ? Runtime::lineName($connectorCode, $lineId) : '',
+            'CALLBACK_URL' => $connectorCode !== null ? Runtime::laravelOpenlinesCallbackUrlForLine($connectorCode, $lineId) : '',
+            'CONNECTOR_CODE' => $connectorCode ?? '',
         ];
 
         $this->includeComponentTemplate();

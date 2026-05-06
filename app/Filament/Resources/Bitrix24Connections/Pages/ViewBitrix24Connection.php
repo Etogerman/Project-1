@@ -29,7 +29,7 @@ class ViewBitrix24Connection extends ViewRecord
     public string $syncLogStatusFilter = '';
 
     /**
-     * @var array<int, array{status:string,connector_code:string,line_id:string,source_id:string}>
+     * @var array<int, array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}>
      */
     public array $openLineRouteForms = [];
 
@@ -253,6 +253,7 @@ class ViewBitrix24Connection extends ViewRecord
                         : 'warning',
                     'connector_code' => filled($route?->connector_code) ? (string) $route?->connector_code : '—',
                     'line_id' => filled($route?->line_id) ? (string) $route?->line_id : '—',
+                    'line_name' => filled($route?->line_name) ? (string) $route?->line_name : '—',
                     'source_id' => filled($route?->source_id) ? (string) $route?->source_id : '—',
                     'line_owner_label' => $this->resolveLineOwnerLabel($profile, $channel, $route, $form),
                     'last_error_message' => filled($route?->last_error_message) ? (string) $route?->last_error_message : 'Ошибок не было',
@@ -296,6 +297,10 @@ class ViewBitrix24Connection extends ViewRecord
 
             if ($connectorCode === '' || $lineId === '') {
                 continue;
+            }
+
+            if (! isset($connectors[$connectorCode])) {
+                $connectors[$connectorCode] = $this->bitrixBoxConnectorEntry($route, $lineId);
             }
 
             $connectors[$connectorCode]['lines'][$lineId] = [
@@ -357,6 +362,7 @@ class ViewBitrix24Connection extends ViewRecord
                 'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
                 'connector_code' => $this->nullableFormValue($form['connector_code']),
                 'line_id' => $this->nullableFormValue($form['line_id']),
+                'line_name' => $this->nullableFormValue($form['line_name']),
                 'source_id' => $this->nullableFormValue($form['source_id']),
                 'status' => $form['status'],
                 'updated_by_user_id' => $user instanceof User ? $user->id : null,
@@ -686,7 +692,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @return array{status:string,connector_code:string,line_id:string,source_id:string}
+     * @return array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}
      */
     protected function defaultOpenLineRouteForm(Bitrix24Profile $profile, Channel $channel, ?Bitrix24OpenLineRoute $route): array
     {
@@ -694,6 +700,7 @@ class ViewBitrix24Connection extends ViewRecord
             'status' => (string) ($route?->status ?? $this->defaultStatusForChannel($channel)),
             'connector_code' => (string) ($route?->connector_code ?? $this->defaultConnectorCodeForChannel($profile, $channel)),
             'line_id' => (string) ($route?->line_id ?? ''),
+            'line_name' => (string) ($route?->line_name ?? $this->defaultLineNameForChannel($channel)),
             'source_id' => (string) ($route?->source_id ?? $this->defaultSourceIdForChannel($profile, $channel)),
         ];
     }
@@ -724,9 +731,16 @@ class ViewBitrix24Connection extends ViewRecord
         };
     }
 
+    protected function defaultLineNameForChannel(Channel $channel): string
+    {
+        $name = trim((string) $channel->name);
+
+        return $name !== '' ? $name : 'Channel #'.$channel->id;
+    }
+
     /**
      * @param  array<string, mixed>  $form
-     * @return array{status:string,connector_code:string,line_id:string,source_id:string}
+     * @return array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}
      */
     protected function normalizeOpenLineRouteForm(array $form): array
     {
@@ -734,12 +748,13 @@ class ViewBitrix24Connection extends ViewRecord
             'status' => trim((string) ($form['status'] ?? Bitrix24OpenLineRoute::STATUS_INACTIVE)),
             'connector_code' => trim((string) ($form['connector_code'] ?? '')),
             'line_id' => trim((string) ($form['line_id'] ?? '')),
+            'line_name' => trim((string) ($form['line_name'] ?? '')),
             'source_id' => trim((string) ($form['source_id'] ?? '')),
         ];
     }
 
     /**
-     * @param  array{status:string,connector_code:string,line_id:string,source_id:string}  $form
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}  $form
      */
     protected function validateOpenLineRouteForm(
         Bitrix24Profile $profile,
@@ -794,7 +809,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @param  array{status:string,connector_code:string,line_id:string,source_id:string}  $form
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}  $form
      */
     protected function persistOpenLineRouteForm(
         Bitrix24Profile $profile,
@@ -816,6 +831,7 @@ class ViewBitrix24Connection extends ViewRecord
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => $this->nullableFormValue($form['connector_code']),
             'line_id' => $this->nullableFormValue($form['line_id']),
+            'line_name' => $this->nullableFormValue($form['line_name']),
             'source_id' => $this->nullableFormValue($form['source_id']),
             'status' => $form['status'],
             'updated_by_user_id' => $user instanceof User ? $user->id : null,
@@ -827,7 +843,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @param  array{status:string,connector_code:string,line_id:string,source_id:string}  $form
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}  $form
      */
     protected function resolveLineOwnerLabel(
         Bitrix24Profile $profile,
@@ -931,6 +947,12 @@ class ViewBitrix24Connection extends ViewRecord
 
     protected function bitrixBoxLineName(Bitrix24OpenLineRoute $route): string
     {
+        $routeLineName = trim((string) ($route->line_name ?? ''));
+
+        if ($routeLineName !== '') {
+            return $routeLineName;
+        }
+
         $channelName = trim((string) ($route->channel?->name ?? ''));
 
         if ($channelName === '') {
@@ -938,6 +960,54 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         return sprintf('#%d %s', $route->channel_id, $channelName);
+    }
+
+    /**
+     * @return array{name: string, component: string, line_id: string, line_name: string, lines: array<string, mixed>, color: string, label: string}
+     */
+    protected function bitrixBoxConnectorEntry(Bitrix24OpenLineRoute $route, string $lineId): array
+    {
+        return [
+            'name' => $this->bitrixBoxConnectorName($route),
+            'component' => $this->bitrixBoxConnectorComponent($route),
+            'line_id' => $lineId,
+            'line_name' => $this->bitrixBoxLineName($route),
+            'lines' => [],
+            'color' => $this->bitrixBoxConnectorColor($route),
+            'label' => $this->bitrixBoxConnectorLabel($route),
+        ];
+    }
+
+    protected function bitrixBoxConnectorName(Bitrix24OpenLineRoute $route): string
+    {
+        return match ($route->channel_type) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'ABC MAX',
+            default => 'ABC Telegram',
+        };
+    }
+
+    protected function bitrixBoxConnectorComponent(Bitrix24OpenLineRoute $route): string
+    {
+        return match ($route->channel_type) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'abrikosoff:imconnector.max',
+            default => 'abrikosoff:imconnector.telegram',
+        };
+    }
+
+    protected function bitrixBoxConnectorColor(Bitrix24OpenLineRoute $route): string
+    {
+        return match ($route->channel_type) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => '#7B4DFF',
+            default => '#27A7E7',
+        };
+    }
+
+    protected function bitrixBoxConnectorLabel(Bitrix24OpenLineRoute $route): string
+    {
+        return match ($route->channel_type) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MX',
+            default => 'TG',
+        };
     }
 
     /**

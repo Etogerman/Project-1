@@ -39,6 +39,7 @@ class Bitrix24OpenLineRoute extends Model
         'channel_type',
         'connector_code',
         'line_id',
+        'line_name',
         'line_owner_key',
         'source_id',
         'status',

@@ -74,6 +74,81 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
         );
     }
 
+    public function test_runtime_resolves_legacy_and_abc_connector_codes_by_component_line(): void
+    {
+        $config = $this->runtimeConfig([
+            '9' => [
+                'line_name' => 'ABC Telegram',
+                'owner_profile_key' => 'staging',
+                'owner_callback_base_url' => 'https://abc-ngrok.example.test',
+            ],
+        ]);
+        $config['connectors'] = [
+            'abrikosoff_telegram' => [
+                'name' => 'Legacy Telegram',
+                'component' => 'abrikosoff:imconnector.telegram',
+                'line_id' => '2',
+                'lines' => [
+                    '2' => [
+                        'line_name' => 'Legacy Telegram',
+                        'owner_profile_key' => 'staging',
+                        'owner_callback_base_url' => 'https://legacy-ngrok.example.test',
+                    ],
+                ],
+            ],
+        ] + $config['connectors'];
+
+        $this->setRuntimeConfig($config);
+
+        $this->assertSame(
+            'abrikosoff_telegram',
+            Runtime::connectorCodeForComponentLine('abrikosoff:imconnector.telegram', '2'),
+        );
+        $this->assertSame(
+            'abc_telegram',
+            Runtime::connectorCodeForComponentLine('abrikosoff:imconnector.telegram', '9'),
+        );
+        $this->assertSame('abrikosoff_telegram', Runtime::onBuildTelegramConnector()['ID'] ?? null);
+
+        $lineInfo = Runtime::onInfoLine('2');
+
+        $this->assertIsArray($lineInfo);
+        $this->assertSame('abrikosoff_telegram', $lineInfo['connector_id']);
+        $this->assertSame('https://legacy-ngrok.example.test/callbacks/bitrix24/openlines', $lineInfo['url']);
+    }
+
+    public function test_runtime_refuses_ambiguous_connector_line_ownership(): void
+    {
+        $config = $this->runtimeConfig([
+            '9' => [
+                'line_name' => 'ABC Telegram',
+                'owner_profile_key' => 'staging',
+                'owner_callback_base_url' => 'https://abc-ngrok.example.test',
+            ],
+        ]);
+        $config['connectors'] = [
+            'abrikosoff_telegram' => [
+                'name' => 'Legacy Telegram',
+                'component' => 'abrikosoff:imconnector.telegram',
+                'line_id' => '9',
+                'lines' => [
+                    '9' => [
+                        'line_name' => 'Legacy Telegram',
+                        'owner_profile_key' => 'staging',
+                        'owner_callback_base_url' => 'https://legacy-ngrok.example.test',
+                    ],
+                ],
+            ],
+        ] + $config['connectors'];
+
+        $this->setRuntimeConfig($config);
+
+        $this->assertNull(
+            Runtime::connectorCodeForComponentLine('abrikosoff:imconnector.telegram', '9'),
+        );
+        $this->assertNull(Runtime::onInfoLine('9'));
+    }
+
     public function test_callback_failure_log_message_does_not_expose_secrets_or_message_text(): void
     {
         $payload = [
@@ -169,19 +244,19 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
             ],
             'connectors' => [
                 'abc_telegram' => [
-                    'name' => 'Abrikosoff Telegram',
+                    'name' => 'ABC Telegram',
                     'component' => 'abrikosoff:imconnector.telegram',
-                    'line_id' => '2',
-                    'lines' => [
-                        '2' => [
+                    'line_id' => '9',
+                    'lines' => $telegramLines + [
+                        '9' => [
                             'line_name' => 'Staging Telegram',
                             'owner_profile_key' => 'staging',
                             'owner_callback_base_url' => 'https://staging.example.test',
                         ],
-                    ] + $telegramLines,
+                    ],
                 ],
                 'abc_max' => [
-                    'name' => 'Abrikosoff MAX',
+                    'name' => 'ABC MAX',
                     'component' => 'abrikosoff:imconnector.max',
                     'line_id' => '3',
                     'lines' => [
@@ -192,6 +267,11 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
                         ],
                     ],
                 ],
+            ],
+            'crm_rebinding' => [
+                'enabled' => false,
+                'log_payload' => false,
+                'log_file' => sys_get_temp_dir().'/bitrix-box-openlines-runtime-test.log',
             ],
         ];
     }

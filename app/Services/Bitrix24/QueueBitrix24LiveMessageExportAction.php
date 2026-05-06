@@ -111,11 +111,11 @@ class QueueBitrix24LiveMessageExportAction
         $this->logLiveExportQueued($message, $rootContact->id, $retryAfterSync, $liveBatchUuid, $existingExport);
 
         ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)
-            ->onQueue(ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME)
+            ->onQueue(ExportMessageToBitrix24OpenLinesJob::queueName())
             ->afterCommit();
         // The delayed recovery path must survive a failed afterCommit handoff of the immediate job.
         ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)
-            ->onQueue(ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME)
+            ->onQueue(ExportMessageToBitrix24OpenLinesJob::queueName())
             ->delay(now()->addSeconds(
                 self::UNCLAIMED_PENDING_RECOVERY_SECONDS + self::DELAYED_PENDING_RECOVERY_BUFFER_SECONDS
             ))
@@ -184,7 +184,7 @@ class QueueBitrix24LiveMessageExportAction
                 'previous_live_batch_uuid' => $existingExport?->live_batch_uuid,
                 'queued_at' => now()->toISOString(),
                 'queue_connection' => config('queue.default'),
-                'queue_name' => ExportMessageToBitrix24OpenLinesJob::QUEUE_NAME,
+                'queue_name' => ExportMessageToBitrix24OpenLinesJob::queueName(),
             ],
             entityType: 'message',
             entityId: (string) $message->id,

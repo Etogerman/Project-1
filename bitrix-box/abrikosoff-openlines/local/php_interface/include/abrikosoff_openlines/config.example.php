@@ -18,18 +18,18 @@ return [
 
     'connectors' => [
         'abc_telegram' => [
-            'name' => 'Abrikosoff Telegram',
+            'name' => 'ABC Telegram',
             'component' => 'abrikosoff:imconnector.telegram',
             'line_id' => '32',
-            'line_name' => 'ABR Телеграм бот <bot-name>',
+            'line_name' => '<line-id> Локальный бот телеграм - <profile-name>',
             'lines' => [
                 '32' => [
-                    'line_name' => 'ABR Телеграм бот <bot-name>',
+                    'line_name' => '32 Локальный бот телеграм - <profile-name>',
                     'owner_profile_key' => 'staging',
                     'owner_callback_base_url' => 'https://project2.abrikosoff.ru',
                 ],
                 '33' => [
-                    'line_name' => 'ABR Телеграм бот <second-bot-name>',
+                    'line_name' => '33 Второй локальный бот телеграм - <profile-name>',
                     'owner_profile_key' => 'staging',
                     'owner_callback_base_url' => 'https://project2.abrikosoff.ru',
                 ],
@@ -38,13 +38,13 @@ return [
             'label' => 'TG',
         ],
         'abc_max' => [
-            'name' => 'Abrikosoff MAX',
+            'name' => 'ABC MAX',
             'component' => 'abrikosoff:imconnector.max',
             'line_id' => '31',
-            'line_name' => 'ABR MAX бот <bot-name>',
+            'line_name' => '<line-id> Локальный бот MAX - <profile-name>',
             'lines' => [
                 '31' => [
-                    'line_name' => 'ABR MAX бот <bot-name>',
+                    'line_name' => '31 Локальный бот MAX - <profile-name>',
                     'owner_profile_key' => 'staging',
                     'owner_callback_base_url' => 'https://project2.abrikosoff.ru',
                 ],

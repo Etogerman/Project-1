@@ -327,22 +327,6 @@ class ProcessBitrix24OpenLinesWebhookAction
         }
 
         $connection = $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle();
-
-        if ($messageData->sourceBitrixChatId !== null) {
-            $sourceChat = $this->resolveCurrentBitrix24OpenLineChatAction->handleMatchingChatId(
-                $dialog,
-                $route,
-                $connection,
-                $messageData->sourceBitrixChatId,
-            );
-
-            if ($sourceChat instanceof Bitrix24CurrentOpenLineChatData) {
-                $this->syncCurrentOpenLineBinding($dialog, $sourceChat);
-
-                return false;
-            }
-        }
-
         $currentChat = $this->resolveCurrentBitrix24OpenLineChatAction->handle(
             $dialog,
             $route,

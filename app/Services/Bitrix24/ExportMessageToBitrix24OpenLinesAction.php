@@ -19,6 +19,8 @@ class ExportMessageToBitrix24OpenLinesAction
 {
     private const LIVE_CLAIM_LEASE_SECONDS = 120;
 
+    private const VERIFIED_BINDING_FAST_PATH_WINDOW_SECONDS = 1800;
+
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ResolveBitrix24LiveChatKeyAction $resolveBitrix24LiveChatKeyAction,
@@ -111,6 +113,7 @@ class ExportMessageToBitrix24OpenLinesAction
                     connection: $this->resolveCurrentConnectionAction->handle(),
                     applyLegacyFallbackSignature: true,
                     requireExpectedResolvedBitrixChatId: true,
+                    allowPostSendBindingResync: false,
                     responsePayload: [
                         'controlled_manual_reply_connector_mirror' => true,
                     ],
@@ -605,6 +608,12 @@ class ExportMessageToBitrix24OpenLinesAction
         bool $retryAfterSync,
     ): ?Message {
         $connection = $this->resolveCurrentConnectionAction->handle();
+        $expectedResolvedBitrixChatId = $this->freshVerifiedBindingResolvedChatId($dialog, $route);
+
+        if ($expectedResolvedBitrixChatId === null) {
+            return null;
+        }
+
         $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle(
             $message,
             $route,
@@ -756,6 +765,49 @@ class ExportMessageToBitrix24OpenLinesAction
             );
         }
 
+        if ($resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
+            $messageText = sprintf(
+                'Bitrix24 Open Lines fast-path returned unexpected chat id [%s], expected [%s].',
+                $resolvedBitrixChatId,
+                $expectedResolvedBitrixChatId,
+            );
+
+            $this->logBitrix24ApiCallAction->handle(
+                direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+                operation: 'openlines_live_export_fast_path_unexpected_chat',
+                status: Bitrix24SyncLog::STATUS_FAILED,
+                requestPayload: [
+                    'message_id' => $message->id,
+                    'dialog_id' => $dialog->id,
+                    'contact_id' => $rootContactId,
+                    'bitrix24_contact_id' => $bitrix24ContactId,
+                    'payload_chat_id' => $payloadChatId,
+                    'expected_current_chat_id' => $expectedResolvedBitrixChatId,
+                    'connector_code' => $route->connectorCode,
+                    'line_id' => $route->lineId,
+                    'retry_after_sync' => $retryAfterSync,
+                ],
+                responsePayload: [
+                    'result' => $response->result,
+                    'rest_method' => $response->restMethod,
+                    'fast_path' => true,
+                    'returned_session_chat_id' => $resolvedBitrixChatId,
+                    'returned_connector_user_id' => $connectorUserId,
+                ],
+                connection: $connection,
+                httpStatus: $response->httpStatus,
+                errorMessage: $messageText,
+                entityType: 'message',
+                entityId: (string) $message->id,
+            );
+
+            throw new Bitrix24LiveExportTransportException(
+                $messageText,
+                failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+                failureUncertain: true,
+            );
+        }
+
         $bindingSynced = $this->syncInboundFastPathBindingFromResponse(
             $dialog,
             $route,
@@ -790,6 +842,23 @@ class ExportMessageToBitrix24OpenLinesAction
                 'payload_chat_id' => $payloadChatId,
             ],
         );
+    }
+
+    private function freshVerifiedBindingResolvedChatId(Dialog $dialog, Bitrix24OpenLinesRouteData $route): ?string
+    {
+        if (
+            $dialog->bitrix24_open_line_binding_verified_at === null
+            || $dialog->bitrix24_open_line_binding_verified_at->lt(
+                now()->subSeconds(self::VERIFIED_BINDING_FAST_PATH_WINDOW_SECONDS)
+            )
+        ) {
+            return null;
+        }
+
+        $binding = $this->resolveDialogBindingAction->handle($dialog, $route);
+        $resolvedChatId = $this->positiveIntegerString($binding?->resolvedBitrixChatId);
+
+        return $resolvedChatId === null ? null : $resolvedChatId;
     }
 
     private function syncInboundFastPathBindingFromResponse(

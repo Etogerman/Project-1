@@ -13,9 +13,9 @@ use Bitrix\Main\Web\HttpClient;
 
 final class Runtime
 {
-    private const TELEGRAM_CONNECTOR = 'abc_telegram';
+    private const TELEGRAM_COMPONENT = 'abrikosoff:imconnector.telegram';
 
-    private const MAX_CONNECTOR = 'abc_max';
+    private const MAX_COMPONENT = 'abrikosoff:imconnector.max';
 
     /**
      * @var array<string, mixed>|null
@@ -36,8 +36,14 @@ final class Runtime
 
         $eventManager = EventManager::getInstance();
 
-        $eventManager->addEventHandler('imconnector', 'OnImConnectorBuildList', [self::class, 'onBuildTelegramConnector']);
-        $eventManager->addEventHandler('imconnector', 'OnImConnectorBuildList', [self::class, 'onBuildMaxConnector']);
+        foreach (self::configuredConnectorCodes() as $connectorCode) {
+            $eventManager->addEventHandler(
+                'imconnector',
+                'OnImConnectorBuildList',
+                static fn (): array => self::buildConnectorDefinition($connectorCode),
+            );
+        }
+
         $eventManager->addEventHandler('imconnector', 'OnInfoLine', [self::class, 'onInfoLine']);
         $eventManager->addEventHandler('imconnector', 'OnDeleteLine', [self::class, 'onDeleteLine']);
         $eventManager->addEventHandler('imconnector', 'OnSendMessageCustom', [self::class, 'onSendMessageCustom']);
@@ -54,7 +60,7 @@ final class Runtime
      */
     public static function onBuildTelegramConnector(): array
     {
-        return self::buildConnectorDefinition(self::TELEGRAM_CONNECTOR);
+        return self::buildConnectorDefinition(self::connectorCodeForComponent(self::TELEGRAM_COMPONENT) ?? 'abc_telegram');
     }
 
     /**
@@ -62,7 +68,41 @@ final class Runtime
      */
     public static function onBuildMaxConnector(): array
     {
-        return self::buildConnectorDefinition(self::MAX_CONNECTOR);
+        return self::buildConnectorDefinition(self::connectorCodeForComponent(self::MAX_COMPONENT) ?? 'abc_max');
+    }
+
+    public static function connectorCodeForComponentLine(string $component, string $lineId): ?string
+    {
+        $component = trim($component);
+        $lineId = trim($lineId);
+
+        if ($component === '') {
+            return null;
+        }
+
+        if ($lineId !== '') {
+            $connectorCode = self::resolveConnectorByLineId($lineId);
+
+            if ($connectorCode === null) {
+                return null;
+            }
+
+            $meta = self::connectorMeta($connectorCode);
+
+            return trim((string) ($meta['component'] ?? '')) === $component
+                ? $connectorCode
+                : null;
+        }
+
+        foreach (self::connectors() as $connectorCode => $meta) {
+            if (! is_array($meta) || trim((string) ($meta['component'] ?? '')) !== $component) {
+                continue;
+            }
+
+            return (string) $connectorCode;
+        }
+
+        return null;
     }
 
     /**
@@ -249,7 +289,7 @@ final class Runtime
             return;
         }
 
-        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+        if (! self::connectorOwnsLine($connectorCode, $lineId)) {
             return;
         }
 
@@ -317,7 +357,7 @@ final class Runtime
             return;
         }
 
-        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+        if (! self::connectorOwnsLine($connectorCode, $lineId)) {
             return;
         }
 
@@ -371,10 +411,23 @@ final class Runtime
 
     private static function resolveConnectorByLineId(string $lineId): ?string
     {
+        $matches = [];
+
         foreach (self::connectors() as $connectorCode => $meta) {
             if (self::connectorHasLine($meta, $lineId)) {
-                return (string) $connectorCode;
+                $matches[] = (string) $connectorCode;
             }
+        }
+
+        if (count($matches) === 1) {
+            return $matches[0];
+        }
+
+        if (count($matches) > 1) {
+            self::logStructured('duplicate_line_id_ignored', [
+                'line_id' => $lineId,
+                'connector_codes' => $matches,
+            ]);
         }
 
         return null;
@@ -383,6 +436,34 @@ final class Runtime
     private static function supportsConnector(string $connectorCode): bool
     {
         return array_key_exists($connectorCode, self::connectors());
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function configuredConnectorCodes(): array
+    {
+        $codes = [];
+
+        foreach (self::connectors() as $connectorCode => $meta) {
+            if (
+                ! is_string($connectorCode)
+                || trim($connectorCode) === ''
+                || ! is_array($meta)
+                || trim((string) ($meta['component'] ?? '')) === ''
+            ) {
+                continue;
+            }
+
+            $codes[] = $connectorCode;
+        }
+
+        return $codes;
+    }
+
+    private static function connectorCodeForComponent(string $component): ?string
+    {
+        return self::connectorCodeForComponentLine($component, '');
     }
 
     /**
@@ -431,6 +512,15 @@ final class Runtime
     private static function connectorHasLine(array $meta, string $lineId): bool
     {
         return self::connectorLineMetaFromMeta($meta, $lineId) !== null;
+    }
+
+    private static function connectorOwnsLine(string $connectorCode, string $lineId): bool
+    {
+        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+            return false;
+        }
+
+        return self::resolveConnectorByLineId($lineId) === $connectorCode;
     }
 
     /**
@@ -568,8 +658,7 @@ final class Runtime
         return self::laravelOpenlinesCallbackUrl() !== ''
             && trim((string) self::cfg('auth.member_id', '')) !== ''
             && trim((string) self::cfg('auth.application_token', '')) !== ''
-            && self::supportsConnector(self::TELEGRAM_CONNECTOR)
-            && self::supportsConnector(self::MAX_CONNECTOR);
+            && self::configuredConnectorCodes() !== [];
     }
 
     /**
@@ -766,7 +855,7 @@ final class Runtime
             return null;
         }
 
-        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+        if (! self::connectorOwnsLine($connectorCode, $lineId)) {
             return null;
         }
 
