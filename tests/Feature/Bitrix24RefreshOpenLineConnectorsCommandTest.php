@@ -66,7 +66,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     return $method === 'imconnector.register'
                         && $usedConnection->is($connection)
                         && $params['ID'] === 'abc_telegram'
-                        && $params['NAME'] === 'Имя из админки Telegram bot'
+                        && $params['NAME'] === 'ABC Telegram'
                         && $params['ICON']['COLOR'] === '#2AABEE'
                         && $params['ICON_DISABLED']['COLOR'] === '#99ADB3'
                         && str_contains($this->decodedSvgDataImage($params['ICON']['DATA_IMAGE'] ?? null), 'path fill="white"');
@@ -81,7 +81,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                         && $params['CONNECTOR'] === 'abc_telegram'
                         && $params['LINE'] === '5'
                         && $params['DATA']['ID'] === 'channel:'.$channel->id.':connector:abc_telegram:line:5'
-                        && $params['DATA']['NAME'] === 'Имя из админки Telegram bot';
+                        && $params['DATA']['NAME'] === 'ABC Telegram';
                 })
                 ->andReturn($this->bitrixResponse(true, true));
 
@@ -164,7 +164,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(function (string $method, array $params): bool {
                     return $method === 'imconnector.register'
                         && $params['ID'] === 'abc_max'
-                        && $params['NAME'] === 'Имя из админки MAX bot'
+                        && $params['NAME'] === 'ABC MAX'
                         && $params['ICON']['COLOR'] === '#7C3AED'
                         && str_contains($this->decodedSvgDataImage($params['ICON']['DATA_IMAGE'] ?? null), '>MAX<');
                 })
@@ -176,7 +176,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     return $method === 'imconnector.connector.data.set'
                         && $params['CONNECTOR'] === 'abc_max'
                         && $params['LINE'] === '7'
-                        && $params['DATA']['NAME'] === 'Имя из админки MAX bot';
+                        && $params['DATA']['NAME'] === 'ABC MAX';
                 })
                 ->andReturn($this->bitrixResponse(true, true));
 
@@ -250,7 +250,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         ])->assertSuccessful();
     }
 
-    public function test_refresh_blocks_shared_connector_code_before_calling_bitrix24(): void
+    public function test_refresh_allows_shared_connector_code_when_line_id_differs(): void
     {
         $connection = $this->makeProfileLinkedActiveBitrix24Connection(
             connectionOverrides: [
@@ -299,6 +299,107 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection, $newMaxChannel): void {
+            $mock->shouldNotReceive('call')->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
+            $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
+                    && $usedConnection->is($connection)
+                    && $params['ID'] === 'abrikosoff_max'
+                    && $params['NAME'] === 'ABC MAX')
+                ->andReturn($this->bitrixResponse(true, ['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && $params['CONNECTOR'] === 'abrikosoff_max'
+                    && $params['LINE'] === '2'
+                    && $params['DATA']['ID'] === 'channel:'.$newMaxChannel->id.':connector:abrikosoff_max:line:2'
+                    && $params['DATA']['NAME'] === 'ABC MAX')
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.activate'
+                    && $usedConnection->is($connection)
+                    && $params === [
+                        'CONNECTOR' => 'abrikosoff_max',
+                        'LINE' => '2',
+                        'ACTIVE' => '1',
+                    ])
+                ->andReturn($this->bitrixResponse(true, true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === '2'
+                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABRIKOSOFF_MAX')
+                ->andReturn($this->bitrixResponse(true, true));
+        });
+
+        $this->artisan('bitrix24:refresh-openline-connectors', [
+            '--connection' => $connection->id,
+            '--route' => $newRoute->id,
+        ])->assertSuccessful();
+
+        $this->assertNull($newRoute->refresh()->last_error_message);
+        $this->assertNull($newRoute->last_error_at);
+        $this->assertNull($oldRoute->refresh()->last_error_message);
+    }
+
+    public function test_refresh_blocks_shared_line_id_before_calling_bitrix24(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
+                'application_name' => 'Имя из админки',
+                'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
+            ],
+            profileOverrides: [
+                'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
+                'max_connector_code' => 'abrikosoff_max',
+                'max_source_id' => 'ABRIKOSOFF_MAX',
+            ],
+        );
+        $profile = $connection->profile()->firstOrFail();
+        $oldMaxChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'old-max-token'],
+        ]);
+        $newMaxChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'new-max-token'],
+        ]);
+
+        $oldRoute = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $oldMaxChannel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+            'connector_code' => 'abrikosoff_max',
+            'line_id' => '31',
+            'source_id' => 'ABRIKOSOFF_MAX',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $newRoute = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $newMaxChannel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+            'connector_code' => 'abrikosoff_max',
+            'line_id' => '31',
+            'source_id' => 'ABRIKOSOFF_MAX',
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ]);
+
         $this->mock(Bitrix24ApiClient::class, function ($mock): void {
             $mock->shouldNotReceive('call');
         });
@@ -308,10 +409,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             '--route' => $newRoute->id,
         ])->assertFailed();
 
-        $this->assertStringContainsString(
-            'connector_code `abrikosoff_max` уже используется рабочим маршрутом ОЛ #'.$oldRoute->id,
-            (string) $newRoute->refresh()->last_error_message,
-        );
+        $this->assertSame('Открытая линия уже занята другим маршрутом.', $newRoute->refresh()->last_error_message);
         $this->assertNotNull($newRoute->last_error_at);
         $this->assertNull($oldRoute->refresh()->last_error_message);
     }
@@ -383,7 +481,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && $params['ID'] === 'abc_max'
-                    && $params['NAME'] === 'Имя из админки MAX bot')
+                    && $params['NAME'] === 'ABC MAX')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')

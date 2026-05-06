@@ -67,8 +67,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         $lineId = $this->normalizedRouteLineId($route);
         $lineName = null;
 
-        $this->assertConnectorCodeIsExclusive($profile, $connectorCode, $route);
-
         if ($lineId !== null) {
             $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, $lineId);
         } else {
@@ -266,7 +264,7 @@ class AutoSetupBitrix24OpenLineRouteAction
             }
         }
 
-        $this->assertConnectorCodeIsExclusive($profile, (string) $route->connector_code, $route);
+        $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, (string) $route->line_id);
 
         $this->assertRequiredScopes($connection);
     }
@@ -387,38 +385,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         ], $connection);
 
         $this->assertSuccessfulBooleanResult($response, 'Не удалось активировать соединитель Bitrix24.');
-    }
-
-    private function assertConnectorCodeIsExclusive(
-        Bitrix24Profile $profile,
-        string $connectorCode,
-        ?Bitrix24OpenLineRoute $route = null,
-    ): void {
-        $connectorCode = trim($connectorCode);
-
-        if ($connectorCode === '') {
-            return;
-        }
-
-        $conflictingRoute = Bitrix24OpenLineRoute::query()
-            ->where('portal_domain', $profile->portal_domain)
-            ->where('connector_code', $connectorCode)
-            ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
-            ->whereNotNull('line_id')
-            ->where('line_id', '!=', '')
-            ->when($route?->getKey() !== null, fn ($query) => $query->whereKeyNot($route->getKey()))
-            ->orderBy('id')
-            ->first();
-
-        if (! $conflictingRoute instanceof Bitrix24OpenLineRoute) {
-            return;
-        }
-
-        throw new Bitrix24OpenLineAutoSetupException(sprintf(
-            'connector_code `%s` уже используется рабочим маршрутом ОЛ #%d на этом портале. Обновление регистрации заблокировано, чтобы не перезаписать другие открытые линии Bitrix24.',
-            $connectorCode,
-            $conflictingRoute->id,
-        ));
     }
 
     private function saveRoute(

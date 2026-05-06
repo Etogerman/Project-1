@@ -14,6 +14,7 @@ use App\Services\Bitrix24\ResolveCurrentBitrix24CallbackBaseUrlAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ProfileAction;
 use Illuminate\Database\QueryException;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -392,6 +393,34 @@ class Bitrix24FoundationStorageTest extends TestCase
             'https://project.example.com/prefix/callbacks/bitrix24/install',
             $profile->installCallbackUrl(),
         );
+    }
+
+    public function test_backfill_profiles_skips_default_callback_owner_before_owner_table_exists(): void
+    {
+        config()->set('bitrix24.portal_domain', 'crm.alexlesley.biz');
+        config()->set('bitrix24.application.client_id', 'client-id');
+        config()->set('bitrix24.application.code', 'local.app.code');
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/callbacks/bitrix24/install');
+
+        $matchingConnection = Bitrix24Connection::query()->forceCreate([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token-1',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        Schema::table('bitrix24_open_line_routes', function (Blueprint $table): void {
+            $table->dropConstrainedForeignId('callback_owner_id');
+        });
+        Schema::dropIfExists('bitrix24_callback_owners');
+
+        app(BackfillBitrix24ConnectionProfilesAction::class)->handle();
+
+        $profile = Bitrix24Profile::query()->firstOrFail();
+
+        $this->assertNotNull($matchingConnection->refresh()->profile_id);
+        $this->assertSame('https://project.example.com', $profile->callback_base_url);
+        $this->assertFalse(Schema::hasTable('bitrix24_callback_owners'));
     }
 
     public function test_webhook_event_dedupe_is_scoped_by_callback_base_url(): void

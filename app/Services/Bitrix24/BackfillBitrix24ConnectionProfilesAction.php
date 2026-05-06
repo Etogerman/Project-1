@@ -2,8 +2,8 @@
 
 namespace App\Services\Bitrix24;
 
-use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24CallbackOwner;
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
 use Illuminate\Support\Facades\Schema;
 
@@ -157,6 +157,10 @@ class BackfillBitrix24ConnectionProfilesAction
 
     private function ensureDefaultCallbackOwner(Bitrix24Profile $profile): void
     {
+        if (! Schema::hasTable('bitrix24_callback_owners')) {
+            return;
+        }
+
         $callbackBaseUrl = Bitrix24Profile::normalizeCallbackBaseUrl($profile->callback_base_url)
             ?? (string) $profile->callback_base_url;
 
