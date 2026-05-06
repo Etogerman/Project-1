@@ -6,6 +6,7 @@ use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -65,6 +66,7 @@ class Channel extends Model
         'name',
         'platform',
         'connection_type',
+        'channel_connection_type_id',
         'credentials',
         'bot_token_present',
         'bot_external_id',
@@ -90,6 +92,7 @@ class Channel extends Model
      */
     protected $casts = [
         'is_active' => 'boolean',
+        'channel_connection_type_id' => 'integer',
         'bot_token_present' => 'boolean',
         'credentials' => 'encrypted:array',
         'last_webhook_received_at' => 'datetime',
@@ -101,6 +104,8 @@ class Channel extends Model
     protected static function booted(): void
     {
         static::saving(function (Channel $channel): void {
+            $channel->syncLegacyConnectionFieldsFromType();
+            $channel->syncConnectionTypeFromLegacyFields();
             $channel->syncTokenPresenceFromCredentials();
             $channel->syncConnectionStatusFromLocalState();
         });
@@ -169,21 +174,93 @@ class Channel extends Model
 
     public function isBotConnection(): bool
     {
-        return $this->connection_type === self::CONNECTION_TYPE_BOT;
+        return $this->resolvedConnectionKind() === self::CONNECTION_TYPE_BOT;
     }
 
     public function isAccountConnection(): bool
     {
-        return $this->connection_type === self::CONNECTION_TYPE_ACCOUNT;
+        return $this->resolvedConnectionKind() === self::CONNECTION_TYPE_ACCOUNT;
     }
 
     public function getConnectionTypeLabel(): string
     {
-        return match ($this->connection_type) {
+        if ($this->connectionTypeDefinition instanceof ChannelConnectionType) {
+            return $this->connectionTypeDefinition->name;
+        }
+
+        return match ($this->resolvedConnectionKind()) {
             self::CONNECTION_TYPE_BOT => 'Bot',
             self::CONNECTION_TYPE_ACCOUNT => 'Account',
-            default => (string) $this->connection_type,
+            default => (string) $this->resolvedConnectionKind(),
         };
+    }
+
+    public function resolvedConnectionKind(): string
+    {
+        $definition = $this->resolvedConnectionTypeDefinition();
+
+        if ($definition instanceof ChannelConnectionType) {
+            return (string) $definition->connection_kind;
+        }
+
+        return (string) $this->connection_type;
+    }
+
+    protected function syncLegacyConnectionFieldsFromType(): void
+    {
+        $definition = $this->resolvedConnectionTypeDefinition();
+
+        if (! $definition instanceof ChannelConnectionType) {
+            return;
+        }
+
+        $this->forceFill([
+            'platform' => $definition->platform,
+            'connection_type' => $definition->connection_kind,
+        ]);
+    }
+
+    protected function syncConnectionTypeFromLegacyFields(): void
+    {
+        if (filled($this->channel_connection_type_id)) {
+            return;
+        }
+
+        $typeId = ChannelConnectionType::resolveIdFor(
+            (string) $this->platform,
+            (string) $this->connection_type,
+        );
+
+        if ($typeId !== null) {
+            $this->forceFill(['channel_connection_type_id' => $typeId]);
+        }
+    }
+
+    protected function resolvedConnectionTypeDefinition(): ?ChannelConnectionType
+    {
+        if (filled($this->channel_connection_type_id)) {
+            if ($this->relationLoaded('connectionTypeDefinition')) {
+                $definition = $this->getRelation('connectionTypeDefinition');
+
+                if ($definition instanceof ChannelConnectionType && (int) $definition->id === (int) $this->channel_connection_type_id) {
+                    return $definition;
+                }
+            }
+
+            try {
+                return ChannelConnectionType::query()->find($this->channel_connection_type_id);
+            } catch (Throwable) {
+                return null;
+            }
+        }
+
+        if ($this->relationLoaded('connectionTypeDefinition')) {
+            $definition = $this->getRelation('connectionTypeDefinition');
+
+            return $definition instanceof ChannelConnectionType ? $definition : null;
+        }
+
+        return null;
     }
 
     public function hasBotTokenConfigured(): bool
@@ -285,7 +362,7 @@ class Channel extends Model
     public function supportsConnectionCheck(): bool
     {
         return in_array($this->platform, [self::PLATFORM_TELEGRAM, self::PLATFORM_MAX], true)
-            && $this->connection_type === self::CONNECTION_TYPE_BOT;
+            && $this->isBotConnection();
     }
 
     public function getConnectionStatusLabel(?string $status = null): string
@@ -381,8 +458,14 @@ class Channel extends Model
     {
         return $this->isDirty('platform')
             || $this->isDirty('connection_type')
+            || $this->isDirty('channel_connection_type_id')
             || $this->isDirty('is_active')
             || $this->isDirty('credentials');
+    }
+
+    public function connectionTypeDefinition(): BelongsTo
+    {
+        return $this->belongsTo(ChannelConnectionType::class, 'channel_connection_type_id');
     }
 
     public function runtimeState(): HasOne
@@ -631,9 +714,14 @@ class Channel extends Model
         $this->forceFill($attributes);
 
         if (! $this->hasUnreadableCredentials()) {
-            $this->saveQuietly();
+            try {
+                $this->saveQuietly();
 
-            return;
+                return;
+            } catch (DecryptException) {
+                // Fall through to a direct operational-state update when legacy
+                // encrypted credentials cannot be compared during dirty checks.
+            }
         }
 
         if ($this->usesTimestamps()) {

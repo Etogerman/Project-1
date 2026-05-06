@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Message;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
@@ -14,6 +15,8 @@ use Throwable;
 class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
 {
     use Queueable;
+
+    public const QUEUE_NAME = 'default';
 
     public int $timeout = 60;
 
@@ -32,6 +35,8 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
         if (! $message instanceof Message) {
             return;
         }
+
+        $this->logJobStarted($message, $logBitrix24ApiCallAction);
 
         try {
             $exportMessageToBitrix24OpenLinesAction->handle($message, $this->retryAfterSync, $this->liveBatchUuid);
@@ -64,5 +69,47 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
                 entityId: (string) $message->id,
             );
         }
+    }
+
+    public static function queueName(): string
+    {
+        $queueName = trim((string) config('bitrix24.openlines.live_export_queue', self::QUEUE_NAME));
+
+        return $queueName === '' ? self::QUEUE_NAME : $queueName;
+    }
+
+    private function logJobStarted(Message $message, LogBitrix24ApiCallAction $logBitrix24ApiCallAction): void
+    {
+        $liveExport = Bitrix24MessageExport::query()
+            ->where('message_id', $message->id)
+            ->where('export_mode', Bitrix24MessageExport::MODE_LIVE)
+            ->first();
+
+        $logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'openlines_live_export_job_started',
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'message_id' => $message->id,
+                'dialog_id' => $message->dialog_id,
+                'contact_id' => $message->contact_id,
+                'channel_id' => $message->channel_id,
+                'direction' => $message->direction,
+                'message_kind' => $message->message_kind,
+                'message_created_at' => $message->created_at?->toISOString(),
+                'retry_after_sync' => $this->retryAfterSync,
+                'live_batch_uuid' => $this->liveBatchUuid,
+                'live_export_id' => $liveExport?->id,
+                'live_export_status' => $liveExport?->export_status,
+                'live_export_created_at' => $liveExport?->created_at?->toISOString(),
+                'live_export_updated_at' => $liveExport?->updated_at?->toISOString(),
+                'job_started_at' => now()->toISOString(),
+                'queue_connection' => config('queue.default'),
+                'queue_name' => self::queueName(),
+            ],
+            entityType: 'message',
+            entityId: (string) $message->id,
+            fingerprint: 'openlines-live-export-job-started:'.($this->liveBatchUuid ?: 'message-'.$message->id),
+        );
     }
 }

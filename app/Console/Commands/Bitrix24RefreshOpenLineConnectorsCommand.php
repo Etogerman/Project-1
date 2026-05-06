@@ -33,7 +33,11 @@ class Bitrix24RefreshOpenLineConnectorsCommand extends Command
 
         $routes = Bitrix24OpenLineRoute::query()
             ->with(['bitrix24Profile', 'channel'])
-            ->usable()
+            ->whereIn('status', [
+                Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                Bitrix24OpenLineRoute::STATUS_LEGACY,
+                Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            ])
             ->when($connection instanceof Bitrix24Connection, fn ($query) => $query->where('bitrix24_profile_id', $connection->profile_id))
             ->when($this->routeId() !== null, fn ($query) => $query->whereKey($this->routeId()))
             ->orderBy('id')

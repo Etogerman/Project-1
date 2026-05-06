@@ -2,7 +2,7 @@
 
 Минимальный box-side пакет для коробочного Bitrix24, который:
 
-- регистрирует custom connector-ы `abrikosoff_telegram` и `abrikosoff_max`
+- регистрирует custom connector-ы `abc_telegram` и `abc_max`
 - добавляет обязательный `OnImConnectorBuildList`
 - добавляет минимальные `imconnector` handlers:
   - `OnInfoLine`
@@ -34,7 +34,7 @@
 
 После деплоя пакета в коробку:
 
-- Bitrix перестаёт считать `abrikosoff_telegram` и `abrikosoff_max` неизвестными provider-ами
+- Bitrix перестаёт считать `abc_telegram` и `abc_max` неизвестными provider-ами
 - коннекторы становятся доступными для привязки к Открытым линиям
 - операторские message events можно прокидывать в Laravel callback path
 - новая Open Lines сессия в happy-path появляется у existing CRM contact
@@ -79,8 +79,8 @@ require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/include/abrikosoff_
 5. Очистить кеш Bitrix.
 6. Открыть Контакт-центр / Открытые линии и подключить каналы:
 
-   - `abrikosoff_telegram`
-   - `abrikosoff_max`
+   - `abc_telegram`
+   - `abc_max`
 
 ## Что заполнить в config.php
 
@@ -90,6 +90,13 @@ require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/include/abrikosoff_
 - `application_token`
 - `portal_domain`
 - `openlines_callback_url`
+
+`openlines_callback_url` остаётся глобальным fallback URL. Если одна коробка
+Bitrix обслуживает несколько Laravel-контуров, для каждой линии нужно добавить
+entry в `connectors.*.lines` и заполнить `owner_callback_base_url`. Для такой
+линии `OnInfoLine` и operator message callbacks будут отправляться на:
+
+- `{owner_callback_base_url}/callbacks/bitrix24/openlines`
 
 Текущий production handoff:
 
@@ -110,8 +117,8 @@ require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/include/abrikosoff_
 
 И зафиксировать line metadata:
 
-- `abrikosoff_telegram.line_id = 32`
-- `abrikosoff_max.line_id = 31`
+- `abc_telegram.line_id = 32`
+- `abc_max.line_id = 31`
 - line name `ABR Телеграм бот {имя бота}`
 - line name `ABR MAX бот {имя бота}`
 
@@ -152,10 +159,10 @@ package пишет fallback-лог в:
 
 1. Коннекторы появляются в Bitrix как доступные каналы.
 2. Линии можно привязать к:
-   - `abrikosoff_telegram`
-   - `abrikosoff_max`
-3. `abrikosoff_telegram` привязан к линии `32`.
-4. `abrikosoff_max` привязан к линии `31`.
+   - `abc_telegram`
+   - `abc_max`
+3. `abc_telegram` привязан к линии `32`.
+4. `abc_max` привязан к линии `31`.
 5. Laravel live export больше не падает на provider lookup error.
 6. Новая Open Lines сессия появляется у existing CRM contact.
 7. Ответ оператора из Bitrix уходит обратно в Telegram / MAX.

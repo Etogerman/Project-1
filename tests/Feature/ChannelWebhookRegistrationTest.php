@@ -167,6 +167,34 @@ class ChannelWebhookRegistrationTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/me');
     }
 
+    public function test_admin_sees_notification_when_registering_webhook_without_bot_token(): void
+    {
+        Http::fake();
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [],
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('registerWebhook', $channel)
+            ->assertHasNoTableActionErrors()
+            ->assertNotified();
+
+        $channel->refresh();
+
+        $this->assertNull($channel->getWebhookSecret());
+        $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->connection_status);
+        $this->assertSame(Channel::CONNECTION_ERROR_NO_TOKEN, $channel->connection_error_message);
+
+        Http::assertSentCount(0);
+    }
+
     public function test_admin_can_sync_telegram_bot_metadata_without_reregistering_webhook(): void
     {
         Http::fake([
@@ -231,15 +259,11 @@ class ChannelWebhookRegistrationTest extends TestCase
             ],
         ]);
 
-        $this->withoutExceptionHandling();
-
-        try {
-            Livewire::actingAs($admin)
-                ->test(ManageChannels::class)
-                ->callTableAction('syncBotMetadata', $channel);
-        } catch (\Throwable) {
-            // Expected for a failed upstream API call.
-        }
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('syncBotMetadata', $channel)
+            ->assertHasNoTableActionErrors()
+            ->assertNotified();
 
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,

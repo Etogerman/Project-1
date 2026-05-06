@@ -65,19 +65,20 @@ class AutoSetupBitrix24OpenLineRouteAction
         $sourceId = $this->requiredSourceId($profile, $channel);
         $route = $this->findRoute($profile, $channel);
         $lineId = $this->normalizedRouteLineId($route);
-
-        $this->assertConnectorCodeIsExclusive($profile, $connectorCode, $route);
+        $lineName = null;
 
         if ($lineId !== null) {
             $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, $lineId);
         } else {
-            $lineId = $this->createOpenLine($connection, $profile, $channel, $sourceId);
+            $lineName = $this->defaultLineName($channel);
+            $lineId = $this->createOpenLine($connection, $channel, $sourceId, $lineName);
             $route = $this->saveRoute(
                 route: $route,
                 profile: $profile,
                 channel: $channel,
                 connectorCode: $connectorCode,
                 lineId: $lineId,
+                lineName: $lineName,
                 sourceId: $sourceId,
                 status: Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
                 errorMessage: 'Открытая линия создана, настройка соединителя ещё не завершена.',
@@ -90,6 +91,7 @@ class AutoSetupBitrix24OpenLineRouteAction
             $this->registerConnector($connection, $profile, $channel, $connectorCode);
             $this->setConnectorData($connection, $profile, $channel, $connectorCode, $lineId);
             $this->activateConnector($connection, $connectorCode, $lineId);
+            $this->syncOpenLineConfig($connection, $channel, $lineId, $sourceId, $lineName);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->saveRoute(
                 route: $route,
@@ -97,6 +99,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                 channel: $channel,
                 connectorCode: $connectorCode,
                 lineId: $lineId,
+                lineName: $lineName,
                 sourceId: $sourceId,
                 status: Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
                 errorMessage: $exception->getMessage(),
@@ -112,6 +115,7 @@ class AutoSetupBitrix24OpenLineRouteAction
             channel: $channel,
             connectorCode: $connectorCode,
             lineId: $lineId,
+            lineName: $lineName,
             sourceId: $sourceId,
             status: Bitrix24OpenLineRoute::STATUS_ACTIVE,
             errorMessage: null,
@@ -139,6 +143,9 @@ class AutoSetupBitrix24OpenLineRouteAction
             $this->assertCanRefreshConnectorRegistration($connection, $profile, $channel, $route);
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
+            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
+            $this->activateConnector($connection, (string) $route->connector_code, (string) $route->line_id);
+            $this->syncOpenLineConfig($connection, $channel, (string) $route->line_id, (string) $route->source_id);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -154,8 +161,10 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $route->forceFill([
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             'last_error_message' => null,
             'last_error_at' => null,
+            'updated_at' => now(),
         ])->save();
 
         return $route->refresh();
@@ -237,8 +246,12 @@ class AutoSetupBitrix24OpenLineRouteAction
             throw new Bitrix24OpenLineAutoSetupException('Обновление регистрации ОЛ сейчас доступно только для Telegram bot и MAX bot каналов.');
         }
 
-        if (! $route->isUsable()) {
-            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не активен или не содержит открытую линию.');
+        if (! in_array($route->status, [
+            Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            Bitrix24OpenLineRoute::STATUS_LEGACY,
+            Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ], true)) {
+            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не активен и не находится в состоянии ремонта.');
         }
 
         foreach ([
@@ -251,25 +264,19 @@ class AutoSetupBitrix24OpenLineRouteAction
             }
         }
 
-        $this->assertConnectorCodeIsExclusive($profile, (string) $route->connector_code, $route);
+        $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, (string) $route->line_id);
 
         $this->assertRequiredScopes($connection);
     }
 
     private function createOpenLine(
         Bitrix24Connection $connection,
-        Bitrix24Profile $profile,
         Channel $channel,
         string $sourceId,
+        string $lineName,
     ): string {
         $response = $this->apiClient->call('imopenlines.config.add', [
-            'PARAMS' => [
-                'LINE_NAME' => $this->buildLineName($profile, $channel),
-                'ACTIVE' => 'Y',
-                'CRM' => 'Y',
-                'CRM_CREATE' => 'deal',
-                'CRM_SOURCE' => $sourceId,
-            ],
+            'PARAMS' => $this->openLineConfigParams($channel, $sourceId, $lineName),
         ], $connection);
 
         $this->assertSuccessfulResponse($response, 'Не удалось создать открытую линию в Bitrix24.');
@@ -281,13 +288,50 @@ class AutoSetupBitrix24OpenLineRouteAction
         return trim((string) $response->result);
     }
 
+    private function syncOpenLineConfig(
+        Bitrix24Connection $connection,
+        Channel $channel,
+        string $lineId,
+        string $sourceId,
+        ?string $lineName = null,
+    ): void {
+        $response = $this->apiClient->call('imopenlines.config.update', [
+            'CONFIG_ID' => $lineId,
+            'PARAMS' => $this->openLineConfigParams($channel, $sourceId, $lineName),
+        ], $connection);
+
+        $this->assertSuccessfulBooleanResult($response, 'Не удалось синхронизировать настройки открытой линии Bitrix24.');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function openLineConfigParams(
+        Channel $channel,
+        string $sourceId,
+        ?string $lineName,
+    ): array {
+        $params = [
+            'ACTIVE' => 'Y',
+            'CRM' => 'Y',
+            'CRM_CREATE' => 'deal',
+            'CRM_SOURCE' => $sourceId,
+        ];
+
+        if ($lineName !== null && trim($lineName) !== '') {
+            $params['LINE_NAME'] = Str::limit(trim($lineName), 120, '');
+        }
+
+        return $params;
+    }
+
     private function registerConnector(
         Bitrix24Connection $connection,
         Bitrix24Profile $profile,
         Channel $channel,
         string $connectorCode,
     ): void {
-        $connectorName = $this->buildConnectorName($connection, $channel);
+        $connectorName = $this->buildConnectorName($channel);
 
         $response = $this->apiClient->call('imconnector.register', [
             'ID' => $connectorCode,
@@ -316,7 +360,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         string $lineId,
     ): void {
         $channelUrl = $this->settingsUrl($profile, $connection);
-        $connectorName = $this->buildConnectorName($connection, $channel);
+        $connectorName = $this->buildConnectorName($channel);
 
         $response = $this->apiClient->call('imconnector.connector.data.set', [
             'CONNECTOR' => $connectorCode,
@@ -343,44 +387,13 @@ class AutoSetupBitrix24OpenLineRouteAction
         $this->assertSuccessfulBooleanResult($response, 'Не удалось активировать соединитель Bitrix24.');
     }
 
-    private function assertConnectorCodeIsExclusive(
-        Bitrix24Profile $profile,
-        string $connectorCode,
-        ?Bitrix24OpenLineRoute $route = null,
-    ): void {
-        $connectorCode = trim($connectorCode);
-
-        if ($connectorCode === '') {
-            return;
-        }
-
-        $conflictingRoute = Bitrix24OpenLineRoute::query()
-            ->where('portal_domain', $profile->portal_domain)
-            ->where('connector_code', $connectorCode)
-            ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
-            ->whereNotNull('line_id')
-            ->where('line_id', '!=', '')
-            ->when($route?->getKey() !== null, fn ($query) => $query->whereKeyNot($route->getKey()))
-            ->orderBy('id')
-            ->first();
-
-        if (! $conflictingRoute instanceof Bitrix24OpenLineRoute) {
-            return;
-        }
-
-        throw new Bitrix24OpenLineAutoSetupException(sprintf(
-            'connector_code `%s` уже используется рабочим маршрутом ОЛ #%d на этом портале. Обновление регистрации заблокировано, чтобы не перезаписать другие открытые линии Bitrix24.',
-            $connectorCode,
-            $conflictingRoute->id,
-        ));
-    }
-
     private function saveRoute(
         ?Bitrix24OpenLineRoute $route,
         Bitrix24Profile $profile,
         Channel $channel,
         string $connectorCode,
         string $lineId,
+        ?string $lineName,
         string $sourceId,
         string $status,
         ?string $errorMessage,
@@ -405,6 +418,10 @@ class AutoSetupBitrix24OpenLineRouteAction
             'updated_by_user_id' => $user?->id,
         ]);
 
+        if ($lineName !== null) {
+            $route->line_name = $this->nullableLineName($lineName);
+        }
+
         $route->save();
 
         $this->syncProfileRouteFields($profile, $channel, $connectorCode, $lineId, $sourceId, $status);
@@ -427,12 +444,10 @@ class AutoSetupBitrix24OpenLineRouteAction
         $fields = match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
             Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT => [
                 'telegram_connector_code' => $connectorCode,
-                'telegram_line_id' => $lineId,
                 'telegram_source_id' => $sourceId,
             ],
             Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => [
                 'max_connector_code' => $connectorCode,
-                'max_line_id' => $lineId,
                 'max_source_id' => $sourceId,
             ],
             default => [],
@@ -537,23 +552,19 @@ class AutoSetupBitrix24OpenLineRouteAction
         return trim((string) $value);
     }
 
-    private function buildLineName(Bitrix24Profile $profile, Channel $channel): string
+    private function defaultLineName(Channel $channel): string
     {
-        $prefix = sprintf('Abrikosoff / %s / #%d ', $profile->profile_key, $channel->id);
-        $maxLength = 120;
-        $suffix = Str::limit($channel->name, max(10, $maxLength - mb_strlen($prefix)), '');
+        $name = trim((string) $channel->name);
 
-        return $prefix.$suffix;
+        return Str::limit($name !== '' ? $name : 'Channel #'.$channel->id, 120, '');
     }
 
-    private function buildConnectorName(Bitrix24Connection $connection, ?Channel $channel = null): string
+    private function buildConnectorName(Channel $channel): string
     {
-        $parts = array_values(array_filter([
-            $this->applicationDisplayName($connection),
-            $this->connectorChannelLabel($channel),
-        ]));
-
-        return Str::limit(implode(' ', $parts), 120, '');
+        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'ABC MAX',
+            default => 'ABC Telegram',
+        };
     }
 
     private function connectorDataExternalId(Channel $channel, string $connectorCode, string $lineId): string
@@ -593,23 +604,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         ])->save();
     }
 
-    private function applicationDisplayName(Bitrix24Connection $connection): string
-    {
-        $connectionName = $this->displayName($connection->application_name);
-
-        if ($connectionName !== null && ! $this->isGenericApplicationName($connectionName)) {
-            return $connectionName;
-        }
-
-        $configuredName = $this->configuredApplicationDisplayName();
-
-        if ($configuredName !== null) {
-            return $configuredName;
-        }
-
-        return $connectionName ?? 'Abrikosoff';
-    }
-
     private function configuredApplicationDisplayName(): ?string
     {
         $configuredName = $this->displayName(config('bitrix24.application.name'));
@@ -635,6 +629,13 @@ class AutoSetupBitrix24OpenLineRouteAction
         $name = trim((string) $value);
 
         return $name === '' ? null : $name;
+    }
+
+    private function nullableLineName(string $value): ?string
+    {
+        $name = trim($value);
+
+        return $name === '' ? null : Str::limit($name, 255, '');
     }
 
     private function requiredConnectorCode(Bitrix24Profile $profile, Channel $channel): string
@@ -664,19 +665,6 @@ class AutoSetupBitrix24OpenLineRouteAction
                 'В профиле Bitrix24 не заполнен MAX source_id.',
             ),
             default => throw new Bitrix24OpenLineAutoSetupException('Автонастройка ОЛ сейчас доступна только для Telegram bot и MAX bot каналов.'),
-        };
-    }
-
-    private function connectorChannelLabel(?Channel $channel): string
-    {
-        if (! $channel instanceof Channel) {
-            return 'Telegram bot';
-        }
-
-        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX bot',
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => 'Telegram account',
-            default => 'Telegram bot',
         };
     }
 

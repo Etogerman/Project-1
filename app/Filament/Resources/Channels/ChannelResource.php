@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Channels;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
+use App\Models\ChannelConnectionType;
 use App\Models\ChannelRuntimeState;
 use App\Models\Message;
 use App\Services\Bots\CheckChannelConnectionAction;
@@ -27,6 +28,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
@@ -42,6 +44,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
+use InvalidArgumentException;
 use Throwable;
 use UnitEnum;
 
@@ -57,16 +60,16 @@ class ChannelResource extends Resource
 
     protected static ?string $navigationLabel = 'Каналы связи';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Настройки';
 
-    protected static ?int $navigationSort = 10;
+    protected static ?int $navigationSort = 14;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedChatBubbleLeftRight;
 
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            ->with('runtimeState');
+            ->with(['runtimeState', 'connectionTypeDefinition']);
     }
 
     public static function form(Schema $schema): Schema
@@ -81,6 +84,30 @@ class ChannelResource extends Resource
                             ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
                             ->required()
                             ->maxLength(255),
+                        Select::make('channel_connection_type_id')
+                            ->label('Тип подключения')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
+                            ->options(fn (): array => ChannelConnectionType::activeOptions())
+                            ->searchable()
+                            ->preload()
+                            ->live()
+                            ->afterStateUpdated(function (mixed $state, Set $set): void {
+                                if (! is_numeric($state)) {
+                                    return;
+                                }
+
+                                $type = ChannelConnectionType::query()->find((int) $state);
+
+                                if (! $type instanceof ChannelConnectionType) {
+                                    return;
+                                }
+
+                                $set('platform', $type->platform);
+                                $set('connection_type', $type->connection_kind);
+                            })
+                            ->placeholder('Определить по платформе и режиму')
+                            ->native(false)
+                            ->helperText('Канал выбирает тип подключения. Платформа и режим ниже синхронизируются для совместимости.'),
                         Select::make('platform')
                             ->label('Платформа')
                             ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
@@ -98,7 +125,7 @@ class ChannelResource extends Resource
                             ->native(false),
                     ])
                     ->columnSpanFull()
-                    ->columns(2),
+                    ->columns(3),
                 Section::make('Доступ и режим')
                     ->extraAttributes(['class' => 'ac-channel-form-section ac-channel-form-section--access'])
                     ->schema([
@@ -567,6 +594,12 @@ class ChannelResource extends Resource
                                 ->title('Webhook зарегистрирован')
                                 ->body('Секрет сохранён автоматически, webhook обновлён, данные бота синхронизированы.')
                                 ->send();
+                        } catch (InvalidArgumentException $throwable) {
+                            Notification::make()
+                                ->warning()
+                                ->title('Нужно проверить настройки канала')
+                                ->body($throwable->getMessage())
+                                ->send();
                         } catch (Throwable $throwable) {
                             report($throwable);
 
@@ -575,8 +608,6 @@ class ChannelResource extends Resource
                                 ->title('Не удалось зарегистрировать webhook')
                                 ->body($throwable->getMessage())
                                 ->send();
-
-                            throw $throwable;
                         }
                     }),
                 Action::make('checkConnection')
@@ -623,6 +654,12 @@ class ChannelResource extends Resource
                                 ->title('Канал проверен')
                                 ->body('Доступ к боту подтверждён, данные бота синхронизированы с платформой.')
                                 ->send();
+                        } catch (InvalidArgumentException $throwable) {
+                            Notification::make()
+                                ->warning()
+                                ->title('Нужно проверить настройки канала')
+                                ->body($throwable->getMessage())
+                                ->send();
                         } catch (Throwable $throwable) {
                             report($throwable);
 
@@ -631,8 +668,6 @@ class ChannelResource extends Resource
                                 ->title('Не удалось обновить данные бота')
                                 ->body($throwable->getMessage())
                                 ->send();
-
-                            throw $throwable;
                         }
                     }),
                 Action::make('manageScenarios')
@@ -708,6 +743,8 @@ class ChannelResource extends Resource
                     ->tooltip('Изменить')
                     ->fillForm(fn (Channel $record): array => [
                         'name' => $record->name,
+                        'channel_connection_type_id' => $record->channel_connection_type_id
+                            ?? ChannelConnectionType::resolveIdFor($record->platform, $record->connection_type),
                         'platform' => $record->platform,
                         'connection_type' => $record->connection_type,
                         'auto_reply_mode' => $record->auto_reply_mode,
@@ -736,6 +773,7 @@ class ChannelResource extends Resource
      */
     public static function mutateChannelData(array $data, ?Channel $record = null): array
     {
+        $data = static::syncChannelConnectionTypeData($data);
         $token = trim((string) data_get($data, 'credentials.token', ''));
         $credentials = $record?->readableCredentials() ?? [];
 
@@ -751,6 +789,37 @@ class ChannelResource extends Resource
         }
 
         Arr::forget($data, 'credentials');
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function syncChannelConnectionTypeData(array $data): array
+    {
+        $typeId = data_get($data, 'channel_connection_type_id');
+
+        if (is_numeric($typeId)) {
+            $type = ChannelConnectionType::query()->find((int) $typeId);
+
+            if ($type instanceof ChannelConnectionType) {
+                $data['channel_connection_type_id'] = $type->id;
+                $data['platform'] = $type->platform;
+                $data['connection_type'] = $type->connection_kind;
+
+                return $data;
+            }
+        }
+
+        $platform = (string) data_get($data, 'platform', '');
+        $connectionType = (string) data_get($data, 'connection_type', '');
+        $resolvedTypeId = ChannelConnectionType::resolveIdFor($platform, $connectionType);
+
+        if ($resolvedTypeId !== null) {
+            $data['channel_connection_type_id'] = $resolvedTypeId;
+        }
 
         return $data;
     }

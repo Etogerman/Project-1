@@ -76,21 +76,28 @@ Bitrix24 integration target:
 - `BITRIX24_INSTALL_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/install`
 - `BITRIX24_EVENTS_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/events`
 - `BITRIX24_OPENLINES_CALLBACK_URL=https://<generated-staging-domain>/callbacks/bitrix24/openlines`
-- `BITRIX24_TELEGRAM_SOURCE_ID=ABRIKOSOFF_TELEGRAM`
-- `BITRIX24_MAX_SOURCE_ID=ABRIKOSOFF_MAX`
-- `BITRIX24_TELEGRAM_LINE_ID=30`
-- `BITRIX24_MAX_LINE_ID=31`
-- `BITRIX24_TELEGRAM_CONNECTOR_CODE=abrikosoff_telegram`
-- `BITRIX24_MAX_CONNECTOR_CODE=abrikosoff_max`
 - `BITRIX24_CONTACTS_SYNC_ENABLED=true`
 - `BITRIX24_DEALS_SYNC_ENABLED=true`
 - `BITRIX24_OPENLINES_ENABLED=true`
 - `BITRIX24_FAKE_HAPPY_PATH_ENABLED=false`
 
-Текущий подтверждённый Open Lines mapping проекта:
+Bitrix24 profile values are configured in admin after deploy:
 
-- Telegram line id `30`
-- MAX line id `31`
+- Telegram SOURCE_ID: `ABC_TELEGRAM`
+- MAX SOURCE_ID: `ABC_MAX`
+- Telegram connector_code: `abc_telegram`
+- MAX connector_code: `abc_max`
+- Default assigned user ID: `1`
+- Default deal category ID: `22`
+- Default deal stage ID: `C22:NEW`
+- CRM field codes: `Name source`, `Age exact`, `Gender`, `Age range`, `Contact ID`, `Channel ID`, `Channel name`, `Platform`, `Bot code`, `Bot name`, `Alt first name`, `Alt last name`, `Name conflict`
+- CRM enum IDs: name-source values and gender values
+
+LINE_ID открытых линий не задаются в `.env`. Их нужно заполнить в админке на
+конкретных маршрутах каналов:
+
+- Telegram route LINE_ID
+- MAX route LINE_ID
 
 Перед тем как считать staging ready для real Bitrix24 acceptance, выполните:
 

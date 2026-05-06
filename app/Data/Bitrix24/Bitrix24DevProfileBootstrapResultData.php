@@ -68,8 +68,6 @@ final readonly class Bitrix24DevProfileBootstrapResultData
             ['Field' => 'max_source_id', 'Value' => $this->displayValue($this->profile->max_source_id)],
             ['Field' => 'telegram_connector_code', 'Value' => $this->displayValue($this->profile->telegram_connector_code)],
             ['Field' => 'max_connector_code', 'Value' => $this->displayValue($this->profile->max_connector_code)],
-            ['Field' => 'telegram_line_id', 'Value' => $this->displayValue($this->profile->telegram_line_id)],
-            ['Field' => 'max_line_id', 'Value' => $this->displayValue($this->profile->max_line_id)],
         ];
     }
 

@@ -6,6 +6,10 @@ use App\Models\Contact;
 
 class ResolveBitrix24ContactNameUpdateAction
 {
+    public function __construct(
+        private readonly ResolveBitrix24ProfileSchemaAction $resolveProfileSchemaAction,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $remoteSnapshot
      * @return array{
@@ -25,10 +29,12 @@ class ResolveBitrix24ContactNameUpdateAction
         $remoteFirstName = $this->nullableString($remoteSnapshot['name'] ?? null);
         $remoteLastName = $this->nullableString($remoteSnapshot['last_name'] ?? null);
         $nameSourceId = $this->nullableString($remoteSnapshot['name_source_id'] ?? null);
+        $schemaFields = $this->resolveProfileSchemaAction->fields();
+        $values = $this->resolveProfileSchemaAction->values();
 
-        $automaticId = (string) config('bitrix24.values.name_source.automatic_information_id');
-        $selfReportedId = (string) config('bitrix24.values.name_source.self_reported_id');
-        $trainingVerifiedId = (string) config('bitrix24.values.name_source.training_verified_id');
+        $automaticId = (string) $values['name_source']['automatic_information_id'];
+        $selfReportedId = (string) $values['name_source']['self_reported_id'];
+        $trainingVerifiedId = (string) $values['name_source']['training_verified_id'];
         $resolvedLocalNameSourceId = $this->resolveLocalNameSourceId($localFirstNameSource);
 
         $canOverwriteName = $this->canOverwriteRemoteName(
@@ -56,7 +62,7 @@ class ResolveBitrix24ContactNameUpdateAction
             }
 
             if ($resolvedLocalNameSourceId !== null && ($fields !== [] || $nameSourceId !== $resolvedLocalNameSourceId)) {
-                $fields[config('bitrix24.fields.name_source')] = $resolvedLocalNameSourceId;
+                $fields[$schemaFields['name_source']] = $resolvedLocalNameSourceId;
             }
 
             return [
@@ -78,11 +84,11 @@ class ResolveBitrix24ContactNameUpdateAction
             $altLastName = $localLastName;
 
             if ($altFirstName !== null) {
-                $fields[config('bitrix24.fields.alt_first_name')] = $altFirstName;
+                $fields[$schemaFields['alt_first_name']] = $altFirstName;
             }
 
             if ($altLastName !== null) {
-                $fields[config('bitrix24.fields.alt_last_name')] = $altLastName;
+                $fields[$schemaFields['alt_last_name']] = $altLastName;
             }
 
             $warnings[] = 'training_verified_name_preserved';
@@ -111,10 +117,12 @@ class ResolveBitrix24ContactNameUpdateAction
 
     private function resolveLocalNameSourceId(?string $source): ?int
     {
+        $values = $this->resolveProfileSchemaAction->values();
+
         return match ($source) {
-            Contact::FIRST_NAME_SOURCE_AUTO => (int) config('bitrix24.values.name_source.automatic_information_id'),
-            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => (int) config('bitrix24.values.name_source.self_reported_id'),
-            Contact::FIRST_NAME_SOURCE_MANUAL => (int) config('bitrix24.values.name_source.training_verified_id'),
+            Contact::FIRST_NAME_SOURCE_AUTO => $values['name_source']['automatic_information_id'],
+            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => $values['name_source']['self_reported_id'],
+            Contact::FIRST_NAME_SOURCE_MANUAL => $values['name_source']['training_verified_id'],
             default => null,
         };
     }
