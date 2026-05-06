@@ -5,7 +5,9 @@ namespace App\Services\Bitrix24;
 use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 
 class BackfillBitrix24ConnectionProfilesAction
 {
@@ -60,24 +62,32 @@ class BackfillBitrix24ConnectionProfilesAction
 
         $profile->forceFill($updates);
 
-        if (! $profile->exists || $profile->isDirty()) {
-            $profile->save();
-        }
+        DB::transaction(function () use ($portalDomain, $profile): void {
+            $this->assertCallbackBaseUrlIsAvailableForProfile(
+                $profile,
+                Bitrix24Profile::normalizeCallbackBaseUrl($profile->callback_base_url)
+                    ?? (string) $profile->callback_base_url,
+            );
 
-        $this->ensureDefaultCallbackOwner($profile);
+            if (! $profile->exists || $profile->isDirty()) {
+                $profile->save();
+            }
 
-        Bitrix24Connection::query()
-            ->whereNull('profile_id')
-            ->get()
-            ->each(function (Bitrix24Connection $connection) use ($portalDomain, $profile): void {
-                if ($this->normalizePortalDomain($connection->portal_domain) !== $portalDomain) {
-                    return;
-                }
+            $this->ensureDefaultCallbackOwner($profile);
 
-                $connection->forceFill([
-                    'profile_id' => $profile->id,
-                ])->save();
-            });
+            Bitrix24Connection::query()
+                ->whereNull('profile_id')
+                ->get()
+                ->each(function (Bitrix24Connection $connection) use ($portalDomain, $profile): void {
+                    if ($this->normalizePortalDomain($connection->portal_domain) !== $portalDomain) {
+                        return;
+                    }
+
+                    $connection->forceFill([
+                        'profile_id' => $profile->id,
+                    ])->save();
+                });
+        });
     }
 
     private function resolveLegacyCallbackBaseUrl(): ?string
@@ -179,6 +189,38 @@ class BackfillBitrix24ConnectionProfilesAction
                 'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
             ],
         );
+    }
+
+    private function assertCallbackBaseUrlIsAvailableForProfile(Bitrix24Profile $profile, string $callbackBaseUrl): void
+    {
+        if (! Schema::hasTable('bitrix24_callback_owners')) {
+            return;
+        }
+
+        $ownerConflict = Bitrix24CallbackOwner::query()
+            ->with('bitrix24Profile')
+            ->where('callback_base_url', $callbackBaseUrl)
+            ->when(
+                $profile->exists,
+                fn ($query) => $query->where('bitrix24_profile_id', '!=', $profile->getKey()),
+            )
+            ->first();
+
+        if (! $ownerConflict instanceof Bitrix24CallbackOwner) {
+            return;
+        }
+
+        $ownerProfile = $ownerConflict->bitrix24Profile;
+        $ownerProfileKey = $ownerProfile instanceof Bitrix24Profile
+            ? $ownerProfile->profile_key
+            : '#'.$ownerConflict->bitrix24_profile_id;
+
+        throw new RuntimeException(sprintf(
+            'callback_base_url `%s` is already assigned to callback owner `%s` on profile `%s`.',
+            $callbackBaseUrl,
+            $ownerConflict->owner_key,
+            $ownerProfileKey,
+        ));
     }
 
     /**
