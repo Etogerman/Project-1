@@ -14,6 +14,8 @@ use App\Models\Dialog;
 use App\Models\User;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
+use App\Services\Bitrix24\Bitrix24OpenLineRepairException;
+use App\Services\Bitrix24\RepairStaleBitrix24OpenLineAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Contracts\Support\Htmlable;
@@ -458,6 +460,7 @@ class ViewBitrix24Connection extends ViewRecord
                     'stale_callback_label' => $staleCallbackDiagnostics['label'],
                     'stale_callback_tone' => $staleCallbackDiagnostics['tone'],
                     'stale_callback_title' => $staleCallbackDiagnostics['title'],
+                    'stale_callback_can_repair' => $staleCallbackDiagnostics['can_repair'],
                     'binding_diagnostic_label' => $bindingDiagnostics['label'],
                     'binding_diagnostic_tone' => $bindingDiagnostics['tone'],
                     'binding_diagnostic_can_reset' => $bindingDiagnostics['can_reset'],
@@ -791,6 +794,66 @@ class ViewBitrix24Connection extends ViewRecord
             ->success()
             ->title('Устаревшие привязки сброшены')
             ->body(sprintf('Диалогов: %d. Следующий входящий callback заново подтвердит актуальную ОЛ.', count($staleDialogIds)))
+            ->send();
+    }
+
+    public function repairLatestStaleOpenLine(int|string $channelId): void
+    {
+        abort_unless($this->canEditOpenLineRoutes(), 403);
+
+        $record = $this->getRecord();
+        $profile = $this->getBitrix24Profile();
+
+        if (! $record instanceof Bitrix24Connection || ! $profile instanceof Bitrix24Profile) {
+            $this->failOpenLineRouteSave('Подключение или профиль Bitrix24 не найдены.');
+
+            return;
+        }
+
+        $route = Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('channel_id', $channelId)
+            ->first();
+
+        if (! $route instanceof Bitrix24OpenLineRoute) {
+            $this->failOpenLineRouteSave('Маршрут открытой линии не найден.');
+
+            return;
+        }
+
+        $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$route->channel_id] ?? []);
+        $staleLog = $this->latestStaleOpenLinesCallbackLogForForm($record, $form);
+
+        if (! $staleLog instanceof Bitrix24SyncLog) {
+            $this->failOpenLineRouteSave('Диагностика старой ОЛ для этого маршрута не найдена.');
+
+            return;
+        }
+
+        try {
+            $result = app(RepairStaleBitrix24OpenLineAction::class)->handle($record, $route, $staleLog);
+        } catch (Bitrix24OpenLineRepairException $exception) {
+            $this->failOpenLineRouteSave($exception->getMessage());
+
+            Notification::make()
+                ->danger()
+                ->title('Старую ОЛ не удалось закрыть')
+                ->body($exception->getMessage())
+                ->send();
+
+            return;
+        }
+
+        $this->openLineRouteErrorMessage = null;
+
+        Notification::make()
+            ->success()
+            ->title('Старая ОЛ закрыта')
+            ->body(sprintf(
+                'Chat %s закрыт. Локальных привязок сброшено: %d.',
+                $result['source_chat_id'],
+                $result['reset_dialog_count'],
+            ))
             ->send();
     }
 
@@ -1546,7 +1609,7 @@ class ViewBitrix24Connection extends ViewRecord
 
     /**
      * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
-     * @return array{visible:bool,label:string,tone:string,title:string}
+     * @return array{visible:bool,label:string,tone:string,title:string,can_repair:bool}
      */
     protected function resolveLatestStaleOpenLinesCallbackDiagnostics(array $form): array
     {
@@ -1555,6 +1618,7 @@ class ViewBitrix24Connection extends ViewRecord
             'label' => '',
             'tone' => 'gray',
             'title' => '',
+            'can_repair' => false,
         ];
         $connectorCode = trim((string) ($form['connector_code'] ?? ''));
         $lineId = trim((string) ($form['line_id'] ?? ''));
@@ -1569,17 +1633,7 @@ class ViewBitrix24Connection extends ViewRecord
             return $empty;
         }
 
-        $log = $record->syncLogs()
-            ->where('operation', self::STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION)
-            ->orderByDesc('id')
-            ->limit(120)
-            ->get()
-            ->first(function (Bitrix24SyncLog $log) use ($connectorCode, $lineId): bool {
-                $payload = is_array($log->request_payload) ? $log->request_payload : [];
-
-                return trim((string) data_get($payload, 'connector_code', '')) === $connectorCode
-                    && trim((string) data_get($payload, 'line_id', '')) === $lineId;
-            });
+        $log = $this->latestStaleOpenLinesCallbackLogForForm($record, $form);
 
         if (! $log instanceof Bitrix24SyncLog) {
             return $empty;
@@ -1595,6 +1649,7 @@ class ViewBitrix24Connection extends ViewRecord
             ? sprintf('chat %s -> %s', $sourceChatId, $currentChatId)
             : 'Ответ из старой ОЛ';
         $titleParts = ['Ответ из старой ОЛ проигнорирован.'];
+        $repairLog = $this->latestStaleOpenLineRepairLog($record, $log);
 
         if ($sourceChatId !== '') {
             $titleParts[] = 'Источник: chat '.$sourceChatId.'.';
@@ -1614,12 +1669,66 @@ class ViewBitrix24Connection extends ViewRecord
 
         $titleParts[] = 'Защита не отправила сообщение в канал, чтобы не доставлять ответ из неактуального чата.';
 
+        if ($repairLog instanceof Bitrix24SyncLog) {
+            return [
+                'visible' => true,
+                'label' => $sourceChatId !== '' ? 'chat '.$sourceChatId.' закрыта' : 'Старая ОЛ закрыта',
+                'tone' => 'success',
+                'title' => implode(' ', array_merge($titleParts, ['Ремонт выполнен '.$this->formatTimestamp($repairLog->created_at).'.'])),
+                'can_repair' => false,
+            ];
+        }
+
         return [
             'visible' => true,
             'label' => $label,
             'tone' => 'danger',
             'title' => implode(' ', $titleParts),
+            'can_repair' => $sourceChatId !== '',
         ];
+    }
+
+    /**
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
+     */
+    protected function latestStaleOpenLinesCallbackLogForForm(
+        Bitrix24Connection $record,
+        array $form,
+    ): ?Bitrix24SyncLog {
+        $connectorCode = trim((string) ($form['connector_code'] ?? ''));
+        $lineId = trim((string) ($form['line_id'] ?? ''));
+
+        if ($connectorCode === '' || $lineId === '') {
+            return null;
+        }
+
+        return $record->syncLogs()
+            ->where('operation', self::STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION)
+            ->orderByDesc('id')
+            ->limit(120)
+            ->get()
+            ->first(function (Bitrix24SyncLog $log) use ($connectorCode, $lineId): bool {
+                $payload = is_array($log->request_payload) ? $log->request_payload : [];
+
+                return trim((string) data_get($payload, 'connector_code', '')) === $connectorCode
+                    && trim((string) data_get($payload, 'line_id', '')) === $lineId;
+            });
+    }
+
+    protected function latestStaleOpenLineRepairLog(Bitrix24Connection $record, Bitrix24SyncLog $staleLog): ?Bitrix24SyncLog
+    {
+        return $record->syncLogs()
+            ->where('operation', RepairStaleBitrix24OpenLineAction::COMPLETED_OPERATION)
+            ->where('status', Bitrix24SyncLog::STATUS_SUCCESS)
+            ->where('id', '>', $staleLog->id)
+            ->orderByDesc('id')
+            ->limit(80)
+            ->get()
+            ->first(function (Bitrix24SyncLog $log) use ($staleLog): bool {
+                $payload = is_array($log->request_payload) ? $log->request_payload : [];
+
+                return (int) data_get($payload, 'stale_log_id') === (int) $staleLog->id;
+            });
     }
 
     protected function resolveLatestOpenLinesWebhookEvent(

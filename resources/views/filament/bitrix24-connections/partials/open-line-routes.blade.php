@@ -209,6 +209,20 @@
                                         <div class="ac-route-diagnostic-line" data-tone="{{ $item['stale_callback_tone'] }}" title="{{ $item['stale_callback_title'] }}">
                                             <span>Старая ОЛ</span>
                                             <strong>{{ $item['stale_callback_label'] }}</strong>
+
+                                            @if ($canEdit && $item['stale_callback_can_repair'])
+                                                <button
+                                                    type="button"
+                                                    wire:click="repairLatestStaleOpenLine({{ $item['channel_id'] }})"
+                                                    wire:confirm="Закрыть старую Open Line в Bitrix24? Сообщения из неё уже не доставляются, действие нужно только для ремонта split-чата."
+                                                    wire:loading.attr="disabled"
+                                                    wire:target="repairLatestStaleOpenLine({{ $item['channel_id'] }})"
+                                                    class="ac-route-mini-action"
+                                                    title="Закрыть старую ОЛ в Bitrix24 и сбросить локальные stale-привязки"
+                                                >
+                                                    Закрыть
+                                                </button>
+                                            @endif
                                         </div>
                                     @endif
                                     <div class="ac-route-diagnostic-line" data-tone="{{ $item['binding_diagnostic_tone'] }}" title="{{ $item['binding_diagnostic_label'] }}">
