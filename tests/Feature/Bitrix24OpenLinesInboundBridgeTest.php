@@ -127,7 +127,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
-    public function test_openlines_operator_message_uses_recent_verified_binding_fast_path_without_current_chat_lookup(): void
+    public function test_openlines_operator_message_from_fresh_verified_old_chat_is_ignored_when_newer_current_chat_exists(): void
     {
         $connection = $this->makeActiveConnection();
         $dialog = $this->makeDialogContactNumeric($this->createTelegramLiveDialog());
@@ -144,7 +144,10 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'bitrix24_open_line_binding_verified_at' => now(),
         ])->save();
 
-        Http::fake([
+        Http::fake(array_merge($this->currentOpenLineLookupFakes($dialog, [
+            '15' => 23,
+            '19' => 26,
+        ]), [
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
                 'result' => [
@@ -154,11 +157,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
                 'result' => true,
             ], 200),
-            'https://client-endpoint.example/rest/*' => Http::response([
-                'error' => 'UNEXPECTED_FAST_PATH_LOOKUP',
-                'error_description' => 'Fast path should not query Bitrix current chat for a fresh verified binding.',
-            ], 500),
-        ]);
+        ]));
 
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
@@ -173,7 +172,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                         'id' => 'abrikosoff-dialog:'.$dialog->id,
                     ],
                     'message' => [
-                        'text' => 'Быстрый ответ оператора',
+                        'text' => 'Ответ из свежей старой ОЛ',
                     ],
                 ]],
             ],
@@ -182,21 +181,31 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $this->runWebhookEventJob($event);
 
         $event->refresh();
+        $dialog->refresh();
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
-        $this->assertDatabaseHas('messages', [
+        $this->assertSame(
+            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            $dialog->bitrix24_open_line_user_code_override,
+        );
+        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
+
+        $this->assertDatabaseMissing('messages', [
             'dialog_id' => $dialog->id,
             'provider_event_key' => 'bitrix24-openlines:616',
-            'external_message_id' => '7101',
-            'text' => 'Быстрый ответ оператора',
         ]);
 
-        Http::assertNotSent(fn (Request $request): bool => in_array($request->url(), [
-            'https://client-endpoint.example/rest/crm.contact.get.json',
-            'https://client-endpoint.example/rest/imopenlines.dialog.get.json',
-        ], true));
-        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage');
-        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_stale_chat_ignored',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => 'skipped',
+        ]);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
+        Http::assertNotSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://api.telegram.org/'));
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
     }
 
     public function test_openlines_operator_message_refreshes_verified_binding_after_current_chat_lookup(): void
