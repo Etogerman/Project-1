@@ -9,6 +9,7 @@ use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24WebhookEvent;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -68,7 +69,7 @@ class BootstrapBitrix24DevProfileAction
         $telegramConnectorCode = $this->buildConnectorCode($profileKey, 'telegram');
         $maxConnectorCode = $this->buildConnectorCode($profileKey, 'max');
 
-        $this->assertCallbackBaseUrlIsAvailable($otherProfiles, $normalizedCallbackBaseUrl);
+        $this->assertCallbackBaseUrlIsAvailable($existingProfile, $otherProfiles, $normalizedCallbackBaseUrl);
 
         if ($clientId !== null) {
             $this->assertPortalFieldIsAvailable(
@@ -121,48 +122,63 @@ class BootstrapBitrix24DevProfileAction
 
         $created = ! $existingProfile instanceof Bitrix24Profile;
 
-        $profile = Bitrix24Profile::query()->updateOrCreate(
-            [
-                'portal_domain' => $resolvedPortalDomain,
-                'profile_key' => $profileKey,
-            ],
-            [
-                'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
-                'display_name' => $resolvedDisplayName,
-                'client_id' => $resolvedClientId,
-                'application_code' => $resolvedApplicationCode,
-                'callback_base_url' => $normalizedCallbackBaseUrl,
-                'telegram_source_id' => $telegramSourceId,
-                'max_source_id' => $maxSourceId,
-                'telegram_connector_code' => $telegramConnectorCode,
-                'max_connector_code' => $maxConnectorCode,
-                'default_assigned_user_id' => (int) config('bitrix24.defaults.assigned_user_id', 1),
-                'default_deal_category_id' => (int) config('bitrix24.defaults.deal_category_id', 22),
-                'default_deal_stage_id' => (string) config('bitrix24.defaults.deal_stage_id', 'C22:NEW'),
-                'crm_field_name_source' => (string) config('bitrix24.fields.name_source'),
-                'crm_field_age_exact' => (string) config('bitrix24.fields.age_exact'),
-                'crm_field_gender' => (string) config('bitrix24.fields.gender'),
-                'crm_field_age_range' => (string) config('bitrix24.fields.age_range'),
-                'crm_field_contact_id' => (string) config('bitrix24.fields.contact_id'),
-                'crm_field_channel_id' => (string) config('bitrix24.fields.channel_id'),
-                'crm_field_channel_name' => (string) config('bitrix24.fields.channel_name'),
-                'crm_field_platform' => (string) config('bitrix24.fields.platform'),
-                'crm_field_bot_code' => (string) config('bitrix24.fields.bot_code'),
-                'crm_field_bot_name' => (string) config('bitrix24.fields.bot_name'),
-                'crm_field_alt_first_name' => (string) config('bitrix24.fields.alt_first_name'),
-                'crm_field_alt_last_name' => (string) config('bitrix24.fields.alt_last_name'),
-                'crm_field_name_conflict' => (string) config('bitrix24.fields.name_conflict'),
-                'crm_name_source_automatic_id' => (int) config('bitrix24.values.name_source.automatic_information_id'),
-                'crm_name_source_self_reported_id' => (int) config('bitrix24.values.name_source.self_reported_id'),
-                'crm_name_source_training_verified_id' => (int) config('bitrix24.values.name_source.training_verified_id'),
-                'crm_gender_male_id' => (int) config('bitrix24.values.gender.male_id'),
-                'crm_gender_female_id' => (int) config('bitrix24.values.gender.female_id'),
-                'crm_gender_unknown_id' => (int) config('bitrix24.values.gender.unknown_id'),
-            ],
-        );
+        $profile = DB::transaction(function () use (
+            $resolvedPortalDomain,
+            $profileKey,
+            $resolvedDisplayName,
+            $resolvedClientId,
+            $resolvedApplicationCode,
+            $normalizedCallbackBaseUrl,
+            $telegramSourceId,
+            $maxSourceId,
+            $telegramConnectorCode,
+            $maxConnectorCode,
+        ): Bitrix24Profile {
+            $profile = Bitrix24Profile::query()->updateOrCreate(
+                [
+                    'portal_domain' => $resolvedPortalDomain,
+                    'profile_key' => $profileKey,
+                ],
+                [
+                    'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+                    'display_name' => $resolvedDisplayName,
+                    'client_id' => $resolvedClientId,
+                    'application_code' => $resolvedApplicationCode,
+                    'callback_base_url' => $normalizedCallbackBaseUrl,
+                    'telegram_source_id' => $telegramSourceId,
+                    'max_source_id' => $maxSourceId,
+                    'telegram_connector_code' => $telegramConnectorCode,
+                    'max_connector_code' => $maxConnectorCode,
+                    'default_assigned_user_id' => (int) config('bitrix24.defaults.assigned_user_id', 1),
+                    'default_deal_category_id' => (int) config('bitrix24.defaults.deal_category_id', 22),
+                    'default_deal_stage_id' => (string) config('bitrix24.defaults.deal_stage_id', 'C22:NEW'),
+                    'crm_field_name_source' => (string) config('bitrix24.fields.name_source'),
+                    'crm_field_age_exact' => (string) config('bitrix24.fields.age_exact'),
+                    'crm_field_gender' => (string) config('bitrix24.fields.gender'),
+                    'crm_field_age_range' => (string) config('bitrix24.fields.age_range'),
+                    'crm_field_contact_id' => (string) config('bitrix24.fields.contact_id'),
+                    'crm_field_channel_id' => (string) config('bitrix24.fields.channel_id'),
+                    'crm_field_channel_name' => (string) config('bitrix24.fields.channel_name'),
+                    'crm_field_platform' => (string) config('bitrix24.fields.platform'),
+                    'crm_field_bot_code' => (string) config('bitrix24.fields.bot_code'),
+                    'crm_field_bot_name' => (string) config('bitrix24.fields.bot_name'),
+                    'crm_field_alt_first_name' => (string) config('bitrix24.fields.alt_first_name'),
+                    'crm_field_alt_last_name' => (string) config('bitrix24.fields.alt_last_name'),
+                    'crm_field_name_conflict' => (string) config('bitrix24.fields.name_conflict'),
+                    'crm_name_source_automatic_id' => (int) config('bitrix24.values.name_source.automatic_information_id'),
+                    'crm_name_source_self_reported_id' => (int) config('bitrix24.values.name_source.self_reported_id'),
+                    'crm_name_source_training_verified_id' => (int) config('bitrix24.values.name_source.training_verified_id'),
+                    'crm_gender_male_id' => (int) config('bitrix24.values.gender.male_id'),
+                    'crm_gender_female_id' => (int) config('bitrix24.values.gender.female_id'),
+                    'crm_gender_unknown_id' => (int) config('bitrix24.values.gender.unknown_id'),
+                ],
+            );
 
-        $profile->refresh();
-        $this->upsertLocalCallbackOwner($profile, $normalizedCallbackBaseUrl);
+            $profile->refresh();
+            $this->upsertLocalCallbackOwner($profile, $normalizedCallbackBaseUrl);
+
+            return $profile;
+        });
 
         return new Bitrix24DevProfileBootstrapResultData(
             profile: $profile,
@@ -274,21 +290,47 @@ class BootstrapBitrix24DevProfileAction
         );
     }
 
-    private function assertCallbackBaseUrlIsAvailable(Collection $otherProfiles, string $callbackBaseUrl): void
-    {
+    private function assertCallbackBaseUrlIsAvailable(
+        ?Bitrix24Profile $existingProfile,
+        Collection $otherProfiles,
+        string $callbackBaseUrl,
+    ): void {
         $conflict = $otherProfiles->first(
             fn (Bitrix24Profile $profile): bool => $profile->callback_base_url === $callbackBaseUrl,
         );
 
-        if (! $conflict instanceof Bitrix24Profile) {
+        if ($conflict instanceof Bitrix24Profile) {
+            throw new Bitrix24DevProfileBootstrapException(sprintf(
+                'callback_base_url `%s` is already assigned to profile `%s` on portal `%s`.',
+                $callbackBaseUrl,
+                $conflict->profile_key,
+                $conflict->portal_domain,
+            ));
+        }
+
+        $ownerConflict = Bitrix24CallbackOwner::query()
+            ->with('bitrix24Profile')
+            ->where('callback_base_url', $callbackBaseUrl)
+            ->when(
+                $existingProfile instanceof Bitrix24Profile,
+                fn ($query) => $query->where('bitrix24_profile_id', '!=', $existingProfile->getKey()),
+            )
+            ->first();
+
+        if (! $ownerConflict instanceof Bitrix24CallbackOwner) {
             return;
         }
 
+        $ownerProfile = $ownerConflict->bitrix24Profile;
+        $ownerProfileKey = $ownerProfile instanceof Bitrix24Profile
+            ? $ownerProfile->profile_key
+            : '#'.$ownerConflict->bitrix24_profile_id;
+
         throw new Bitrix24DevProfileBootstrapException(sprintf(
-            'callback_base_url `%s` is already assigned to profile `%s` on portal `%s`.',
+            'callback_base_url `%s` is already assigned to callback owner `%s` on profile `%s`.',
             $callbackBaseUrl,
-            $conflict->profile_key,
-            $conflict->portal_domain,
+            $ownerConflict->owner_key,
+            $ownerProfileKey,
         ));
     }
 

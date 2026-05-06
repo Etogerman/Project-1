@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
@@ -220,6 +221,36 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             ->assertExitCode(2);
 
         $this->assertSame(0, Bitrix24Profile::query()->count());
+    }
+
+    public function test_command_rejects_callback_base_url_used_by_another_profile_callback_owner(): void
+    {
+        $stagingProfile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'callback_base_url' => 'https://project.example.com',
+        ]);
+
+        Bitrix24CallbackOwner::query()->create([
+            'bitrix24_profile_id' => $stagingProfile->id,
+            'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+            'display_name' => 'Локалка 1',
+            'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
+            'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+        ]);
+
+        $this->artisan('bitrix24:dev-profile-bootstrap', [
+            'profile_key' => 'dev-ivan-main',
+            'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
+        ])
+            ->expectsOutputToContain('callback_base_url `https://spark-rocket.trycloudflare.com` is already assigned to callback owner `local-1` on profile `staging`.')
+            ->assertExitCode(2);
+
+        $this->assertDatabaseMissing('bitrix24_profiles', [
+            'profile_key' => 'dev-ivan-main',
+        ]);
     }
 
     public function test_command_rejects_staging_profile_key(): void
