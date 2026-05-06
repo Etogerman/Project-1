@@ -9,6 +9,7 @@
 
 - auto-deploy сам по себе не означает, что релиз принят
 - automatic smoke должен проверять то окружение, куда реально попал новый код
+- automatic smoke не заменяет staging QA для code/runtime stream-а
 - production smoke без нового production deploy не считается подтверждением релиза
 - destructive maintenance-команды не запускаются просто ради smoke-check
 
@@ -56,6 +57,15 @@ production deploy.
 
 - merge или push в `staging` должен проверяться staging smoke
 - staging становится главным автоматическим acceptance gate уже после публикации change-set в среду, а не trigger-ом выхода из локалки
+- для code/runtime stream-а после успешного automatic smoke отдельно проводится staging QA затронутого рабочего сценария
+- переход к `draft PR` в `main` запрещён, если staging QA нашёл blocker или не был проведён
+
+Staging QA фиксируется коротко:
+
+- environment и видимый rev
+- какие сценарии проверены вручную или оператором
+- результат каждого сценария
+- незакрытые риски или явная причина, почему пользователь принимает риск
 
 Если staging smoke запускается автоматически по `push` в `staging`:
 

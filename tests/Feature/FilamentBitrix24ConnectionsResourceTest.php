@@ -574,6 +574,102 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
     }
 
+    public function test_admin_can_see_last_stale_open_line_callback_on_route_card(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.stale-callback.test',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '10',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $event = $this->makeWebhookEvent($connection, [
+            'callback_type' => Bitrix24WebhookEvent::TYPE_OPENLINES,
+            'event_name' => 'OnSendMessageCustom',
+            'processing_status' => Bitrix24WebhookEvent::STATUS_PROCESSED,
+            'payload' => [
+                'data' => [
+                    'CONNECTOR' => 'abc_telegram',
+                    'LINE' => '10',
+                    'DATA' => [[
+                        'chat' => ['id' => 'abrikosoff-dialog:24'],
+                        'im' => ['chat_id' => 23, 'message_id' => 922],
+                    ]],
+                ],
+            ],
+        ]);
+
+        $this->makeSyncLog($connection, [
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'openlines_stale_chat_ignored',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
+            'http_status' => null,
+            'request_payload' => [
+                'chat_id' => 'abrikosoff-dialog:24',
+                'line_id' => '10',
+                'dialog_id' => 24,
+                'event_name' => 'OnSendMessageCustom',
+                'connector_code' => 'abc_telegram',
+                'webhook_event_id' => $event->id,
+                'bitrix_message_id' => '922',
+                'source_bitrix_chat_id' => '23',
+                'current_bitrix_chat_id' => '26',
+            ],
+        ]);
+
+        $this->makeWebhookEvent($connection, [
+            'callback_type' => Bitrix24WebhookEvent::TYPE_OPENLINES,
+            'event_name' => 'OnSendMessageCustom',
+            'processing_status' => Bitrix24WebhookEvent::STATUS_PROCESSED,
+            'payload' => [
+                'data' => [
+                    'CONNECTOR' => 'abc_telegram',
+                    'LINE' => '10',
+                    'DATA' => [[
+                        'chat' => ['id' => 'abrikosoff-dialog:24'],
+                        'im' => ['chat_id' => 26, 'message_id' => 923],
+                    ]],
+                ],
+            ],
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee('Старая ОЛ')
+            ->assertSee('chat 23 -> 26');
+
+        $cards = collect($component->instance()->getOpenLineRouteCards())->keyBy('channel_id');
+        $card = $cards->get($channel->id);
+
+        $this->assertTrue($card['stale_callback_visible']);
+        $this->assertSame('chat 23 -> 26', $card['stale_callback_label']);
+        $this->assertSame('danger', $card['stale_callback_tone']);
+        $this->assertStringContainsString('Источник: chat 23.', $card['stale_callback_title']);
+        $this->assertStringContainsString('Текущая ОЛ: chat 26.', $card['stale_callback_title']);
+    }
+
     public function test_telegram_account_route_cannot_be_saved_as_active_in_first_slice(): void
     {
         $admin = $this->makeAdmin();
