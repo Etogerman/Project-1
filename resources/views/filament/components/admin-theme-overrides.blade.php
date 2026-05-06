@@ -2568,44 +2568,388 @@
         background: var(--ac-surface-strong);
     }
 
-    .ac-bitrix-profile-settings {
-        display: grid;
-        gap: 0.75rem;
+    .ac-bitrix-overview-grid + .ac-bitrix-queue-health,
+    .ac-bitrix-queue-health + .ac-bitrix-snippet {
+        margin-block-start: 1rem;
     }
 
-    .ac-bitrix-profile-grid {
+    .ac-bitrix-queue-health {
         display: grid;
-        grid-template-columns: minmax(16rem, 0.85fr) minmax(0, 1.15fr);
-        gap: 0.9rem;
-        align-items: start;
-    }
-
-    .ac-bitrix-profile-form {
-        display: grid;
-        gap: 0.75rem;
         min-width: 0;
+        gap: 0.65rem;
         padding: 0.85rem;
         border: 1px solid var(--ac-border);
         border-radius: 12px;
         background: var(--ac-surface-strong);
     }
 
-    .ac-bitrix-profile-form-heading {
+    .ac-bitrix-queue-health[data-tone="success"] {
+        border-color: color-mix(in srgb, #22c55e 32%, var(--ac-border) 68%);
+        background: color-mix(in srgb, #22c55e 8%, var(--ac-surface-strong) 92%);
+    }
+
+    .ac-bitrix-queue-health[data-tone="warning"] {
+        border-color: color-mix(in srgb, #f59e0b 38%, var(--ac-border) 62%);
+        background: color-mix(in srgb, #f59e0b 10%, var(--ac-surface-strong) 90%);
+    }
+
+    .ac-bitrix-queue-health[data-tone="danger"] {
+        border-color: color-mix(in srgb, #ef4444 44%, var(--ac-border) 56%);
+        background: color-mix(in srgb, #ef4444 10%, var(--ac-surface-strong) 90%);
+    }
+
+    .ac-bitrix-queue-health__header {
+        display: flex;
+        min-width: 0;
+        gap: 0.75rem;
+        align-items: flex-start;
+        justify-content: space-between;
+    }
+
+    .ac-bitrix-queue-health__title {
+        display: grid;
+        min-width: 0;
+        gap: 0.12rem;
+        color: var(--ac-text);
+        font-size: 0.9rem;
+        font-weight: 850;
+        line-height: 1.2;
+    }
+
+    .ac-bitrix-queue-health__title small,
+    .ac-bitrix-queue-health__summary {
+        color: var(--ac-muted);
+        font-size: 0.74rem;
+        font-weight: 650;
+        line-height: 1.35;
+    }
+
+    .ac-bitrix-queue-health__details {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 0.45rem;
+    }
+
+    .ac-bitrix-queue-health__item {
+        display: grid;
+        min-width: 0;
+        gap: 0.14rem;
+        padding: 0.5rem;
+        border: 1px solid var(--ac-border);
+        border-radius: 0.5rem;
+        background: var(--ac-surface-muted);
+    }
+
+    .ac-bitrix-queue-health__item strong {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--ac-muted);
+        font-size: 0.64rem;
+        font-weight: 850;
+        letter-spacing: 0.04em;
+        line-height: 1.1;
+        text-overflow: ellipsis;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    .ac-bitrix-queue-health__item span {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--ac-text);
+        font-size: 0.76rem;
+        font-weight: 800;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .ac-bitrix-queue-health__item[data-tone="success"] strong {
+        color: #15803d;
+    }
+
+    .ac-bitrix-queue-health__item[data-tone="warning"] strong {
+        color: #b45309;
+    }
+
+    .ac-bitrix-queue-health__item[data-tone="danger"] strong {
+        color: #b91c1c;
+    }
+
+    .ac-bitrix-queue-health__recommendation {
+        padding: 0.5rem 0.65rem;
+        border: 1px solid color-mix(in srgb, #ef4444 36%, transparent);
+        border-radius: 0.5rem;
+        color: #991b1b;
+        background: color-mix(in srgb, #fee2e2 72%, transparent);
+        font-size: 0.76rem;
+        font-weight: 800;
+        line-height: 1.35;
+    }
+
+    .ac-bitrix-snippet {
+        max-width: 100%;
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    .ac-bitrix-snippet > summary {
+        list-style: none;
+    }
+
+    .ac-bitrix-snippet > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .ac-bitrix-snippet-summary,
+    .ac-bitrix-snippet-code-summary {
+        display: flex;
+        min-width: 0;
+        cursor: pointer;
+        user-select: none;
+        gap: 0.75rem;
+        align-items: center;
+        justify-content: space-between;
+        font-weight: 800;
+    }
+
+    .ac-bitrix-snippet-summary-main {
+        display: grid;
+        min-width: 0;
+        gap: 0.12rem;
+    }
+
+    .ac-bitrix-snippet-summary-main > small {
+        color: color-mix(in srgb, currentColor 72%, transparent);
+        font-size: 0.72rem;
+        font-weight: 650;
+        line-height: 1.2;
+    }
+
+    .ac-bitrix-snippet-toggle {
+        flex: none;
+        padding: 0.22rem 0.45rem;
+        border: 1px solid color-mix(in srgb, #f59e0b 44%, transparent);
+        border-radius: 0.38rem;
+        color: #92400e;
+        font-size: 0.68rem;
+        font-weight: 850;
+        letter-spacing: 0.04em;
+        line-height: 1;
+        text-transform: uppercase;
+    }
+
+    .ac-bitrix-snippet-body {
+        margin-block-start: 0.65rem;
+        color: color-mix(in srgb, currentColor 86%, transparent);
+        font-size: 0.75rem;
+        line-height: 1.45;
+    }
+
+    .ac-bitrix-snippet-code-details {
+        margin-block-start: 0.7rem;
+        padding-block-start: 0.7rem;
+        border-block-start: 1px solid color-mix(in srgb, #f59e0b 28%, transparent);
+    }
+
+    .ac-bitrix-snippet-code-details > summary {
+        list-style: none;
+    }
+
+    .ac-bitrix-snippet-code-details > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .ac-bitrix-snippet-code {
+        box-sizing: border-box;
+        display: block;
+        max-width: 100%;
+        min-width: 0;
+        overflow: auto;
+        white-space: pre;
+    }
+
+    .ac-bitrix-snippet-code > code {
+        display: block;
+        min-width: max-content;
+    }
+
+    .ac-bitrix-profile-settings {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .ac-bitrix-profile-hint {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.18rem 0.55rem;
+        align-items: center;
+        color: var(--ac-text-soft);
+        font-size: 0.72rem;
+        font-weight: 600;
+        line-height: 1.3;
+    }
+
+    .ac-bitrix-profile-hint__label {
+        color: var(--ac-text-muted);
+        font-weight: 850;
+    }
+
+    .ac-bitrix-profile-grid {
+        display: grid;
+        grid-template-columns: minmax(15rem, 0.62fr) minmax(0, 1.38fr);
+        gap: 0.9rem;
+        align-items: start;
+    }
+
+    .ac-bitrix-profile-form {
+        display: grid;
+        gap: 0.55rem;
+        min-width: 0;
+        padding: 0.7rem;
+        border: 1px solid var(--ac-border);
+        border-radius: 12px;
+        background: var(--ac-surface-strong);
+    }
+
+    .ac-bitrix-profile-section {
+        display: grid;
+        min-width: 0;
+        gap: 0.55rem;
+        padding-block-start: 0.55rem;
+        border-block-start: 1px solid color-mix(in srgb, var(--ac-border) 72%, transparent);
+    }
+
+    .ac-bitrix-profile-section:first-child {
+        padding-block-start: 0;
+        border-block-start: 0;
+    }
+
+    .ac-bitrix-profile-section--static {
+        display: grid;
+    }
+
+    .ac-bitrix-profile-section > summary {
+        list-style: none;
+        cursor: pointer;
+    }
+
+    .ac-bitrix-profile-section > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .ac-bitrix-profile-section-title {
+        display: flex;
+        min-width: 0;
+        gap: 0.45rem;
+        align-items: baseline;
+        justify-content: space-between;
         color: var(--ac-text);
         font-size: 0.72rem;
         font-weight: 850;
         line-height: 1.2;
     }
 
+    .ac-bitrix-profile-section-title > span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .ac-bitrix-profile-section-title > small {
+        color: var(--ac-text);
+        flex: none;
+        font-size: 0.72rem;
+        font-weight: 700;
+        line-height: 1.2;
+        opacity: 0.6;
+    }
+
+    .ac-bitrix-profile-section-body {
+        min-width: 0;
+    }
+
+    .ac-profile-inline-action,
+    .ac-profile-secondary-button {
+        border: 1px solid color-mix(in srgb, #f59e0b 42%, var(--ac-border) 58%);
+        border-radius: 0.55rem;
+        background: color-mix(in srgb, #fbbf24 18%, var(--ac-surface) 82%);
+        color: #92400e;
+        font-size: 0.68rem;
+        font-weight: 800;
+        line-height: 1;
+        padding: 0.42rem 0.62rem;
+    }
+
+    .ac-profile-inline-action:hover,
+    .ac-profile-secondary-button:hover {
+        background: color-mix(in srgb, #fbbf24 28%, var(--ac-surface) 72%);
+    }
+
+    .ac-callback-owner-list {
+        display: grid;
+        gap: 0.5rem;
+        min-width: 0;
+    }
+
+    .ac-callback-owner-card {
+        display: grid;
+        gap: 0.45rem;
+        min-width: 0;
+        padding: 0.55rem;
+        border: 1px solid color-mix(in srgb, var(--ac-border) 76%, transparent);
+        border-radius: 0.7rem;
+        background: color-mix(in srgb, var(--ac-surface) 76%, var(--ac-surface-strong) 24%);
+    }
+
+    .ac-callback-owner-card__header {
+        display: flex;
+        min-width: 0;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .ac-callback-owner-card__header > strong {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--ac-text);
+        font-size: 0.8rem;
+        font-weight: 850;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .ac-empty-state--compact {
+        padding: 0.65rem 0.75rem;
+        font-size: 0.78rem;
+    }
+
     @media (max-width: 1180px) {
         .ac-bitrix-overview-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .ac-bitrix-queue-health__details {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
         }
     }
 
     @media (max-width: 720px) {
         .ac-bitrix-overview-grid {
             grid-template-columns: minmax(0, 1fr);
+        }
+
+        .ac-bitrix-queue-health__header {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .ac-bitrix-queue-health__details {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
         }
     }
 
@@ -2789,28 +3133,82 @@
     }
 
     .ac-route-col-channel {
-        width: 10.5rem;
-    }
-
-    .ac-route-col-type {
-        width: 6rem;
+        width: 11rem;
     }
 
     .ac-route-col-config {
-        width: 24rem;
+        width: 31rem;
     }
 
     .ac-route-col-diagnostics {
-        width: 12rem;
+        width: 8.5rem;
     }
 
-    .ac-route-col-action {
-        width: 6rem;
+    .ac-route-channel-cell {
+        display: grid;
+        min-width: 0;
+        gap: 0.45rem;
+        align-content: center;
+    }
+
+    .ac-route-channel-controls {
+        display: flex;
+        min-width: 0;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.45rem;
+        align-items: center;
+    }
+
+    .ac-route-channel-actions {
+        display: flex;
+        min-width: 0;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        align-items: center;
+    }
+
+    .ac-route-status-pill {
+        max-width: 100%;
+    }
+
+    .ac-route-icon-button {
+        width: 1.9rem;
+        height: 1.9rem;
+        border-radius: 0.55rem;
+    }
+
+    .ac-route-icon-button--warning {
+        border-color: color-mix(in srgb, #f59e0b 44%, var(--ac-border) 56%);
+        background: color-mix(in srgb, #fbbf24 22%, var(--ac-surface-strong) 78%);
+        color: #92400e;
+    }
+
+    .ac-route-icon-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.48;
+    }
+
+    .ac-route-icon-button:disabled:hover {
+        transform: none;
+        border-color: color-mix(in srgb, var(--ac-border) 88%, transparent);
+        box-shadow: none;
+    }
+
+    .ac-route-action-note {
+        margin: 0;
+        max-width: 100%;
+        overflow: hidden;
+        color: var(--ac-text-soft);
+        font-size: 0.68rem;
+        font-weight: 650;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .ac-route-config-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0.45rem;
     }
 
@@ -2818,6 +3216,14 @@
         display: grid;
         min-width: 0;
         gap: 0.18rem;
+    }
+
+    .ac-route-field--wide {
+        grid-column: span 2;
+    }
+
+    .ac-route-field--action {
+        align-content: end;
     }
 
     .ac-route-field > span,
@@ -2830,6 +3236,31 @@
         text-transform: uppercase;
     }
 
+    .ac-route-field-label {
+        display: inline-flex;
+        min-width: 0;
+        gap: 0.2rem;
+        align-items: center;
+    }
+
+    .ac-route-info-icon {
+        display: inline-flex;
+        flex: none;
+        width: 0.88rem;
+        height: 0.88rem;
+        align-items: center;
+        justify-content: center;
+        color: var(--ac-text-muted);
+        cursor: help;
+        line-height: 1;
+        opacity: 0.8;
+    }
+
+    .ac-route-info-icon:hover {
+        color: var(--ac-accent);
+        opacity: 1;
+    }
+
     .ac-route-diagnostics {
         display: grid;
         min-width: 0;
@@ -2837,43 +3268,71 @@
     }
 
     .ac-route-diagnostic-line {
-        display: grid;
+        display: flex;
         min-width: 0;
-        gap: 0.08rem;
+        flex-wrap: wrap;
+        gap: 0.08rem 0.32rem;
+        align-items: baseline;
     }
 
     .ac-route-diagnostic-line > strong {
-        min-width: 0;
-        overflow: hidden;
+        min-width: 2rem;
         color: var(--ac-text-muted);
         font-size: 0.7rem;
         font-weight: 700;
         line-height: 1.2;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
+    }
+
+    .ac-route-diagnostic-line[data-tone="success"] > strong {
+        color: #15803d;
+    }
+
+    .ac-route-diagnostic-line[data-tone="warning"] > strong {
+        color: #b45309;
+    }
+
+    .ac-route-diagnostic-line[data-tone="danger"] > strong {
+        color: #b91c1c;
+    }
+
+    .ac-route-mini-action {
+        border: 1px solid color-mix(in srgb, #ef4444 44%, var(--ac-border) 56%);
+        border-radius: 0.45rem;
+        background: color-mix(in srgb, #fee2e2 72%, var(--ac-surface) 28%);
+        color: #991b1b;
+        flex: none;
+        font-size: 0.62rem;
+        font-weight: 800;
+        line-height: 1;
+        padding: 0.25rem 0.4rem;
     }
 
     @media (max-width: 1180px) {
         .ac-bitrix-table--routes {
-            min-width: 940px;
+            min-width: 880px;
         }
 
         .ac-route-col-channel {
-            width: 10rem;
+            width: 11rem;
         }
 
         .ac-route-col-config {
-            width: 24rem;
+            width: 31rem;
         }
 
         .ac-route-col-diagnostics {
-            width: 12rem;
+            width: 8.5rem;
         }
     }
 
     @media (max-width: 760px) {
         .ac-route-config-grid {
             grid-template-columns: minmax(0, 1fr);
+        }
+
+        .ac-route-field--wide {
+            grid-column: auto;
         }
     }
 

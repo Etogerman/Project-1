@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24DevProfileBootstrapResultData;
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
@@ -161,12 +162,28 @@ class BootstrapBitrix24DevProfileAction
         );
 
         $profile->refresh();
+        $this->upsertLocalCallbackOwner($profile, $normalizedCallbackBaseUrl);
 
         return new Bitrix24DevProfileBootstrapResultData(
             profile: $profile,
             created: $created,
             checks: $this->buildChecks($profile, $callbackBaseUrlRotated),
             instructionSteps: $this->buildInstructionSteps($profile),
+        );
+    }
+
+    private function upsertLocalCallbackOwner(Bitrix24Profile $profile, string $callbackBaseUrl): void
+    {
+        Bitrix24CallbackOwner::query()->updateOrCreate(
+            [
+                'bitrix24_profile_id' => $profile->id,
+                'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+            ],
+            [
+                'display_name' => 'Локалка 1',
+                'callback_base_url' => $callbackBaseUrl,
+                'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+            ],
         );
     }
 

@@ -3,12 +3,14 @@
 namespace App\Filament\Resources\Bitrix24Connections\Pages;
 
 use App\Filament\Resources\Bitrix24Connections\Bitrix24ConnectionResource;
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Channel;
+use App\Models\Dialog;
 use App\Models\User;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
@@ -16,7 +18,10 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class ViewBitrix24Connection extends ViewRecord
 {
@@ -29,9 +34,14 @@ class ViewBitrix24Connection extends ViewRecord
     public string $syncLogStatusFilter = '';
 
     /**
-     * @var array<int, array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}>
+     * @var array<int, array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}>
      */
     public array $openLineRouteForms = [];
+
+    /**
+     * @var array<int, array{owner_key:string,display_name:string,callback_base_url:string,status:string}>
+     */
+    public array $callbackOwnerForms = [];
 
     /**
      * @var array{application_name:string}
@@ -76,6 +86,8 @@ class ViewBitrix24Connection extends ViewRecord
 
     public ?string $profileSettingsErrorMessage = null;
 
+    public ?string $callbackOwnersErrorMessage = null;
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
@@ -83,6 +95,7 @@ class ViewBitrix24Connection extends ViewRecord
         $this->reloadOpenLineRouteForms();
         $this->reloadApplicationNameForm();
         $this->reloadProfileSettingsForm();
+        $this->reloadCallbackOwnerForms();
     }
 
     public function getTitle(): string|Htmlable
@@ -97,16 +110,7 @@ class ViewBitrix24Connection extends ViewRecord
 
     public function getSubheading(): ?string
     {
-        $record = $this->getRecord();
-
-        if (! $record instanceof Bitrix24Connection) {
-            return null;
-        }
-
-        return sprintf(
-            '%s: подключение, маршруты открытых линий, callback-и и sync-логи.',
-            $record->portal_domain,
-        );
+        return null;
     }
 
     /**
@@ -171,6 +175,148 @@ class ViewBitrix24Connection extends ViewRecord
             ->all();
     }
 
+    /**
+     * @return array{label:string,tone:string,summary:string,recommendation:string,details:list<array{label:string,value:string,tone:string}>}
+     */
+    public function getQueueHealthCard(): array
+    {
+        $record = $this->getRecord();
+        $now = now();
+        $staleThresholdSeconds = 30;
+        $trackedQueues = ['default', 'bitrix-live'];
+
+        $pendingOpenLinesQuery = Bitrix24WebhookEvent::query()
+            ->where('callback_type', Bitrix24WebhookEvent::TYPE_OPENLINES)
+            ->where('processing_status', Bitrix24WebhookEvent::STATUS_PENDING);
+
+        if ($record instanceof Bitrix24Connection) {
+            $pendingOpenLinesQuery->where('connection_id', $record->id);
+        }
+
+        $pendingOpenLinesCount = (clone $pendingOpenLinesQuery)->count();
+        $oldestPendingOpenLinesAt = (clone $pendingOpenLinesQuery)->oldest('created_at')->value('created_at');
+        $oldestPendingOpenLinesAge = $this->ageInSeconds($oldestPendingOpenLinesAt, $now);
+
+        $lastProcessedOpenLinesQuery = Bitrix24WebhookEvent::query()
+            ->where('callback_type', Bitrix24WebhookEvent::TYPE_OPENLINES)
+            ->where('processing_status', Bitrix24WebhookEvent::STATUS_PROCESSED)
+            ->whereNotNull('processed_at');
+
+        if ($record instanceof Bitrix24Connection) {
+            $lastProcessedOpenLinesQuery->where('connection_id', $record->id);
+        }
+
+        $lastProcessedOpenLinesAt = $lastProcessedOpenLinesQuery->latest('processed_at')->value('processed_at');
+
+        $readyJobsCount = 0;
+        $totalTrackedJobsCount = 0;
+        $staleReservedJobsCount = 0;
+        $failedJobsCount = 0;
+        $oldestReadyJobCreatedAt = null;
+        $oldestReadyJobAge = null;
+
+        if (Schema::hasTable('jobs')) {
+            $readyJobsQuery = DB::table('jobs')
+                ->whereIn('queue', $trackedQueues)
+                ->whereNull('reserved_at')
+                ->where('available_at', '<=', $now->timestamp);
+
+            $readyJobsCount = (clone $readyJobsQuery)->count();
+            $oldestReadyJobCreatedAt = (clone $readyJobsQuery)->min('created_at');
+            $oldestReadyJobAge = $this->ageInSeconds($oldestReadyJobCreatedAt, $now);
+
+            $staleReservedJobsCount = DB::table('jobs')
+                ->whereIn('queue', $trackedQueues)
+                ->whereNotNull('reserved_at')
+                ->where('reserved_at', '<=', $now->copy()->subMinutes(5)->timestamp)
+                ->count();
+
+            $totalTrackedJobsCount = DB::table('jobs')
+                ->whereIn('queue', $trackedQueues)
+                ->count();
+        }
+
+        if (Schema::hasTable('failed_jobs')) {
+            $failedJobsCount = DB::table('failed_jobs')
+                ->whereIn('queue', $trackedQueues)
+                ->count();
+        }
+
+        $hasStaleOpenLines = $pendingOpenLinesCount > 0
+            && $oldestPendingOpenLinesAge !== null
+            && $oldestPendingOpenLinesAge >= $staleThresholdSeconds;
+        $hasStaleReadyJobs = $readyJobsCount > 0
+            && $oldestReadyJobAge !== null
+            && $oldestReadyJobAge >= $staleThresholdSeconds;
+        $hasStaleQueue = $hasStaleOpenLines || $hasStaleReadyJobs || $staleReservedJobsCount > 0;
+
+        $tone = match (true) {
+            $hasStaleQueue => 'danger',
+            $pendingOpenLinesCount > 0 || $readyJobsCount > 0 || $failedJobsCount > 0 => 'warning',
+            default => 'success',
+        };
+
+        $label = match ($tone) {
+            'danger' => 'Очередь не обрабатывается',
+            'warning' => 'Есть задачи в очереди',
+            default => 'Очередь без задержек',
+        };
+
+        $summary = match ($tone) {
+            'danger' => 'Callback-и или jobs ждут дольше '.$staleThresholdSeconds.' секунд. Обычно это значит, что локальный queue worker остановлен.',
+            'warning' => 'Есть свежие задачи или старые failed jobs. Worker должен забрать свежие задачи в ближайшие секунды.',
+            default => 'Ожидающих callback-и/jobs нет. Прямого heartbeat worker-а пока нет, статус подтверждается отсутствием зависших задач.',
+        };
+
+        $recommendation = $tone === 'danger'
+            ? 'Запустите локальные worker-ы: default и bitrix-live.'
+            : '';
+
+        return [
+            'label' => $label,
+            'tone' => $tone,
+            'summary' => $summary,
+            'recommendation' => $recommendation,
+            'details' => [
+                [
+                    'label' => 'Драйвер очереди',
+                    'value' => (string) config('queue.default', 'database'),
+                    'tone' => 'gray',
+                ],
+                [
+                    'label' => 'Callback-и Open Lines',
+                    'value' => $this->formatQueueCountWithAge($pendingOpenLinesCount, $oldestPendingOpenLinesAge),
+                    'tone' => $hasStaleOpenLines ? 'danger' : ($pendingOpenLinesCount > 0 ? 'warning' : 'success'),
+                ],
+                [
+                    'label' => 'Задачи к обработке',
+                    'value' => $this->formatQueueCountWithAge($readyJobsCount, $oldestReadyJobAge),
+                    'tone' => $hasStaleReadyJobs ? 'danger' : ($readyJobsCount > 0 ? 'warning' : 'success'),
+                ],
+                [
+                    'label' => 'Всего задач',
+                    'value' => (string) $totalTrackedJobsCount,
+                    'tone' => $totalTrackedJobsCount > 0 ? 'warning' : 'success',
+                ],
+                [
+                    'label' => 'Зависшие в работе',
+                    'value' => (string) $staleReservedJobsCount,
+                    'tone' => $staleReservedJobsCount > 0 ? 'danger' : 'success',
+                ],
+                [
+                    'label' => 'Ошибки задач',
+                    'value' => (string) $failedJobsCount,
+                    'tone' => $failedJobsCount > 0 ? 'warning' : 'success',
+                ],
+                [
+                    'label' => 'Последний Open Lines callback',
+                    'value' => $this->formatQueueTimestamp($lastProcessedOpenLinesAt),
+                    'tone' => $lastProcessedOpenLinesAt === null ? 'gray' : 'success',
+                ],
+            ],
+        ];
+    }
+
     public function canEditOpenLineRoutes(): bool
     {
         $user = auth()->user();
@@ -207,6 +353,48 @@ class ViewBitrix24Connection extends ViewRecord
             && $this->getBitrix24Profile() instanceof Bitrix24Profile;
     }
 
+    public function canEditCallbackOwners(): bool
+    {
+        return $this->canEditProfileSettings();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function getCallbackOwnerStatusOptions(): array
+    {
+        return [
+            Bitrix24CallbackOwner::STATUS_ACTIVE => 'Активен',
+            Bitrix24CallbackOwner::STATUS_INACTIVE => 'Отключен',
+        ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function getCallbackOwnerCards(): array
+    {
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            return [];
+        }
+
+        return Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->orderByRaw("case when owner_key = ? then 0 else 1 end", [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
+            ->orderBy('owner_key')
+            ->get()
+            ->map(fn (Bitrix24CallbackOwner $owner): array => [
+                'id' => $owner->id,
+                'label' => $owner->label(),
+                'status_label' => $this->getCallbackOwnerStatusOptions()[$owner->status] ?? $owner->status,
+                'status_tone' => $owner->isActive() ? 'success' : 'gray',
+            ])
+            ->values()
+            ->all();
+    }
+
     /**
      * @return list<array<string, mixed>>
      */
@@ -219,7 +407,7 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $routes = Bitrix24OpenLineRoute::query()
-            ->with(['bitrix24Profile', 'channel'])
+            ->with(['bitrix24Profile', 'callbackOwner', 'channel'])
             ->where('bitrix24_profile_id', $profile->id)
             ->get()
             ->keyBy('channel_id');
@@ -234,6 +422,8 @@ class ViewBitrix24Connection extends ViewRecord
                 );
                 $status = (string) ($route?->status ?? '');
                 $autoSetup = $this->resolveOpenLineAutoSetupState($profile, $channel, $route, $form);
+                $bindingDiagnostics = $this->resolveRouteBindingDiagnostics($route, $form);
+                $callbackDiagnostics = $this->resolveLatestOpenLinesCallbackDiagnostics($form);
 
                 return [
                     'channel_id' => $channel->id,
@@ -255,8 +445,15 @@ class ViewBitrix24Connection extends ViewRecord
                     'line_id' => filled($route?->line_id) ? (string) $route?->line_id : '—',
                     'line_name' => filled($route?->line_name) ? (string) $route?->line_name : '—',
                     'source_id' => filled($route?->source_id) ? (string) $route?->source_id : '—',
+                    'callback_owner_options' => $this->callbackOwnerOptions($profile),
+                    'callback_owner_label' => $this->resolveCallbackOwnerLabel($profile, $form),
                     'line_owner_label' => $this->resolveLineOwnerLabel($profile, $channel, $route, $form),
                     'last_error_message' => filled($route?->last_error_message) ? (string) $route?->last_error_message : 'Ошибок не было',
+                    'callback_diagnostic_label' => $callbackDiagnostics['label'],
+                    'callback_diagnostic_tone' => $callbackDiagnostics['tone'],
+                    'binding_diagnostic_label' => $bindingDiagnostics['label'],
+                    'binding_diagnostic_tone' => $bindingDiagnostics['tone'],
+                    'binding_diagnostic_can_reset' => $bindingDiagnostics['can_reset'],
                     'auto_setup_visible' => $autoSetup['visible'],
                     'auto_setup_enabled' => $autoSetup['enabled'],
                     'auto_setup_label' => $autoSetup['label'],
@@ -276,7 +473,7 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $routes = Bitrix24OpenLineRoute::query()
-            ->with('channel')
+            ->with(['callbackOwner', 'channel'])
             ->where('bitrix24_profile_id', $profile->id)
             ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
             ->whereNotNull('connector_code')
@@ -305,8 +502,8 @@ class ViewBitrix24Connection extends ViewRecord
 
             $connectors[$connectorCode]['lines'][$lineId] = [
                 'line_name' => $this->bitrixBoxLineName($route),
-                'owner_profile_key' => $profile->profile_key,
-                'owner_callback_base_url' => $profile->callback_base_url,
+                'owner_profile_key' => (string) ($route->callbackOwner?->owner_key ?? $profile->profile_key),
+                'owner_callback_base_url' => (string) ($route->callbackOwner?->callback_base_url ?? $profile->callback_base_url),
             ];
         }
 
@@ -363,6 +560,7 @@ class ViewBitrix24Connection extends ViewRecord
                 'connector_code' => $this->nullableFormValue($form['connector_code']),
                 'line_id' => $this->nullableFormValue($form['line_id']),
                 'line_name' => $this->nullableFormValue($form['line_name']),
+                'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
                 'source_id' => $this->nullableFormValue($form['source_id']),
                 'status' => $form['status'],
                 'updated_by_user_id' => $user instanceof User ? $user->id : null,
@@ -381,6 +579,199 @@ class ViewBitrix24Connection extends ViewRecord
         Notification::make()
             ->success()
             ->title('Маршрут открытой линии сохранён')
+            ->send();
+    }
+
+    public function createLocalCallbackOwner(): void
+    {
+        abort_unless($this->canEditCallbackOwners(), 403);
+
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            $this->failCallbackOwnerSave('Профиль Bitrix24 не найден.');
+
+            return;
+        }
+
+        $callbackBaseUrl = Bitrix24Profile::normalizeCallbackBaseUrl($profile->callback_base_url)
+            ?? (string) $profile->callback_base_url;
+
+        if ($callbackBaseUrl === '') {
+            $this->failCallbackOwnerSave('В профиле не заполнен callback URL.');
+
+            return;
+        }
+
+        try {
+            Bitrix24CallbackOwner::query()->updateOrCreate(
+                [
+                    'bitrix24_profile_id' => $profile->id,
+                    'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+                ],
+                [
+                    'display_name' => 'Локалка 1',
+                    'callback_base_url' => $callbackBaseUrl,
+                    'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+                ],
+            );
+        } catch (QueryException) {
+            $this->failCallbackOwnerSave('Такой callback URL уже занят другим владельцем.');
+
+            return;
+        }
+
+        $this->callbackOwnersErrorMessage = null;
+        $this->reloadCallbackOwnerForms();
+        $this->reloadOpenLineRouteForms();
+
+        Notification::make()
+            ->success()
+            ->title('Callback-владелец local-1 создан')
+            ->send();
+    }
+
+    public function saveCallbackOwner(int|string $ownerId): void
+    {
+        abort_unless($this->canEditCallbackOwners(), 403);
+
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            $this->failCallbackOwnerSave('Профиль Bitrix24 не найден.');
+
+            return;
+        }
+
+        $owner = Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->whereKey($ownerId)
+            ->first();
+
+        if (! $owner instanceof Bitrix24CallbackOwner) {
+            $this->failCallbackOwnerSave('Callback-владелец не найден.');
+
+            return;
+        }
+
+        $form = $this->callbackOwnerForms[$owner->id] ?? [];
+        $ownerKey = trim((string) ($form['owner_key'] ?? ''));
+        $displayName = trim((string) ($form['display_name'] ?? ''));
+        $callbackBaseUrl = Bitrix24Profile::normalizeCallbackBaseUrl(trim((string) ($form['callback_base_url'] ?? '')));
+        $status = trim((string) ($form['status'] ?? Bitrix24CallbackOwner::STATUS_INACTIVE));
+
+        if ($ownerKey === '') {
+            $this->failCallbackOwnerSave('Ключ callback-владельца не заполнен.');
+
+            return;
+        }
+
+        if (mb_strlen($ownerKey) > 64) {
+            $this->failCallbackOwnerSave('Ключ callback-владельца должен быть не длиннее 64 символов.');
+
+            return;
+        }
+
+        if ($callbackBaseUrl === null) {
+            $this->failCallbackOwnerSave('Callback URL должен быть корректным URL.');
+
+            return;
+        }
+
+        if (! array_key_exists($status, $this->getCallbackOwnerStatusOptions())) {
+            $this->failCallbackOwnerSave('Выбран неизвестный статус callback-владельца.');
+
+            return;
+        }
+
+        $keyConflict = Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('owner_key', $ownerKey)
+            ->whereKeyNot($owner->id)
+            ->exists();
+
+        if ($keyConflict) {
+            $this->failCallbackOwnerSave('Такой ключ callback-владельца уже есть в этом профиле.');
+
+            return;
+        }
+
+        try {
+            $owner->fill([
+                'owner_key' => $ownerKey,
+                'display_name' => $this->nullableFormValue($displayName),
+                'callback_base_url' => $callbackBaseUrl,
+                'status' => $status,
+            ])->save();
+        } catch (QueryException) {
+            $this->failCallbackOwnerSave('Такой callback URL уже занят другим владельцем.');
+
+            return;
+        }
+
+        $this->callbackOwnersErrorMessage = null;
+        $this->reloadCallbackOwnerForms();
+        $this->reloadOpenLineRouteForms();
+
+        Notification::make()
+            ->success()
+            ->title('Callback-владелец сохранён')
+            ->send();
+    }
+
+    public function resetStaleOpenLineBindings(int|string $channelId): void
+    {
+        abort_unless($this->canEditOpenLineRoutes(), 403);
+
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            $this->failOpenLineRouteSave('Профиль Bitrix24 не найден.');
+
+            return;
+        }
+
+        $route = Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('channel_id', $channelId)
+            ->first();
+
+        if (! $route instanceof Bitrix24OpenLineRoute) {
+            $this->failOpenLineRouteSave('Маршрут открытой линии не найден.');
+
+            return;
+        }
+
+        $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$route->channel_id] ?? []);
+        $staleDialogIds = $route->dialogs()
+            ->select(['id', 'bitrix24_open_line_user_code_override', 'bitrix24_open_line_binding_verified_at'])
+            ->whereNotNull('bitrix24_open_line_binding_verified_at')
+            ->get()
+            ->filter(fn (Dialog $dialog): bool => $this->isDialogBindingStale($dialog, $form))
+            ->pluck('id')
+            ->all();
+
+        if ($staleDialogIds === []) {
+            Notification::make()
+                ->success()
+                ->title('Устаревших привязок не найдено')
+                ->send();
+
+            return;
+        }
+
+        Dialog::query()
+            ->whereKey($staleDialogIds)
+            ->update([
+                'bitrix24_open_line_user_code_override' => null,
+                'bitrix24_open_line_resolved_chat_id_override' => null,
+                'bitrix24_open_line_binding_verified_at' => null,
+            ]);
+
+        Notification::make()
+            ->success()
+            ->title('Устаревшие привязки сброшены')
+            ->body(sprintf('Диалогов: %d. Следующий входящий callback заново подтвердит актуальную ОЛ.', count($staleDialogIds)))
             ->send();
     }
 
@@ -583,6 +974,7 @@ class ViewBitrix24Connection extends ViewRecord
         $this->profileSettingsErrorMessage = null;
         $this->getRecord()->refresh();
         $this->reloadProfileSettingsForm();
+        $this->reloadCallbackOwnerForms();
         $this->reloadOpenLineRouteForms();
 
         Notification::make()
@@ -609,6 +1001,32 @@ class ViewBitrix24Connection extends ViewRecord
         $this->openLineRouteForms = $this->getOpenLineRouteChannels()
             ->mapWithKeys(fn (Channel $channel): array => [
                 $channel->id => $this->defaultOpenLineRouteForm($profile, $channel, $routes->get($channel->id)),
+            ])
+            ->all();
+    }
+
+    public function reloadCallbackOwnerForms(): void
+    {
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            $this->callbackOwnerForms = [];
+
+            return;
+        }
+
+        $this->callbackOwnerForms = Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->orderByRaw("case when owner_key = ? then 0 else 1 end", [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
+            ->orderBy('owner_key')
+            ->get()
+            ->mapWithKeys(fn (Bitrix24CallbackOwner $owner): array => [
+                $owner->id => [
+                    'owner_key' => (string) $owner->owner_key,
+                    'display_name' => (string) ($owner->display_name ?? ''),
+                    'callback_base_url' => (string) $owner->callback_base_url,
+                    'status' => (string) $owner->status,
+                ],
             ])
             ->all();
     }
@@ -665,6 +1083,75 @@ class ViewBitrix24Connection extends ViewRecord
         return $value->format('d.m.Y H:i:s');
     }
 
+    protected function formatQueueCountWithAge(int $count, ?int $ageSeconds): string
+    {
+        if ($count <= 0) {
+            return '0';
+        }
+
+        if ($ageSeconds === null) {
+            return (string) $count;
+        }
+
+        return $count.' · '.$this->formatQueueDuration($ageSeconds);
+    }
+
+    protected function formatQueueTimestamp(mixed $value): string
+    {
+        $date = $this->normalizeQueueTimestamp($value);
+
+        if (! $date instanceof Carbon) {
+            return 'Не было';
+        }
+
+        return $date->timezone(config('app.timezone', 'Europe/Moscow'))->format('d.m.Y H:i:s');
+    }
+
+    protected function ageInSeconds(mixed $value, Carbon $now): ?int
+    {
+        $date = $this->normalizeQueueTimestamp($value);
+
+        if (! $date instanceof Carbon) {
+            return null;
+        }
+
+        return max(0, $now->getTimestamp() - $date->getTimestamp());
+    }
+
+    protected function normalizeQueueTimestamp(mixed $value): ?Carbon
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value);
+        }
+
+        if (is_numeric($value)) {
+            return Carbon::createFromTimestamp((int) $value);
+        }
+
+        if (is_string($value) && trim($value) !== '') {
+            return Carbon::parse($value);
+        }
+
+        return null;
+    }
+
+    protected function formatQueueDuration(int $seconds): string
+    {
+        if ($seconds < 60) {
+            return $seconds.' сек';
+        }
+
+        $minutes = intdiv($seconds, 60);
+
+        if ($minutes < 60) {
+            return $minutes.' мин '.($seconds % 60).' сек';
+        }
+
+        $hours = intdiv($minutes, 60);
+
+        return $hours.' ч '.($minutes % 60).' мин';
+    }
+
     protected function getBitrix24Profile(): ?Bitrix24Profile
     {
         $record = $this->getRecord();
@@ -692,7 +1179,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @return array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}
+     * @return array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}
      */
     protected function defaultOpenLineRouteForm(Bitrix24Profile $profile, Channel $channel, ?Bitrix24OpenLineRoute $route): array
     {
@@ -701,6 +1188,9 @@ class ViewBitrix24Connection extends ViewRecord
             'connector_code' => (string) ($route?->connector_code ?? $this->defaultConnectorCodeForChannel($profile, $channel)),
             'line_id' => (string) ($route?->line_id ?? ''),
             'line_name' => (string) ($route?->line_name ?? $this->defaultLineNameForChannel($channel)),
+            'callback_owner_id' => $route?->callback_owner_id !== null
+                ? (string) $route->callback_owner_id
+                : $this->defaultCallbackOwnerId($profile),
             'source_id' => (string) ($route?->source_id ?? $this->defaultSourceIdForChannel($profile, $channel)),
         ];
     }
@@ -731,6 +1221,78 @@ class ViewBitrix24Connection extends ViewRecord
         };
     }
 
+    protected function defaultCallbackOwnerId(Bitrix24Profile $profile): string
+    {
+        $owner = Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('status', Bitrix24CallbackOwner::STATUS_ACTIVE)
+            ->orderByRaw("case when owner_key = ? then 0 else 1 end", [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
+            ->orderBy('owner_key')
+            ->first();
+
+        return $owner instanceof Bitrix24CallbackOwner ? (string) $owner->id : '';
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function callbackOwnerOptions(Bitrix24Profile $profile): array
+    {
+        return Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->orderByRaw("case when owner_key = ? then 0 else 1 end", [Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY])
+            ->orderBy('owner_key')
+            ->get()
+            ->mapWithKeys(function (Bitrix24CallbackOwner $owner): array {
+                $label = $owner->label();
+
+                if (! $owner->isActive()) {
+                    $label .= ' · отключен';
+                }
+
+                return [$owner->id => $label];
+            })
+            ->all();
+    }
+
+    protected function resolveActiveCallbackOwner(Bitrix24Profile $profile, string $ownerId): ?Bitrix24CallbackOwner
+    {
+        $id = $this->nullableIntegerFormValue($ownerId);
+
+        if ($id === null) {
+            return null;
+        }
+
+        return Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('status', Bitrix24CallbackOwner::STATUS_ACTIVE)
+            ->whereKey($id)
+            ->first();
+    }
+
+    /**
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
+     */
+    protected function resolveCallbackOwnerLabel(Bitrix24Profile $profile, array $form): string
+    {
+        $id = $this->nullableIntegerFormValue($form['callback_owner_id'] ?? '');
+
+        if ($id === null) {
+            return 'Не выбран';
+        }
+
+        $owner = Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->whereKey($id)
+            ->first();
+
+        if (! $owner instanceof Bitrix24CallbackOwner) {
+            return 'Не найден';
+        }
+
+        return $owner->isActive() ? $owner->label() : $owner->label().' · отключен';
+    }
+
     protected function defaultLineNameForChannel(Channel $channel): string
     {
         $name = trim((string) $channel->name);
@@ -740,7 +1302,7 @@ class ViewBitrix24Connection extends ViewRecord
 
     /**
      * @param  array<string, mixed>  $form
-     * @return array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}
+     * @return array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}
      */
     protected function normalizeOpenLineRouteForm(array $form): array
     {
@@ -749,12 +1311,13 @@ class ViewBitrix24Connection extends ViewRecord
             'connector_code' => trim((string) ($form['connector_code'] ?? '')),
             'line_id' => trim((string) ($form['line_id'] ?? '')),
             'line_name' => trim((string) ($form['line_name'] ?? '')),
+            'callback_owner_id' => trim((string) ($form['callback_owner_id'] ?? '')),
             'source_id' => trim((string) ($form['source_id'] ?? '')),
         ];
     }
 
     /**
-     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}  $form
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
      */
     protected function validateOpenLineRouteForm(
         Bitrix24Profile $profile,
@@ -785,6 +1348,12 @@ class ViewBitrix24Connection extends ViewRecord
             return false;
         }
 
+        if ($isUsableStatus && ! ($this->resolveActiveCallbackOwner($profile, $form['callback_owner_id']) instanceof Bitrix24CallbackOwner)) {
+            $this->failOpenLineRouteSave('Для рабочего маршрута нужен активный callback-владелец.');
+
+            return false;
+        }
+
         if ($isUsableStatus && $this->hasOpenLineOwnerConflict($profile, $route, $form['line_id'])) {
             $this->failOpenLineRouteSave('Открытая линия уже занята другим рабочим маршрутом.');
 
@@ -809,7 +1378,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}  $form
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
      */
     protected function persistOpenLineRouteForm(
         Bitrix24Profile $profile,
@@ -832,6 +1401,7 @@ class ViewBitrix24Connection extends ViewRecord
             'connector_code' => $this->nullableFormValue($form['connector_code']),
             'line_id' => $this->nullableFormValue($form['line_id']),
             'line_name' => $this->nullableFormValue($form['line_name']),
+            'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
             'source_id' => $this->nullableFormValue($form['source_id']),
             'status' => $form['status'],
             'updated_by_user_id' => $user instanceof User ? $user->id : null,
@@ -843,7 +1413,7 @@ class ViewBitrix24Connection extends ViewRecord
     }
 
     /**
-     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,source_id:string}  $form
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
      */
     protected function resolveLineOwnerLabel(
         Bitrix24Profile $profile,
@@ -867,6 +1437,151 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         return 'Свободна в текущей базе';
+    }
+
+    /**
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
+     * @return array{label:string,tone:string,can_reset:bool}
+     */
+    protected function resolveRouteBindingDiagnostics(?Bitrix24OpenLineRoute $route, array $form): array
+    {
+        if (! $route instanceof Bitrix24OpenLineRoute) {
+            return [
+                'label' => 'Маршрут не сохранён',
+                'tone' => 'gray',
+                'can_reset' => false,
+            ];
+        }
+
+        $dialogs = $route->dialogs()
+            ->select(['id', 'bitrix24_open_line_user_code_override', 'bitrix24_open_line_binding_verified_at'])
+            ->whereNotNull('bitrix24_open_line_binding_verified_at')
+            ->get();
+
+        if ($dialogs->isEmpty()) {
+            return [
+                'label' => 'Нет проверенных',
+                'tone' => 'gray',
+                'can_reset' => false,
+            ];
+        }
+
+        $staleCount = $dialogs
+            ->filter(fn (Dialog $dialog): bool => $this->isDialogBindingStale($dialog, $form))
+            ->count();
+
+        if ($staleCount > 0) {
+            return [
+                'label' => 'Устаревших: '.$staleCount,
+                'tone' => 'danger',
+                'can_reset' => true,
+            ];
+        }
+
+        return [
+            'label' => 'Актуальна',
+            'tone' => 'success',
+            'can_reset' => false,
+        ];
+    }
+
+    /**
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
+     * @return array{label:string,tone:string}
+     */
+    protected function resolveLatestOpenLinesCallbackDiagnostics(array $form): array
+    {
+        $connectorCode = trim((string) ($form['connector_code'] ?? ''));
+        $lineId = trim((string) ($form['line_id'] ?? ''));
+
+        if ($connectorCode === '' || $lineId === '') {
+            return [
+                'label' => 'Нет LINE_ID',
+                'tone' => 'gray',
+            ];
+        }
+
+        $record = $this->getRecord();
+
+        if (! $record instanceof Bitrix24Connection) {
+            return [
+                'label' => 'Нет подключения',
+                'tone' => 'gray',
+            ];
+        }
+
+        $event = $record->webhookEvents()
+            ->where('callback_type', Bitrix24WebhookEvent::TYPE_OPENLINES)
+            ->orderByDesc('id')
+            ->limit(80)
+            ->get()
+            ->first(function (Bitrix24WebhookEvent $event) use ($connectorCode, $lineId): bool {
+                $payload = is_array($event->payload) ? $event->payload : [];
+
+                return (string) data_get($payload, 'data.CONNECTOR') === $connectorCode
+                    && (string) data_get($payload, 'data.LINE') === $lineId;
+            });
+
+        if (! $event instanceof Bitrix24WebhookEvent) {
+            return [
+                'label' => 'Нет для LINE '.$lineId,
+                'tone' => 'warning',
+            ];
+        }
+
+        return [
+            'label' => 'Был '.$this->formatTimestamp($event->created_at),
+            'tone' => 'success',
+        ];
+    }
+
+    /**
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
+     */
+    protected function isDialogBindingStale(Dialog $dialog, array $form): bool
+    {
+        $connectorCode = trim((string) ($form['connector_code'] ?? ''));
+        $lineId = trim((string) ($form['line_id'] ?? ''));
+
+        if ($connectorCode === '' || $lineId === '') {
+            return false;
+        }
+
+        $parsed = $this->parseOpenLineUserCode($dialog->bitrix24_open_line_user_code_override);
+
+        if ($parsed === null) {
+            return false;
+        }
+
+        return $parsed['connector_code'] !== $connectorCode || $parsed['line_id'] !== $lineId;
+    }
+
+    /**
+     * @return array{connector_code:string,line_id:string}|null
+     */
+    protected function parseOpenLineUserCode(mixed $value): ?array
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $parts = array_values(array_filter(
+            explode('|', trim((string) $value)),
+            static fn (string $part): bool => $part !== '',
+        ));
+
+        if (($parts[0] ?? null) === 'imol') {
+            array_shift($parts);
+        }
+
+        if (count($parts) < 4) {
+            return null;
+        }
+
+        return [
+            'connector_code' => (string) $parts[0],
+            'line_id' => (string) $parts[1],
+        ];
     }
 
     protected function nullableFormValue(string $value): ?string
@@ -945,6 +1660,16 @@ class ViewBitrix24Connection extends ViewRecord
             ->send();
     }
 
+    protected function failCallbackOwnerSave(string $message): void
+    {
+        $this->callbackOwnersErrorMessage = $message;
+
+        Notification::make()
+            ->danger()
+            ->title($message)
+            ->send();
+    }
+
     protected function bitrixBoxLineName(Bitrix24OpenLineRoute $route): string
     {
         $routeLineName = trim((string) ($route->line_name ?? ''));
@@ -959,7 +1684,7 @@ class ViewBitrix24Connection extends ViewRecord
             return 'Channel #'.$route->channel_id;
         }
 
-        return sprintf('#%d %s', $route->channel_id, $channelName);
+        return $channelName;
     }
 
     /**

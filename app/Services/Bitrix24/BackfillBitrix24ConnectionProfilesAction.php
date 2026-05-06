@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Profile;
 use Illuminate\Support\Facades\Schema;
 
@@ -62,6 +63,8 @@ class BackfillBitrix24ConnectionProfilesAction
         if (! $profile->exists || $profile->isDirty()) {
             $profile->save();
         }
+
+        $this->ensureDefaultCallbackOwner($profile);
 
         Bitrix24Connection::query()
             ->whereNull('profile_id')
@@ -150,6 +153,28 @@ class BackfillBitrix24ConnectionProfilesAction
         }
 
         return mb_strtolower(trim($trimmed, "/ \t\n\r\0\x0B"));
+    }
+
+    private function ensureDefaultCallbackOwner(Bitrix24Profile $profile): void
+    {
+        $callbackBaseUrl = Bitrix24Profile::normalizeCallbackBaseUrl($profile->callback_base_url)
+            ?? (string) $profile->callback_base_url;
+
+        if ($callbackBaseUrl === '') {
+            return;
+        }
+
+        Bitrix24CallbackOwner::query()->updateOrCreate(
+            [
+                'bitrix24_profile_id' => $profile->id,
+                'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+            ],
+            [
+                'display_name' => 'Локалка 1',
+                'callback_base_url' => $callbackBaseUrl,
+                'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+            ],
+        );
     }
 
     /**

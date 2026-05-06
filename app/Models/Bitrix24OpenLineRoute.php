@@ -41,6 +41,7 @@ class Bitrix24OpenLineRoute extends Model
         'line_id',
         'line_name',
         'line_owner_key',
+        'callback_owner_id',
         'source_id',
         'status',
         'last_error_message',
@@ -118,6 +119,11 @@ class Bitrix24OpenLineRoute extends Model
     public function dialogs(): HasMany
     {
         return $this->hasMany(Dialog::class, 'bitrix24_open_line_route_id');
+    }
+
+    public function callbackOwner(): BelongsTo
+    {
+        return $this->belongsTo(Bitrix24CallbackOwner::class, 'callback_owner_id');
     }
 
     public function createdByUser(): BelongsTo

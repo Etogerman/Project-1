@@ -6,9 +6,9 @@ use App\Filament\Resources\Channels\ChannelResource;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
+use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
-use App\Models\ChannelRuntimeState;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
@@ -16,6 +16,7 @@ use App\Models\ScenarioVersion;
 use App\Models\User;
 use App\Services\Scenarios\CreateScenarioAction;
 use App\Services\Scenarios\PublishScenarioVersionAction;
+use App\Services\Scenarios\WarmupScenario;
 use Filament\Facades\Filament;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -39,6 +40,12 @@ class FilamentChannelsResourceTest extends TestCase
 
         Filament::setCurrentPanel(Filament::getPanel('admin'));
         Filament::bootCurrentPanel();
+    }
+
+    public function test_channels_resource_lives_in_settings_navigation_group(): void
+    {
+        $this->assertSame('Настройки', ChannelResource::getNavigationGroup());
+        $this->assertSame(14, ChannelResource::getNavigationSort());
     }
 
     public function test_active_admin_can_open_channels_page_and_see_resource(): void
@@ -845,7 +852,7 @@ class FilamentChannelsResourceTest extends TestCase
     public function test_manage_scenarios_deactivates_existing_incompatible_active_binding(): void
     {
         config()->set('scenarios.legacy_telegram_only', [
-            'handler' => \App\Services\Scenarios\WarmupScenario::class,
+            'handler' => WarmupScenario::class,
             'platforms' => [
                 Channel::PLATFORM_TELEGRAM,
             ],

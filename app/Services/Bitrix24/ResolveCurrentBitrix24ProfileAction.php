@@ -4,6 +4,7 @@ namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24WebhookEvent;
+use App\Models\Bitrix24CallbackOwner;
 
 class ResolveCurrentBitrix24ProfileAction
 {
@@ -16,9 +17,10 @@ class ResolveCurrentBitrix24ProfileAction
     {
         $callbackBaseUrl = $this->resolveCurrentCallbackBaseUrl->handle();
         $profiles = Bitrix24Profile::query()
+            ->with('callbackOwners')
             ->get();
         $matches = $profiles->filter(
-            fn (Bitrix24Profile $profile): bool => $this->normalizeCallbackBaseUrl->handle($profile->callback_base_url) === $callbackBaseUrl,
+            fn (Bitrix24Profile $profile): bool => $this->profileMatchesCallbackBaseUrl($profile, $callbackBaseUrl),
         );
 
         if ($matches->isEmpty()) {
@@ -47,5 +49,16 @@ class ResolveCurrentBitrix24ProfileAction
         }
 
         return $profile;
+    }
+
+    private function profileMatchesCallbackBaseUrl(Bitrix24Profile $profile, string $callbackBaseUrl): bool
+    {
+        if ($this->normalizeCallbackBaseUrl->handle($profile->callback_base_url) === $callbackBaseUrl) {
+            return true;
+        }
+
+        return $profile->callbackOwners
+            ->contains(fn (Bitrix24CallbackOwner $owner): bool => $owner->status === Bitrix24CallbackOwner::STATUS_ACTIVE
+                && $this->normalizeCallbackBaseUrl->handle($owner->callback_base_url) === $callbackBaseUrl);
     }
 }

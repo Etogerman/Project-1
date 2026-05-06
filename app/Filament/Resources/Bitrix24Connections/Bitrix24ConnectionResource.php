@@ -97,6 +97,8 @@ class Bitrix24ConnectionResource extends Resource
                             ])
                             ->columnSpanFull(),
                     ])
+                    ->collapsible()
+                    ->collapsed()
                     ->columnSpanFull(),
                 Section::make('Последние sync-логи')
                     ->schema([
@@ -108,6 +110,8 @@ class Bitrix24ConnectionResource extends Resource
                             ])
                             ->columnSpanFull(),
                     ])
+                    ->collapsible()
+                    ->collapsed()
                     ->columnSpanFull(),
             ]);
     }

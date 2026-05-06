@@ -6,12 +6,15 @@ use App\Data\Bitrix24\Bitrix24RestResponseData;
 use App\Filament\Resources\Bitrix24Connections\Bitrix24ConnectionResource;
 use App\Filament\Resources\Bitrix24Connections\Pages\ListBitrix24Connections;
 use App\Filament\Resources\Bitrix24Connections\Pages\ViewBitrix24Connection;
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Channel;
+use App\Models\ContactIdentity;
+use App\Models\Dialog;
 use App\Models\User;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use Filament\Facades\Filament;
@@ -133,7 +136,9 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('Настройки Bitrix24')
             ->assertSee('crm.example.test')
-            ->assertSee('маршруты открытых линий')
+            ->assertSee('Очередь и worker')
+            ->assertSee('Очередь без задержек')
+            ->assertSee('Маршруты открытых линий')
             ->assertSee('Token refresh failed.')
             ->assertSee('Последние callback-и')
             ->assertSee('ONCRMCONTACTUPDATE')
@@ -143,6 +148,51 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->assertSee('Bitrix API returned 500.')
             ->assertDontSee('secret-access-token')
             ->assertDontSee('secret-refresh-token');
+    }
+
+    public function test_bitrix24_connection_view_warns_when_openlines_queue_is_stalled(): void
+    {
+        $admin = $this->makeAdmin();
+        $connection = $this->makeConnection([
+            'portal_domain' => 'crm.queue.test',
+        ]);
+        $queuedAt = now()->subMinute();
+
+        $event = $this->makeWebhookEvent($connection, [
+            'callback_type' => Bitrix24WebhookEvent::TYPE_OPENLINES,
+            'event_name' => 'OnSendMessageCustom',
+            'processing_status' => Bitrix24WebhookEvent::STATUS_PENDING,
+        ]);
+
+        DB::table($event->getTable())
+            ->where('id', $event->id)
+            ->update([
+                'created_at' => $queuedAt->copy()->utc()->toIso8601String(),
+                'updated_at' => $queuedAt->copy()->utc()->toIso8601String(),
+            ]);
+
+        DB::table('jobs')->insert([
+            'queue' => 'default',
+            'payload' => json_encode(['displayName' => 'App\\Jobs\\ProcessBitrix24WebhookEventJob'], JSON_THROW_ON_ERROR),
+            'attempts' => 0,
+            'reserved_at' => null,
+            'available_at' => $queuedAt->timestamp,
+            'created_at' => $queuedAt->timestamp,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee('Очередь и worker')
+            ->assertSee('Очередь не обрабатывается')
+            ->assertSee('Callback-и Open Lines')
+            ->assertSee('Задачи к обработке');
+
+        $health = $component->instance()->getQueueHealthCard();
+
+        $this->assertSame('danger', $health['tone']);
+        $this->assertSame('Очередь не обрабатывается', $health['label']);
+        $this->assertStringStartsWith('1 · 1 мин', $health['details'][1]['value']);
+        $this->assertStringStartsWith('1 · 1 мин', $health['details'][2]['value']);
     }
 
     public function test_bitrix24_connection_view_builds_bitrix_box_config_snippet(): void
@@ -167,6 +217,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'platform' => Channel::PLATFORM_MAX,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
+        $callbackOwner = $profile->callbackOwners()->firstOrFail();
 
         Bitrix24OpenLineRoute::query()->create([
             'bitrix24_profile_id' => $profile->id,
@@ -177,6 +228,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'connector_code' => 'abc_telegram',
             'line_id' => '9',
             'line_name' => '9 Локальный бот телеграм - Герман-1',
+            'callback_owner_id' => $callbackOwner->id,
             'source_id' => 'ABC_TELEGRAM',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
@@ -189,13 +241,15 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'connector_code' => 'abc_max',
             'line_id' => '8',
             'line_name' => '8 Локальный бот MAX - Герман-1',
+            'callback_owner_id' => $callbackOwner->id,
             'source_id' => 'ABC_MAX',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
         $component = Livewire::actingAs($admin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
-            ->assertSee('Bitrix-box config entries для обратных сообщений')
+            ->assertSee('Настройка Bitrix-box для админа')
+            ->assertSee('Показать PHP snippet')
             ->assertSee('local/php_interface/include/abrikosoff_openlines/config.php')
             ->assertSee('Не удаляйте старые `abrikosoff_*`');
 
@@ -220,6 +274,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertStringContainsString("'color' => '#7B4DFF'", $snippet);
         $this->assertStringContainsString("'label' => 'MX'", $snippet);
         $this->assertStringContainsString('8 =>', $snippet);
+        $this->assertStringContainsString("'owner_profile_key' => 'local-1'", $snippet);
         $this->assertStringContainsString("'owner_callback_base_url' => 'https://local-ngrok.example.test'", $snippet);
     }
 
@@ -374,6 +429,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'connector_code' => 'abc_telegram',
             'line_id' => 'line-editable',
             'line_name' => '9 Локальный бот телеграм - Герман-1',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'line_owner_key' => 'crm.edit.test#line-editable',
             'source_id' => 'source-editable',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
@@ -424,6 +480,62 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'channel_id' => $secondChannel->id,
             'line_owner_key' => 'crm.conflict.test#shared-line',
         ]);
+    }
+
+    public function test_admin_can_see_and_reset_stale_open_line_dialog_bindings(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.stale.test',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '10',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+            'bitrix24_open_line_route_id' => $route->id,
+            'bitrix24_open_line_user_code_override' => 'abc_telegram|9|abrikosoff-dialog:1|26',
+            'bitrix24_open_line_resolved_chat_id_override' => '33',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()]);
+
+        $cards = collect($component->instance()->getOpenLineRouteCards())->keyBy('channel_id');
+        $this->assertSame('Устаревших: 1', $cards->get($channel->id)['binding_diagnostic_label']);
+
+        $component
+            ->call('resetStaleOpenLineBindings', $channel->id)
+            ->assertHasNoErrors();
+
+        $dialog->refresh();
+        $this->assertNull($dialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
     }
 
     public function test_telegram_account_route_cannot_be_saved_as_active_in_first_slice(): void
@@ -1394,13 +1506,23 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
      */
     private function makeProfile(array $overrides = []): Bitrix24Profile
     {
-        return Bitrix24Profile::query()->create(array_merge([
+        $profile = Bitrix24Profile::query()->create(array_merge([
             'portal_domain' => 'crm.default.test',
             'profile_key' => 'staging',
             'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
             'display_name' => 'Staging',
             'callback_base_url' => 'https://project.example.test/'.str()->uuid(),
         ], $overrides));
+
+        Bitrix24CallbackOwner::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+            'display_name' => 'Локалка 1',
+            'callback_base_url' => $profile->callback_base_url,
+            'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+        ]);
+
+        return $profile;
     }
 
     /**
