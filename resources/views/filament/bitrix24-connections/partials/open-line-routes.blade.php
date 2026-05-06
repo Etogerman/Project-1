@@ -205,6 +205,12 @@
                                         <span>Входящие</span>
                                         <strong>{{ $item['callback_diagnostic_label'] }}</strong>
                                     </div>
+                                    @if ($item['stale_callback_visible'])
+                                        <div class="ac-route-diagnostic-line" data-tone="{{ $item['stale_callback_tone'] }}" title="{{ $item['stale_callback_title'] }}">
+                                            <span>Старая ОЛ</span>
+                                            <strong>{{ $item['stale_callback_label'] }}</strong>
+                                        </div>
+                                    @endif
                                     <div class="ac-route-diagnostic-line" data-tone="{{ $item['binding_diagnostic_tone'] }}" title="{{ $item['binding_diagnostic_label'] }}">
                                         <span>Привязка</span>
                                         <strong>{{ $item['binding_diagnostic_label'] }}</strong>
