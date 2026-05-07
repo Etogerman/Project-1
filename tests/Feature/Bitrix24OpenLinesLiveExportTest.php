@@ -1761,7 +1761,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
             'resolved_bitrix_chat_verified' => true,
-            'bitrix_remote_message_id' => '946',
+            'bitrix_remote_message_id' => null,
         ]);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'openlines_live_export_fast_path_exported',
@@ -2112,7 +2112,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
             'resolved_bitrix_chat_verified' => true,
-            'bitrix_remote_message_id' => '947',
+            'bitrix_remote_message_id' => null,
             'failure_code' => null,
             'failure_uncertain' => false,
         ]);

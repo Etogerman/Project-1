@@ -366,7 +366,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
     }
 
-    public function test_openlines_inbound_export_without_returned_message_id_skips_later_exact_echo_callback(): void
+    public function test_openlines_inbound_export_without_returned_message_id_does_not_trust_last_message_id_for_echo_skip(): void
     {
         config()->set('bitrix24.features.fast_inbound_export_enabled', true);
 
@@ -403,6 +403,21 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         ]);
 
         Http::fake(function (Request $request) use ($sourceMessage, $userCode) {
+            if (str_starts_with($request->url(), 'https://api.telegram.org/')) {
+                return Http::response([
+                    'ok' => true,
+                    'result' => [
+                        'message_id' => 7108,
+                    ],
+                ]);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return Http::response([
+                    'result' => true,
+                ], 200);
+            }
+
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
@@ -454,7 +469,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
             'resolved_bitrix_chat_verified' => true,
-            'bitrix_remote_message_id' => '946',
+            'bitrix_remote_message_id' => null,
         ]);
 
         Http::fake([
@@ -493,19 +508,38 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event->refresh();
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
-        $this->assertDatabaseMissing('messages', [
+        $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
             'provider_event_key' => 'bitrix24-openlines:946',
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Клиентский текст без returned Bitrix message id',
         ]);
-        $this->assertDatabaseHas('bitrix24_sync_logs', [
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
             'operation' => 'openlines_inbound_echo_skipped',
             'entity_type' => 'openlines_webhook_event',
             'entity_id' => (string) $event->id,
-            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
         ]);
 
-        Http::assertNotSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://api.telegram.org/'));
-        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
+        Http::assertSent(function (Request $request): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage'
+                && $request['chat_id'] === 'telegram-chat-100'
+                && $request['text'] === 'Клиентский текст без returned Bitrix message id';
+        });
+        Http::assertSent(function (Request $request) use ($dialog): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json') {
+                return false;
+            }
+
+            parse_str($request->body(), $payload);
+
+            return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
+                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
+                && ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === '946'
+                && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === '7108';
+        });
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
     }
 
