@@ -57,6 +57,8 @@ class ProcessBitrix24OpenLinesWebhookAction
 
     private const ECHO_CANDIDATE_FRESH_WINDOW_SECONDS = 10;
 
+    private const SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS = 1800;
+
     private const ECHO_RESULT_NONE = 'none';
 
     private const ECHO_RESULT_SKIPPED = 'skipped';
@@ -70,6 +72,7 @@ class ProcessBitrix24OpenLinesWebhookAction
         private readonly ResolveBitrix24OpenLinesRouteAction $resolveBitrix24OpenLinesRouteAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentBitrix24ConnectionAction,
         private readonly ResolveCurrentBitrix24OpenLineChatAction $resolveCurrentBitrix24OpenLineChatAction,
+        private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveBitrix24OpenLinesDialogBindingAction,
         private readonly IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
         private readonly DeliverBitrix24OpenLinesMessageToMessengerAction $deliverBitrix24OpenLinesMessageToMessengerAction,
         private readonly SendBitrix24OpenLinesBlockedDialogFeedbackAction $sendBitrix24OpenLinesBlockedDialogFeedbackAction,
@@ -320,6 +323,12 @@ class ProcessBitrix24OpenLinesWebhookAction
         Bitrix24OpenLinesOperatorMessageData $messageData,
         Bitrix24OpenLinesRouteData $route,
     ): bool {
+        if ($this->messageMatchesRecentSuccessfulSendBinding($dialog, $messageData, $route)) {
+            $this->touchOpenLineBindingVerifiedAt($dialog);
+
+            return false;
+        }
+
         $connection = $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle();
         $currentChat = $this->resolveCurrentBitrix24OpenLineChatAction->handle(
             $dialog,
@@ -358,6 +367,45 @@ class ProcessBitrix24OpenLinesWebhookAction
         );
 
         return true;
+    }
+
+    private function messageMatchesRecentSuccessfulSendBinding(
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        Bitrix24OpenLinesRouteData $route,
+    ): bool {
+        if ($messageData->sourceBitrixChatId === null) {
+            return false;
+        }
+
+        if (
+            $dialog->bitrix24_live_last_exported_at === null
+            || $dialog->bitrix24_live_last_exported_at->lt(
+                now()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS)
+            )
+        ) {
+            return false;
+        }
+
+        if (
+            $dialog->bitrix24_open_line_binding_verified_at === null
+            || $dialog->bitrix24_open_line_binding_verified_at->lt(
+                $dialog->bitrix24_live_last_exported_at->copy()->subSeconds(5)
+            )
+        ) {
+            return false;
+        }
+
+        $binding = $this->resolveBitrix24OpenLinesDialogBindingAction->handle($dialog, $route);
+
+        return $binding?->resolvedBitrixChatId === $messageData->sourceBitrixChatId;
+    }
+
+    private function touchOpenLineBindingVerifiedAt(Dialog $dialog): void
+    {
+        $dialog->forceFill([
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ])->save();
     }
 
     private function syncCurrentOpenLineBinding(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void

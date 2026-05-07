@@ -774,49 +774,6 @@ class ExportMessageToBitrix24OpenLinesAction
             );
         }
 
-        if ($resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
-            $messageText = sprintf(
-                'Bitrix24 Open Lines fast-path returned unexpected chat id [%s], expected [%s].',
-                $resolvedBitrixChatId,
-                $expectedResolvedBitrixChatId,
-            );
-
-            $this->logBitrix24ApiCallAction->handle(
-                direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
-                operation: 'openlines_live_export_fast_path_unexpected_chat',
-                status: Bitrix24SyncLog::STATUS_FAILED,
-                requestPayload: [
-                    'message_id' => $message->id,
-                    'dialog_id' => $dialog->id,
-                    'contact_id' => $rootContactId,
-                    'bitrix24_contact_id' => $bitrix24ContactId,
-                    'payload_chat_id' => $payloadChatId,
-                    'expected_current_chat_id' => $expectedResolvedBitrixChatId,
-                    'connector_code' => $route->connectorCode,
-                    'line_id' => $route->lineId,
-                    'retry_after_sync' => $retryAfterSync,
-                ],
-                responsePayload: [
-                    'result' => $response->result,
-                    'rest_method' => $response->restMethod,
-                    'fast_path' => true,
-                    'returned_session_chat_id' => $resolvedBitrixChatId,
-                    'returned_connector_user_id' => $connectorUserId,
-                ],
-                connection: $connection,
-                httpStatus: $response->httpStatus,
-                errorMessage: $messageText,
-                entityType: 'message',
-                entityId: (string) $message->id,
-            );
-
-            throw new Bitrix24LiveExportTransportException(
-                $messageText,
-                failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
-                failureUncertain: true,
-            );
-        }
-
         $bindingSynced = $this->syncInboundFastPathBindingFromResponse(
             $dialog,
             $route,
@@ -842,6 +799,7 @@ class ExportMessageToBitrix24OpenLinesAction
                 'result' => $response->result,
                 'rest_method' => $response->restMethod,
                 'fast_path' => true,
+                'expected_current_chat_id' => $expectedResolvedBitrixChatId,
                 'returned_session_chat_id' => $resolvedBitrixChatId,
                 'returned_connector_user_id' => $connectorUserId,
                 'binding_synced_from_response' => $bindingSynced,
@@ -1064,8 +1022,21 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         $resolvedBitrixChatId = $this->extractLegacySessionChatId($response->result);
+        $connectorUserId = $this->extractLegacyConnectorUserId($response->result);
+        $bindingSyncedFromResponse = $this->shouldSyncInboundClientBindingFromResponse($message, $operation)
+            && $this->syncInboundClientBindingFromResponse(
+                $dialog,
+                $route,
+                $payloadChatId,
+                $resolvedBitrixChatId,
+                $connectorUserId,
+            );
 
-        if ($expectedResolvedBitrixChatId !== null && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
+        if (
+            $expectedResolvedBitrixChatId !== null
+            && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId
+            && ! $bindingSyncedFromResponse
+        ) {
             if (
                 ! $allowPostSendBindingResync
                 || ! $this->syncVerifiedBindingToCurrentChatAfterMismatch($dialog, $route, $connection, $resolvedBitrixChatId)
@@ -1099,13 +1070,44 @@ class ExportMessageToBitrix24OpenLinesAction
                 'result' => $response->result,
                 'rest_method' => $response->restMethod,
                 'verified_binding_resynced_after_chat_mismatch' => $expectedResolvedBitrixChatId !== null
-                    && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId,
+                    && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId
+                    && ! $bindingSyncedFromResponse,
+                'returned_session_chat_id' => $resolvedBitrixChatId,
+                'returned_connector_user_id' => $connectorUserId,
+                'inbound_client_binding_synced_from_response' => $bindingSyncedFromResponse,
             ] + $this->resolveLegacyExportAuditResponsePayload($operation, $resolvedBitrixChatId),
             requestPayload: $this->resolveLegacyExportAuditRequestPayload(
                 $operation,
                 $payloadChatId,
                 $expectedResolvedBitrixChatId,
             ),
+        );
+    }
+
+    private function shouldSyncInboundClientBindingFromResponse(Message $message, string $operation): bool
+    {
+        return $operation === 'openlines_live_exported'
+            && $message->direction === Message::DIRECTION_INBOUND
+            && $message->sent_by_type === Message::SENT_BY_TYPE_CONTACT
+            && in_array($message->message_kind, [
+                Message::KIND_INBOUND_USER,
+                Message::KIND_INBOUND_CONTACT_SHARE,
+            ], true);
+    }
+
+    private function syncInboundClientBindingFromResponse(
+        Dialog $dialog,
+        Bitrix24OpenLinesRouteData $route,
+        ?string $payloadChatId,
+        ?string $resolvedBitrixChatId,
+        ?string $connectorUserId,
+    ): bool {
+        return $this->syncInboundFastPathBindingFromResponse(
+            $dialog,
+            $route,
+            $payloadChatId,
+            $resolvedBitrixChatId,
+            $connectorUserId,
         );
     }
 

@@ -2004,7 +2004,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
     }
 
-    public function test_inbound_client_fast_path_unexpected_chat_is_uncertain_without_binding_resync(): void
+    public function test_inbound_client_fast_path_records_returned_successful_chat_when_it_differs_from_expected(): void
     {
         config()->set('bitrix24.features.fast_inbound_export_enabled', true);
 
@@ -2072,32 +2072,28 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             return Http::response(['error' => 'Unexpected fallback request'], 500);
         });
 
-        try {
-            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
-        } catch (Bitrix24LiveExportTransportException $exception) {
-            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
-            $this->assertTrue($exception->failureUncertain);
-            $this->assertStringContainsString('unexpected chat id [23], expected [26]', $exception->getMessage());
-        }
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
 
         $dialog->refresh();
 
         $this->assertSame(1, $sendCalls);
-        $this->assertSame($storedUserCode, $dialog->bitrix24_open_line_user_code_override);
-        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertSame(
+            sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id),
+            $dialog->bitrix24_open_line_user_code_override,
+        );
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $message->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
-            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
-            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
-            'failure_uncertain' => true,
+            'resolved_bitrix_chat_id' => '23',
+            'failure_code' => null,
+            'failure_uncertain' => false,
         ]);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
-            'operation' => 'openlines_live_export_fast_path_unexpected_chat',
-            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'operation' => 'openlines_live_export_fast_path_exported',
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
             'entity_type' => 'message',
             'entity_id' => (string) $message->id,
         ]);
@@ -2458,7 +2454,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         });
     }
 
-    public function test_live_export_rejects_returned_history_chat_when_higher_current_chat_exists(): void
+    public function test_live_export_records_returned_successful_chat_when_higher_current_chat_exists(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(
@@ -2554,28 +2550,21 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             return Http::response(['error' => 'Unexpected request'], 500);
         });
 
-        try {
-            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
-        } catch (Bitrix24LiveExportTransportException $exception) {
-            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
-            $this->assertTrue($exception->failureUncertain);
-            $this->assertStringContainsString('unexpected chat id [23], expected [26]', $exception->getMessage());
-        }
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
 
         $dialog->refresh();
 
-        $this->assertSame($newerUserCode, $dialog->bitrix24_open_line_user_code_override);
-        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertSame($currentUserCode, $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $message->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
-            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
-            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
-            'failure_uncertain' => true,
+            'resolved_bitrix_chat_id' => '23',
+            'failure_code' => null,
+            'failure_uncertain' => false,
         ]);
 
         Http::assertSent(function (Request $request) use ($dialog): bool {
@@ -2698,7 +2687,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
     }
 
-    public function test_live_export_rejects_returned_history_chat_when_stored_verified_binding_points_to_higher_chat(): void
+    public function test_live_export_records_returned_chat_when_stored_verified_binding_points_to_higher_chat(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(
@@ -2787,27 +2776,20 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             return Http::response(['error' => 'Unexpected request'], 500);
         });
 
-        try {
-            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
-        } catch (Bitrix24LiveExportTransportException $exception) {
-            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
-            $this->assertTrue($exception->failureUncertain);
-            $this->assertStringContainsString('unexpected chat id [23], expected [26]', $exception->getMessage());
-        }
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
 
         $dialog->refresh();
 
-        $this->assertSame($storedUserCode, $dialog->bitrix24_open_line_user_code_override);
-        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertSame($returnedUserCode, $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $message->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
-            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
-            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
-            'failure_uncertain' => true,
+            'resolved_bitrix_chat_id' => '23',
+            'failure_code' => null,
+            'failure_uncertain' => false,
         ]);
     }
 

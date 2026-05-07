@@ -127,11 +127,12 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         });
     }
 
-    public function test_openlines_operator_message_from_fresh_verified_old_chat_is_ignored_when_newer_current_chat_exists(): void
+    public function test_openlines_operator_message_from_recent_successful_send_chat_is_delivered_when_newer_current_chat_exists(): void
     {
         $connection = $this->makeActiveConnection();
         $dialog = $this->makeDialogContactNumeric($this->createTelegramLiveDialog());
         $route = Bitrix24OpenLineRoute::query()->findOrFail($dialog->bitrix24_open_line_route_id);
+        $sentAt = now();
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => implode('|', [
@@ -141,7 +142,8 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                 '15',
             ]),
             'bitrix24_open_line_resolved_chat_id_override' => '23',
-            'bitrix24_open_line_binding_verified_at' => now(),
+            'bitrix24_open_line_binding_verified_at' => $sentAt,
+            'bitrix24_live_last_exported_at' => $sentAt,
         ])->save();
 
         Http::fake(array_merge($this->currentOpenLineLookupFakes($dialog, [
@@ -172,7 +174,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                         'id' => 'abrikosoff-dialog:'.$dialog->id,
                     ],
                     'message' => [
-                        'text' => 'Ответ из свежей старой ОЛ',
+                        'text' => 'Ответ из chat успешной отправки',
                     ],
                 ]],
             ],
@@ -185,27 +187,28 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|15',
             $dialog->bitrix24_open_line_user_code_override,
         );
-        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
-        $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertTrue($dialog->bitrix24_open_line_binding_verified_at->greaterThanOrEqualTo($sentAt->copy()->startOfSecond()));
 
-        $this->assertDatabaseMissing('messages', [
+        $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
             'provider_event_key' => 'bitrix24-openlines:616',
+            'external_message_id' => '7101',
+            'text' => 'Ответ из chat успешной отправки',
         ]);
 
-        $this->assertDatabaseHas('bitrix24_sync_logs', [
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
             'operation' => 'openlines_stale_chat_ignored',
             'entity_type' => 'openlines_webhook_event',
             'entity_id' => (string) $event->id,
-            'status' => 'skipped',
         ]);
 
-        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
-        Http::assertNotSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://api.telegram.org/'));
-        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
     }
 
     public function test_openlines_operator_message_refreshes_verified_binding_after_current_chat_lookup(): void
