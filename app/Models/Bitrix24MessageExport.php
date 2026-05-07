@@ -63,6 +63,7 @@ class Bitrix24MessageExport extends Model
         'live_claim_expires_at',
         'transport_method',
         'resolved_bitrix_chat_id',
+        'resolved_bitrix_chat_verified',
         'resolved_crm_entity_type',
         'resolved_crm_entity_id',
         'bitrix_remote_message_id',
@@ -84,6 +85,7 @@ class Bitrix24MessageExport extends Model
         'live_claimed_at' => 'datetime',
         'live_claim_expires_at' => 'datetime',
         'failure_uncertain' => 'boolean',
+        'resolved_bitrix_chat_verified' => 'boolean',
     ];
 
     public function message(): BelongsTo
