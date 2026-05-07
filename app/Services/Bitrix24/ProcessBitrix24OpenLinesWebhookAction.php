@@ -434,33 +434,24 @@ class ProcessBitrix24OpenLinesWebhookAction
             return null;
         }
 
-        $normalizedText = $this->normalizeEchoText($messageData->text);
-
-        if ($normalizedText === '') {
+        if ($messageData->bitrixMessageId === '') {
             return null;
         }
 
-        $exports = $this->successfulInboundClientExportQuery($dialog)
-            ->with('message')
+        return $this->successfulInboundClientExportQuery($dialog)
             ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
+            ->where('bitrix24_message_exports.resolved_bitrix_chat_verified', true)
+            ->where('bitrix24_message_exports.bitrix_remote_message_id', $messageData->bitrixMessageId)
             ->where('bitrix24_message_exports.exported_at', '>=', now()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
             ->latest('bitrix24_message_exports.exported_at')
             ->latest('bitrix24_message_exports.id')
-            ->limit(5)
-            ->get();
-
-        return $exports
-            ->first(function (Bitrix24MessageExport $export) use ($normalizedText): bool {
-                $message = $export->message;
-
-                return $message instanceof Message
-                    && $this->normalizeEchoText($message->text) === $normalizedText;
-            });
+            ->first();
     }
 
     private function latestSuccessfulInboundClientExport(Dialog $dialog, Carbon $freshAfter): ?Bitrix24MessageExport
     {
         return $this->successfulInboundClientExportQuery($dialog)
+            ->where('bitrix24_message_exports.resolved_bitrix_chat_verified', true)
             ->where('bitrix24_message_exports.exported_at', '>=', $freshAfter)
             ->latest('bitrix24_message_exports.exported_at')
             ->latest('bitrix24_message_exports.id')

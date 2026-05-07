@@ -1729,6 +1729,9 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                             'RESULT' => [
                                 [
                                     'user' => '15',
+                                    'message' => [
+                                        'MESSAGE_ID' => 'fast-inbound-619',
+                                    ],
                                     'session' => [
                                         'CHAT_ID' => '23',
                                     ],
@@ -1756,6 +1759,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
+            'resolved_bitrix_chat_verified' => true,
+            'bitrix_remote_message_id' => 'fast-inbound-619',
         ]);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'openlines_live_export_fast_path_exported',
@@ -2101,6 +2106,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
+            'resolved_bitrix_chat_verified' => true,
             'failure_code' => null,
             'failure_uncertain' => false,
         ]);
@@ -2576,6 +2582,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
+            'resolved_bitrix_chat_verified' => true,
             'failure_code' => null,
             'failure_uncertain' => false,
         ]);
@@ -2801,6 +2808,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
+            'resolved_bitrix_chat_verified' => true,
             'failure_code' => null,
             'failure_uncertain' => false,
         ]);
