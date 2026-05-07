@@ -930,12 +930,7 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         try {
-            $currentChat = $this->resolveCurrentOpenLineChatAction->handleMatchingChatId(
-                $dialog,
-                $route,
-                $connection,
-                $resolvedBitrixChatId,
-            );
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24LiveExportTransportException(
                 'Bitrix24 Open Lines returned chat validation failed after inbound client export.',
@@ -945,7 +940,10 @@ class ExportMessageToBitrix24OpenLinesAction
             );
         }
 
-        if (! $currentChat instanceof Bitrix24CurrentOpenLineChatData) {
+        if (
+            ! $currentChat instanceof Bitrix24CurrentOpenLineChatData
+            || $currentChat->chatId !== $resolvedBitrixChatId
+        ) {
             return null;
         }
 

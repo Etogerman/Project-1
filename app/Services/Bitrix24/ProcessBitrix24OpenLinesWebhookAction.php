@@ -61,8 +61,6 @@ class ProcessBitrix24OpenLinesWebhookAction
 
     private const INBOUND_ECHO_FRESH_WINDOW_SECONDS = 120;
 
-    private const SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS = 1800;
-
     private const ECHO_RESULT_NONE = 'none';
 
     private const ECHO_RESULT_SKIPPED = 'skipped';
@@ -336,10 +334,6 @@ class ProcessBitrix24OpenLinesWebhookAction
         Bitrix24OpenLinesOperatorMessageData $messageData,
         Bitrix24OpenLinesRouteData $route,
     ): bool {
-        if ($this->messageMatchesRecentSuccessfulSendExport($dialog, $messageData)) {
-            return false;
-        }
-
         $connection = $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle();
         $currentChat = $this->resolveCurrentBitrix24OpenLineChatAction->handle(
             $dialog,
@@ -378,24 +372,6 @@ class ProcessBitrix24OpenLinesWebhookAction
         );
 
         return true;
-    }
-
-    private function messageMatchesRecentSuccessfulSendExport(
-        Dialog $dialog,
-        Bitrix24OpenLinesOperatorMessageData $messageData,
-    ): bool {
-        if ($messageData->sourceBitrixChatId === null) {
-            return false;
-        }
-
-        $latestExport = $this->latestSuccessfulInboundClientExport(
-            $dialog,
-            now()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS),
-        );
-
-        return $latestExport instanceof Bitrix24MessageExport
-            && $latestExport->resolved_bitrix_chat_verified
-            && $latestExport->resolved_bitrix_chat_id === $messageData->sourceBitrixChatId;
     }
 
     private function handleInboundEchoCallback(
@@ -547,15 +523,6 @@ class ProcessBitrix24OpenLinesWebhookAction
         }
 
         return null;
-    }
-
-    private function latestSuccessfulInboundClientExport(Dialog $dialog, Carbon $freshAfter): ?Bitrix24MessageExport
-    {
-        return $this->successfulInboundClientExportQuery($dialog)
-            ->where('bitrix24_message_exports.exported_at', '>=', $freshAfter)
-            ->latest('bitrix24_message_exports.exported_at')
-            ->latest('bitrix24_message_exports.id')
-            ->first();
     }
 
     private function successfulInboundClientExportQuery(Dialog $dialog): Builder
