@@ -40,6 +40,7 @@ class ResolveCurrentBitrix24OpenLineChatAction
         return new Bitrix24CurrentOpenLineChatData(
             userCode: $current['user_code'],
             chatId: $current['chat_id'],
+            lastMessageId: $current['last_message_id'],
         );
     }
 
@@ -63,6 +64,7 @@ class ResolveCurrentBitrix24OpenLineChatAction
             return new Bitrix24CurrentOpenLineChatData(
                 userCode: $candidate['user_code'],
                 chatId: $candidate['chat_id'],
+                lastMessageId: $candidate['last_message_id'],
             );
         }
 
@@ -70,7 +72,7 @@ class ResolveCurrentBitrix24OpenLineChatAction
     }
 
     /**
-     * @return list<array{chat_id: string, user_code: string}>
+     * @return list<array{chat_id: string, user_code: string, last_message_id: ?string}>
      */
     private function resolveCandidates(
         Dialog $dialog,
@@ -123,6 +125,7 @@ class ResolveCurrentBitrix24OpenLineChatAction
             $candidates[] = [
                 'chat_id' => $numericChatId,
                 'user_code' => $resolvedChat->userCode,
+                'last_message_id' => $resolvedChat->lastMessageId,
             ];
         }
 
@@ -216,6 +219,7 @@ class ResolveCurrentBitrix24OpenLineChatAction
         return new Bitrix24CurrentOpenLineChatData(
             userCode: $userCode,
             chatId: $chatId,
+            lastMessageId: $this->extractLastMessageId($response->result),
         );
     }
 
@@ -239,6 +243,28 @@ class ResolveCurrentBitrix24OpenLineChatAction
             $normalized = trim((string) $value);
 
             if ($normalized !== '') {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $chat
+     */
+    private function extractLastMessageId(array $chat): ?string
+    {
+        foreach (['LAST_MESSAGE_ID', 'last_message_id', 'lastMessageId', 'LAST_ID', 'last_id', 'lastId'] as $key) {
+            $value = $chat[$key] ?? null;
+
+            if (! is_scalar($value)) {
+                continue;
+            }
+
+            $normalized = $this->positiveIntegerString($value);
+
+            if ($normalized !== null) {
                 return $normalized;
             }
         }

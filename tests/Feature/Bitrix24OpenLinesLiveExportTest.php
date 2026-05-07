@@ -1698,7 +1698,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'text' => 'Быстрый входящий путь',
         ]);
 
-        Http::fake(function (Request $request) use ($storedUserCode) {
+        Http::fake(function (Request $request) use ($message, $storedUserCode) {
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
@@ -1718,6 +1718,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                         'id' => 23,
                         'entity_id' => $storedUserCode,
                         'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
+                        'last_message_id' => 946,
                     ],
                 ], 200);
             }
@@ -1730,7 +1731,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                                 [
                                     'user' => '15',
                                     'message' => [
-                                        'MESSAGE_ID' => 'fast-inbound-619',
+                                        'id' => 'abrikosoff-message:'.$message->id,
                                     ],
                                     'session' => [
                                         'CHAT_ID' => '23',
@@ -1760,7 +1761,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
             'resolved_bitrix_chat_verified' => true,
-            'bitrix_remote_message_id' => 'fast-inbound-619',
+            'bitrix_remote_message_id' => '946',
         ]);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'openlines_live_export_fast_path_exported',
@@ -2067,6 +2068,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                         'id' => $chatId,
                         'entity_id' => $userCode,
                         'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
+                        'last_message_id' => match ($userCode) {
+                            $returnedUserCode => 947,
+                            default => 0,
+                        },
                     ],
                 ], 200);
             }
@@ -2107,6 +2112,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
             'resolved_bitrix_chat_verified' => true,
+            'bitrix_remote_message_id' => '947',
             'failure_code' => null,
             'failure_uncertain' => false,
         ]);

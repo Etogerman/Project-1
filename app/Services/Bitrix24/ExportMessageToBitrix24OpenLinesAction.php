@@ -837,6 +837,11 @@ class ExportMessageToBitrix24OpenLinesAction
 
         $resolvedBitrixChatVerified = $bindingSynced
             || $resolvedBitrixChatId === $expectedResolvedBitrixChatId;
+        $bitrixRemoteMessageId = $this->resolveCallbackCompatibleRemoteMessageId(
+            $bitrixRemoteMessageId,
+            $validatedReturnedChat,
+            $resolvedBitrixChatVerified,
+        );
 
         return $this->completeSuccessfulExport(
             message: $message,
@@ -1150,6 +1155,12 @@ class ExportMessageToBitrix24OpenLinesAction
             $bindingResyncedAfterChatMismatch = true;
             $resolvedBitrixChatVerified = true;
         }
+
+        $bitrixRemoteMessageId = $this->resolveCallbackCompatibleRemoteMessageId(
+            $bitrixRemoteMessageId,
+            $validatedReturnedChat,
+            $resolvedBitrixChatVerified,
+        );
 
         return $this->completeSuccessfulExport(
             message: $message,
@@ -1472,6 +1483,22 @@ class ExportMessageToBitrix24OpenLinesAction
         }
 
         return null;
+    }
+
+    private function resolveCallbackCompatibleRemoteMessageId(
+        ?string $responseMessageId,
+        ?Bitrix24CurrentOpenLineChatData $validatedReturnedChat,
+        bool $resolvedBitrixChatVerified,
+    ): ?string {
+        if ($responseMessageId !== null) {
+            return $responseMessageId;
+        }
+
+        if (! $resolvedBitrixChatVerified) {
+            return null;
+        }
+
+        return $validatedReturnedChat?->lastMessageId;
     }
 
     private function positiveIntegerString(mixed $value): ?string

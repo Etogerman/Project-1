@@ -387,7 +387,9 @@ class ProcessBitrix24OpenLinesWebhookAction
             now()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS),
         );
 
-        return $latestExport?->resolved_bitrix_chat_id === $messageData->sourceBitrixChatId;
+        return $latestExport instanceof Bitrix24MessageExport
+            && $latestExport->resolved_bitrix_chat_verified
+            && $latestExport->resolved_bitrix_chat_id === $messageData->sourceBitrixChatId;
     }
 
     private function ignoreInboundEchoMessageIfNeeded(
@@ -440,7 +442,6 @@ class ProcessBitrix24OpenLinesWebhookAction
 
         return $this->successfulInboundClientExportQuery($dialog)
             ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
-            ->where('bitrix24_message_exports.resolved_bitrix_chat_verified', true)
             ->where('bitrix24_message_exports.bitrix_remote_message_id', $messageData->bitrixMessageId)
             ->where('bitrix24_message_exports.exported_at', '>=', now()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
             ->latest('bitrix24_message_exports.exported_at')
@@ -451,7 +452,6 @@ class ProcessBitrix24OpenLinesWebhookAction
     private function latestSuccessfulInboundClientExport(Dialog $dialog, Carbon $freshAfter): ?Bitrix24MessageExport
     {
         return $this->successfulInboundClientExportQuery($dialog)
-            ->where('bitrix24_message_exports.resolved_bitrix_chat_verified', true)
             ->where('bitrix24_message_exports.exported_at', '>=', $freshAfter)
             ->latest('bitrix24_message_exports.exported_at')
             ->latest('bitrix24_message_exports.id')
