@@ -292,10 +292,10 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|15',
+            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
-        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
             'provider_event_key' => 'bitrix24-openlines:617',
@@ -312,6 +312,102 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.telegram.org/bottelegram-live-token/sendMessage');
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
+    }
+
+    public function test_openlines_same_second_delayed_operator_callback_does_not_use_newer_export_to_skip_delivery(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->makeDialogContactNumeric($this->createTelegramLiveDialog());
+        $route = Bitrix24OpenLineRoute::query()->findOrFail($dialog->bitrix24_open_line_route_id);
+        $callbackReceivedAt = now()->subSeconds(10)->startOfSecond();
+        $olderSentAt = $callbackReceivedAt->copy()->subSecond();
+
+        $dialog->forceFill([
+            'bitrix24_open_line_user_code_override' => implode('|', [
+                $route->connector_code,
+                $route->line_id,
+                'abrikosoff-dialog:'.$dialog->id,
+                '19',
+            ]),
+            'bitrix24_open_line_resolved_chat_id_override' => '26',
+            'bitrix24_open_line_binding_verified_at' => $callbackReceivedAt,
+            'bitrix24_live_last_exported_at' => $callbackReceivedAt,
+        ])->save();
+        $this->seedSuccessfulInboundClientTransportExport(
+            $dialog,
+            '23',
+            'Клиентское сообщение до callback-а',
+            $olderSentAt,
+        );
+
+        Http::fake(array_merge($this->currentOpenLineLookupFakes($dialog, [
+            '15' => 23,
+            '19' => 26,
+        ]), [
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 7112,
+                ],
+            ]),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]));
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 23,
+                        'message_id' => 623,
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Ответ из chat в ту же секунду',
+                    ],
+                ]],
+            ],
+        ]);
+        $event->forceFill([
+            'created_at' => $callbackReceivedAt,
+            'updated_at' => $callbackReceivedAt,
+        ])->save();
+
+        $this->seedSuccessfulInboundClientTransportExport(
+            $dialog,
+            '26',
+            'Более новый export с той же секундой timestamp',
+            $callbackReceivedAt,
+        );
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertSame(
+            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            $dialog->bitrix24_open_line_user_code_override,
+        );
+        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertDatabaseHas('messages', [
+            'dialog_id' => $dialog->id,
+            'provider_event_key' => 'bitrix24-openlines:623',
+            'external_message_id' => '7112',
+            'text' => 'Ответ из chat в ту же секунду',
+        ]);
+
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'openlines_stale_chat_ignored',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+        ]);
     }
 
     public function test_openlines_operator_message_from_mutable_binding_chat_is_ignored_when_last_successful_send_used_other_chat(): void
@@ -455,6 +551,79 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $this->assertDatabaseMissing('messages', [
             'dialog_id' => $dialog->id,
             'provider_event_key' => 'bitrix24-openlines:619',
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_inbound_echo_skipped',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => (string) $event->id,
+            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
+        ]);
+
+        Http::assertNotSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://api.telegram.org/'));
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.status.delivery.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
+    }
+
+    public function test_openlines_exact_inbound_client_echo_is_skipped_after_queue_delay(): void
+    {
+        $connection = $this->makeActiveConnection();
+        $dialog = $this->makeDialogContactNumeric($this->createTelegramLiveDialog());
+        $sentAt = now()->subSeconds(130);
+        $callbackReceivedAt = $sentAt->copy()->addSecond();
+
+        $this->seedSuccessfulInboundClientTransportExport(
+            $dialog,
+            '23',
+            'Текст клиента до задержки очереди',
+            $sentAt,
+            remoteMessageId: '624',
+        );
+
+        Http::fake(array_merge($this->currentOpenLineLookupFakes($dialog, [
+            '15' => 23,
+        ]), [
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 7113,
+                ],
+            ]),
+            'https://client-endpoint.example/rest/imconnector.send.status.delivery.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]));
+
+        $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
+            'data' => [
+                'CONNECTOR' => 'abrikosoff_telegram',
+                'LINE' => 'line-telegram',
+                'DATA' => [[
+                    'im' => [
+                        'chat_id' => 23,
+                        'message_id' => 624,
+                    ],
+                    'chat' => [
+                        'id' => 'abrikosoff-dialog:'.$dialog->id,
+                    ],
+                    'message' => [
+                        'text' => 'Текст клиента до задержки очереди',
+                    ],
+                ]],
+            ],
+        ]);
+        $event->forceFill([
+            'created_at' => $callbackReceivedAt,
+            'updated_at' => $callbackReceivedAt,
+        ])->save();
+
+        $this->runWebhookEventJob($event);
+
+        $event->refresh();
+
+        $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
+        $this->assertDatabaseMissing('messages', [
+            'dialog_id' => $dialog->id,
+            'provider_event_key' => 'bitrix24-openlines:624',
         ]);
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'openlines_inbound_echo_skipped',
@@ -965,8 +1134,9 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $connection = $this->makeActiveConnection();
         $dialog = $this->makeDialogContactNumeric($this->createTelegramLiveDialog());
         $route = Bitrix24OpenLineRoute::query()->findOrFail($dialog->bitrix24_open_line_route_id);
-        $olderSentAt = now()->subSeconds(20);
-        $newerSentAt = now();
+        $callbackReceivedAt = now()->subSeconds(10)->startOfSecond();
+        $olderSentAt = $callbackReceivedAt->copy()->subSeconds(20);
+        $newerSentAt = $callbackReceivedAt->copy()->subSeconds(5);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => implode('|', [
@@ -1028,6 +1198,10 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                 ]],
             ],
         ]);
+        $event->forceFill([
+            'created_at' => $callbackReceivedAt,
+            'updated_at' => $callbackReceivedAt,
+        ])->save();
 
         $this->runWebhookEventJob($event);
 

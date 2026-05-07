@@ -397,7 +397,7 @@ class ProcessBitrix24OpenLinesWebhookAction
             return null;
         }
 
-        $latestExport = $this->latestSuccessfulInboundClientExport($dialog, $event->created_at);
+        $latestExport = $this->latestSuccessfulInboundClientExport($dialog, $messageData, $event->created_at);
 
         if (
             ! $latestExport instanceof Bitrix24MessageExport
@@ -426,10 +426,12 @@ class ProcessBitrix24OpenLinesWebhookAction
             return null;
         }
 
-        $this->syncCurrentOpenLineBinding($dialog, $currentChat);
-
         if ($messageData->sourceBitrixChatId === $expectedChatId) {
             return false;
+        }
+
+        if (! $this->hasSuccessfulInboundClientExportAfter($dialog, $event->created_at)) {
+            $this->syncCurrentOpenLineBinding($dialog, $currentChat);
         }
 
         $this->logBitrix24ApiCallAction->handle(
@@ -466,7 +468,7 @@ class ProcessBitrix24OpenLinesWebhookAction
         Dialog $dialog,
         Bitrix24OpenLinesOperatorMessageData $messageData,
     ): string {
-        $echoExport = $this->findRecentInboundEchoExport($dialog, $messageData);
+        $echoExport = $this->findRecentInboundEchoExport($dialog, $messageData, $event->created_at);
 
         if ($echoExport instanceof Bitrix24MessageExport) {
             $this->logInboundEchoSkipped(
@@ -522,6 +524,7 @@ class ProcessBitrix24OpenLinesWebhookAction
     private function findRecentInboundEchoExport(
         Dialog $dialog,
         Bitrix24OpenLinesOperatorMessageData $messageData,
+        ?Carbon $asOf = null,
     ): ?Bitrix24MessageExport {
         if ($messageData->sourceBitrixChatId === null) {
             return null;
@@ -531,10 +534,13 @@ class ProcessBitrix24OpenLinesWebhookAction
             return null;
         }
 
+        $asOf = $this->normalizeEventSecond($asOf);
+
         return $this->successfulInboundClientExportQuery($dialog)
             ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
             ->where('bitrix24_message_exports.bitrix_remote_message_id', $messageData->bitrixMessageId)
-            ->where('bitrix24_message_exports.exported_at', '>=', now()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
+            ->where('bitrix24_message_exports.exported_at', '>=', $asOf->copy()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
+            ->where('bitrix24_message_exports.exported_at', '<', $asOf->copy()->addSecond())
             ->latest('bitrix24_message_exports.exported_at')
             ->latest('bitrix24_message_exports.id')
             ->first();
@@ -558,16 +564,68 @@ class ProcessBitrix24OpenLinesWebhookAction
             ->whereNotNull('bitrix24_message_exports.resolved_bitrix_chat_id');
     }
 
-    private function latestSuccessfulInboundClientExport(Dialog $dialog, ?Carbon $asOf = null): ?Bitrix24MessageExport
+    private function latestSuccessfulInboundClientExport(
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        ?Carbon $asOf = null,
+    ): ?Bitrix24MessageExport
     {
-        $asOf ??= now();
-
-        return $this->successfulInboundClientExportQuery($dialog)
-            ->where('bitrix24_message_exports.exported_at', '>=', $asOf->copy()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS))
-            ->where('bitrix24_message_exports.exported_at', '<=', $asOf)
+        $asOf = $this->normalizeEventSecond($asOf);
+        $windowStart = $asOf->copy()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS);
+        $latestBeforeEvent = $this->successfulInboundClientExportQuery($dialog)
+            ->where('bitrix24_message_exports.exported_at', '>=', $windowStart)
+            ->where('bitrix24_message_exports.exported_at', '<', $asOf)
             ->latest('bitrix24_message_exports.exported_at')
             ->latest('bitrix24_message_exports.id')
             ->first();
+
+        if ($messageData->sourceBitrixChatId !== null) {
+            $sameSecondSourceExport = $this->successfulInboundClientExportQuery($dialog)
+                ->where('bitrix24_message_exports.exported_at', '>=', $asOf)
+                ->where('bitrix24_message_exports.exported_at', '<', $asOf->copy()->addSecond())
+                ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
+                ->latest('bitrix24_message_exports.exported_at')
+                ->latest('bitrix24_message_exports.id')
+                ->first();
+
+            if ($sameSecondSourceExport instanceof Bitrix24MessageExport) {
+                return $sameSecondSourceExport;
+            }
+
+            if (
+                $latestBeforeEvent instanceof Bitrix24MessageExport
+                && $latestBeforeEvent->resolved_bitrix_chat_id === $messageData->sourceBitrixChatId
+            ) {
+                return $latestBeforeEvent;
+            }
+        }
+
+        $sameSecondExport = $this->successfulInboundClientExportQuery($dialog)
+            ->where('bitrix24_message_exports.exported_at', '>=', $asOf)
+            ->where('bitrix24_message_exports.exported_at', '<', $asOf->copy()->addSecond())
+            ->latest('bitrix24_message_exports.exported_at')
+            ->latest('bitrix24_message_exports.id')
+            ->first();
+
+        if ($sameSecondExport instanceof Bitrix24MessageExport) {
+            return $sameSecondExport;
+        }
+
+        return $latestBeforeEvent;
+    }
+
+    private function hasSuccessfulInboundClientExportAfter(Dialog $dialog, ?Carbon $asOf = null): bool
+    {
+        $asOf = $this->normalizeEventSecond($asOf);
+
+        return $this->successfulInboundClientExportQuery($dialog)
+            ->where('bitrix24_message_exports.exported_at', '>=', $asOf->copy()->addSecond())
+            ->exists();
+    }
+
+    private function normalizeEventSecond(?Carbon $value): Carbon
+    {
+        return ($value ?? now())->copy()->startOfSecond();
     }
 
     private function syncCurrentOpenLineBinding(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void
