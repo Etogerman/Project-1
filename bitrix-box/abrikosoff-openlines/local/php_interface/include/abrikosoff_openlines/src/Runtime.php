@@ -2,11 +2,20 @@
 
 namespace Abrikosoff\BitrixBox\OpenLines;
 
+use Bitrix\ImConnector\Library;
+use Bitrix\ImConnector\Status;
+use Bitrix\ImOpenLines\Crm\Common;
+use Bitrix\Main\Data\Cache;
+use Bitrix\Main\DI\ServiceLocator;
+use Bitrix\Main\Event;
+use Bitrix\Main\EventManager;
+use Bitrix\Main\Web\HttpClient;
+
 final class Runtime
 {
-    private const TELEGRAM_CONNECTOR = 'abrikosoff_telegram';
+    private const TELEGRAM_COMPONENT = 'abrikosoff:imconnector.telegram';
 
-    private const MAX_CONNECTOR = 'abrikosoff_max';
+    private const MAX_COMPONENT = 'abrikosoff:imconnector.max';
 
     /**
      * @var array<string, mixed>|null
@@ -25,10 +34,16 @@ final class Runtime
             return;
         }
 
-        $eventManager = \Bitrix\Main\EventManager::getInstance();
+        $eventManager = EventManager::getInstance();
 
-        $eventManager->addEventHandler('imconnector', 'OnImConnectorBuildList', [self::class, 'onBuildTelegramConnector']);
-        $eventManager->addEventHandler('imconnector', 'OnImConnectorBuildList', [self::class, 'onBuildMaxConnector']);
+        foreach (self::configuredConnectorCodes() as $connectorCode) {
+            $eventManager->addEventHandler(
+                'imconnector',
+                'OnImConnectorBuildList',
+                static fn (): array => self::buildConnectorDefinition($connectorCode),
+            );
+        }
+
         $eventManager->addEventHandler('imconnector', 'OnInfoLine', [self::class, 'onInfoLine']);
         $eventManager->addEventHandler('imconnector', 'OnDeleteLine', [self::class, 'onDeleteLine']);
         $eventManager->addEventHandler('imconnector', 'OnSendMessageCustom', [self::class, 'onSendMessageCustom']);
@@ -45,7 +60,7 @@ final class Runtime
      */
     public static function onBuildTelegramConnector(): array
     {
-        return self::buildConnectorDefinition(self::TELEGRAM_CONNECTOR);
+        return self::buildConnectorDefinition(self::connectorCodeForComponent(self::TELEGRAM_COMPONENT) ?? 'abc_telegram');
     }
 
     /**
@@ -53,7 +68,41 @@ final class Runtime
      */
     public static function onBuildMaxConnector(): array
     {
-        return self::buildConnectorDefinition(self::MAX_CONNECTOR);
+        return self::buildConnectorDefinition(self::connectorCodeForComponent(self::MAX_COMPONENT) ?? 'abc_max');
+    }
+
+    public static function connectorCodeForComponentLine(string $component, string $lineId): ?string
+    {
+        $component = trim($component);
+        $lineId = trim($lineId);
+
+        if ($component === '') {
+            return null;
+        }
+
+        if ($lineId !== '') {
+            $connectorCode = self::resolveConnectorByLineId($lineId);
+
+            if ($connectorCode === null) {
+                return null;
+            }
+
+            $meta = self::connectorMeta($connectorCode);
+
+            return trim((string) ($meta['component'] ?? '')) === $component
+                ? $connectorCode
+                : null;
+        }
+
+        foreach (self::connectors() as $connectorCode => $meta) {
+            if (! is_array($meta) || trim((string) ($meta['component'] ?? '')) !== $component) {
+                continue;
+            }
+
+            return (string) $connectorCode;
+        }
+
+        return null;
     }
 
     /**
@@ -73,11 +122,13 @@ final class Runtime
             return null;
         }
 
+        $callbackUrl = self::laravelOpenlinesCallbackUrlForLine($connectorCode, $lineId);
+
         return [
             'connector_id' => $connectorCode,
             'id' => $lineId,
-            'url' => self::laravelOpenlinesCallbackUrl(),
-            'url_im' => self::laravelOpenlinesCallbackUrl(),
+            'url' => $callbackUrl,
+            'url_im' => $callbackUrl,
             'name' => self::lineName($connectorCode, $lineId),
             'picture' => [
                 'url' => self::svgDataUri($connectorCode, false),
@@ -100,7 +151,7 @@ final class Runtime
         }
 
         if (class_exists('\\Bitrix\\ImConnector\\Status')) {
-            \Bitrix\ImConnector\Status::delete($connectorCode, $lineId);
+            Status::delete($connectorCode, $lineId);
         }
     }
 
@@ -119,7 +170,7 @@ final class Runtime
         self::forwardImconnectorEvent('OnDeleteMessageCustom', $args);
     }
 
-    public static function onSessionStart(\Bitrix\Main\Event $event): void
+    public static function onSessionStart(Event $event): void
     {
         $eventParams = $event->getParameters();
 
@@ -238,11 +289,11 @@ final class Runtime
             return;
         }
 
-        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+        if (! self::connectorOwnsLine($connectorCode, $lineId)) {
             return;
         }
 
-        $status = \Bitrix\ImConnector\Status::getInstance($connectorCode, $lineId);
+        $status = Status::getInstance($connectorCode, $lineId);
         $status->setActive(true);
         $status->setConnection(true);
         $status->setRegister(true);
@@ -268,6 +319,36 @@ final class Runtime
         return trim((string) self::cfg('laravel.openlines_callback_url', ''));
     }
 
+    public static function laravelOpenlinesCallbackUrlForLine(string $connectorCode, string $lineId): string
+    {
+        $lineMeta = self::connectorLineMeta($connectorCode, $lineId);
+        $ownerCallbackBaseUrl = self::scalarString($lineMeta['owner_callback_base_url'] ?? '');
+
+        if ($ownerCallbackBaseUrl === '') {
+            return self::laravelOpenlinesCallbackUrl();
+        }
+
+        return self::buildOpenlinesCallbackUrl($ownerCallbackBaseUrl);
+    }
+
+    private static function buildOpenlinesCallbackUrl(string $callbackBaseUrl): string
+    {
+        $callbackBaseUrl = trim($callbackBaseUrl);
+
+        if ($callbackBaseUrl === '') {
+            return '';
+        }
+
+        $openLinesPath = '/callbacks/bitrix24/openlines';
+        $path = parse_url($callbackBaseUrl, PHP_URL_PATH);
+
+        if (is_string($path) && rtrim($path, '/') === $openLinesPath) {
+            return rtrim($callbackBaseUrl, '/');
+        }
+
+        return rtrim($callbackBaseUrl, '/').$openLinesPath;
+    }
+
     private static function forwardImconnectorEvent(string $eventName, array $args): void
     {
         [$connectorCode, $lineId, $data] = self::extractImconnectorMessageEvent($args);
@@ -276,7 +357,7 @@ final class Runtime
             return;
         }
 
-        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+        if (! self::connectorOwnsLine($connectorCode, $lineId)) {
             return;
         }
 
@@ -290,7 +371,7 @@ final class Runtime
             ],
         ];
 
-        self::postJson(self::laravelOpenlinesCallbackUrl(), $payload);
+        self::postJson(self::laravelOpenlinesCallbackUrlForLine($connectorCode, $lineId), $payload);
     }
 
     /**
@@ -299,7 +380,7 @@ final class Runtime
      */
     private static function extractImconnectorMessageEvent(array $args): array
     {
-        if (count($args) === 1 && $args[0] instanceof \Bitrix\Main\Event) {
+        if (count($args) === 1 && $args[0] instanceof Event) {
             $event = $args[0];
 
             return [
@@ -321,7 +402,7 @@ final class Runtime
      */
     private static function extractLineId(array $args): string
     {
-        if (count($args) === 1 && $args[0] instanceof \Bitrix\Main\Event) {
+        if (count($args) === 1 && $args[0] instanceof Event) {
             return trim((string) ($args[0]->getParameter('LINE_ID') ?? ''));
         }
 
@@ -330,10 +411,23 @@ final class Runtime
 
     private static function resolveConnectorByLineId(string $lineId): ?string
     {
+        $matches = [];
+
         foreach (self::connectors() as $connectorCode => $meta) {
             if (self::connectorHasLine($meta, $lineId)) {
-                return (string) $connectorCode;
+                $matches[] = (string) $connectorCode;
             }
+        }
+
+        if (count($matches) === 1) {
+            return $matches[0];
+        }
+
+        if (count($matches) > 1) {
+            self::logStructured('duplicate_line_id_ignored', [
+                'line_id' => $lineId,
+                'connector_codes' => $matches,
+            ]);
         }
 
         return null;
@@ -342,6 +436,34 @@ final class Runtime
     private static function supportsConnector(string $connectorCode): bool
     {
         return array_key_exists($connectorCode, self::connectors());
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function configuredConnectorCodes(): array
+    {
+        $codes = [];
+
+        foreach (self::connectors() as $connectorCode => $meta) {
+            if (
+                ! is_string($connectorCode)
+                || trim($connectorCode) === ''
+                || ! is_array($meta)
+                || trim((string) ($meta['component'] ?? '')) === ''
+            ) {
+                continue;
+            }
+
+            $codes[] = $connectorCode;
+        }
+
+        return $codes;
+    }
+
+    private static function connectorCodeForComponent(string $component): ?string
+    {
+        return self::connectorCodeForComponentLine($component, '');
     }
 
     /**
@@ -390,6 +512,15 @@ final class Runtime
     private static function connectorHasLine(array $meta, string $lineId): bool
     {
         return self::connectorLineMetaFromMeta($meta, $lineId) !== null;
+    }
+
+    private static function connectorOwnsLine(string $connectorCode, string $lineId): bool
+    {
+        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+            return false;
+        }
+
+        return self::resolveConnectorByLineId($lineId) === $connectorCode;
     }
 
     /**
@@ -485,8 +616,8 @@ final class Runtime
             return;
         }
 
-        $cache = \Bitrix\Main\Data\Cache::createInstance();
-        $cache->clean($lineId, \Bitrix\ImConnector\Library::CACHE_DIR_INFO_CONNECTORS_LINE);
+        $cache = Cache::createInstance();
+        $cache->clean($lineId, Library::CACHE_DIR_INFO_CONNECTORS_LINE);
     }
 
     /**
@@ -527,8 +658,7 @@ final class Runtime
         return self::laravelOpenlinesCallbackUrl() !== ''
             && trim((string) self::cfg('auth.member_id', '')) !== ''
             && trim((string) self::cfg('auth.application_token', '')) !== ''
-            && self::supportsConnector(self::TELEGRAM_CONNECTOR)
-            && self::supportsConnector(self::MAX_CONNECTOR);
+            && self::configuredConnectorCodes() !== [];
     }
 
     /**
@@ -556,7 +686,7 @@ final class Runtime
         }
 
         if (class_exists('\\Bitrix\\Main\\Web\\HttpClient')) {
-            $client = new \Bitrix\Main\Web\HttpClient([
+            $client = new HttpClient([
                 'socketTimeout' => (int) self::cfg('laravel.timeout_seconds', 15),
                 'streamTimeout' => (int) self::cfg('laravel.timeout_seconds', 15),
             ]);
@@ -725,7 +855,7 @@ final class Runtime
             return null;
         }
 
-        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+        if (! self::connectorOwnsLine($connectorCode, $lineId)) {
             return null;
         }
 
@@ -1165,7 +1295,7 @@ final class Runtime
 
         try {
             /** @var mixed $tracker */
-            $tracker = \Bitrix\Main\DI\ServiceLocator::getInstance()->get('ImOpenLines.Services.Tracker');
+            $tracker = ServiceLocator::getInstance()->get('ImOpenLines.Services.Tracker');
 
             if (! is_object($tracker) || ! method_exists($tracker, 'getMessengerLink')) {
                 return null;
@@ -1291,7 +1421,7 @@ final class Runtime
         try {
             $bindingContactBefore = self::extractActivityBindingContactId($crmActivityId);
 
-            $result = \Bitrix\ImOpenLines\Crm\Common::addActivityBindings($crmActivityId, [
+            $result = Common::addActivityBindings($crmActivityId, [
                 \CCrmOwnerType::ContactName => $contactId,
             ]);
 
@@ -1354,7 +1484,7 @@ final class Runtime
             return '';
         }
 
-        $bindingsResult = \Bitrix\ImOpenLines\Crm\Common::getActivityBindings($crmActivityId);
+        $bindingsResult = Common::getActivityBindings($crmActivityId);
 
         if (! is_object($bindingsResult) || ! method_exists($bindingsResult, 'isSuccess') || ! $bindingsResult->isSuccess() || ! method_exists($bindingsResult, 'getData')) {
             return '';

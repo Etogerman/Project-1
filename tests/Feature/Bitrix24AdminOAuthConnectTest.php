@@ -524,12 +524,10 @@ class Bitrix24AdminOAuthConnectTest extends TestCase
             'client_id' => 'local.app',
             'application_code' => 'local.app.code',
             'callback_base_url' => 'https://project.example.com',
-            'telegram_source_id' => 'ABRIKOSOFF_TELEGRAM',
-            'max_source_id' => 'ABRIKOSOFF_MAX',
-            'telegram_connector_code' => 'abrikosoff_telegram',
-            'max_connector_code' => 'abrikosoff_max',
-            'telegram_line_id' => 'line-telegram',
-            'max_line_id' => 'line-max',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+            'max_source_id' => 'ABC_MAX',
+            'telegram_connector_code' => 'abc_telegram',
+            'max_connector_code' => 'abc_max',
         ]);
 
         $this->configureCurrentBitrix24RuntimeProfile($profile);

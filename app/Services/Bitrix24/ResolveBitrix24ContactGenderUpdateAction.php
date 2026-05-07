@@ -6,6 +6,10 @@ use App\Models\Contact;
 
 class ResolveBitrix24ContactGenderUpdateAction
 {
+    public function __construct(
+        private readonly ResolveBitrix24ProfileSchemaAction $resolveProfileSchemaAction,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $remoteSnapshot
      * @return array{
@@ -18,7 +22,9 @@ class ResolveBitrix24ContactGenderUpdateAction
     {
         $remoteGenderId = $this->nullableString($remoteSnapshot['gender_id'] ?? null);
         $localGenderId = $this->resolveLocalGenderId($contact->gender);
-        $unknownGenderId = (string) config('bitrix24.values.gender.unknown_id');
+        $fields = $this->resolveProfileSchemaAction->fields();
+        $values = $this->resolveProfileSchemaAction->values();
+        $unknownGenderId = (string) $values['gender']['unknown_id'];
 
         if ($localGenderId === null) {
             return [
@@ -31,7 +37,7 @@ class ResolveBitrix24ContactGenderUpdateAction
         if ($remoteGenderId === null || $remoteGenderId === '' || $remoteGenderId === $unknownGenderId) {
             return [
                 'fields' => [
-                    config('bitrix24.fields.gender') => (int) $localGenderId,
+                    $fields['gender'] => (int) $localGenderId,
                 ],
                 'warnings' => [],
                 'resolved_gender_id' => $localGenderId,
@@ -55,10 +61,12 @@ class ResolveBitrix24ContactGenderUpdateAction
 
     private function resolveLocalGenderId(?string $gender): ?string
     {
+        $values = $this->resolveProfileSchemaAction->values();
+
         return match ($gender) {
-            'male' => (string) config('bitrix24.values.gender.male_id'),
-            'female' => (string) config('bitrix24.values.gender.female_id'),
-            'unknown' => (string) config('bitrix24.values.gender.unknown_id'),
+            'male' => (string) $values['gender']['male_id'],
+            'female' => (string) $values['gender']['female_id'],
+            'unknown' => (string) $values['gender']['unknown_id'],
             default => null,
         };
     }

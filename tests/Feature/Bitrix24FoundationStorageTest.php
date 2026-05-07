@@ -2,21 +2,24 @@
 
 namespace Tests\Feature;
 
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
-use App\Services\Bitrix24\BackfillBitrix24ProfileRoutingFieldsAction;
 use App\Services\Bitrix24\BackfillBitrix24ConnectionProfilesAction;
+use App\Services\Bitrix24\BackfillBitrix24ProfileRoutingFieldsAction;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
 use App\Services\Bitrix24\NormalizeBitrix24ProfileCallbackBaseUrlsAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24CallbackBaseUrlAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ProfileAction;
 use Illuminate\Database\QueryException;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 use Tests\TestCase;
 
 class Bitrix24FoundationStorageTest extends TestCase
@@ -394,6 +397,81 @@ class Bitrix24FoundationStorageTest extends TestCase
         );
     }
 
+    public function test_backfill_profiles_skips_default_callback_owner_before_owner_table_exists(): void
+    {
+        config()->set('bitrix24.portal_domain', 'crm.alexlesley.biz');
+        config()->set('bitrix24.application.client_id', 'client-id');
+        config()->set('bitrix24.application.code', 'local.app.code');
+        config()->set('bitrix24.callbacks.install_url', 'https://project.example.com/callbacks/bitrix24/install');
+
+        $matchingConnection = Bitrix24Connection::query()->forceCreate([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token-1',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        Schema::table('bitrix24_open_line_routes', function (Blueprint $table): void {
+            $table->dropConstrainedForeignId('callback_owner_id');
+        });
+        Schema::dropIfExists('bitrix24_callback_owners');
+
+        app(BackfillBitrix24ConnectionProfilesAction::class)->handle();
+
+        $profile = Bitrix24Profile::query()->firstOrFail();
+
+        $this->assertNotNull($matchingConnection->refresh()->profile_id);
+        $this->assertSame('https://project.example.com', $profile->callback_base_url);
+        $this->assertFalse(Schema::hasTable('bitrix24_callback_owners'));
+    }
+
+    public function test_backfill_profiles_rejects_callback_url_used_by_another_profile_callback_owner(): void
+    {
+        config()->set('bitrix24.portal_domain', 'crm.alexlesley.biz');
+        config()->set('bitrix24.application.client_id', 'client-id');
+        config()->set('bitrix24.application.code', 'local.app.code');
+        config()->set('bitrix24.callbacks.install_url', 'https://owner-tunnel.example.test/callbacks/bitrix24/install');
+
+        $matchingConnection = Bitrix24Connection::query()->forceCreate([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'member_id' => 'member-1',
+            'application_token' => 'application-token-1',
+            'status' => Bitrix24Connection::STATUS_ACTIVE,
+        ]);
+
+        $foreignProfile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.foreign.biz',
+            'profile_key' => 'dev-foreign',
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Foreign',
+            'callback_base_url' => 'https://foreign.example.test',
+        ]);
+
+        Bitrix24CallbackOwner::query()->create([
+            'bitrix24_profile_id' => $foreignProfile->id,
+            'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+            'display_name' => 'Локалка 1',
+            'callback_base_url' => 'https://owner-tunnel.example.test',
+            'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+        ]);
+
+        try {
+            app(BackfillBitrix24ConnectionProfilesAction::class)->handle();
+            $this->fail('Expected backfill to reject a callback owner URL conflict.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame(
+                'callback_base_url `https://owner-tunnel.example.test` is already assigned to callback owner `local-1` on profile `dev-foreign`.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertDatabaseMissing('bitrix24_profiles', [
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+        ]);
+        $this->assertNull($matchingConnection->refresh()->profile_id);
+    }
+
     public function test_webhook_event_dedupe_is_scoped_by_callback_base_url(): void
     {
         $firstEvent = Bitrix24WebhookEvent::query()->create([
@@ -500,7 +578,7 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertTrue(app(ResolveCurrentBitrix24ProfileAction::class)->handle()->is($profile));
     }
 
-    public function test_backfill_profile_routing_fields_assigns_current_runtime_profile_from_legacy_config(): void
+    public function test_backfill_profile_routing_fields_assigns_non_line_values_from_legacy_config(): void
     {
         $profile = Bitrix24Profile::query()->create([
             'portal_domain' => 'crm.alexlesley.biz',
@@ -530,8 +608,8 @@ class Bitrix24FoundationStorageTest extends TestCase
         $this->assertSame('ABRIKOSOFF_MAX', $profile->max_source_id);
         $this->assertSame('abrikosoff_telegram', $profile->telegram_connector_code);
         $this->assertSame('abrikosoff_max', $profile->max_connector_code);
-        $this->assertSame('line-telegram', $profile->telegram_line_id);
-        $this->assertSame('line-max', $profile->max_line_id);
+        $this->assertNull($profile->telegram_line_id);
+        $this->assertNull($profile->max_line_id);
     }
 
     public function test_current_runtime_selector_fails_when_configured_callbacks_resolve_to_different_base_urls(): void

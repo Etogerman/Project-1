@@ -2,9 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24WebhookEvent;
+use App\Models\Channel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -28,14 +31,13 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
             '--client-id' => 'client-id-ivan',
             '--application-code' => 'local.app.dev.ivan',
-            '--telegram-line-id' => 'telegram-line-ivan',
-            '--max-line-id' => 'max-line-ivan',
         ])
             ->expectsOutput('Bitrix24 dev-profile bootstrap completed.')
             ->expectsOutputToContain('Profile action: created.')
             ->expectsOutputToContain('ABC_TELEGRAM_DEV_IVAN_MAIN')
             ->expectsOutputToContain('abc_telegram_dev_ivan_main')
             ->expectsOutputToContain('https://spark-rocket.trycloudflare.com/callbacks/bitrix24/install')
+            ->expectsOutputToContain('Active Telegram channel routes have LINE_ID')
             ->expectsOutputToContain('Active Bitrix install connection exists for profile')
             ->expectsOutputToContain('Dev-profile сохранён, но full_live setup ещё не готов.')
             ->assertFailed();
@@ -51,8 +53,6 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
         $this->assertSame('ABC_MAX_DEV_IVAN_MAIN', $profile->max_source_id);
         $this->assertSame('abc_telegram_dev_ivan_main', $profile->telegram_connector_code);
         $this->assertSame('abc_max_dev_ivan_main', $profile->max_connector_code);
-        $this->assertSame('telegram-line-ivan', $profile->telegram_line_id);
-        $this->assertSame('max-line-ivan', $profile->max_line_id);
     }
 
     public function test_command_marks_existing_profile_ready_after_bitrix_side_verification_succeeds(): void
@@ -69,12 +69,11 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'max_source_id' => 'ABC_MAX_DEV_IVAN_MAIN',
             'telegram_connector_code' => 'abc_telegram_dev_ivan_main',
             'max_connector_code' => 'abc_max_dev_ivan_main',
-            'telegram_line_id' => 'telegram-line-ivan',
-            'max_line_id' => 'max-line-ivan',
         ]);
 
         $this->createActiveConnection($profile);
         $this->recordInstallCallbackEvent($profile, 'https://spark-rocket.trycloudflare.com');
+        $this->createOpenLineRoutes($profile);
         $this->fakeBitrixVerifySuccess($profile);
 
         $this->artisan('bitrix24:dev-profile-bootstrap', [
@@ -82,8 +81,8 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
         ])
             ->expectsOutputToContain('Bitrix app probe confirms application_code')
-            ->expectsOutputToContain('Telegram LINE_ID exists on Bitrix')
-            ->expectsOutputToContain('MAX LINE_ID exists on Bitrix')
+            ->expectsOutputToContain('Telegram route LINE_ID values exist on Bitrix')
+            ->expectsOutputToContain('MAX route LINE_ID values exist on Bitrix')
             ->expectsOutputToContain('Dev-profile готов к full_live handoff и verify-контуру.')
             ->assertSuccessful();
     }
@@ -102,12 +101,11 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'max_source_id' => 'ABC_MAX_DEV_IVAN_MAIN',
             'telegram_connector_code' => 'abc_telegram_dev_ivan_main',
             'max_connector_code' => 'abc_max_dev_ivan_main',
-            'telegram_line_id' => 'telegram-line-ivan',
-            'max_line_id' => 'max-line-ivan',
         ]);
 
         $this->createActiveConnection($profile);
         $this->recordInstallCallbackEvent($profile, 'https://old-tunnel.trycloudflare.com');
+        $this->createOpenLineRoutes($profile);
         $this->fakeBitrixVerifySuccess($profile);
 
         $this->artisan('bitrix24:dev-profile-bootstrap', [
@@ -126,7 +124,7 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
 
         $this->assertSame('https://new-tunnel.trycloudflare.com', $profile->callback_base_url);
         $this->assertSame('client-id-ivan', $profile->client_id);
-        $this->assertSame('telegram-line-ivan', $profile->telegram_line_id);
+        $this->assertSame(['max-line-ivan', 'telegram-line-ivan'], $profile->openLineRoutes()->pluck('line_id')->sort()->values()->all());
     }
 
     public function test_command_marks_rotated_profile_ready_after_fresh_install_callback_reaches_new_ingress(): void
@@ -143,12 +141,11 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'max_source_id' => 'ABC_MAX_DEV_IVAN_MAIN',
             'telegram_connector_code' => 'abc_telegram_dev_ivan_main',
             'max_connector_code' => 'abc_max_dev_ivan_main',
-            'telegram_line_id' => 'telegram-line-ivan',
-            'max_line_id' => 'max-line-ivan',
         ]);
 
         $this->createActiveConnection($profile);
         $this->recordInstallCallbackEvent($profile, 'https://new-tunnel.trycloudflare.com');
+        $this->createOpenLineRoutes($profile);
         $this->fakeBitrixVerifySuccess($profile);
 
         $this->artisan('bitrix24:dev-profile-bootstrap', [
@@ -174,11 +171,10 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'max_source_id' => 'ABC_MAX_DEV_IVAN_MAIN',
             'telegram_connector_code' => 'abc_telegram_dev_ivan_main',
             'max_connector_code' => 'abc_max_dev_ivan_main',
-            'telegram_line_id' => 'telegram-line-ivan',
-            'max_line_id' => 'max-line-ivan',
         ]);
 
         $this->createActiveConnection($profile);
+        $this->createOpenLineRoutes($profile);
         $this->recordInstallCallbackEvent(
             $profile,
             'https://new-tunnel.trycloudflare.com',
@@ -210,37 +206,51 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
 
         $this->assertSame('https://draft-tunnel.trycloudflare.com', $profile->callback_base_url);
         $this->assertNull($profile->client_id);
-        $this->assertNull($profile->telegram_line_id);
         $this->assertSame('ABC_TELEGRAM_DEV_IVAN_MAIN', $profile->telegram_source_id);
     }
 
-    public function test_command_fails_when_telegram_and_max_reuse_one_line_id(): void
+    public function test_command_rejects_deprecated_line_id_options(): void
     {
-        $profile = Bitrix24Profile::query()->create([
-            'portal_domain' => 'crm.alexlesley.biz',
+        $this->artisan('bitrix24:dev-profile-bootstrap', [
             'profile_key' => 'dev-ivan-main',
-            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
-            'display_name' => 'Dev Ivan Main',
-            'client_id' => 'client-id-ivan',
-            'application_code' => 'local.app.dev.ivan',
             'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
-            'telegram_source_id' => 'ABC_TELEGRAM_DEV_IVAN_MAIN',
-            'max_source_id' => 'ABC_MAX_DEV_IVAN_MAIN',
-            'telegram_connector_code' => 'abc_telegram_dev_ivan_main',
-            'max_connector_code' => 'abc_max_dev_ivan_main',
-            'telegram_line_id' => 'shared-line',
-            'max_line_id' => 'shared-line',
+            '--telegram-line-id' => 'telegram-line-ivan',
+            '--max-line-id' => 'max-line-ivan',
+        ])
+            ->expectsOutputToContain('LINE_ID is configured per concrete channel route')
+            ->assertExitCode(2);
+
+        $this->assertSame(0, Bitrix24Profile::query()->count());
+    }
+
+    public function test_command_rejects_callback_base_url_used_by_another_profile_callback_owner(): void
+    {
+        $stagingProfile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.alexlesley.biz',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'callback_base_url' => 'https://project.example.com',
         ]);
 
-        $this->createActiveConnection($profile);
-        $this->fakeBitrixVerifySuccess($profile);
+        Bitrix24CallbackOwner::query()->create([
+            'bitrix24_profile_id' => $stagingProfile->id,
+            'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+            'display_name' => 'Локалка 1',
+            'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
+            'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+        ]);
 
         $this->artisan('bitrix24:dev-profile-bootstrap', [
             'profile_key' => 'dev-ivan-main',
             'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
         ])
-            ->expectsOutputToContain('Telegram and MAX use different LINE_ID values')
-            ->assertFailed();
+            ->expectsOutputToContain('callback_base_url `https://spark-rocket.trycloudflare.com` is already assigned to callback owner `local-1` on profile `staging`.')
+            ->assertExitCode(2);
+
+        $this->assertDatabaseMissing('bitrix24_profiles', [
+            'profile_key' => 'dev-ivan-main',
+        ]);
     }
 
     public function test_command_rejects_staging_profile_key(): void
@@ -251,35 +261,6 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
         ])
             ->expectsOutputToContain('cannot mutate the fixed `staging` profile')
             ->assertExitCode(2);
-    }
-
-    public function test_command_rejects_duplicate_explicit_line_id_assignment(): void
-    {
-        Bitrix24Profile::query()->create([
-            'portal_domain' => 'crm.alexlesley.biz',
-            'profile_key' => 'dev-alex-main',
-            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
-            'display_name' => 'Dev Alex Main',
-            'client_id' => 'client-id-alex',
-            'application_code' => 'local.app.dev.alex',
-            'callback_base_url' => 'https://alex-tunnel.trycloudflare.com',
-            'telegram_source_id' => 'ABC_TELEGRAM_DEV_ALEX_MAIN',
-            'max_source_id' => 'ABC_MAX_DEV_ALEX_MAIN',
-            'telegram_connector_code' => 'abc_telegram_dev_alex_main',
-            'max_connector_code' => 'abc_max_dev_alex_main',
-            'telegram_line_id' => 'telegram-line-shared',
-            'max_line_id' => 'max-line-alex',
-        ]);
-
-        $this->artisan('bitrix24:dev-profile-bootstrap', [
-            'profile_key' => 'dev-ivan-main',
-            'callback_base_url' => 'https://ivan-tunnel.trycloudflare.com',
-            '--telegram-line-id' => 'telegram-line-shared',
-        ])
-            ->expectsOutputToContain('Telegram LINE_ID `telegram-line-shared` is already assigned to profile `dev-alex-main`.')
-            ->assertExitCode(2);
-
-        $this->assertSame(1, Bitrix24Profile::query()->count());
     }
 
     public function test_command_fails_when_open_lines_probe_returns_unrelated_non_empty_payload(): void
@@ -296,19 +277,18 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
             'max_source_id' => 'ABC_MAX_DEV_IVAN_MAIN',
             'telegram_connector_code' => 'abc_telegram_dev_ivan_main',
             'max_connector_code' => 'abc_max_dev_ivan_main',
-            'telegram_line_id' => 'telegram-line-ivan',
-            'max_line_id' => 'max-line-ivan',
         ]);
 
         $this->createActiveConnection($profile);
         $this->recordInstallCallbackEvent($profile, 'https://spark-rocket.trycloudflare.com');
+        $this->createOpenLineRoutes($profile);
         $this->fakeBitrixVerifyWithUnexpectedLinePayload($profile);
 
         $this->artisan('bitrix24:dev-profile-bootstrap', [
             'profile_key' => 'dev-ivan-main',
             'callback_base_url' => 'https://spark-rocket.trycloudflare.com',
         ])
-            ->expectsOutputToContain('Telegram LINE_ID exists on Bitrix')
+            ->expectsOutputToContain('Telegram route LINE_ID values exist on Bitrix')
             ->expectsOutputToContain('Bitrix did not confirm this LINE_ID through imopenlines.config.get.')
             ->expectsOutputToContain('Dev-profile сохранён, но full_live setup ещё не готов.')
             ->assertFailed();
@@ -336,8 +316,54 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
         ]);
     }
 
+    private function createOpenLineRoutes(
+        Bitrix24Profile $profile,
+        string $telegramLineId = 'telegram-line-ivan',
+        string $maxLineId = 'max-line-ivan',
+    ): void {
+        $telegram = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $max = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $telegram->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($telegram),
+            'connector_code' => $profile->telegram_connector_code,
+            'line_id' => $telegramLineId,
+            'source_id' => $profile->telegram_source_id,
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $max->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($max),
+            'connector_code' => $profile->max_connector_code,
+            'line_id' => $maxLineId,
+            'source_id' => $profile->max_source_id,
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+    }
+
     private function fakeBitrixVerifySuccess(Bitrix24Profile $profile): void
     {
+        $lineIds = $profile->openLineRoutes()
+            ->where('status', Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->pluck('line_id')
+            ->map(fn (mixed $lineId): string => trim((string) $lineId))
+            ->filter()
+            ->values()
+            ->all();
+
         Http::fake([
             'https://client-endpoint.example/rest/app.info.json' => Http::response([
                 'result' => [
@@ -345,18 +371,15 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
                     'INSTALLED' => 1,
                 ],
             ]),
-            'https://client-endpoint.example/rest/imopenlines.config.get.json' => function ($request) use ($profile) {
+            'https://client-endpoint.example/rest/imopenlines.config.get.json' => function ($request) use ($lineIds) {
                 $lineId = trim((string) $request['CONFIG_ID']);
 
-                if (in_array($lineId, [
-                    (string) $profile->telegram_line_id,
-                    (string) $profile->max_line_id,
-                ], true)) {
-                return Http::response([
-                    'result' => [
-                        'ID' => $lineId,
-                    ],
-                ]);
+                if (in_array($lineId, $lineIds, true)) {
+                    return Http::response([
+                        'result' => [
+                            'ID' => $lineId,
+                        ],
+                    ]);
                 }
 
                 return Http::response([

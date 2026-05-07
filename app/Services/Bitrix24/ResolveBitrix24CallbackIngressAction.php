@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24CallbackIngressData;
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Profile;
 use Illuminate\Http\Request;
 
@@ -39,9 +40,21 @@ class ResolveBitrix24CallbackIngressAction
 
     private function findProfile(string $callbackBaseUrl): ?Bitrix24Profile
     {
-        return Bitrix24Profile::query()
+        $profile = Bitrix24Profile::query()
             ->where('callback_base_url', $callbackBaseUrl)
             ->first();
+
+        if ($profile instanceof Bitrix24Profile) {
+            return $profile;
+        }
+
+        $owner = Bitrix24CallbackOwner::query()
+            ->with('bitrix24Profile')
+            ->where('callback_base_url', $callbackBaseUrl)
+            ->where('status', Bitrix24CallbackOwner::STATUS_ACTIVE)
+            ->first();
+
+        return $owner?->bitrix24Profile;
     }
 
     private function matchesConfiguredCallbackBaseUrl(string $callbackBaseUrl): bool

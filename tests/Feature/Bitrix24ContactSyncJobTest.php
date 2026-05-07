@@ -6,8 +6,8 @@ use App\Data\Bitrix24\Bitrix24DealSyncQueueResultData;
 use App\Data\Bitrix24\Bitrix24HistoryExportQueueResultData;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\SyncContactToBitrix24Job;
-use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24Connection;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -16,11 +16,12 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bitrix24\IsContactReadyForBitrix24SyncAction;
+use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
 use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
+use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Bitrix24\QueueMissedBitrix24OpenLinesRetryAction;
 use App\Services\Bitrix24\SyncContactToBitrix24Action;
-use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -40,8 +41,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
         config()->set('bitrix24.application.client_id', 'local.app');
         config()->set('bitrix24.application.client_secret', 'local.secret');
-        config()->set('bitrix24.sources.telegram_id', 'ABRIKOSOFF_TELEGRAM');
-        config()->set('bitrix24.sources.max_id', 'ABRIKOSOFF_MAX');
+        config()->set('bitrix24.sources.telegram_id', 'ABC_TELEGRAM');
+        config()->set('bitrix24.sources.max_id', 'ABC_MAX');
         config()->set('bitrix24.features.openlines_enabled', true);
         config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
         config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
@@ -82,7 +83,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'received_at' => now(),
         ]);
 
-        $initialQueueResult = app(\App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction::class)->handle($missedInbound);
+        $initialQueueResult = app(QueueBitrix24LiveMessageExportAction::class)->handle($missedInbound);
 
         $this->assertFalse($initialQueueResult->queued);
         $this->assertFalse($initialQueueResult->ready);
@@ -196,7 +197,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'received_at' => now()->subMinute(),
         ]);
 
-        $initialQueueResult = app(\App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction::class)->handle($missedSystemEvent);
+        $initialQueueResult = app(QueueBitrix24LiveMessageExportAction::class)->handle($missedSystemEvent);
 
         $this->assertFalse($initialQueueResult->queued);
         $this->assertFalse($initialQueueResult->ready);
@@ -609,7 +610,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             return is_array($fields)
                 && $fields['NAME'] === 'Герман'
                 && $fields['LAST_NAME'] === 'Абрикосов'
-                && $fields['SOURCE_ID'] === 'ABRIKOSOFF_TELEGRAM'
+                && $fields['SOURCE_ID'] === 'ABC_TELEGRAM'
                 && $fields['UF_CRM_ABRIKOSOFF_CONTACT_ID'] === (string) $contact->id
                 && $fields['UF_CRM_ABRIKOSOFF_CHANNEL_ID'] === (string) $channel->id
                 && $fields['UF_CRM_ABRIKOSOFF_PLATFORM'] === Channel::PLATFORM_TELEGRAM
@@ -619,6 +620,73 @@ class Bitrix24ContactSyncJobTest extends TestCase
                 && $fields['PHONE'][0]['VALUE_TYPE'] === 'WORK'
                 && $fields['PHONE'][1]['VALUE'] === '+79995555555'
                 && $fields['PHONE'][1]['VALUE_TYPE'] === 'OTHER';
+        });
+    }
+
+    public function test_contact_create_payload_uses_current_profile_crm_schema_settings(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection(
+            profileOverrides: [
+                'telegram_source_id' => 'ABC_TELEGRAM_PROFILE',
+            ],
+        );
+        $connection->profile->forceFill([
+            'crm_field_name_source' => 'UF_CRM_PROFILE_NAME_SOURCE',
+            'crm_field_age_exact' => 'UF_CRM_PROFILE_AGE_EXACT',
+            'crm_field_gender' => 'UF_CRM_PROFILE_GENDER',
+            'crm_field_age_range' => 'UF_CRM_PROFILE_AGE_RANGE',
+            'crm_field_contact_id' => 'UF_CRM_PROFILE_CONTACT_ID',
+            'crm_field_channel_id' => 'UF_CRM_PROFILE_CHANNEL_ID',
+            'crm_field_channel_name' => 'UF_CRM_PROFILE_CHANNEL_NAME',
+            'crm_field_platform' => 'UF_CRM_PROFILE_PLATFORM',
+            'crm_field_bot_code' => 'UF_CRM_PROFILE_BOT_CODE',
+            'crm_field_bot_name' => 'UF_CRM_PROFILE_BOT_NAME',
+            'crm_name_source_self_reported_id' => 9002,
+            'crm_gender_male_id' => 9001,
+        ])->save();
+
+        $channel = $this->makeTelegramChannel([
+            'name' => 'Profile Telegram',
+            'bot_username' => 'profile_tg',
+            'bot_name' => 'Profile TG',
+        ]);
+        $contact = $this->createSyncReadyContact(channel: $channel);
+
+        $contact->forceFill([
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+        ])->save();
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'result' => ['CONTACT' => []],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.add.json' => Http::response([
+                'result' => 501,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Http::assertSent(function ($request) use ($contact, $channel): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/crm.contact.add.json') {
+                return false;
+            }
+
+            $fields = $request['fields'];
+
+            return is_array($fields)
+                && ($fields['SOURCE_ID'] ?? null) === 'ABC_TELEGRAM_PROFILE'
+                && ($fields['UF_CRM_PROFILE_NAME_SOURCE'] ?? null) === 9002
+                && ($fields['UF_CRM_PROFILE_GENDER'] ?? null) === 9001
+                && ($fields['UF_CRM_PROFILE_CONTACT_ID'] ?? null) === (string) $contact->id
+                && ($fields['UF_CRM_PROFILE_CHANNEL_ID'] ?? null) === (string) $channel->id
+                && ($fields['UF_CRM_PROFILE_CHANNEL_NAME'] ?? null) === 'Profile Telegram'
+                && ($fields['UF_CRM_PROFILE_PLATFORM'] ?? null) === Channel::PLATFORM_TELEGRAM
+                && ($fields['UF_CRM_PROFILE_BOT_CODE'] ?? null) === 'profile_tg'
+                && ($fields['UF_CRM_PROFILE_BOT_NAME'] ?? null) === 'Profile TG'
+                && ! array_key_exists('UF_CRM_ABRIKOSOFF_CONTACT_ID', $fields)
+                && ! array_key_exists('UF_CRM_ABRIKOSOFF_PLATFORM', $fields);
         });
     }
 
@@ -863,7 +931,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
             return is_array($fields)
                 && ($fields['ADDRESS_CITY'] ?? null) === 'Москва'
-                && ($fields['SOURCE_ID'] ?? null) === 'ABRIKOSOFF_TELEGRAM'
+                && ($fields['SOURCE_ID'] ?? null) === 'ABC_TELEGRAM'
                 && ($fields['UF_CRM_ABRIKOSOFF_CHANNEL_NAME'] ?? null) === 'Telegram Sales';
         });
     }
@@ -1546,7 +1614,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'ID' => (string) ($contact->bitrix24_contact_id ?? '555'),
             'NAME' => (string) $contact->first_name,
             'LAST_NAME' => (string) $contact->last_name,
-            'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+            'SOURCE_ID' => 'ABC_TELEGRAM',
             'ADDRESS_CITY' => (string) $contact->city,
             'ADDRESS_COUNTRY' => (string) $contact->country,
             'UF_CRM_64D7457E4DC07' => (string) $this->resolveExpectedBitrixNameSourceId($contact),

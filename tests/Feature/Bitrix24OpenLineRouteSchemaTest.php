@@ -2,8 +2,8 @@
 
 namespace Tests\Feature;
 
-use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
@@ -28,6 +28,7 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
             'connector_code',
             'line_id',
             'line_owner_key',
+            'callback_owner_id',
             'source_id',
             'status',
             'last_error_message',
@@ -37,6 +38,15 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
         ]));
 
         $this->assertTrue(Schema::hasColumn('dialogs', 'bitrix24_open_line_route_id'));
+        $this->assertTrue(Schema::hasColumns('bitrix24_callback_owners', [
+            'id',
+            'bitrix24_profile_id',
+            'owner_key',
+            'display_name',
+            'callback_base_url',
+            'status',
+            'last_seen_at',
+        ]));
     }
 
     public function test_usable_routes_claim_line_owner_key_and_drafts_keep_it_null(): void

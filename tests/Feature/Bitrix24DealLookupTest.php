@@ -77,7 +77,7 @@ class Bitrix24DealLookupTest extends TestCase
                 && ($fields['STAGE_ID'] ?? null) === 'C22:NEW'
                 && ($fields['ASSIGNED_BY_ID'] ?? null) === 1
                 && ($fields['CONTACT_ID'] ?? null) === $contact->bitrix24_contact_id
-                && ($fields['SOURCE_ID'] ?? null) === 'ABRIKOSOFF_TELEGRAM';
+                && ($fields['SOURCE_ID'] ?? null) === 'ABC_TELEGRAM';
         });
 
         $this->assertDatabaseHas('bitrix24_sync_logs', [
@@ -152,7 +152,7 @@ class Bitrix24DealLookupTest extends TestCase
                         'STAGE_ID' => 'C22:NEW',
                         'CLOSED' => 'N',
                         'ASSIGNED_BY_ID' => '1',
-                        'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+                        'SOURCE_ID' => 'ABC_TELEGRAM',
                     ],
                 ],
             ], 200),
@@ -187,7 +187,7 @@ class Bitrix24DealLookupTest extends TestCase
                         'STAGE_ID' => 'C22:NEW',
                         'CLOSED' => 'N',
                         'ASSIGNED_BY_ID' => '1',
-                        'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+                        'SOURCE_ID' => 'ABC_TELEGRAM',
                     ],
                     [
                         'ID' => '2',
@@ -196,7 +196,7 @@ class Bitrix24DealLookupTest extends TestCase
                         'STAGE_ID' => 'C22:NEW',
                         'CLOSED' => 'N',
                         'ASSIGNED_BY_ID' => '1',
-                        'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+                        'SOURCE_ID' => 'ABC_TELEGRAM',
                     ],
                     [
                         'ID' => '9',
@@ -205,7 +205,7 @@ class Bitrix24DealLookupTest extends TestCase
                         'STAGE_ID' => 'C22:NEW',
                         'CLOSED' => 'N',
                         'ASSIGNED_BY_ID' => '1',
-                        'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+                        'SOURCE_ID' => 'ABC_TELEGRAM',
                     ],
                 ],
             ], 200),
@@ -247,7 +247,7 @@ class Bitrix24DealLookupTest extends TestCase
                             'STAGE_ID' => 'C22:NEW',
                             'CLOSED' => 'N',
                             'ASSIGNED_BY_ID' => '1',
-                            'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+                            'SOURCE_ID' => 'ABC_TELEGRAM',
                         ],
                     ],
                     'next' => 50,
@@ -261,7 +261,7 @@ class Bitrix24DealLookupTest extends TestCase
                             'STAGE_ID' => 'C22:NEW',
                             'CLOSED' => 'N',
                             'ASSIGNED_BY_ID' => '1',
-                            'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+                            'SOURCE_ID' => 'ABC_TELEGRAM',
                         ],
                     ],
                 ], 200),
@@ -343,7 +343,7 @@ class Bitrix24DealLookupTest extends TestCase
                         'STAGE_ID' => 'C22:NEW',
                         'CLOSED' => 'N',
                         'ASSIGNED_BY_ID' => '1',
-                        'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+                        'SOURCE_ID' => 'ABC_TELEGRAM',
                     ],
                 ],
             ], 200),
@@ -477,7 +477,7 @@ class Bitrix24DealLookupTest extends TestCase
                         'STAGE_ID' => 'C22:NEW',
                         'CLOSED' => 'N',
                         'ASSIGNED_BY_ID' => '1',
-                        'SOURCE_ID' => 'ABRIKOSOFF_TELEGRAM',
+                        'SOURCE_ID' => 'ABC_TELEGRAM',
                     ],
                 ],
             ], 200),
