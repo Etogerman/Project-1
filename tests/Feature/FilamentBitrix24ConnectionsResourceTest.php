@@ -17,6 +17,7 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\User;
 use App\Services\Bitrix24\Bitrix24ApiClient;
+use App\Services\Bitrix24\Bitrix24ApiException;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -668,6 +669,323 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertSame('danger', $card['stale_callback_tone']);
         $this->assertStringContainsString('Источник: chat 23.', $card['stale_callback_title']);
         $this->assertStringContainsString('Текущая ОЛ: chat 26.', $card['stale_callback_title']);
+    }
+
+    public function test_admin_can_repair_latest_stale_open_line_callback_from_route_card(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.stale-repair.test',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '10',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+            'bitrix24_open_line_route_id' => $route->id,
+            'bitrix24_open_line_user_code_override' => 'abc_telegram|9|abrikosoff-dialog:24|15',
+            'bitrix24_open_line_resolved_chat_id_override' => '23',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $sameLineStaleIdentity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $sameLineStaleDialog = Dialog::factory()->create([
+            'current_contact_identity_id' => $sameLineStaleIdentity->id,
+            'bitrix24_open_line_route_id' => $route->id,
+            'bitrix24_open_line_user_code_override' => 'abc_telegram|10|abrikosoff-dialog:24|15',
+            'bitrix24_open_line_resolved_chat_id_override' => '23',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $currentIdentity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $currentDialog = Dialog::factory()->create([
+            'current_contact_identity_id' => $currentIdentity->id,
+            'bitrix24_open_line_route_id' => $route->id,
+            'bitrix24_open_line_user_code_override' => 'imol|abc_telegram|10|abrikosoff-dialog:24|26',
+            'bitrix24_open_line_resolved_chat_id_override' => '26',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $staleLog = $this->makeSyncLog($connection, [
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'openlines_stale_chat_ignored',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => '111',
+            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
+            'http_status' => null,
+            'request_payload' => [
+                'chat_id' => 'abrikosoff-dialog:24',
+                'line_id' => '10',
+                'dialog_id' => 24,
+                'event_name' => 'OnSendMessageCustom',
+                'connector_code' => 'abc_telegram',
+                'webhook_event_id' => 111,
+                'bitrix_message_id' => '922',
+                'source_bitrix_chat_id' => '23',
+                'current_bitrix_chat_id' => '26',
+            ],
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry): bool => $method === 'imopenlines.operator.another.finish'
+                    && ($params['CHAT_ID'] ?? null) === '23'
+                    && $usedConnection->is($connection)
+                    && $transportRetry === false)
+                ->andReturn($this->bitrixResponse(true, true));
+        });
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee('Старая ОЛ')
+            ->assertSee('Закрыть')
+            ->call('repairLatestStaleOpenLine', $channel->id)
+            ->assertHasNoErrors();
+
+        $dialog->refresh();
+        $this->assertNull($dialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
+
+        $sameLineStaleDialog->refresh();
+        $this->assertNull($sameLineStaleDialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($sameLineStaleDialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($sameLineStaleDialog->bitrix24_open_line_binding_verified_at);
+
+        $currentDialog->refresh();
+        $this->assertSame('imol|abc_telegram|10|abrikosoff-dialog:24|26', $currentDialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('26', $currentDialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNotNull($currentDialog->bitrix24_open_line_binding_verified_at);
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'connection_id' => $connection->id,
+            'operation' => 'openlines_stale_chat_repair_completed',
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+            'entity_type' => 'open_line_route',
+            'entity_id' => (string) $route->id,
+        ]);
+
+        $repairLog = Bitrix24SyncLog::query()
+            ->where('operation', 'openlines_stale_chat_repair_completed')
+            ->firstOrFail();
+        $this->assertSame($staleLog->id, (int) data_get($repairLog->request_payload, 'stale_log_id'));
+        $this->assertSame('23', (string) data_get($repairLog->request_payload, 'source_bitrix_chat_id'));
+        $this->assertSame(2, (int) data_get($repairLog->request_payload, 'reset_dialog_count'));
+
+        $cards = collect($component->instance()->getOpenLineRouteCards())->keyBy('channel_id');
+        $card = $cards->get($channel->id);
+        $this->assertSame('success', $card['stale_callback_tone']);
+        $this->assertSame('chat 23 закрыта', $card['stale_callback_label']);
+        $this->assertFalse($card['stale_callback_can_repair']);
+    }
+
+    public function test_stale_open_line_repair_does_not_reset_bindings_when_bitrix_rejects_finish(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.stale-repair-fail.test',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '10',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+            'bitrix24_open_line_route_id' => $route->id,
+            'bitrix24_open_line_user_code_override' => 'abc_telegram|9|abrikosoff-dialog:24|15',
+            'bitrix24_open_line_resolved_chat_id_override' => '23',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+
+        $this->makeSyncLog($connection, [
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'openlines_stale_chat_ignored',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => '111',
+            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
+            'http_status' => null,
+            'request_payload' => [
+                'chat_id' => 'abrikosoff-dialog:24',
+                'line_id' => '10',
+                'dialog_id' => 24,
+                'event_name' => 'OnSendMessageCustom',
+                'connector_code' => 'abc_telegram',
+                'webhook_event_id' => 111,
+                'bitrix_message_id' => '922',
+                'source_bitrix_chat_id' => '23',
+                'current_bitrix_chat_id' => '26',
+            ],
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry): bool => $method === 'imopenlines.operator.another.finish'
+                    && ($params['CHAT_ID'] ?? null) === '23'
+                    && $usedConnection->is($connection)
+                    && $transportRetry === false)
+                ->andReturn($this->bitrixResponse(false, null, 'ACCESS_DENIED', 'Недостаточно прав.'));
+        });
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('repairLatestStaleOpenLine', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', 'Не удалось закрыть старую ОЛ: Недостаточно прав.');
+
+        $dialog->refresh();
+        $this->assertSame('abc_telegram|9|abrikosoff-dialog:24|15', $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'connection_id' => $connection->id,
+            'operation' => 'openlines_stale_chat_repair_failed',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_code' => 'ACCESS_DENIED',
+            'error_message' => 'Недостаточно прав.',
+            'entity_type' => 'open_line_route',
+            'entity_id' => (string) $route->id,
+        ]);
+    }
+
+    public function test_stale_open_line_repair_logs_failure_when_bitrix_transport_fails(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.stale-repair-transport-fail.test',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '10',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $dialog = Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+            'bitrix24_open_line_route_id' => $route->id,
+            'bitrix24_open_line_user_code_override' => 'imol|abc_telegram|10|abrikosoff-dialog:24|15',
+            'bitrix24_open_line_resolved_chat_id_override' => '23',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+
+        $this->makeSyncLog($connection, [
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'openlines_stale_chat_ignored',
+            'entity_type' => 'openlines_webhook_event',
+            'entity_id' => '111',
+            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
+            'http_status' => null,
+            'request_payload' => [
+                'chat_id' => 'abrikosoff-dialog:24',
+                'line_id' => '10',
+                'dialog_id' => 24,
+                'event_name' => 'OnSendMessageCustom',
+                'connector_code' => 'abc_telegram',
+                'webhook_event_id' => 111,
+                'bitrix_message_id' => '922',
+                'source_bitrix_chat_id' => '23',
+                'current_bitrix_chat_id' => '26',
+            ],
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry): bool => $method === 'imopenlines.operator.another.finish'
+                    && ($params['CHAT_ID'] ?? null) === '23'
+                    && $usedConnection->is($connection)
+                    && $transportRetry === false)
+                ->andThrow(new Bitrix24ApiException('Bitrix24 REST call failed without transport retry.'));
+        });
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('repairLatestStaleOpenLine', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', 'Не удалось закрыть старую ОЛ: Bitrix24 REST call failed without transport retry.');
+
+        $dialog->refresh();
+        $this->assertSame('imol|abc_telegram|10|abrikosoff-dialog:24|15', $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'connection_id' => $connection->id,
+            'operation' => 'openlines_stale_chat_repair_failed',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_code' => 'transport_uncertain',
+            'error_message' => 'Bitrix24 REST call failed without transport retry.',
+            'entity_type' => 'open_line_route',
+            'entity_id' => (string) $route->id,
+        ]);
     }
 
     public function test_telegram_account_route_cannot_be_saved_as_active_in_first_slice(): void
