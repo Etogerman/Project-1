@@ -472,7 +472,6 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'resolved_bitrix_chat_id' => '23',
             'resolved_bitrix_chat_verified' => true,
             'bitrix_remote_message_id' => null,
-            'bitrix_remote_user_id' => '15',
         ]);
 
         Http::fake(array_merge($this->currentOpenLineLookupFakes($dialog, [
@@ -534,7 +533,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
     }
 
-    public function test_openlines_inbound_export_without_returned_message_id_delivers_same_text_from_different_bitrix_user(): void
+    public function test_openlines_inbound_export_without_returned_message_id_delivers_same_text_without_user_fallback(): void
     {
         $connection = $this->makeActiveConnection();
         $dialog = $this->makeDialogContactNumeric($this->createTelegramLiveDialog());
@@ -544,7 +543,6 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'похожий ответ без returned id',
             now(),
             remoteMessageId: null,
-            remoteUserId: '15',
         );
 
         Http::fake(array_merge($this->currentOpenLineLookupFakes($dialog, [
@@ -643,7 +641,6 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'непроверенный echo fallback',
             now(),
             remoteMessageId: null,
-            remoteUserId: '15',
             resolvedBitrixChatVerified: false,
         );
 
@@ -3164,7 +3161,6 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         string $text,
         \DateTimeInterface $exportedAt,
         ?string $remoteMessageId = null,
-        ?string $remoteUserId = null,
         bool $resolvedBitrixChatVerified = true,
     ): Message {
         $dialog->loadMissing('contact');
@@ -3195,7 +3191,6 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'resolved_bitrix_chat_id' => $resolvedChatId,
             'resolved_bitrix_chat_verified' => $resolvedBitrixChatVerified,
             'bitrix_remote_message_id' => $remoteMessageId,
-            'bitrix_remote_user_id' => $remoteUserId,
             'exported_at' => $exportedAt,
             'failed_at' => null,
             'failure_reason' => null,
