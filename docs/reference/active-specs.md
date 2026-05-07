@@ -30,6 +30,7 @@
 - `[telegram-account-automated-replies-via-gateway-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-automated-replies-via-gateway-v1.md`; Spec revision: `892c2f783e38383efc63e107c17fcbb1fc63eb92`; status: `opened`; opened-at: `2026-04-28`
 - `[salebot-green-start-conditions-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `salebot/tz-green-start-conditions-v1.md`; Spec revision: `e6c219ee5609677daa3e45bbbe64cbf5b5eaf0a5`; status: `opened`; opened-at: `2026-04-28`
 - `[bitrix24-openlines-manual-reply-reactivate-inactive-binding-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-openlines-manual-reply-reactivate-inactive-binding-v1.md`; Spec revision: `89ed2ecf87c111b02e9da05b9adf95d31cf3928f`; status: `opened`; opened-at: `2026-05-05`
+- `[bitrix24-openlines-stale-contact-self-heal-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-openlines-stale-contact-self-heal-v1.md`; Spec revision: `9cef683c972e03a5e6192e87fad14847305e9a73`; status: `opened`; opened-at: `2026-05-08`
 
 ## Связанные документы
 

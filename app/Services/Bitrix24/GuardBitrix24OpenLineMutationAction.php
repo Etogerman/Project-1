@@ -441,6 +441,15 @@ class GuardBitrix24OpenLineMutationAction
         }
 
         if (! $response->successful || ! is_array($response->result)) {
+            if ($notFound = Bitrix24ContactNotFoundException::fromResponse((string) $rootContact->bitrix24_contact_id, $response)) {
+                throw new Bitrix24OpenLineMutationGuardException(
+                    'Bitrix24 Open Lines mutation guard contact lookup found a stale CRM contact binding.',
+                    Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+                    false,
+                    $notFound,
+                );
+            }
+
             throw new Bitrix24OpenLineMutationGuardException(
                 sprintf(
                     'Bitrix24 Open Lines mutation guard contact lookup failed: %s',

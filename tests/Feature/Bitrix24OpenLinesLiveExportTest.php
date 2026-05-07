@@ -3393,6 +3393,89 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
     }
 
+    public function test_live_export_invalidates_stale_verified_binding_and_retries_when_chat_belongs_to_old_contact(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_MAX,
+            contactAttributes: [
+                'bitrix24_contact_id' => '10',
+            ],
+            dialogAttributes: [
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|abrikosoff-dialog:2|27',
+                'bitrix24_open_line_resolved_chat_id_override' => '34',
+                'bitrix24_open_line_binding_verified_at' => now(),
+            ],
+        );
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'MAX binding должен очиститься и уйти на retry',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => '35',
+                        'CONNECTOR_ID' => 'abrikosoff_telegram',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'result' => [
+                    'id' => 34,
+                    'entity_id' => 'abrikosoff_max|line-max|abrikosoff-dialog:2|27',
+                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|0',
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => [
+                    'ID' => '10',
+                    'IM' => [
+                        [
+                            'VALUE' => 'imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:1|26',
+                            'VALUE_TYPE' => 'IMOL',
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $dialog->refresh();
+
+        $this->assertNull($dialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '10',
+            'failure_code' => null,
+            'failure_uncertain' => false,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'open_line_binding_invalidated_after_guard_failure',
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $message->id
+            && $job->retryAfterSync === true);
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+    }
+
     public function test_live_export_resyncs_stale_verified_binding_when_old_and_new_active_chats_exist(): void
     {
         $this->makeActiveConnection();
@@ -4076,6 +4159,135 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json');
     }
 
+    public function test_stale_bitrix_contact_repair_does_not_retry_uncertain_post_send_contact_not_found(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_TELEGRAM,
+            contactAttributes: [
+                'bitrix24_contact_id' => '70951',
+            ],
+            dialogAttributes: [
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                'bitrix24_open_line_resolved_chat_id_override' => '23',
+                'bitrix24_open_line_binding_verified_at' => now(),
+            ],
+        );
+        $contact = $dialog->contact()->firstOrFail();
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 996 066-60-12',
+            'phone_normalized' => '+79960666012',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Post-send stale contact lookup is uncertain',
+        ]);
+        $contactLookupCalls = 0;
+
+        Http::fake(function (Request $request) use (&$contactLookupCalls) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
+                return Http::response([
+                    'result' => [
+                        [
+                            'CHAT_ID' => '23',
+                            'CONNECTOR_ID' => 'abrikosoff_telegram',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return Http::response([
+                    'result' => [
+                        'DATA' => [
+                            'RESULT' => [
+                                [
+                                    'user' => '15',
+                                    'session' => [
+                                        'CHAT_ID' => '26',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
+                $contactLookupCalls++;
+
+                if ($contactLookupCalls === 1) {
+                    return Http::response([
+                        'result' => [
+                            'IM' => [
+                                [
+                                    'VALUE' => 'imol|abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                                    'VALUE_TYPE' => 'IMOL',
+                                ],
+                            ],
+                        ],
+                    ], 200);
+                }
+
+                return Http::response([
+                    'error' => 'ERROR_NOT_FOUND',
+                    'error_description' => 'Not found',
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                return Http::response([
+                    'result' => [
+                        'id' => 23,
+                        'entity_id' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                        'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|70951|DEAL|12',
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json') {
+                return Http::response([
+                    'result' => ['CONTACT' => ['70740']],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
+            $this->assertTrue($exception->failureUncertain);
+            $this->assertStringContainsString('post-send lookup outcome is uncertain', $exception->getMessage());
+        }
+
+        $contact->refresh();
+        $this->assertSame('70951', $contact->bitrix24_contact_id);
+        $this->assertSame(2, $contactLookupCalls);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => null,
+            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            'failure_uncertain' => true,
+        ]);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json');
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+    }
+
     public function test_live_export_uses_verified_route_chat_even_when_higher_history_chat_exists(): void
     {
         $this->makeActiveConnection();
@@ -4593,6 +4805,512 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         $this->assertCount(2, $contactLookupRequests);
         $this->assertCount(1, $legacySendRequests);
+    }
+
+    public function test_stale_bitrix_contact_repair_relinks_by_all_contact_phones_and_retries_from_trigger_message(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, contactAttributes: [
+            'bitrix24_contact_id' => '70951',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+        $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, 'stale-telegram-chat-repair');
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 996 066-60-12',
+            'phone_normalized' => '+79960666012',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 555-55-55',
+            'phone_normalized' => '+79995555555',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => false,
+        ]);
+
+        $olderFailed = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Более старое сообщение не трогаем',
+        ]);
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $olderFailed->id,
+            'contact_id' => $contact->id,
+            'bitrix24_contact_id' => '70951',
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'failure_code' => Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+            'failure_uncertain' => false,
+            'failed_at' => now()->subMinutes(3),
+        ]);
+
+        $triggerMessage = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Сообщение, на котором сработал repair',
+        ]);
+        $newerFailed = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Более новое failed сообщение',
+        ]);
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $newerFailed->id,
+            'contact_id' => $contact->id,
+            'bitrix24_contact_id' => '70951',
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'failure_code' => Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+            'failure_uncertain' => false,
+            'failed_at' => now()->subMinute(),
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'active-max-chat-repair',
+                        'CONNECTOR_ID' => 'abrikosoff_max',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'error' => 'ERROR_NOT_FOUND',
+                'error_description' => 'Not found',
+            ], 200),
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::sequence()
+                ->push(['result' => ['CONTACT' => ['70739', '70951']]], 200)
+                ->push(['result' => ['CONTACT' => ['70740']]], 200),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($triggerMessage);
+
+        $contact->refresh();
+
+        $this->assertSame('70740', $contact->bitrix24_contact_id);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $olderFailed->id,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'bitrix24_contact_id' => '70951',
+        ]);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $triggerMessage->id,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '70740',
+            'failure_code' => null,
+        ]);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $newerFailed->id,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '70740',
+            'failure_code' => null,
+        ]);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $triggerMessage->id
+            && $job->retryAfterSync === true);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $newerFailed->id
+            && $job->retryAfterSync === true);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $olderFailed->id);
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'old_contact_not_found',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'phone_lookup',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'relink',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'retry_live_export',
+            'entity_type' => 'message',
+            'entity_id' => (string) $triggerMessage->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+    }
+
+    public function test_stale_bitrix_contact_repair_invalidates_sibling_dialog_open_line_bindings_after_relink(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, contactAttributes: [
+            'bitrix24_contact_id' => '70951',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+        $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, 'stale-telegram-chat-repair');
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352-71-11',
+            'phone_normalized' => '+79263527111',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $profile = $this->currentRuntimeBitrix24Profile();
+        $maxChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $maxIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'platform' => Channel::PLATFORM_MAX,
+            'external_user_id' => 'max-user-'.$contact->id,
+            'external_username' => 'max_user_'.$contact->id,
+        ]);
+        $siblingDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $maxChannel->id,
+            'current_contact_identity_id' => $maxIdentity->id,
+            'external_chat_id' => 'max-chat-'.$contact->id,
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|max-chat-'.$contact->id.'|max-user-'.$contact->id,
+            'bitrix24_open_line_resolved_chat_id_override' => '34',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ]);
+        $this->pinDialogOpenLineRoute($siblingDialog, $profile, 'abrikosoff_max', 'line-max');
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Repair должен сбросить соседнюю ОЛ-привязку',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'error' => 'ERROR_NOT_FOUND',
+                'error_description' => 'Not found',
+            ], 200),
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'result' => ['CONTACT' => ['70740']],
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $contact->refresh();
+        $siblingDialog->refresh();
+
+        $this->assertSame('70740', $contact->bitrix24_contact_id);
+        $this->assertNull($siblingDialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($siblingDialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($siblingDialog->bitrix24_open_line_binding_verified_at);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '70740',
+            'failure_code' => null,
+        ]);
+
+        $log = Bitrix24SyncLog::query()
+            ->where('operation', 'open_line_bindings_invalidated_after_contact_repair')
+            ->where('entity_type', 'contact')
+            ->where('entity_id', (string) $contact->id)
+            ->first();
+
+        $this->assertInstanceOf(Bitrix24SyncLog::class, $log);
+        $this->assertSame([$siblingDialog->id], $log->response_payload['reset_dialog_ids']);
+        $this->assertSame(1, $log->response_payload['reset_dialog_count']);
+    }
+
+    public function test_stale_bitrix_contact_repair_runs_before_fast_inbound_fallback_can_send(): void
+    {
+        $this->makeActiveConnection();
+        config()->set('bitrix24.features.fast_inbound_export_enabled', true);
+
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_TELEGRAM,
+            contactAttributes: [
+                'bitrix24_contact_id' => '9',
+            ],
+            dialogAttributes: [
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:1|101154',
+                'bitrix24_open_line_resolved_chat_id_override' => '35',
+                'bitrix24_open_line_binding_verified_at' => now(),
+            ],
+        );
+        $contact = $dialog->contact()->firstOrFail();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352-71-11',
+            'phone_normalized' => '+79263527111',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Fast inbound stale contact repair',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'error' => '',
+                'error_description' => 'Not found',
+            ], 400),
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'result' => ['CONTACT' => [10]],
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $contact->refresh();
+
+        $this->assertSame('10', $contact->bitrix24_contact_id);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '10',
+            'failure_code' => null,
+        ]);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $message->id
+            && $job->retryAfterSync === true);
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
+    }
+
+    public function test_stale_bitrix_contact_repair_without_valid_phone_leaves_export_failed_without_send(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, contactAttributes: [
+            'bitrix24_contact_id' => '70951',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+        $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, 'stale-telegram-chat-no-phone');
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Нет телефона для repair',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'active-max-chat-no-phone',
+                        'CONNECTOR_ID' => 'abrikosoff_max',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'error' => 'ERROR_NOT_FOUND',
+                'error_description' => 'Not found',
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $contact->refresh();
+
+        $this->assertSame('70951', $contact->bitrix24_contact_id);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'failure_code' => Bitrix24MessageExport::FAILURE_STALE_CONTACT_REPAIR_NO_VALID_PHONE,
+            'failure_uncertain' => false,
+        ]);
+
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+    }
+
+    public function test_stale_bitrix_contact_repair_creates_replacement_contact_when_phone_lookup_has_no_match(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, contactAttributes: [
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            'last_name' => 'Абрикосов',
+            'gender' => 'male',
+            'age_years' => 28,
+            'age_range' => '24_29',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'bitrix24_contact_id' => '70951',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+        $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, 'stale-telegram-chat-create');
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 996 066-60-12',
+            'phone_normalized' => '+79960666012',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Создать новый contact после stale ID',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'active-max-chat-create',
+                        'CONNECTOR_ID' => 'abrikosoff_max',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'error' => 'ERROR_NOT_FOUND',
+                'error_description' => 'Not found',
+            ], 200),
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::sequence()
+                ->push(['result' => ['CONTACT' => []]], 200)
+                ->push(['result' => ['CONTACT' => []]], 200),
+            'https://client-endpoint.example/rest/crm.contact.add.json' => Http::response([
+                'result' => '70741',
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $contact->refresh();
+
+        $this->assertSame('70741', $contact->bitrix24_contact_id);
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_SYNCED, $contact->bitrix24_sync_status);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '70741',
+            'failure_code' => null,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'create',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $message->id
+            && $job->retryAfterSync === true);
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.contact.add.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
+    }
+
+    public function test_stale_bitrix_contact_repair_creates_replacement_contact_when_phone_lookup_only_returns_old_contact(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, contactAttributes: [
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            'last_name' => 'Абрикосов',
+            'gender' => 'male',
+            'age_years' => 28,
+            'age_range' => '24_29',
+            'country' => 'Россия',
+            'city' => 'Москва',
+            'bitrix24_contact_id' => '70951',
+        ]);
+        $contact = $dialog->contact()->firstOrFail();
+        $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, 'stale-telegram-chat-create-old-only');
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 996 066-60-12',
+            'phone_normalized' => '+79960666012',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Создать новый contact, если поиск вернул только старый stale ID',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
+                'result' => [
+                    [
+                        'CHAT_ID' => 'active-max-chat-create-old-only',
+                        'CONNECTOR_ID' => 'abrikosoff_max',
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'error' => 'ERROR_NOT_FOUND',
+                'error_description' => 'Not found',
+            ], 200),
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::sequence()
+                ->push(['result' => ['CONTACT' => ['70951']]], 200)
+                ->push(['result' => ['CONTACT' => ['70951']]], 200),
+            'https://client-endpoint.example/rest/crm.contact.add.json' => Http::response([
+                'result' => '70742',
+            ], 200),
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+
+        $contact->refresh();
+
+        $this->assertSame('70742', $contact->bitrix24_contact_id);
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_SYNCED, $contact->bitrix24_sync_status);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '70742',
+            'failure_code' => null,
+        ]);
+
+        $contactLookupRequests = collect(Http::recorded())
+            ->filter(fn (array $pair): bool => $pair[0]->url() === 'https://client-endpoint.example/rest/crm.contact.get.json');
+
+        $this->assertCount(1, $contactLookupRequests);
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/crm.contact.add.json');
+        Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
     }
 
     public function test_fake_happy_path_live_export_marks_message_as_exported_without_bitrix_request(): void

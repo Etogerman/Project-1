@@ -14,6 +14,7 @@ use App\Models\Message;
 use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use Illuminate\Support\Str;
+use Throwable;
 
 class ExportMessageToBitrix24OpenLinesAction
 {
@@ -39,6 +40,8 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
         private readonly ResolveCurrentBitrix24OpenLineChatAction $resolveCurrentOpenLineChatAction,
         private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
+        private readonly RepairStaleBitrix24ContactForLiveExportAction $repairStaleBitrix24ContactForLiveExportAction,
+        private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
     ) {}
 
     public function handle(Message|int $message, bool $retryAfterSync = false, ?string $liveBatchUuid = null): Message
@@ -230,6 +233,28 @@ class ExportMessageToBitrix24OpenLinesAction
         } catch (Bitrix24LiveExportTransportException $exception) {
             $this->markRouteMisconfiguredOnInactiveLineFailure($route, $dialog, $exception);
 
+            if ($this->handleStaleContactRepairAfterFailedExport(
+                message: $message,
+                dialog: $dialog,
+                rootContact: $rootContact,
+                bitrix24ContactId: $bitrix24ContactId,
+                exception: $exception,
+                transportMethod: Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            )) {
+                return $message->fresh() ?? $message;
+            }
+
+            if ($this->handleStaleOpenLineBindingRepairAfterFailedExport(
+                message: $message,
+                dialog: $dialog,
+                rootContact: $rootContact,
+                bitrix24ContactId: $bitrix24ContactId,
+                exception: $exception,
+                transportMethod: Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            )) {
+                return $message->fresh() ?? $message;
+            }
+
             $this->markFailed(
                 $message,
                 $rootContact->id,
@@ -245,7 +270,7 @@ class ExportMessageToBitrix24OpenLinesAction
             ])->save();
 
             throw $exception;
-        } catch (\Throwable $throwable) {
+        } catch (Throwable $throwable) {
             $this->markFailed(
                 $message,
                 $rootContact->id,
@@ -260,6 +285,179 @@ class ExportMessageToBitrix24OpenLinesAction
 
             throw $throwable;
         }
+    }
+
+    private function handleStaleContactRepairAfterFailedExport(
+        Message $message,
+        Dialog $dialog,
+        Contact $rootContact,
+        string $bitrix24ContactId,
+        Bitrix24LiveExportTransportException $exception,
+        ?string $transportMethod,
+    ): bool {
+        if ($exception->failureUncertain) {
+            return false;
+        }
+
+        $notFound = $this->findContactNotFoundException($exception);
+
+        if (! $notFound instanceof Bitrix24ContactNotFoundException) {
+            return false;
+        }
+
+        if ($notFound->restMethod !== 'crm.contact.get' || $notFound->bitrix24ContactId !== $bitrix24ContactId) {
+            return false;
+        }
+
+        $this->markFailed(
+            $message,
+            $rootContact->id,
+            $bitrix24ContactId,
+            $exception->getMessage(),
+            $transportMethod,
+            failureCode: $exception->failureCode,
+            failureUncertain: false,
+        );
+
+        $dialog->forceFill([
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_FAILED,
+        ])->save();
+
+        $result = $this->repairStaleBitrix24ContactForLiveExportAction->handle(
+            $message,
+            $rootContact->fresh() ?? $rootContact,
+            $bitrix24ContactId,
+        );
+
+        if ($result->repaired) {
+            return true;
+        }
+
+        $this->markFailed(
+            $message,
+            $rootContact->id,
+            $bitrix24ContactId,
+            $result->failureReason ?? 'Bitrix24 stale contact repair failed.',
+            $transportMethod,
+            failureCode: $result->failureCode ?? Bitrix24MessageExport::FAILURE_STALE_CONTACT_REPAIR_FAILED,
+            failureUncertain: false,
+        );
+
+        return true;
+    }
+
+    private function handleStaleOpenLineBindingRepairAfterFailedExport(
+        Message $message,
+        Dialog $dialog,
+        Contact $rootContact,
+        string $bitrix24ContactId,
+        Bitrix24LiveExportTransportException $exception,
+        ?string $transportMethod,
+    ): bool {
+        $guardFailure = $this->findOpenLineMutationGuardException($exception);
+
+        if (! $guardFailure instanceof Bitrix24OpenLineMutationGuardException) {
+            return false;
+        }
+
+        if (! $this->isRecoverableStaleOpenLineBindingGuardFailure($dialog, $guardFailure)) {
+            return false;
+        }
+
+        $oldUserCode = $dialog->bitrix24_open_line_user_code_override;
+        $oldResolvedChatId = $dialog->bitrix24_open_line_resolved_chat_id_override;
+
+        $dialog->forceFill([
+            'bitrix24_open_line_user_code_override' => null,
+            'bitrix24_open_line_resolved_chat_id_override' => null,
+            'bitrix24_open_line_binding_verified_at' => null,
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_FAILED,
+        ])->save();
+
+        $this->markFailed(
+            $message,
+            $rootContact->id,
+            $bitrix24ContactId,
+            $exception->getMessage(),
+            $transportMethod,
+            failureCode: $exception->failureCode,
+            failureUncertain: false,
+        );
+
+        $queueResult = $this->queueBitrix24LiveMessageExportAction->handle($message->fresh() ?? $message, retryAfterSync: true);
+
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'open_line_binding_invalidated_after_guard_failure',
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'message_id' => $message->id,
+                'dialog_id' => $dialog->id,
+                'contact_id' => $rootContact->id,
+                'bitrix24_contact_id' => $bitrix24ContactId,
+                'old_user_code' => $oldUserCode,
+                'old_resolved_chat_id' => $oldResolvedChatId,
+                'failure_code' => $exception->failureCode,
+                'failure_reason' => $exception->getMessage(),
+            ],
+            responsePayload: [
+                'queued' => $queueResult->queued,
+                'already_pending' => $queueResult->alreadyPending,
+            ],
+            entityType: 'message',
+            entityId: (string) $message->id,
+        );
+
+        return true;
+    }
+
+    private function isRecoverableStaleOpenLineBindingGuardFailure(
+        Dialog $dialog,
+        Bitrix24OpenLineMutationGuardException $exception,
+    ): bool {
+        if (
+            $exception->failureCode !== Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED
+            || $exception->failureUncertain
+            || $dialog->bitrix24_open_line_binding_verified_at === null
+            || blank($dialog->bitrix24_open_line_user_code_override)
+            || blank($dialog->bitrix24_open_line_resolved_chat_id_override)
+        ) {
+            return false;
+        }
+
+        $message = Str::lower($exception->getMessage());
+
+        return Str::contains($message, 'verified binding preflight failed')
+            && Str::contains($message, [
+                'is not active for contact',
+                'is active, but connector',
+            ]);
+    }
+
+    private function findContactNotFoundException(Throwable $throwable): ?Bitrix24ContactNotFoundException
+    {
+        do {
+            if ($throwable instanceof Bitrix24ContactNotFoundException) {
+                return $throwable;
+            }
+
+            $throwable = $throwable->getPrevious();
+        } while ($throwable instanceof Throwable);
+
+        return null;
+    }
+
+    private function findOpenLineMutationGuardException(Throwable $throwable): ?Bitrix24OpenLineMutationGuardException
+    {
+        do {
+            if ($throwable instanceof Bitrix24OpenLineMutationGuardException) {
+                return $throwable;
+            }
+
+            $throwable = $throwable->getPrevious();
+        } while ($throwable instanceof Throwable);
+
+        return null;
     }
 
     private function markRouteMisconfiguredOnInactiveLineFailure(
@@ -899,6 +1097,13 @@ class ExportMessageToBitrix24OpenLinesAction
                 $dialog,
                 $route,
                 $connection,
+            );
+        } catch (Bitrix24ContactNotFoundException $exception) {
+            throw new Bitrix24LiveExportTransportException(
+                'Bitrix24 Open Lines fast-path current chat lookup found a stale CRM contact binding before mutating export.',
+                failureCode: Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+                failureUncertain: false,
+                previous: $exception,
             );
         } catch (Bitrix24ApiException) {
             return false;
