@@ -4,6 +4,7 @@ namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24ContactMatchResultData;
 use App\Data\Bitrix24\Bitrix24ContactUpdatePlanData;
+use App\Data\Bitrix24\Bitrix24DuplicateContactLookupResultData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Contact;
@@ -31,7 +32,10 @@ class SyncContactToBitrix24Action
         private readonly ResolveBitrix24ProfileSchemaAction $resolveProfileSchemaAction,
     ) {}
 
-    public function handle(Contact|int $contact): Contact
+    /**
+     * @param  list<string>  $excludedBitrix24ContactIds
+     */
+    public function handle(Contact|int $contact, array $excludedBitrix24ContactIds = []): Contact
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
 
@@ -69,7 +73,10 @@ class SyncContactToBitrix24Action
         }
 
         $phones = $this->collectContactPhonesAction->handle($rootContact);
-        $lookupResult = $this->findDuplicateContactsByPhonesAction->handle($phones, $connection);
+        $lookupResult = $this->excludeBitrix24ContactIds(
+            $this->findDuplicateContactsByPhonesAction->handle($phones, $connection),
+            $excludedBitrix24ContactIds,
+        );
         $matchResult = $this->resolveContactMatchAction->handle($lookupResult);
 
         $this->logApiCallAction->handle(
@@ -99,6 +106,44 @@ class SyncContactToBitrix24Action
             Bitrix24ContactMatchResultData::TYPE_CONFLICT => $this->markConflict($rootContact, $matchResult),
             default => $rootContact,
         };
+    }
+
+    /**
+     * @param  list<string>  $excludedBitrix24ContactIds
+     */
+    private function excludeBitrix24ContactIds(
+        Bitrix24DuplicateContactLookupResultData $lookupResult,
+        array $excludedBitrix24ContactIds,
+    ): Bitrix24DuplicateContactLookupResultData {
+        $excluded = [];
+
+        foreach ($excludedBitrix24ContactIds as $contactId) {
+            $contactId = trim((string) $contactId);
+
+            if ($contactId !== '') {
+                $excluded[$contactId] = true;
+            }
+        }
+
+        if ($excluded === []) {
+            return $lookupResult;
+        }
+
+        $filteredContactIds = array_values(array_filter(
+            $lookupResult->uniqueContactIds,
+            static fn (string $contactId): bool => ! isset($excluded[trim($contactId)]),
+        ));
+
+        if ($filteredContactIds === $lookupResult->uniqueContactIds) {
+            return $lookupResult;
+        }
+
+        return new Bitrix24DuplicateContactLookupResultData(
+            checkedPhones: $lookupResult->checkedPhones,
+            matchesByPhone: $lookupResult->matchesByPhone,
+            uniqueContactIds: $filteredContactIds,
+            ambiguous: $lookupResult->ambiguous && count($filteredContactIds) > 1,
+        );
     }
 
     private function createRemoteContact(Contact $contact, Bitrix24Connection $connection): Contact

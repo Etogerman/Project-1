@@ -147,6 +147,10 @@ class ResolveCurrentBitrix24OpenLineChatAction
         );
 
         if (! $response->successful || ! is_array($response->result)) {
+            if ($notFound = Bitrix24ContactNotFoundException::fromResponse($bitrix24ContactId, $response)) {
+                throw $notFound;
+            }
+
             throw new Bitrix24ApiException(sprintf(
                 'Bitrix24 Open Lines current chat contact lookup failed: %s',
                 $response->errorMessage ?? 'Unknown error.',
