@@ -2012,6 +2012,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $dialog = $this->createLiveReadyDialog(contactAttributes: [
             'bitrix24_contact_id' => '9',
         ]);
+        $returnedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
         $storedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $storedUserCode,
@@ -2026,11 +2027,15 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
         $sendCalls = 0;
 
-        Http::fake(function (Request $request) use (&$sendCalls, $storedUserCode) {
+        Http::fake(function (Request $request) use (&$sendCalls, $returnedUserCode, $storedUserCode) {
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
                         'IM' => [
+                            [
+                                'VALUE' => 'imol|'.$returnedUserCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
                             [
                                 'VALUE' => 'imol|'.$storedUserCode,
                                 'VALUE_TYPE' => 'IMOL',
@@ -2041,10 +2046,21 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             }
 
             if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                $userCode = (string) $request['USER_CODE'];
+                $chatId = match ($userCode) {
+                    $returnedUserCode => '23',
+                    $storedUserCode => '26',
+                    default => null,
+                };
+
+                if ($chatId === null) {
+                    return Http::response(['error' => 'NOT_FOUND'], 404);
+                }
+
                 return Http::response([
                     'result' => [
-                        'id' => 26,
-                        'entity_id' => $storedUserCode,
+                        'id' => $chatId,
+                        'entity_id' => $userCode,
                         'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
                     ],
                 ], 200);
@@ -2077,10 +2093,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $dialog->refresh();
 
         $this->assertSame(1, $sendCalls);
-        $this->assertSame(
-            sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id),
-            $dialog->bitrix24_open_line_user_code_override,
-        );
+        $this->assertSame($returnedUserCode, $dialog->bitrix24_open_line_user_code_override);
         $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $message->id,
@@ -2790,6 +2803,120 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'resolved_bitrix_chat_id' => '23',
             'failure_code' => null,
             'failure_uncertain' => false,
+        ]);
+    }
+
+    public function test_live_export_rejects_returned_chat_when_it_belongs_to_other_contact(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_TELEGRAM,
+            contactAttributes: [
+                'bitrix24_contact_id' => '9',
+            ],
+        );
+
+        $returnedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
+        $storedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+
+        $dialog->forceFill([
+            'bitrix24_open_line_user_code_override' => $storedUserCode,
+            'bitrix24_open_line_resolved_chat_id_override' => '26',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ])->save();
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Bitrix вернул чат другого контакта',
+        ]);
+
+        Http::fake(function (Request $request) use ($returnedUserCode, $storedUserCode) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
+                return Http::response(['result' => []], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
+                return Http::response([
+                    'result' => [
+                        'IM' => [
+                            [
+                                'VALUE' => 'imol|'.$returnedUserCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                            [
+                                'VALUE' => 'imol|'.$storedUserCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                $userCode = (string) $request['USER_CODE'];
+
+                return match ($userCode) {
+                    $returnedUserCode => Http::response([
+                        'result' => [
+                            'id' => 23,
+                            'entity_id' => $userCode,
+                            'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|999|DEAL|12',
+                        ],
+                    ], 200),
+                    $storedUserCode => Http::response([
+                        'result' => [
+                            'id' => 26,
+                            'entity_id' => $userCode,
+                            'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
+                        ],
+                    ], 200),
+                    default => Http::response(['error' => 'NOT_FOUND'], 404),
+                };
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return Http::response([
+                    'result' => [
+                        'DATA' => [
+                            'RESULT' => [
+                                [
+                                    'user' => '15',
+                                    'session' => [
+                                        'CHAT_ID' => '23',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
+            $this->assertTrue($exception->failureUncertain);
+            $this->assertStringContainsString('returned unexpected chat id [23], expected [26]', $exception->getMessage());
+        }
+
+        $dialog->refresh();
+
+        $this->assertSame($storedUserCode, $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => null,
+            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            'failure_uncertain' => true,
         ]);
     }
 
