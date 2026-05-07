@@ -544,7 +544,6 @@ class ProcessBitrix24OpenLinesWebhookAction
             ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
             ->where('bitrix24_message_exports.bitrix_remote_message_id', $messageData->bitrixMessageId)
             ->where('bitrix24_message_exports.exported_at', '>=', $asOf->copy()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
-            ->where('bitrix24_message_exports.exported_at', '<', $asOf->copy()->addSecond())
             ->latest('bitrix24_message_exports.exported_at')
             ->latest('bitrix24_message_exports.id')
             ->first();
@@ -572,8 +571,7 @@ class ProcessBitrix24OpenLinesWebhookAction
         Dialog $dialog,
         Bitrix24OpenLinesOperatorMessageData $messageData,
         ?Carbon $asOf = null,
-    ): ?Bitrix24MessageExport
-    {
+    ): ?Bitrix24MessageExport {
         $asOf = $this->normalizeEventSecond($asOf);
         $windowStart = $asOf->copy()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS);
         $latestBeforeEvent = $this->successfulInboundClientExportQuery($dialog)
@@ -622,8 +620,7 @@ class ProcessBitrix24OpenLinesWebhookAction
         Dialog $dialog,
         ?Carbon $asOf = null,
         ?Bitrix24MessageExport $referenceExport = null,
-    ): bool
-    {
+    ): bool {
         $asOf = $this->normalizeEventSecond($asOf);
         $query = $this->successfulInboundClientExportQuery($dialog)
             ->where('bitrix24_message_exports.exported_at', '>=', $asOf);
@@ -639,24 +636,45 @@ class ProcessBitrix24OpenLinesWebhookAction
         Dialog $dialog,
         ?Carbon $asOf = null,
         ?Bitrix24MessageExport $referenceExport = null,
-    ): bool
-    {
+    ): bool {
         return $this->hasSuccessfulInboundClientExportAfter($dialog, $asOf, $referenceExport)
-            || $this->hasVerifiedOpenLineBindingAfter($dialog, $asOf);
+            || $this->hasVerifiedOpenLineBindingAfter($dialog, $asOf, $referenceExport);
     }
 
-    private function hasVerifiedOpenLineBindingAfter(Dialog $dialog, ?Carbon $asOf = null): bool
-    {
-        $verifiedAt = Dialog::query()
+    private function hasVerifiedOpenLineBindingAfter(
+        Dialog $dialog,
+        ?Carbon $asOf = null,
+        ?Bitrix24MessageExport $referenceExport = null,
+    ): bool {
+        $bindingState = Dialog::query()
             ->whereKey($dialog->id)
-            ->first(['bitrix24_open_line_binding_verified_at'])
-            ?->bitrix24_open_line_binding_verified_at;
+            ->first([
+                'bitrix24_open_line_resolved_chat_id_override',
+                'bitrix24_open_line_binding_verified_at',
+            ]);
+        $verifiedAt = $bindingState?->bitrix24_open_line_binding_verified_at;
 
         if (! $verifiedAt instanceof Carbon) {
             return false;
         }
 
-        return $verifiedAt->gte($this->normalizeDialogTimestampSecond($asOf)->addSecond());
+        $asOfSecond = $this->normalizeDialogTimestampSecond($asOf);
+
+        if ($verifiedAt->gte($asOfSecond->copy()->addSecond())) {
+            return true;
+        }
+
+        if (
+            $verifiedAt->gte($asOfSecond)
+            && $referenceExport instanceof Bitrix24MessageExport
+            && $this->referenceExportIsBeforeEventSecond($referenceExport, $asOf)
+            && is_string($referenceExport->resolved_bitrix_chat_id)
+            && trim((string) $bindingState?->bitrix24_open_line_resolved_chat_id_override) !== trim($referenceExport->resolved_bitrix_chat_id)
+        ) {
+            return true;
+        }
+
+        return false;
     }
 
     private function normalizeDialogTimestampSecond(?Carbon $value): Carbon
@@ -670,6 +688,17 @@ class ProcessBitrix24OpenLinesWebhookAction
     private function normalizeEventSecond(?Carbon $value): Carbon
     {
         return ($value ?? now())->copy()->startOfSecond();
+    }
+
+    private function referenceExportIsBeforeEventSecond(
+        Bitrix24MessageExport $referenceExport,
+        ?Carbon $asOf = null,
+    ): bool {
+        if (! $referenceExport->exported_at instanceof Carbon) {
+            return false;
+        }
+
+        return $referenceExport->exported_at->lt($this->normalizeEventSecond($asOf));
     }
 
     private function syncCurrentOpenLineBinding(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void

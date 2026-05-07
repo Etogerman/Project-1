@@ -895,17 +895,16 @@ class ExportMessageToBitrix24OpenLinesAction
         string $expectedResolvedBitrixChatId,
     ): bool {
         try {
-            $currentChat = $this->resolveCurrentOpenLineChatAction->handleMatchingChatId(
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handle(
                 $dialog,
                 $route,
                 $connection,
-                $expectedResolvedBitrixChatId,
             );
         } catch (Bitrix24ApiException) {
             return false;
         }
 
-        if ($currentChat === null) {
+        if (! $currentChat instanceof Bitrix24CurrentOpenLineChatData) {
             return false;
         }
 

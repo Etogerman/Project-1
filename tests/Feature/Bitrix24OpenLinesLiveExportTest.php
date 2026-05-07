@@ -1820,8 +1820,16 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'text' => 'Fast-path должен уйти в актуальную ОЛ',
         ]);
         $sendCalls = 0;
+        $currentChatResolvedBeforeSend = false;
+        $sendSawCurrentCheck = false;
 
-        Http::fake(function (Request $request) use (&$sendCalls, $oldUserCode, $newUserCode) {
+        Http::fake(function (Request $request) use (
+            &$currentChatResolvedBeforeSend,
+            &$sendCalls,
+            &$sendSawCurrentCheck,
+            $oldUserCode,
+            $newUserCode,
+        ) {
             if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
                 return Http::response(['result' => []], 200);
             }
@@ -1855,6 +1863,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     return Http::response(['error' => 'NOT_FOUND'], 404);
                 }
 
+                if ($userCode === $newUserCode) {
+                    $currentChatResolvedBeforeSend = true;
+                }
+
                 return Http::response([
                     'result' => [
                         'id' => $chatId,
@@ -1866,6 +1878,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
                 $sendCalls++;
+                $sendSawCurrentCheck = $currentChatResolvedBeforeSend;
 
                 return Http::response([
                     'result' => [
@@ -1891,6 +1904,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $dialog->refresh();
 
         $this->assertSame(1, $sendCalls);
+        $this->assertTrue($sendSawCurrentCheck);
         $this->assertSame($newUserCode, $dialog->bitrix24_open_line_user_code_override);
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
