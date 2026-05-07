@@ -67,6 +67,7 @@ class Bitrix24MessageExport extends Model
         'resolved_crm_entity_type',
         'resolved_crm_entity_id',
         'bitrix_remote_message_id',
+        'bitrix_remote_user_id',
         'batch_uuid',
         'bitrix24_timeline_entry_id',
         'exported_at',
