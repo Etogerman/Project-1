@@ -3346,6 +3346,10 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     'IM' => [],
                 ],
             ], 200),
+            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
+                'error' => 'NOT_FOUND',
+                'error_description' => 'USER_CODE was not found.',
+            ], 404),
             'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
                 'result' => true,
             ], 200),
@@ -3987,9 +3991,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'text' => 'Post-send lookup failed after mutating request',
         ]);
 
-        $contactLookupCount = 0;
-
-        Http::fake(function (Request $request) use (&$contactLookupCount) {
+        Http::fake(function (Request $request) {
             if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
                 return Http::response([
                     'result' => [
@@ -4002,16 +4004,6 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             }
 
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
-                $contactLookupCount++;
-
-                if ($contactLookupCount === 1) {
-                    return Http::response([
-                        'result' => [
-                            'IM' => [],
-                        ],
-                    ], 200);
-                }
-
                 return Http::response([
                     'error' => 'TEMPORARY_ERROR',
                     'error_description' => 'Contact lookup temporarily unavailable.',

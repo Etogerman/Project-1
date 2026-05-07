@@ -899,7 +899,12 @@ class ExportMessageToBitrix24OpenLinesAction
         string $expectedResolvedBitrixChatId,
     ): bool {
         try {
-            $currentChat = $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+            $currentChat = $this->resolveCurrentOpenLineChatAction->handleMatchingChatId(
+                $dialog,
+                $route,
+                $connection,
+                $expectedResolvedBitrixChatId,
+            );
         } catch (Bitrix24ApiException) {
             return false;
         }

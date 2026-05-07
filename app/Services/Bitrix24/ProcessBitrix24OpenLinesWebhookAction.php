@@ -408,13 +408,8 @@ class ProcessBitrix24OpenLinesWebhookAction
             return null;
         }
 
-        $expectedChatId = trim($latestExport->resolved_bitrix_chat_id);
-
-        if ($messageData->sourceBitrixChatId === $expectedChatId) {
-            return false;
-        }
-
         $connection = $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle();
+        $expectedChatId = trim($latestExport->resolved_bitrix_chat_id);
 
         try {
             $currentChat = $this->resolveCurrentBitrix24OpenLineChatAction->handleMatchingChatId(
@@ -424,11 +419,17 @@ class ProcessBitrix24OpenLinesWebhookAction
                 $expectedChatId,
             );
         } catch (Bitrix24ApiException) {
-            $currentChat = null;
+            return null;
         }
 
-        if ($currentChat instanceof Bitrix24CurrentOpenLineChatData) {
-            $this->syncCurrentOpenLineBinding($dialog, $currentChat);
+        if (! $currentChat instanceof Bitrix24CurrentOpenLineChatData) {
+            return null;
+        }
+
+        $this->syncCurrentOpenLineBinding($dialog, $currentChat);
+
+        if ($messageData->sourceBitrixChatId === $expectedChatId) {
+            return false;
         }
 
         $this->logBitrix24ApiCallAction->handle(
@@ -484,22 +485,7 @@ class ProcessBitrix24OpenLinesWebhookAction
             return self::ECHO_RESULT_SKIPPED;
         }
 
-        $connectorUserEchoExport = $this->findRecentConnectorUserInboundEchoExport($dialog, $messageData);
-
-        if (! $connectorUserEchoExport instanceof Bitrix24MessageExport) {
-            return self::ECHO_RESULT_NONE;
-        }
-
-        $this->logInboundEchoSkipped(
-            $event,
-            $dialog,
-            $messageData,
-            $connectorUserEchoExport,
-            self::INBOUND_ECHO_SKIPPED_OPERATION,
-            Bitrix24SyncLog::STATUS_SKIPPED,
-        );
-
-        return self::ECHO_RESULT_SKIPPED;
+        return self::ECHO_RESULT_NONE;
     }
 
     private function logInboundEchoSkipped(
@@ -552,63 +538,6 @@ class ProcessBitrix24OpenLinesWebhookAction
             ->latest('bitrix24_message_exports.exported_at')
             ->latest('bitrix24_message_exports.id')
             ->first();
-    }
-
-    private function findRecentConnectorUserInboundEchoExport(
-        Dialog $dialog,
-        Bitrix24OpenLinesOperatorMessageData $messageData,
-    ): ?Bitrix24MessageExport {
-        $normalizedBitrixText = $this->normalizeEchoText($messageData->text);
-        $bitrixMessageUserId = $this->bitrixMessageUserId($messageData);
-
-        if (
-            $messageData->sourceBitrixChatId === null
-            || $normalizedBitrixText === ''
-            || $bitrixMessageUserId === null
-        ) {
-            return null;
-        }
-
-        return $this->successfulInboundClientExportQuery($dialog)
-            ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
-            ->where('bitrix24_message_exports.resolved_bitrix_chat_verified', true)
-            ->whereNull('bitrix24_message_exports.bitrix_remote_message_id')
-            ->where('bitrix24_message_exports.bitrix_remote_user_id', $bitrixMessageUserId)
-            ->where('bitrix24_message_exports.exported_at', '>=', now()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
-            ->latest('bitrix24_message_exports.exported_at')
-            ->latest('bitrix24_message_exports.id')
-            ->get()
-            ->first(function (Bitrix24MessageExport $candidate) use ($normalizedBitrixText): bool {
-                $message = $candidate->message;
-
-                return $message instanceof Message
-                    && $this->normalizeEchoText($message->text) === $normalizedBitrixText;
-            });
-    }
-
-    private function bitrixMessageUserId(Bitrix24OpenLinesOperatorMessageData $messageData): ?string
-    {
-        foreach ([
-            'message.user_id',
-            'message.USER_ID',
-            'message.userId',
-            'MESSAGE.user_id',
-            'MESSAGE.USER_ID',
-            'user_id',
-            'USER_ID',
-            'im.user_id',
-            'im.USER_ID',
-            'IM.user_id',
-            'IM.USER_ID',
-        ] as $path) {
-            $candidate = data_get($messageData->rawPayload, $path);
-
-            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
-                return trim((string) $candidate);
-            }
-        }
-
-        return null;
     }
 
     private function successfulInboundClientExportQuery(Dialog $dialog): Builder
