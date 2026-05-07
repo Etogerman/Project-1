@@ -427,10 +427,14 @@ class ProcessBitrix24OpenLinesWebhookAction
         }
 
         if ($messageData->sourceBitrixChatId === $expectedChatId) {
+            if (! $this->hasNewerSuccessfulSendStateAfter($dialog, $event->created_at, $latestExport)) {
+                $this->syncCurrentOpenLineBinding($dialog, $currentChat);
+            }
+
             return false;
         }
 
-        if (! $this->hasSuccessfulInboundClientExportAfter($dialog, $event->created_at)) {
+        if (! $this->hasNewerSuccessfulSendStateAfter($dialog, $event->created_at, $latestExport)) {
             $this->syncCurrentOpenLineBinding($dialog, $currentChat);
         }
 
@@ -614,13 +618,53 @@ class ProcessBitrix24OpenLinesWebhookAction
         return $latestBeforeEvent;
     }
 
-    private function hasSuccessfulInboundClientExportAfter(Dialog $dialog, ?Carbon $asOf = null): bool
+    private function hasSuccessfulInboundClientExportAfter(
+        Dialog $dialog,
+        ?Carbon $asOf = null,
+        ?Bitrix24MessageExport $referenceExport = null,
+    ): bool
     {
         $asOf = $this->normalizeEventSecond($asOf);
+        $query = $this->successfulInboundClientExportQuery($dialog)
+            ->where('bitrix24_message_exports.exported_at', '>=', $asOf);
 
-        return $this->successfulInboundClientExportQuery($dialog)
-            ->where('bitrix24_message_exports.exported_at', '>=', $asOf->copy()->addSecond())
-            ->exists();
+        if ($referenceExport instanceof Bitrix24MessageExport) {
+            $query->where('bitrix24_message_exports.id', '!=', $referenceExport->id);
+        }
+
+        return $query->exists();
+    }
+
+    private function hasNewerSuccessfulSendStateAfter(
+        Dialog $dialog,
+        ?Carbon $asOf = null,
+        ?Bitrix24MessageExport $referenceExport = null,
+    ): bool
+    {
+        return $this->hasSuccessfulInboundClientExportAfter($dialog, $asOf, $referenceExport)
+            || $this->hasVerifiedOpenLineBindingAfter($dialog, $asOf);
+    }
+
+    private function hasVerifiedOpenLineBindingAfter(Dialog $dialog, ?Carbon $asOf = null): bool
+    {
+        $verifiedAt = Dialog::query()
+            ->whereKey($dialog->id)
+            ->first(['bitrix24_open_line_binding_verified_at'])
+            ?->bitrix24_open_line_binding_verified_at;
+
+        if (! $verifiedAt instanceof Carbon) {
+            return false;
+        }
+
+        return $verifiedAt->gte($this->normalizeDialogTimestampSecond($asOf)->addSecond());
+    }
+
+    private function normalizeDialogTimestampSecond(?Carbon $value): Carbon
+    {
+        $value = $this->normalizeEventSecond($value);
+
+        // Dialog binding timestamp is stored without timezone, so compare by stored wall-clock second.
+        return Carbon::parse($value->format('Y-m-d H:i:s'), config('app.timezone'));
     }
 
     private function normalizeEventSecond(?Carbon $value): Carbon
