@@ -397,7 +397,7 @@ class ProcessBitrix24OpenLinesWebhookAction
             return null;
         }
 
-        $latestExport = $this->latestSuccessfulInboundClientExport($dialog);
+        $latestExport = $this->latestSuccessfulInboundClientExport($dialog, $event->created_at);
 
         if (
             ! $latestExport instanceof Bitrix24MessageExport
@@ -558,10 +558,13 @@ class ProcessBitrix24OpenLinesWebhookAction
             ->whereNotNull('bitrix24_message_exports.resolved_bitrix_chat_id');
     }
 
-    private function latestSuccessfulInboundClientExport(Dialog $dialog): ?Bitrix24MessageExport
+    private function latestSuccessfulInboundClientExport(Dialog $dialog, ?Carbon $asOf = null): ?Bitrix24MessageExport
     {
+        $asOf ??= now();
+
         return $this->successfulInboundClientExportQuery($dialog)
-            ->where('bitrix24_message_exports.exported_at', '>=', now()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS))
+            ->where('bitrix24_message_exports.exported_at', '>=', $asOf->copy()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS))
+            ->where('bitrix24_message_exports.exported_at', '<=', $asOf)
             ->latest('bitrix24_message_exports.exported_at')
             ->latest('bitrix24_message_exports.id')
             ->first();
