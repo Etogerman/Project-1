@@ -30,6 +30,24 @@ class ResolveCurrentBitrix24OpenLineChatAction
             return null;
         }
 
+        $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
+        $preferredChatId = $this->positiveIntegerString($dialogBinding?->resolvedBitrixChatId);
+
+        if ($preferredChatId !== null) {
+            foreach ($candidates as $candidate) {
+                if (
+                    $candidate['chat_id'] === $preferredChatId
+                    && $candidate['user_code'] === $dialogBinding?->userCode
+                ) {
+                    return new Bitrix24CurrentOpenLineChatData(
+                        userCode: $candidate['user_code'],
+                        chatId: $candidate['chat_id'],
+                        lastMessageId: $candidate['last_message_id'],
+                    );
+                }
+            }
+        }
+
         usort(
             $candidates,
             static fn (array $left, array $right): int => (int) $right['chat_id'] <=> (int) $left['chat_id'],
