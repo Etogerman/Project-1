@@ -91,6 +91,25 @@ class FilamentAdminAuthTest extends TestCase
             ->assertDontSee('Сотрудники');
     }
 
+    public function test_not_found_page_has_link_to_admin_home(): void
+    {
+        $user = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $this->actingAs($user)
+            ->get('/admin/missing-page')
+            ->assertNotFound()
+            ->assertSee('Страница не найдена')
+            ->assertSee('Перейти на главную')
+            ->assertSee('data-theme', false)
+            ->assertSee('localStorage.getItem(\'theme\')', false)
+            ->assertSee(':root[data-theme="dark"]', false)
+            ->assertSee(':root:not([data-theme="light"])', false)
+            ->assertSee('href="'.url('/admin').'"', false);
+    }
+
     public function test_inactive_user_cannot_log_in_to_the_admin_panel(): void
     {
         $user = User::factory()->create([

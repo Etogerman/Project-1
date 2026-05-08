@@ -573,8 +573,12 @@ class ChannelResource extends Resource
                     ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Зарегистрировать webhook')
                     ->requiresConfirmation()
-                    ->visible(fn (Channel $record): bool => $record->is_active && $record->connection_type === Channel::CONNECTION_TYPE_BOT)
+                    ->visible(fn (Channel $record): bool => $record->is_active
+                        && $record->connection_type === Channel::CONNECTION_TYPE_BOT
+                        && static::canUpdateChannel($record))
                     ->action(function (Channel $record): void {
+                        static::authorizeChannelUpdate($record);
+
                         try {
                             app(RegisterChannelWebhookAction::class)->handle($record);
                             $record->refresh();
@@ -617,8 +621,10 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Проверить подключение')
-                    ->visible(fn (Channel $record): bool => (bool) auth()->user()?->can('update', $record))
+                    ->visible(fn (Channel $record): bool => static::canUpdateChannel($record))
                     ->action(function (Channel $record): void {
+                        static::authorizeChannelUpdate($record);
+
                         $state = app(CheckChannelConnectionAction::class)->handle($record);
 
                         if ($state['connection_status'] === Channel::CONNECTION_STATUS_CONNECTED) {
@@ -644,8 +650,12 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Обновить данные бота')
-                    ->visible(fn (Channel $record): bool => $record->connection_type === Channel::CONNECTION_TYPE_BOT && $record->hasBotTokenConfigured())
+                    ->visible(fn (Channel $record): bool => $record->connection_type === Channel::CONNECTION_TYPE_BOT
+                        && $record->hasBotTokenConfigured()
+                        && static::canUpdateChannel($record))
                     ->action(function (Channel $record): void {
+                        static::authorizeChannelUpdate($record);
+
                         try {
                             app(SyncChannelBotMetadataAction::class)->handle($record);
 
@@ -677,13 +687,15 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Сценарии')
-                    ->visible(fn (Channel $record): bool => $record->isBotConnection())
+                    ->visible(fn (Channel $record): bool => $record->isBotConnection() && static::canUpdateChannel($record))
                     ->modalWidth(Width::Large)
                     ->modalHeading('Сценарии канала')
                     ->modalSubmitAction(fn (Action $action): Action => $action
                         ->label('Сохранить')
                         ->color('success'))
                     ->fillForm(function (Channel $record): array {
+                        static::authorizeChannelUpdate($record);
+
                         $scenarioRegistry = app(ScenarioRegistry::class);
                         $selectableScenarioCodes = $scenarioRegistry->selectableScenarioCodesForChannel($record);
 
@@ -707,6 +719,8 @@ class ChannelResource extends Resource
                             ->columns(1),
                     ])
                     ->action(function (Channel $record, array $data): void {
+                        static::authorizeChannelUpdate($record);
+
                         app(SyncChannelScenarioBindingsAction::class)->handle(
                             $record,
                             (array) data_get($data, 'scenario_codes', []),
@@ -758,6 +772,16 @@ class ChannelResource extends Resource
                     }),
             ], position: RecordActionsPosition::BeforeColumns)
             ->toolbarActions([]);
+    }
+
+    protected static function canUpdateChannel(Channel $record): bool
+    {
+        return (bool) auth()->user()?->can('update', $record);
+    }
+
+    protected static function authorizeChannelUpdate(Channel $record): void
+    {
+        abort_unless(static::canUpdateChannel($record), 403);
     }
 
     public static function getPages(): array

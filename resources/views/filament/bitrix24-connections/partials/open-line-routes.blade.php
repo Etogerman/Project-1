@@ -1,12 +1,28 @@
 @php
     $items = $this->getOpenLineRouteCards();
     $canEdit = $this->canEditOpenLineRoutes();
+    $readyRouteLabels = collect($items)
+        ->filter(fn (array $item): bool => ($item['route_status_label'] ?? '') === 'Активен' && filled($item['line_id'] ?? null) && ($item['line_id'] ?? '—') !== '—')
+        ->map(fn (array $item): string => sprintf('%s, LINE_ID %s', $item['channel_title'], $item['line_id']))
+        ->values();
 @endphp
 
 <section data-role="bitrix24-open-line-routes" class="ac-panel-stack">
     @if ($this->openLineRouteErrorMessage)
         <div data-role="bitrix24-open-line-route-error" class="ac-empty-state">
             {{ $this->openLineRouteErrorMessage }}
+        </div>
+    @endif
+
+    @if ($this->openLineRouteSuccessMessage)
+        <div data-role="bitrix24-open-line-route-success" class="ac-empty-state" data-tone="success">
+            {{ $this->openLineRouteSuccessMessage }}
+        </div>
+    @endif
+
+    @if ($readyRouteLabels->isNotEmpty())
+        <div data-role="bitrix24-open-line-route-ready-summary" class="ac-empty-state" data-tone="success">
+            Открытые линии готовы: {{ $readyRouteLabels->join('; ') }}.
         </div>
     @endif
 
@@ -112,7 +128,7 @@
                                         <span>Статус</span>
                                         <select
                                             aria-label="Статус маршрута {{ $item['channel_title'] }}"
-                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.status"
+                                            wire:model="openLineRouteForms.{{ $item['channel_id'] }}.status"
                                             class="ac-select ac-bitrix-table__control"
                                             @disabled(! $canEdit)
                                         >
@@ -127,7 +143,7 @@
                                         <input
                                             aria-label="Код соединителя {{ $item['channel_title'] }}"
                                             type="text"
-                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.connector_code"
+                                            wire:model="openLineRouteForms.{{ $item['channel_id'] }}.connector_code"
                                             class="ac-input ac-bitrix-table__control"
                                             @disabled(! $canEdit)
                                         />
@@ -147,7 +163,7 @@
                                         <input
                                             aria-label="LINE_ID {{ $item['channel_title'] }}"
                                             type="text"
-                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.line_id"
+                                            wire:model="openLineRouteForms.{{ $item['channel_id'] }}.line_id"
                                             class="ac-input ac-bitrix-table__control"
                                             @disabled(! $canEdit)
                                         />
@@ -158,7 +174,7 @@
                                         <input
                                             aria-label="Имя ОЛ {{ $item['channel_title'] }}"
                                             type="text"
-                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.line_name"
+                                            wire:model="openLineRouteForms.{{ $item['channel_id'] }}.line_name"
                                             class="ac-input ac-bitrix-table__control"
                                             @disabled(! $canEdit)
                                         />
@@ -168,7 +184,7 @@
                                         <span>Callback owner</span>
                                         <select
                                             aria-label="Callback owner {{ $item['channel_title'] }}"
-                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.callback_owner_id"
+                                            wire:model="openLineRouteForms.{{ $item['channel_id'] }}.callback_owner_id"
                                             class="ac-select ac-bitrix-table__control"
                                             @disabled(! $canEdit)
                                         >
@@ -184,7 +200,7 @@
                                         <input
                                             aria-label="CRM source {{ $item['channel_title'] }}"
                                             type="text"
-                                            wire:model.live="openLineRouteForms.{{ $item['channel_id'] }}.source_id"
+                                            wire:model="openLineRouteForms.{{ $item['channel_id'] }}.source_id"
                                             class="ac-input ac-bitrix-table__control"
                                             @disabled(! $canEdit)
                                         />

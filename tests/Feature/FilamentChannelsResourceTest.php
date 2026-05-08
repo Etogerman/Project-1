@@ -28,6 +28,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Livewire;
 use ReflectionMethod;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\TestCase;
 
 class FilamentChannelsResourceTest extends TestCase
@@ -101,6 +102,115 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertTrue(Gate::forUser($employee)->allows('view', $channel));
         $this->assertFalse(Gate::forUser($employee)->allows('create', Channel::class));
         $this->assertFalse(Gate::forUser($employee)->allows('update', $channel));
+    }
+
+    public function test_read_only_employee_cannot_see_channel_mutation_actions(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => [
+                'token' => 'telegram-visible-token',
+            ],
+            'bot_token_present' => true,
+            'is_active' => true,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', false);
+
+        Livewire::actingAs($employee)
+            ->test(ManageChannels::class)
+            ->assertTableActionHidden('registerWebhook', $channel)
+            ->assertTableActionHidden('checkConnection', $channel)
+            ->assertTableActionHidden('syncBotMetadata', $channel)
+            ->assertTableActionHidden('manageScenarios', $channel);
+    }
+
+    public function test_employee_with_channel_edit_can_see_channel_mutation_actions(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => [
+                'token' => 'telegram-visible-token',
+            ],
+            'bot_token_present' => true,
+            'is_active' => true,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+
+        Livewire::actingAs($employee)
+            ->test(ManageChannels::class)
+            ->assertTableActionVisible('registerWebhook', $channel)
+            ->assertTableActionVisible('checkConnection', $channel)
+            ->assertTableActionVisible('syncBotMetadata', $channel)
+            ->assertTableActionVisible('manageScenarios', $channel);
+    }
+
+    public function test_channel_update_guard_rejects_employee_without_channel_edit_permission(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => [
+                'token' => 'telegram-visible-token',
+            ],
+            'bot_token_present' => true,
+            'is_active' => true,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', false);
+
+        $this->actingAs($employee->fresh());
+
+        $authorizer = new ReflectionMethod(ChannelResource::class, 'authorizeChannelUpdate');
+        $authorizer->setAccessible(true);
+
+        $this->assertHttpForbidden(fn () => $authorizer->invoke(null, $channel));
+    }
+
+    public function test_channel_update_guard_allows_employee_with_channel_edit_permission(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+
+        $this->actingAs($employee->fresh());
+
+        $authorizer = new ReflectionMethod(ChannelResource::class, 'authorizeChannelUpdate');
+        $authorizer->setAccessible(true);
+        $authorizer->invoke(null, $channel);
+
+        $this->assertTrue(Gate::forUser($employee->fresh())->allows('update', $channel));
     }
 
     public function test_employee_can_create_channel_when_channels_edit_is_enabled_in_matrix(): void
@@ -1365,5 +1475,15 @@ class FilamentChannelsResourceTest extends TestCase
             ->where('role', $role)
             ->where('permission_key', $permissionKey)
             ->update(['granted' => $granted]);
+    }
+
+    private function assertHttpForbidden(callable $callback): void
+    {
+        try {
+            $callback();
+            $this->fail('Expected a 403 response exception.');
+        } catch (HttpException $exception) {
+            $this->assertSame(403, $exception->getStatusCode());
+        }
     }
 }

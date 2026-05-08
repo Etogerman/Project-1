@@ -66,7 +66,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     return $method === 'imconnector.register'
                         && $usedConnection->is($connection)
                         && $params['ID'] === 'abc_telegram'
-                        && $params['NAME'] === 'ABC Telegram'
+                        && $params['NAME'] === 'Имя из админки Telegram'
                         && $params['ICON']['COLOR'] === '#2AABEE'
                         && $params['ICON_DISABLED']['COLOR'] === '#99ADB3'
                         && str_contains($this->decodedSvgDataImage($params['ICON']['DATA_IMAGE'] ?? null), 'path fill="white"');
@@ -81,7 +81,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                         && $params['CONNECTOR'] === 'abc_telegram'
                         && $params['LINE'] === '5'
                         && $params['DATA']['ID'] === 'channel:'.$channel->id.':connector:abc_telegram:line:5'
-                        && $params['DATA']['NAME'] === 'ABC Telegram';
+                        && $params['DATA']['NAME'] === 'Имя из админки Telegram';
                 })
                 ->andReturn($this->bitrixResponse(true, true));
 
@@ -164,7 +164,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(function (string $method, array $params): bool {
                     return $method === 'imconnector.register'
                         && $params['ID'] === 'abc_max'
-                        && $params['NAME'] === 'ABC MAX'
+                        && $params['NAME'] === 'Имя из админки MAX'
                         && $params['ICON']['COLOR'] === '#7C3AED'
                         && str_contains($this->decodedSvgDataImage($params['ICON']['DATA_IMAGE'] ?? null), '>MAX<');
                 })
@@ -176,7 +176,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     return $method === 'imconnector.connector.data.set'
                         && $params['CONNECTOR'] === 'abc_max'
                         && $params['LINE'] === '7'
-                        && $params['DATA']['NAME'] === 'ABC MAX';
+                        && $params['DATA']['NAME'] === 'Имя из админки MAX';
                 })
                 ->andReturn($this->bitrixResponse(true, true));
 
@@ -308,7 +308,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && $params['ID'] === 'abrikosoff_max'
-                    && $params['NAME'] === 'ABC MAX')
+                    && $params['NAME'] === 'Имя из админки MAX')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
@@ -318,7 +318,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                     && $params['CONNECTOR'] === 'abrikosoff_max'
                     && $params['LINE'] === '2'
                     && $params['DATA']['ID'] === 'channel:'.$newMaxChannel->id.':connector:abrikosoff_max:line:2'
-                    && $params['DATA']['NAME'] === 'ABC MAX')
+                    && $params['DATA']['NAME'] === 'Имя из админки MAX')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
@@ -481,7 +481,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && $params['ID'] === 'abc_max'
-                    && $params['NAME'] === 'ABC MAX')
+                    && $params['NAME'] === 'Имя из админки MAX')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
