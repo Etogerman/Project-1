@@ -209,7 +209,11 @@ class RepairStaleBitrix24ContactForLiveExportAction
         $queuedMessageIds = [];
 
         foreach ($this->findRetryMessages($triggerMessage) as $message) {
-            $result = $this->queueBitrix24LiveMessageExportAction->handle($message, retryAfterSync: true);
+            $result = $this->queueBitrix24LiveMessageExportAction->handle(
+                $message,
+                retryAfterSync: true,
+                retryAfterSyncReason: Bitrix24MessageExport::RETRY_AFTER_SYNC_REASON_STALE_CONTACT_REPAIR,
+            );
 
             if ($result->queued || $result->alreadyPending) {
                 $queuedMessageIds[] = $message->id;
