@@ -342,8 +342,57 @@ class GuardBitrix24OpenLineMutationAction
             return false;
         }
 
-        return $this->extractChatId($response->result) === $expectedResolvedBitrixChatId
-            && $this->chatBelongsToContact($response->result, (string) $rootContact->bitrix24_contact_id);
+        if (
+            $this->extractChatId($response->result) !== $expectedResolvedBitrixChatId
+            || ! $this->chatBelongsToContact($response->result, (string) $rootContact->bitrix24_contact_id)
+        ) {
+            return false;
+        }
+
+        $this->assertCrmContactExistsBeforeVerifiedBindingSend($rootContact, $connection);
+
+        return true;
+    }
+
+    private function assertCrmContactExistsBeforeVerifiedBindingSend(Contact $rootContact, Bitrix24Connection $connection): void
+    {
+        try {
+            $response = $this->bitrix24ApiClient->call(
+                'crm.contact.get',
+                ['ID' => (string) $rootContact->bitrix24_contact_id],
+                connection: $connection,
+                transportRetry: false,
+            );
+        } catch (Bitrix24ApiException $exception) {
+            throw new Bitrix24OpenLineMutationGuardException(
+                'Bitrix24 Open Lines verified binding contact lookup failed before mutating export.',
+                Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+                false,
+                $exception,
+            );
+        }
+
+        if ($response->successful && is_array($response->result)) {
+            return;
+        }
+
+        if ($notFound = Bitrix24ContactNotFoundException::fromResponse((string) $rootContact->bitrix24_contact_id, $response)) {
+            throw new Bitrix24OpenLineMutationGuardException(
+                'Bitrix24 Open Lines verified binding contact lookup found a stale CRM contact binding before mutating export.',
+                Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+                false,
+                $notFound,
+            );
+        }
+
+        throw new Bitrix24OpenLineMutationGuardException(
+            sprintf(
+                'Bitrix24 Open Lines verified binding contact lookup failed before mutating export: %s',
+                $response->errorMessage ?? 'Unknown error.',
+            ),
+            Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+            false,
+        );
     }
 
     private function hasLegacyOpenLineExportHistory(Dialog $dialog): bool
