@@ -22,7 +22,11 @@ class QueueBitrix24LiveMessageExportAction
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
     ) {}
 
-    public function handle(Message|int $message, bool $retryAfterSync = false): Bitrix24LiveMessageExportQueueResultData
+    public function handle(
+        Message|int $message,
+        bool $retryAfterSync = false,
+        ?string $retryAfterSyncReason = null,
+    ): Bitrix24LiveMessageExportQueueResultData
     {
         $message = $message instanceof Message
             ? $message
@@ -108,13 +112,30 @@ class QueueBitrix24LiveMessageExportAction
             ],
         );
 
-        $this->logLiveExportQueued($message, $rootContact->id, $retryAfterSync, $liveBatchUuid, $existingExport);
+        $this->logLiveExportQueued(
+            $message,
+            $rootContact->id,
+            $retryAfterSync,
+            $retryAfterSyncReason,
+            $liveBatchUuid,
+            $existingExport,
+        );
 
-        ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)
+        ExportMessageToBitrix24OpenLinesJob::dispatch(
+            $message->id,
+            $retryAfterSync,
+            $liveBatchUuid,
+            $retryAfterSyncReason,
+        )
             ->onQueue(ExportMessageToBitrix24OpenLinesJob::queueName())
             ->afterCommit();
         // The delayed recovery path must survive a failed afterCommit handoff of the immediate job.
-        ExportMessageToBitrix24OpenLinesJob::dispatch($message->id, $retryAfterSync, $liveBatchUuid)
+        ExportMessageToBitrix24OpenLinesJob::dispatch(
+            $message->id,
+            $retryAfterSync,
+            $liveBatchUuid,
+            $retryAfterSyncReason,
+        )
             ->onQueue(ExportMessageToBitrix24OpenLinesJob::queueName())
             ->delay(now()->addSeconds(
                 self::UNCLAIMED_PENDING_RECOVERY_SECONDS + self::DELAYED_PENDING_RECOVERY_BUFFER_SECONDS
@@ -162,6 +183,7 @@ class QueueBitrix24LiveMessageExportAction
         Message $message,
         int $rootContactId,
         bool $retryAfterSync,
+        ?string $retryAfterSyncReason,
         string $liveBatchUuid,
         ?Bitrix24MessageExport $existingExport,
     ): void {
@@ -179,6 +201,7 @@ class QueueBitrix24LiveMessageExportAction
                 'message_kind' => $message->message_kind,
                 'message_created_at' => $message->created_at?->toISOString(),
                 'retry_after_sync' => $retryAfterSync,
+                'retry_after_sync_reason' => $retryAfterSyncReason,
                 'live_batch_uuid' => $liveBatchUuid,
                 'previous_export_status' => $existingExport?->export_status,
                 'previous_live_batch_uuid' => $existingExport?->live_batch_uuid,
