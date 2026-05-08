@@ -982,6 +982,8 @@ class ExportMessageToBitrix24OpenLinesAction
                 $messageText,
                 failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
                 failureUncertain: true,
+                resolvedBitrixChatId: $this->positiveIntegerString($resolvedBitrixChatId),
+                bitrixRemoteMessageId: $bitrixRemoteMessageId,
             );
         }
 
@@ -992,6 +994,7 @@ class ExportMessageToBitrix24OpenLinesAction
             $payloadChatId,
             $resolvedBitrixChatId,
             $connectorUserId,
+            $bitrixRemoteMessageId,
         );
 
         if ($validatedReturnedChat === null && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
@@ -1034,6 +1037,8 @@ class ExportMessageToBitrix24OpenLinesAction
                 $messageText,
                 failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
                 failureUncertain: true,
+                resolvedBitrixChatId: $this->positiveIntegerString($resolvedBitrixChatId),
+                bitrixRemoteMessageId: $bitrixRemoteMessageId,
             );
         }
 
@@ -1139,6 +1144,7 @@ class ExportMessageToBitrix24OpenLinesAction
         ?string $payloadChatId,
         ?string $resolvedBitrixChatId,
         ?string $connectorUserId,
+        ?string $bitrixRemoteMessageId = null,
     ): ?Bitrix24CurrentOpenLineChatData {
         if ($payloadChatId === null || $resolvedBitrixChatId === null || $connectorUserId === null) {
             return null;
@@ -1156,6 +1162,8 @@ class ExportMessageToBitrix24OpenLinesAction
                 'Bitrix24 Open Lines returned chat validation failed after inbound client export.',
                 failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
                 failureUncertain: true,
+                resolvedBitrixChatId: $this->positiveIntegerString($resolvedBitrixChatId),
+                bitrixRemoteMessageId: $bitrixRemoteMessageId,
                 previous: $exception,
             );
         }
@@ -1336,6 +1344,7 @@ class ExportMessageToBitrix24OpenLinesAction
                 $payloadChatId,
                 $resolvedBitrixChatId,
                 $connectorUserId,
+                $bitrixRemoteMessageId,
             )
             : null;
         $bindingSyncedFromResponse = $validatedReturnedChat instanceof Bitrix24CurrentOpenLineChatData;
@@ -1382,7 +1391,13 @@ class ExportMessageToBitrix24OpenLinesAction
         ) {
             if (
                 ! $allowPostSendBindingResync
-                || ! $this->syncVerifiedBindingToCurrentChatAfterMismatch($dialog, $route, $connection, $resolvedBitrixChatId)
+                || ! $this->syncVerifiedBindingToCurrentChatAfterMismatch(
+                    $dialog,
+                    $route,
+                    $connection,
+                    $resolvedBitrixChatId,
+                    $bitrixRemoteMessageId,
+                )
             ) {
                 throw new Bitrix24LiveExportTransportException(
                     sprintf(
@@ -1392,6 +1407,8 @@ class ExportMessageToBitrix24OpenLinesAction
                     ),
                     failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
                     failureUncertain: true,
+                    resolvedBitrixChatId: $this->positiveIntegerString($resolvedBitrixChatId),
+                    bitrixRemoteMessageId: $bitrixRemoteMessageId,
                 );
             }
 
@@ -1472,13 +1489,18 @@ class ExportMessageToBitrix24OpenLinesAction
                     $payloadChatId,
                     $returnedResolvedBitrixChatId,
                     $returnedConnectorUserId,
+                    $bitrixRemoteMessageId,
                 )
                 : $this->resolveCurrentOpenLineChatAction->handle($dialog, $route, $connection);
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            throw $exception;
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24LiveExportTransportException(
                 'Bitrix24 Open Lines post-repair CRM binding lookup outcome is uncertain.',
                 failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
                 failureUncertain: true,
+                resolvedBitrixChatId: $this->positiveIntegerString($returnedResolvedBitrixChatId),
+                bitrixRemoteMessageId: $bitrixRemoteMessageId,
                 previous: $exception,
             );
         }
@@ -1655,6 +1677,7 @@ class ExportMessageToBitrix24OpenLinesAction
         Bitrix24OpenLinesRouteData $route,
         Bitrix24Connection $connection,
         ?string $resolvedBitrixChatId,
+        ?string $bitrixRemoteMessageId = null,
     ): bool {
         if ($this->positiveIntegerString($resolvedBitrixChatId) === null) {
             return false;
@@ -1672,6 +1695,8 @@ class ExportMessageToBitrix24OpenLinesAction
                 'Bitrix24 Open Lines verified binding post-send lookup outcome is uncertain.',
                 failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
                 failureUncertain: true,
+                resolvedBitrixChatId: $this->positiveIntegerString($resolvedBitrixChatId),
+                bitrixRemoteMessageId: $bitrixRemoteMessageId,
                 previous: $exception,
             );
         }

@@ -530,30 +530,40 @@ class ProcessBitrix24OpenLinesWebhookAction
         Bitrix24OpenLinesOperatorMessageData $messageData,
         ?Carbon $asOf = null,
     ): ?Bitrix24MessageExport {
-        if ($messageData->sourceBitrixChatId === null) {
-            return null;
-        }
-
         if ($messageData->bitrixMessageId === '') {
             return null;
         }
 
         $asOf = $this->normalizeEventSecond($asOf);
 
-        return $this->successfulInboundClientExportQuery($dialog)
-            ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
-            ->where('bitrix24_message_exports.bitrix_remote_message_id', $messageData->bitrixMessageId)
-            ->where('bitrix24_message_exports.exported_at', '>=', $asOf->copy()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
-            ->latest('bitrix24_message_exports.exported_at')
-            ->latest('bitrix24_message_exports.id')
-            ->first()
-            ?? $this->uncertainFailedInboundClientExportQuery($dialog)
+        if ($messageData->sourceBitrixChatId !== null) {
+            $chatScopedEchoExport = $this->successfulInboundClientExportQuery($dialog)
                 ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
                 ->where('bitrix24_message_exports.bitrix_remote_message_id', $messageData->bitrixMessageId)
-                ->where('bitrix24_message_exports.failed_at', '>=', $asOf->copy()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
-                ->latest('bitrix24_message_exports.failed_at')
+                ->where('bitrix24_message_exports.exported_at', '>=', $asOf->copy()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
+                ->latest('bitrix24_message_exports.exported_at')
                 ->latest('bitrix24_message_exports.id')
-                ->first();
+                ->first()
+                ?? $this->uncertainFailedInboundClientExportQuery($dialog)
+                    ->where('bitrix24_message_exports.resolved_bitrix_chat_id', $messageData->sourceBitrixChatId)
+                    ->where('bitrix24_message_exports.bitrix_remote_message_id', $messageData->bitrixMessageId)
+                    ->where('bitrix24_message_exports.failed_at', '>=', $asOf->copy()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
+                    ->latest('bitrix24_message_exports.failed_at')
+                    ->latest('bitrix24_message_exports.id')
+                    ->first();
+
+            if ($chatScopedEchoExport instanceof Bitrix24MessageExport) {
+                return $chatScopedEchoExport;
+            }
+        }
+
+        return $this->uncertainFailedInboundClientExportQuery($dialog)
+            ->whereNull('bitrix24_message_exports.resolved_bitrix_chat_id')
+            ->where('bitrix24_message_exports.bitrix_remote_message_id', $messageData->bitrixMessageId)
+            ->where('bitrix24_message_exports.failed_at', '>=', $asOf->copy()->subSeconds(self::INBOUND_ECHO_FRESH_WINDOW_SECONDS))
+            ->latest('bitrix24_message_exports.failed_at')
+            ->latest('bitrix24_message_exports.id')
+            ->first();
     }
 
     private function successfulInboundClientExportQuery(Dialog $dialog): Builder
@@ -590,7 +600,6 @@ class ProcessBitrix24OpenLinesWebhookAction
             ->where('bitrix24_message_exports.export_status', Bitrix24MessageExport::STATUS_FAILED)
             ->where('bitrix24_message_exports.failure_uncertain', true)
             ->where('bitrix24_message_exports.transport_method', Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES)
-            ->whereNotNull('bitrix24_message_exports.resolved_bitrix_chat_id')
             ->whereNotNull('bitrix24_message_exports.bitrix_remote_message_id');
     }
 

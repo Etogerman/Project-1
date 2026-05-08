@@ -1257,7 +1257,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
+            'resolved_bitrix_chat_id' => '23',
             'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
             'failure_uncertain' => true,
         ]);
@@ -1384,7 +1384,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
+            'resolved_bitrix_chat_id' => '30',
             'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
             'failure_uncertain' => true,
         ]);
@@ -2977,7 +2977,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
+            'resolved_bitrix_chat_id' => '23',
             'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
             'failure_uncertain' => true,
         ]);
@@ -4198,7 +4198,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
+            'resolved_bitrix_chat_id' => '26',
             'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
             'failure_uncertain' => true,
         ]);
@@ -4300,7 +4300,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
+            'resolved_bitrix_chat_id' => '26',
             'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
             'failure_uncertain' => true,
         ]);
@@ -4428,7 +4428,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
-            'resolved_bitrix_chat_id' => null,
+            'resolved_bitrix_chat_id' => '26',
             'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
             'failure_uncertain' => true,
         ]);
@@ -5724,6 +5724,66 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json'
             && ($request['MESSAGES'][0]['user']['crm_contact_id'] ?? null) === '18'
             && ($request['MESSAGES'][0]['message']['params']['retry_after_sync_probe'] ?? null) === 'Y');
+    }
+
+    public function test_retry_after_sync_inbound_export_keeps_remote_message_id_when_post_send_lookup_fails(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, contactAttributes: [
+            'bitrix24_contact_id' => '18',
+            'bitrix24_deal_id' => '22',
+        ]);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Post-send lookup failure',
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
+                'result' => [
+                    'DATA' => [
+                        'RESULT' => [
+                            [
+                                'message' => [
+                                    'MESSAGE_ID' => 'remote-after-lookup-failure-111',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'error' => 'TEMPORARY_FAILURE',
+                'error_description' => 'Temporary CRM lookup failure',
+            ], 500),
+        ]);
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle(
+                $message,
+                retryAfterSync: true,
+                retryAfterSyncReason: Bitrix24MessageExport::RETRY_AFTER_SYNC_REASON_STALE_CONTACT_REPAIR,
+            );
+            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
+            $this->assertTrue($exception->failureUncertain);
+            $this->assertNull($exception->resolvedBitrixChatId);
+            $this->assertSame('remote-after-lookup-failure-111', $exception->bitrixRemoteMessageId);
+        }
+
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
+            'resolved_bitrix_chat_id' => null,
+            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
+            'failure_uncertain' => true,
+            'bitrix_remote_message_id' => 'remote-after-lookup-failure-111',
+        ]);
     }
 
     public function test_retry_after_sync_inbound_export_rejects_returned_chat_when_connector_user_does_not_match(): void
