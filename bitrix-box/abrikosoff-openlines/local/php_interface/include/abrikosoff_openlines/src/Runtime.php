@@ -206,14 +206,24 @@ final class Runtime
                 'binding_contact_before' => '',
                 'binding_contact_after' => '',
             ];
+            $sessionAttach = [
+                'success' => false,
+                'status' => 'invalid_explicit_contact_id',
+                'error' => '',
+            ];
 
             self::logStructured('crm_rebind_activity_binding_attempted', $context + [
+                'hook' => 'OnSessionStart',
+                'contact_id' => $context['explicit_contact_id'],
+            ]);
+            self::logStructured('crm_rebind_session_attach_attempted', $context + [
                 'hook' => 'OnSessionStart',
                 'contact_id' => $context['explicit_contact_id'],
             ]);
 
             if ($explicitContactId > 0) {
                 $activityBinding = self::bindCrmActivityToContact($eventParams, $explicitContactId);
+                $sessionAttach = self::attachRuntimeSessionToContact($eventParams, $explicitContactId);
             }
 
             self::logStructured(
@@ -227,6 +237,17 @@ final class Runtime
                     'error' => $activityBinding['error'],
                     'binding_contact_before' => $activityBinding['binding_contact_before'],
                     'binding_contact_after' => $activityBinding['binding_contact_after'],
+                ]
+            );
+            self::logStructured(
+                $sessionAttach['status'] === 'invalid_explicit_contact_id'
+                    ? 'crm_rebind_session_attach_skipped'
+                    : ($sessionAttach['success'] ? 'crm_rebind_session_attach_succeeded' : 'crm_rebind_session_attach_failed'),
+                $context + [
+                    'hook' => 'OnSessionStart',
+                    'contact_id' => $context['explicit_contact_id'],
+                    'status' => $sessionAttach['status'],
+                    'error' => $sessionAttach['error'],
                 ]
             );
 

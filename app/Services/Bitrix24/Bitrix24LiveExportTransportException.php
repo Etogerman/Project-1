@@ -10,6 +10,8 @@ final class Bitrix24LiveExportTransportException extends Bitrix24ApiException
         string $message,
         public readonly ?string $failureCode = null,
         public readonly bool $failureUncertain = false,
+        public readonly ?string $resolvedBitrixChatId = null,
+        public readonly ?string $bitrixRemoteMessageId = null,
         ?Throwable $previous = null,
     ) {
         parent::__construct($message, 0, $previous);

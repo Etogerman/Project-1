@@ -20,11 +20,16 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
 
     public int $timeout = 60;
 
+    public ?string $retryAfterSyncReason = null;
+
     public function __construct(
         public readonly int $messageId,
         public readonly bool $retryAfterSync = false,
         public readonly ?string $liveBatchUuid = null,
-    ) {}
+        ?string $retryAfterSyncReason = null,
+    ) {
+        $this->retryAfterSyncReason = $retryAfterSyncReason;
+    }
 
     public function handle(
         ExportMessageToBitrix24OpenLinesAction $exportMessageToBitrix24OpenLinesAction,
@@ -39,7 +44,12 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
         $this->logJobStarted($message, $logBitrix24ApiCallAction);
 
         try {
-            $exportMessageToBitrix24OpenLinesAction->handle($message, $this->retryAfterSync, $this->liveBatchUuid);
+            $exportMessageToBitrix24OpenLinesAction->handle(
+                $message,
+                $this->retryAfterSync,
+                $this->liveBatchUuid,
+                $this->retryAfterSyncReason,
+            );
         } catch (Throwable $throwable) {
             Log::critical('Bitrix24 Open Lines live export job failed.', [
                 'job' => self::class,
@@ -47,6 +57,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
                 'dialog_id' => $message->dialog_id,
                 'contact_id' => $message->contact_id,
                 'retry_after_sync' => $this->retryAfterSync,
+                'retry_after_sync_reason' => $this->retryAfterSyncReason,
                 'live_batch_uuid' => $this->liveBatchUuid,
                 'exception_class' => $throwable::class,
                 'exception_message' => $throwable->getMessage(),
@@ -61,6 +72,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
                     'dialog_id' => $message->dialog_id,
                     'contact_id' => $message->contact_id,
                     'retry_after_sync' => $this->retryAfterSync,
+                    'retry_after_sync_reason' => $this->retryAfterSyncReason,
                     'live_batch_uuid' => $this->liveBatchUuid,
                 ],
                 connection: null,
@@ -98,6 +110,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
                 'message_kind' => $message->message_kind,
                 'message_created_at' => $message->created_at?->toISOString(),
                 'retry_after_sync' => $this->retryAfterSync,
+                'retry_after_sync_reason' => $this->retryAfterSyncReason,
                 'live_batch_uuid' => $this->liveBatchUuid,
                 'live_export_id' => $liveExport?->id,
                 'live_export_status' => $liveExport?->export_status,
