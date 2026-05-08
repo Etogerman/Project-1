@@ -48,19 +48,25 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(AutoReplyCategory::class, AutoReplyCategoryPolicy::class);
         Gate::policy(Bitrix24Connection::class, Bitrix24ConnectionPolicy::class);
 
-        RateLimiter::for('bitrix24-install', function (Request $request): Limit {
-            return Limit::perMinute(max(1, (int) config('bitrix24.rate_limits.install.max_per_minute', 30)))
-                ->by($this->resolveBitrix24CallbackRateLimitKey($request));
+        RateLimiter::for('bitrix24-install', function (Request $request): array {
+            return $this->resolveBitrix24CallbackRateLimits(
+                $request,
+                max(1, (int) config('bitrix24.rate_limits.install.max_per_minute', 30)),
+            );
         });
 
-        RateLimiter::for('bitrix24-events', function (Request $request): Limit {
-            return Limit::perMinute(max(1, (int) config('bitrix24.rate_limits.events.max_per_minute', 300)))
-                ->by($this->resolveBitrix24CallbackRateLimitKey($request));
+        RateLimiter::for('bitrix24-events', function (Request $request): array {
+            return $this->resolveBitrix24CallbackRateLimits(
+                $request,
+                max(1, (int) config('bitrix24.rate_limits.events.max_per_minute', 300)),
+            );
         });
 
-        RateLimiter::for('bitrix24-openlines', function (Request $request): Limit {
-            return Limit::perMinute(max(1, (int) config('bitrix24.rate_limits.openlines.max_per_minute', 300)))
-                ->by($this->resolveBitrix24CallbackRateLimitKey($request));
+        RateLimiter::for('bitrix24-openlines', function (Request $request): array {
+            return $this->resolveBitrix24CallbackRateLimits(
+                $request,
+                max(1, (int) config('bitrix24.rate_limits.openlines.max_per_minute', 300)),
+            );
         });
 
         RateLimiter::for('telegram-account-gateway', function (Request $request): Limit {
@@ -81,22 +87,41 @@ class AppServiceProvider extends ServiceProvider
 
     private function resolveBitrix24CallbackRateLimitKey(Request $request): string
     {
+        $ip = $this->resolveRequestIp($request);
         $memberId = $this->normalizeRateLimitValue($request->input('auth.member_id') ?? $request->input('member_id'));
         $applicationToken = $this->normalizeRateLimitValue(
             $request->input('auth.application_token') ?? $request->input('application_token') ?? $request->input('APP_SID'),
         );
 
         if ($memberId !== null && $applicationToken !== null) {
-            return $memberId.':'.$applicationToken;
+            return 'member:'.$memberId.'|token:'.hash('sha256', $applicationToken);
         }
 
         $domain = $this->normalizeRateLimitValue($request->input('auth.domain') ?? $request->input('DOMAIN'));
 
         if ($domain !== null) {
-            return $domain;
+            return 'domain:'.mb_strtolower($domain);
         }
 
-        return 'ip:'.($request->ip() ?: 'unknown');
+        return 'ip:'.$ip.'|unknown';
+    }
+
+    /**
+     * @return list<Limit>
+     */
+    private function resolveBitrix24CallbackRateLimits(Request $request, int $maxPerMinute): array
+    {
+        return [
+            Limit::perMinute($maxPerMinute)
+                ->by($this->resolveBitrix24CallbackRateLimitKey($request)),
+            Limit::perMinute(max(10, $maxPerMinute * 10))
+                ->by('ip:'.$this->resolveRequestIp($request)),
+        ];
+    }
+
+    private function resolveRequestIp(Request $request): string
+    {
+        return $request->ip() ?: 'unknown';
     }
 
     private function normalizeRateLimitValue(mixed $value): ?string

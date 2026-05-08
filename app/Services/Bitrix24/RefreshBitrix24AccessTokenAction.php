@@ -66,7 +66,7 @@ class RefreshBitrix24AccessTokenAction
         } catch (RequestException|\Throwable $exception) {
             $connection = $this->persistRefreshResult->handleFailure(
                 $connection,
-                Bitrix24Connection::STATUS_INVALID,
+                $connection->status,
                 $exception->getMessage(),
             );
 
@@ -98,10 +98,13 @@ class RefreshBitrix24AccessTokenAction
             $errorCode = $this->nullableString($responseData['error'] ?? null);
             $errorMessage = $this->nullableString($responseData['error_description'] ?? $responseData['error_message'] ?? null)
                 ?? 'Bitrix24 refresh response did not contain a new access token.';
+            $failureStatus = $this->shouldInvalidateRefreshFailure($errorCode)
+                ? Bitrix24Connection::STATUS_INVALID
+                : $connection->status;
 
             $connection = $this->persistRefreshResult->handleFailure(
                 $connection,
-                Bitrix24Connection::STATUS_INVALID,
+                $failureStatus,
                 $errorMessage,
             );
 
@@ -151,6 +154,19 @@ class RefreshBitrix24AccessTokenAction
         );
 
         return $connection;
+    }
+
+    private function shouldInvalidateRefreshFailure(?string $errorCode): bool
+    {
+        if (in_array($errorCode, [
+            'invalid_grant',
+            'invalid_client',
+            'unauthorized_client',
+        ], true)) {
+            return true;
+        }
+
+        return false;
     }
 
     private function resolveAuthServerUrl(Bitrix24Connection $connection): ?string
