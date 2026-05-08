@@ -6,6 +6,7 @@ use App\Models\AutoReplyCategory;
 use App\Models\AutoReplyRule;
 use App\Models\Bitrix24Connection;
 use App\Models\Channel;
+use App\Models\ChannelConnectionType;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Scenario;
@@ -13,6 +14,7 @@ use App\Models\User;
 use App\Policies\AutoReplyCategoryPolicy;
 use App\Policies\AutoReplyRulePolicy;
 use App\Policies\Bitrix24ConnectionPolicy;
+use App\Policies\ChannelConnectionTypePolicy;
 use App\Policies\ChannelPolicy;
 use App\Policies\ContactPolicy;
 use App\Policies\DialogPolicy;
@@ -40,6 +42,7 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Gate::policy(Channel::class, ChannelPolicy::class);
+        Gate::policy(ChannelConnectionType::class, ChannelConnectionTypePolicy::class);
         Gate::policy(Contact::class, ContactPolicy::class);
         Gate::policy(Dialog::class, DialogPolicy::class);
         Gate::policy(User::class, UserPolicy::class);

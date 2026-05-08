@@ -331,7 +331,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         Channel $channel,
         string $connectorCode,
     ): void {
-        $connectorName = $this->buildConnectorName($channel);
+        $connectorName = $this->buildConnectorName($connection, $channel);
 
         $response = $this->apiClient->call('imconnector.register', [
             'ID' => $connectorCode,
@@ -360,7 +360,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         string $lineId,
     ): void {
         $channelUrl = $this->settingsUrl($profile, $connection);
-        $connectorName = $this->buildConnectorName($channel);
+        $connectorName = $this->buildConnectorName($connection, $channel);
 
         $response = $this->apiClient->call('imconnector.connector.data.set', [
             'CONNECTOR' => $connectorCode,
@@ -559,12 +559,27 @@ class AutoSetupBitrix24OpenLineRouteAction
         return Str::limit($name !== '' ? $name : 'Channel #'.$channel->id, 120, '');
     }
 
-    private function buildConnectorName(Channel $channel): string
+    private function buildConnectorName(Bitrix24Connection $connection, Channel $channel): string
     {
-        return match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'ABC MAX',
-            default => 'ABC Telegram',
+        $platformName = match (Bitrix24OpenLineRoute::channelTypeForChannel($channel)) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX',
+            default => 'Telegram',
         };
+
+        return Str::limit($this->connectorNamePrefix($connection).' '.$platformName, 120, '');
+    }
+
+    private function connectorNamePrefix(Bitrix24Connection $connection): string
+    {
+        $connectionName = $this->displayName($connection->application_name);
+
+        if ($connectionName !== null && ! $this->isGenericApplicationName($connectionName)) {
+            return $connectionName;
+        }
+
+        $configuredName = $this->configuredApplicationDisplayName();
+
+        return $configuredName ?? 'ABC';
     }
 
     private function connectorDataExternalId(Channel $channel, string $connectorCode, string $lineId): string

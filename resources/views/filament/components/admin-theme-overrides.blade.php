@@ -2028,12 +2028,26 @@
     }
 
     .ac-channel-form-modal .ac-channel-form-field .fi-fo-field-label {
-        color: #475569;
+        color: #0f172a !important;
         font-size: 0.7rem;
         font-weight: 800;
         letter-spacing: 0.06em;
         line-height: 1.2;
         text-transform: uppercase;
+    }
+
+    .ac-channel-form-modal .ac-channel-form-field .fi-fo-field-label-content,
+    .ac-channel-form-modal .ac-channel-form-field .fi-fo-field-label-content span {
+        color: #0f172a !important;
+    }
+
+    .ac-channel-form-modal .ac-channel-form-field .fi-fo-field-label-content .fi-fo-field-label-required-mark,
+    .ac-channel-form-modal .ac-channel-form-field .fi-fo-field-label-required-mark {
+        color: #dc2626 !important;
+    }
+
+    .ac-channel-form-modal .ac-channel-form-field .fi-fo-field-wrp-helper-text {
+        color: #475569 !important;
     }
 
     .ac-channel-form-modal .ac-channel-form-field .fi-input-wrp {
@@ -2056,6 +2070,56 @@
         color: #0f172a;
         font-size: 0.86rem;
         line-height: 1.35;
+    }
+
+    .ac-channel-form-modal .fi-select-input .fi-select-input-btn,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-value-ctn,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-value-label,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-value-label > span {
+        color: #0f172a !important;
+        -webkit-text-fill-color: #0f172a !important;
+    }
+
+    .ac-channel-form-modal .fi-select-input .fi-select-input-placeholder {
+        color: #475569 !important;
+        -webkit-text-fill-color: #475569 !important;
+    }
+
+    .ac-channel-form-modal .fi-select-input .fi-dropdown-panel,
+    .ac-channel-form-modal .fi-select-input .fi-dropdown-list,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-search-ctn,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-options-ctn {
+        background: #0f172a !important;
+        color: #e2e8f0 !important;
+    }
+
+    .ac-channel-form-modal .fi-select-input .fi-select-input-search-ctn .fi-input-wrp {
+        border-color: rgba(148, 163, 184, 0.42) !important;
+        background: #18181b !important;
+    }
+
+    .ac-channel-form-modal .fi-select-input .fi-select-input-search-ctn .fi-input,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-search-ctn .fi-input::placeholder,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option > span,
+    .ac-channel-form-modal .fi-select-input .fi-dropdown-header,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-message {
+        color: #e2e8f0 !important;
+    }
+
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option:hover,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option:focus,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option.fi-active,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option.fi-selected {
+        background: #1e3a8a !important;
+        color: #ffffff !important;
+    }
+
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option:hover > span,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option:focus > span,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option.fi-active > span,
+    .ac-channel-form-modal .fi-select-input .fi-select-input-option.fi-selected > span {
+        color: #ffffff !important;
     }
 
     .ac-channel-form-modal .fi-select-input .fi-input-wrp-actions button:first-child:not(:last-child) {
@@ -3871,6 +3935,12 @@
         font-size: 0.9rem;
         line-height: 1.5;
         color: var(--ac-text-soft);
+    }
+
+    .ac-empty-state[data-tone="success"] {
+        border-color: color-mix(in srgb, var(--ac-success) 42%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-success-soft) 72%, var(--ac-surface-muted));
+        color: color-mix(in srgb, var(--ac-success) 72%, var(--ac-text));
     }
 
     .ac-list-stack {
