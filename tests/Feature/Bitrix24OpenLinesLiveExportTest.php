@@ -28,6 +28,7 @@ use App\Services\Bitrix24\DedupeBitrix24ContactPhonesAction;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
 use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
+use App\Services\Bitrix24\RepairStaleBitrix24ContactForLiveExportAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ProfileAction;
 use App\Services\Bots\ChannelWebhookUrlGenerator;
 use App\Services\Bots\SendManualDialogReplyAction;
@@ -4964,7 +4965,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertCount(1, $legacySendRequests);
     }
 
-    public function test_stale_bitrix_contact_repair_relinks_by_all_contact_phones_and_retries_from_trigger_message(): void
+    public function test_stale_bitrix_contact_repair_relinks_by_all_contact_phones_and_retries_all_matching_failed_messages(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, contactAttributes: [
@@ -4992,7 +4993,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
             'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
-            'text' => 'Более старое сообщение не трогаем',
+            'text' => 'Более старое failed сообщение тоже ретраим',
         ]);
         Bitrix24MessageExport::query()->create([
             'message_id' => $olderFailed->id,
@@ -5056,8 +5057,9 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertSame('70740', $contact->bitrix24_contact_id);
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $olderFailed->id,
-            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
-            'bitrix24_contact_id' => '70951',
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '70740',
+            'failure_code' => null,
         ]);
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $triggerMessage->id,
@@ -5076,7 +5078,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             && $job->retryAfterSync === true);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $newerFailed->id
             && $job->retryAfterSync === true);
-        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $olderFailed->id);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $olderFailed->id
+            && $job->retryAfterSync === true);
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
 
         $this->assertDatabaseHas('bitrix24_sync_logs', [
@@ -5191,6 +5194,98 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         $this->assertInstanceOf(Bitrix24SyncLog::class, $log);
         $this->assertSame([$siblingDialog->id], $log->response_payload['reset_dialog_ids']);
+        $this->assertSame(1, $log->response_payload['reset_dialog_count']);
+    }
+
+    public function test_stale_bitrix_contact_repair_invalidates_merged_child_dialog_open_line_binding_after_relink(): void
+    {
+        $this->makeActiveConnection();
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_TELEGRAM,
+            contactAttributes: [
+                'bitrix24_contact_id' => null,
+                'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            ],
+        );
+        $childContact = $dialog->contact()->firstOrFail();
+        $rootContact = Contact::factory()->create([
+            'name' => 'Root stale contact',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'bitrix24_contact_id' => '70951',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_sync_pending' => false,
+        ]);
+
+        $childContact->forceFill([
+            'merged_into_contact_id' => $rootContact->id,
+        ])->save();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $rootContact->id,
+            'phone_raw' => '+7 926 352-71-11',
+            'phone_normalized' => '+79263527111',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $dialog->forceFill([
+            'bitrix24_open_line_user_code_override' => sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id),
+            'bitrix24_open_line_resolved_chat_id_override' => '19',
+            'bitrix24_open_line_binding_verified_at' => now(),
+        ])->save();
+
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Repair должен сбросить ОЛ-привязку merged child dialog',
+        ]);
+
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $message->id,
+            'contact_id' => $rootContact->id,
+            'bitrix24_contact_id' => '70951',
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'failure_code' => Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED,
+            'failure_uncertain' => false,
+            'failed_at' => now()->subMinute(),
+        ]);
+
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.duplicate.findbycomm.json' => Http::response([
+                'result' => ['CONTACT' => ['70740']],
+            ], 200),
+        ]);
+
+        app(RepairStaleBitrix24ContactForLiveExportAction::class)->handle($message, $rootContact, '70951');
+
+        $rootContact->refresh();
+        $dialog->refresh();
+
+        $this->assertSame('70740', $rootContact->bitrix24_contact_id);
+        $this->assertNull($dialog->bitrix24_open_line_user_code_override);
+        $this->assertNull($dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertNull($dialog->bitrix24_open_line_binding_verified_at);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'contact_id' => $rootContact->id,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+            'bitrix24_contact_id' => '70740',
+            'failure_code' => null,
+        ]);
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $message->id
+            && $job->retryAfterSync === true);
+
+        $log = Bitrix24SyncLog::query()
+            ->where('operation', 'open_line_bindings_invalidated_after_contact_repair')
+            ->where('entity_type', 'contact')
+            ->where('entity_id', (string) $rootContact->id)
+            ->first();
+
+        $this->assertInstanceOf(Bitrix24SyncLog::class, $log);
+        $this->assertSame([$dialog->id], $log->response_payload['reset_dialog_ids']);
         $this->assertSame(1, $log->response_payload['reset_dialog_count']);
     }
 
