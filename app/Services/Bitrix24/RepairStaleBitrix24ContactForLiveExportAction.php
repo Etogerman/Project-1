@@ -76,7 +76,7 @@ class RepairStaleBitrix24ContactForLiveExportAction
                 $selectedBitrix24ContactId,
                 'relink',
             );
-            $this->queueRetryScope($triggerMessage);
+            $this->queueRetryScope($triggerMessage, $rootContact->fresh() ?? $rootContact, $oldBitrix24ContactId);
 
             return new Bitrix24StaleContactRepairResultData(repaired: true);
         }
@@ -110,7 +110,7 @@ class RepairStaleBitrix24ContactForLiveExportAction
             'create',
         );
         $this->queueBitrix24DealSyncAction->handle($syncedContact);
-        $this->queueRetryScope($triggerMessage);
+        $this->queueRetryScope($triggerMessage, $syncedContact, $oldBitrix24ContactId);
 
         return new Bitrix24StaleContactRepairResultData(repaired: true);
     }
@@ -204,11 +204,11 @@ class RepairStaleBitrix24ContactForLiveExportAction
         return $normalized;
     }
 
-    private function queueRetryScope(Message $triggerMessage): void
+    private function queueRetryScope(Message $triggerMessage, Contact $rootContact, string $oldBitrix24ContactId): void
     {
         $queuedMessageIds = [];
 
-        foreach ($this->findRetryMessages($triggerMessage) as $message) {
+        foreach ($this->findRetryMessages($triggerMessage, $rootContact, $oldBitrix24ContactId) as $message) {
             $result = $this->queueBitrix24LiveMessageExportAction->handle(
                 $message,
                 retryAfterSync: true,
@@ -243,8 +243,16 @@ class RepairStaleBitrix24ContactForLiveExportAction
         ?string $newBitrix24ContactId,
         string $repairOutcome,
     ): void {
+        $contactIds = $this->contactIdsForOpenLineBindingInvalidation($rootContact);
+        $contactIds[] = (int) $triggerMessage->contact_id;
+        $contactIds = array_values(array_unique(array_filter($contactIds, static fn (int $id): bool => $id > 0)));
+
         $dialogIds = Dialog::query()
-            ->where('contact_id', $rootContact->id)
+            ->where(function ($query) use ($contactIds, $triggerMessage): void {
+                $query
+                    ->whereIn('contact_id', $contactIds)
+                    ->orWhere('id', $triggerMessage->dialog_id);
+            })
             ->where(function ($query): void {
                 $query
                     ->whereNotNull('bitrix24_open_line_user_code_override')
@@ -276,6 +284,7 @@ class RepairStaleBitrix24ContactForLiveExportAction
                 'old_bitrix24_contact_id' => $oldBitrix24ContactId,
                 'new_bitrix24_contact_id' => $newBitrix24ContactId,
                 'repair_outcome' => $repairOutcome,
+                'contact_ids' => $contactIds,
             ],
             responsePayload: [
                 'reset_dialog_ids' => $dialogIds,
@@ -287,9 +296,39 @@ class RepairStaleBitrix24ContactForLiveExportAction
     }
 
     /**
+     * @return list<int>
+     */
+    private function contactIdsForOpenLineBindingInvalidation(Contact $rootContact): array
+    {
+        $contactIds = [(int) $rootContact->id];
+        $frontier = [(int) $rootContact->id];
+
+        while ($frontier !== []) {
+            $childIds = Contact::query()
+                ->whereIn('merged_into_contact_id', $frontier)
+                ->pluck('id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->filter(static fn (int $id): bool => $id > 0)
+                ->values()
+                ->all();
+
+            $newChildIds = array_values(array_diff($childIds, $contactIds));
+
+            if ($newChildIds === []) {
+                break;
+            }
+
+            $contactIds = array_merge($contactIds, $newChildIds);
+            $frontier = $newChildIds;
+        }
+
+        return array_values(array_unique($contactIds));
+    }
+
+    /**
      * @return Collection<int, Message>
      */
-    private function findRetryMessages(Message $triggerMessage): Collection
+    private function findRetryMessages(Message $triggerMessage, Contact $rootContact, string $oldBitrix24ContactId): Collection
     {
         return Message::query()
             ->select('messages.*')
@@ -298,7 +337,8 @@ class RepairStaleBitrix24ContactForLiveExportAction
                     ->where('live_export.export_mode', '=', Bitrix24MessageExport::MODE_LIVE);
             })
             ->where('messages.dialog_id', $triggerMessage->dialog_id)
-            ->where('messages.id', '>=', $triggerMessage->id)
+            ->where('live_export.contact_id', $rootContact->id)
+            ->where('live_export.bitrix24_contact_id', $oldBitrix24ContactId)
             ->where('live_export.export_status', Bitrix24MessageExport::STATUS_FAILED)
             ->where('live_export.failure_code', Bitrix24MessageExport::FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED)
             ->where(function ($query): void {
