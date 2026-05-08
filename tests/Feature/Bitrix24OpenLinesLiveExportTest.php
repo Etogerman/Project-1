@@ -317,6 +317,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$userCode,
@@ -439,6 +440,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$userCode,
@@ -520,6 +522,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
@@ -639,6 +642,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|abrikosoff_max|line-max|abrikosoff-dialog:396|101154',
@@ -746,6 +750,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$userCode,
@@ -860,6 +865,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$userCode,
@@ -933,6 +939,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::fake([
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => '9',
                     'IM' => [],
                 ],
             ], 200),
@@ -997,6 +1004,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => '71034',
                     'IM' => [
                         [
                             'VALUE' => 'imol|'.$userCode,
@@ -1082,6 +1090,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => '71034',
                     'IM' => [
                         [
                             'VALUE' => 'imol|'.$userCode,
@@ -1174,6 +1183,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$returnedUserCode,
@@ -1301,6 +1311,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -1434,6 +1445,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -1710,6 +1722,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$storedUserCode,
@@ -1837,6 +1850,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -1956,6 +1970,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$storedUserCode,
@@ -2059,6 +2074,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$returnedUserCode,
@@ -2248,7 +2264,9 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 ],
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
-                'result' => [],
+                'result' => [
+                    'ID' => 'B24-CONTACT-100',
+                ],
             ], 200),
             'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
                 'result' => [
@@ -2327,6 +2345,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => '9',
                     'IM' => [
                         [
                             'VALUE' => 'imol|'.$userCode,
@@ -2420,6 +2439,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -2540,6 +2560,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -2665,6 +2686,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -2772,6 +2794,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$returnedUserCode,
@@ -2879,6 +2902,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$returnedUserCode,
@@ -3000,6 +3024,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -3124,6 +3149,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -3242,6 +3268,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -3360,6 +3387,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => '9',
                     'IM' => [],
                 ],
             ], 200),
@@ -3626,6 +3654,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -3750,6 +3779,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -3877,6 +3907,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$currentUserCode,
@@ -4006,6 +4037,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
                 return Http::response([
                     'result' => [
+                        'ID' => '9',
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -4136,6 +4168,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => '9',
                     'IM' => [],
                 ],
             ], 200),
@@ -4212,7 +4245,9 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
                 if ($contactLookupCalls === 1) {
                     return Http::response([
-                        'result' => [],
+                        'result' => [
+                            'ID' => '9',
+                        ],
                     ], 200);
                 }
 
@@ -4437,6 +4472,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
                 return Http::response([
                     'result' => [
+                        'ID' => (string) $request['ID'],
                         'IM' => [
                             [
                                 'VALUE' => 'imol|'.$oldUserCode,
@@ -4539,6 +4575,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => '9',
                     'IM' => [
                         [
                             'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
@@ -4621,6 +4658,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => 'B24-CONTACT-100',
                     'IM' => [
                         [
                             'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
@@ -4690,6 +4728,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => 'B24-CONTACT-100',
                     'IM' => [
                         [
                             'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
@@ -4747,6 +4786,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ], 200),
             'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
                 'result' => [
+                    'ID' => 'B24-CONTACT-100',
                     'IM' => [
                         [
                             'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
@@ -4876,6 +4916,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 ], 503)
                 ->push([
                     'result' => [
+                        'ID' => 'B24-CONTACT-100',
                         'IM' => [],
                     ],
                 ], 200),

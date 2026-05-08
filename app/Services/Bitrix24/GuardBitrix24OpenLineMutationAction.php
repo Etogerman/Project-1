@@ -372,7 +372,12 @@ class GuardBitrix24OpenLineMutationAction
             );
         }
 
-        if ($response->successful && is_array($response->result)) {
+        if (
+            $response->successful
+            && is_array($response->result)
+            && isset($response->result['ID'])
+            && (string) $response->result['ID'] === (string) $rootContact->bitrix24_contact_id
+        ) {
             return;
         }
 
