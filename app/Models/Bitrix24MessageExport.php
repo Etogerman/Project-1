@@ -46,7 +46,15 @@ class Bitrix24MessageExport extends Model
 
     public const FAILURE_OPEN_LINE_GUARD_LOOKUP_FAILED = 'openline_guard_lookup_failed';
 
+    public const FAILURE_STALE_CONTACT_REPAIR_NO_VALID_PHONE = 'stale_contact_repair_no_valid_phone';
+
+    public const FAILURE_STALE_CONTACT_REPAIR_FAILED = 'stale_contact_repair_failed';
+
+    public const FAILURE_OPEN_LINE_CRM_BINDING_MISSING_AFTER_REPAIR = 'openline_crm_binding_missing_after_repair';
+
     public const FAILURE_FAILED_UNCERTAIN = 'failed_uncertain';
+
+    public const RETRY_AFTER_SYNC_REASON_STALE_CONTACT_REPAIR = 'stale_contact_repair';
 
     /**
      * @var list<string>

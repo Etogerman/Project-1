@@ -19,6 +19,10 @@ class FetchBitrix24ContactAction
             'id' => $bitrix24ContactId,
         ], $connection);
 
+        if ($notFound = Bitrix24ContactNotFoundException::fromResponse($bitrix24ContactId, $response)) {
+            throw $notFound;
+        }
+
         if (! $response->successful || ! is_array($response->result) || ! filled($response->result['ID'] ?? null)) {
             throw new Bitrix24ApiException(
                 sprintf('Bitrix24 contact `%s` could not be fetched.', $bitrix24ContactId),
