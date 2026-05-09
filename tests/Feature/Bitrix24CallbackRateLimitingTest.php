@@ -167,6 +167,33 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
         Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 2);
     }
 
+    public function test_events_callbacks_share_auth_context_bucket_across_source_ips(): void
+    {
+        Queue::fake();
+        config()->set('bitrix24.rate_limits.events.max_per_minute', 1);
+
+        $this->createActiveConnection('member-cross-ip', 'app-token-cross-ip');
+
+        $this->withServerVariables(['REMOTE_ADDR' => '10.0.0.1'])
+            ->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
+                memberId: 'member-cross-ip',
+                applicationToken: 'app-token-cross-ip',
+                eventName: 'ONCRMCONTACTUPDATE',
+                entityId: 301,
+            ))->assertOk();
+
+        $this->withServerVariables(['REMOTE_ADDR' => '10.0.0.2'])
+            ->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
+                memberId: 'member-cross-ip',
+                applicationToken: 'app-token-cross-ip',
+                eventName: 'ONCRMCONTACTUPDATE',
+                entityId: 302,
+            ))->assertStatus(429);
+
+        $this->assertSame(1, Bitrix24WebhookEvent::query()->count());
+        Queue::assertPushed(ProcessBitrix24WebhookEventJob::class, 1);
+    }
+
     public function test_openlines_callbacks_use_independent_buckets_for_different_auth_contexts(): void
     {
         Queue::fake();
@@ -220,6 +247,31 @@ class Bitrix24CallbackRateLimitingTest extends TestCase
         $response->assertStatus(429);
 
         $this->assertSame(1, Bitrix24WebhookEvent::query()->count());
+        Queue::assertNotPushed(ProcessBitrix24WebhookEventJob::class);
+    }
+
+    public function test_events_callbacks_with_rotating_invalid_auth_are_limited_by_ip_guard(): void
+    {
+        Queue::fake();
+        config()->set('bitrix24.rate_limits.events.max_per_minute', 1);
+
+        for ($index = 1; $index <= 10; $index++) {
+            $this->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
+                memberId: 'fake-member-'.$index,
+                applicationToken: 'fake-token-'.$index,
+                eventName: 'ONCRMCONTACTUPDATE',
+                entityId: 100 + $index,
+            ))->assertOk();
+        }
+
+        $this->postJson('http://localhost/callbacks/bitrix24/events', $this->eventsPayload(
+            memberId: 'fake-member-11',
+            applicationToken: 'fake-token-11',
+            eventName: 'ONCRMCONTACTUPDATE',
+            entityId: 111,
+        ))->assertStatus(429);
+
+        $this->assertSame(10, Bitrix24WebhookEvent::query()->count());
         Queue::assertNotPushed(ProcessBitrix24WebhookEventJob::class);
     }
 

@@ -88,6 +88,8 @@ class ViewBitrix24Connection extends ViewRecord
 
     public ?string $openLineRouteErrorMessage = null;
 
+    public ?string $openLineRouteSuccessMessage = null;
+
     public ?string $profileSettingsErrorMessage = null;
 
     public ?string $callbackOwnersErrorMessage = null;
@@ -584,6 +586,7 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $this->openLineRouteErrorMessage = null;
+        $this->openLineRouteSuccessMessage = null;
         $this->reloadOpenLineRouteForms();
 
         Notification::make()
@@ -899,9 +902,9 @@ class ViewBitrix24Connection extends ViewRecord
 
         try {
             if ($refreshExistingRoute) {
-                app(AutoSetupBitrix24OpenLineRouteAction::class)->refreshConnectorRegistration($record, $route);
+                $route = app(AutoSetupBitrix24OpenLineRouteAction::class)->refreshConnectorRegistration($record, $route);
             } else {
-                app(AutoSetupBitrix24OpenLineRouteAction::class)->handle($record, $channel, auth()->user());
+                $route = app(AutoSetupBitrix24OpenLineRouteAction::class)->handle($record, $channel, auth()->user());
             }
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->failOpenLineRouteSave($exception->getMessage());
@@ -910,6 +913,7 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $this->openLineRouteErrorMessage = null;
+        $this->openLineRouteSuccessMessage = $this->openLineRouteSetupSuccessMessage($channel, $route, $refreshExistingRoute);
         $this->reloadOpenLineRouteForms();
 
         Notification::make()
@@ -1849,6 +1853,7 @@ class ViewBitrix24Connection extends ViewRecord
     protected function failOpenLineRouteSave(string $message): void
     {
         $this->openLineRouteErrorMessage = $message;
+        $this->openLineRouteSuccessMessage = null;
 
         Notification::make()
             ->danger()
@@ -1862,6 +1867,18 @@ class ViewBitrix24Connection extends ViewRecord
             ->danger()
             ->title($message)
             ->send();
+    }
+
+    protected function openLineRouteSetupSuccessMessage(
+        Channel $channel,
+        Bitrix24OpenLineRoute $route,
+        bool $refreshExistingRoute,
+    ): string {
+        $actionLabel = $refreshExistingRoute ? 'Карточка соединителя обновлена' : 'Открытая линия настроена';
+        $channelTitle = sprintf('#%d %s', $channel->id, $channel->name);
+        $lineSuffix = filled($route->line_id) ? sprintf(', LINE_ID %s', $route->line_id) : '';
+
+        return sprintf('%s: %s%s.', $actionLabel, $channelTitle, $lineSuffix);
     }
 
     protected function failProfileSettingsSave(string $message): void
@@ -1927,10 +1944,18 @@ class ViewBitrix24Connection extends ViewRecord
 
     protected function bitrixBoxConnectorName(Bitrix24OpenLineRoute $route): string
     {
-        return match ($route->channel_type) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'ABC MAX',
-            default => 'ABC Telegram',
+        $platformName = match ($route->channel_type) {
+            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX',
+            default => 'Telegram',
         };
+        $record = $this->getRecord();
+        $connectionName = $record instanceof Bitrix24Connection ? trim((string) $record->application_name) : '';
+        $configuredName = trim((string) config('bitrix24.application.name', ''));
+        $prefix = $connectionName !== '' && mb_strtolower($connectionName) !== 'abrikosoff connector'
+            ? $connectionName
+            : ($configuredName !== '' && mb_strtolower($configuredName) !== 'abrikosoff connector' ? $configuredName : 'ABC');
+
+        return mb_substr($prefix.' '.$platformName, 0, 120);
     }
 
     protected function bitrixBoxConnectorComponent(Bitrix24OpenLineRoute $route): string

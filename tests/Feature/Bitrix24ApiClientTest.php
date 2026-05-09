@@ -13,6 +13,7 @@ use App\Services\Bitrix24\NoActiveBitrix24ConnectionException;
 use App\Services\Bitrix24\RefreshBitrix24AccessTokenAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
@@ -234,6 +235,127 @@ class Bitrix24ApiClientTest extends TestCase
 
         $this->assertArrayNotHasKey('refresh_token', $log->request_payload);
         $this->assertArrayNotHasKey('client_secret', $log->request_payload);
+    }
+
+    public function test_transient_refresh_http_failure_keeps_connection_active(): void
+    {
+        config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+
+        $connection = $this->makeActiveConnection([
+            'server_endpoint' => 'https://server-endpoint.example/rest/',
+            'refresh_token_encrypted' => 'refresh-token',
+            'access_token_expires_at' => now()->subMinute(),
+        ]);
+
+        Http::fake([
+            'https://oauth.example/oauth/token/' => Http::response([
+                'error' => 'temporarily_unavailable',
+                'error_description' => 'Bitrix24 OAuth is temporarily unavailable',
+            ], 500),
+        ]);
+
+        try {
+            app(RefreshBitrix24AccessTokenAction::class)->handle($connection);
+            $this->fail('Expected refresh failure exception was not thrown.');
+        } catch (Bitrix24AuthRefreshException) {
+            $connection->refresh();
+
+            $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
+            $this->assertSame('Bitrix24 OAuth is temporarily unavailable', $connection->last_error_message);
+        }
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'token_refresh_failed',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'http_status' => 500,
+            'error_code' => 'temporarily_unavailable',
+        ]);
+    }
+
+    public function test_transient_refresh_connection_exception_keeps_connection_active(): void
+    {
+        config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+
+        $connection = $this->makeActiveConnection([
+            'server_endpoint' => 'https://server-endpoint.example/rest/',
+            'refresh_token_encrypted' => 'refresh-token',
+            'access_token_expires_at' => now()->subMinute(),
+        ]);
+
+        Http::fake([
+            'https://oauth.example/oauth/token/' => fn () => throw new ConnectionException('Connection timed out.'),
+        ]);
+
+        try {
+            app(RefreshBitrix24AccessTokenAction::class)->handle($connection);
+            $this->fail('Expected refresh failure exception was not thrown.');
+        } catch (Bitrix24AuthRefreshException) {
+            $connection->refresh();
+
+            $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
+            $this->assertSame('Connection timed out.', $connection->last_error_message);
+        }
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'token_refresh_failed',
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_message' => 'Connection timed out.',
+        ]);
+    }
+
+    public function test_unknown_refresh_forbidden_response_keeps_connection_active(): void
+    {
+        config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+
+        $connection = $this->makeActiveConnection([
+            'server_endpoint' => 'https://server-endpoint.example/rest/',
+            'refresh_token_encrypted' => 'refresh-token',
+            'access_token_expires_at' => now()->subMinute(),
+        ]);
+
+        Http::fake([
+            'https://oauth.example/oauth/token/' => Http::response([
+                'error_description' => 'Temporary edge denial',
+            ], 403),
+        ]);
+
+        try {
+            app(RefreshBitrix24AccessTokenAction::class)->handle($connection);
+            $this->fail('Expected refresh failure exception was not thrown.');
+        } catch (Bitrix24AuthRefreshException) {
+            $connection->refresh();
+
+            $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
+            $this->assertSame('Temporary edge denial', $connection->last_error_message);
+        }
+    }
+
+    public function test_temporarily_unavailable_refresh_bad_request_keeps_connection_active(): void
+    {
+        config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+
+        $connection = $this->makeActiveConnection([
+            'server_endpoint' => 'https://server-endpoint.example/rest/',
+            'refresh_token_encrypted' => 'refresh-token',
+            'access_token_expires_at' => now()->subMinute(),
+        ]);
+
+        Http::fake([
+            'https://oauth.example/oauth/token/' => Http::response([
+                'error' => 'temporarily_unavailable',
+                'error_description' => 'OAuth endpoint is temporarily unavailable',
+            ], 400),
+        ]);
+
+        try {
+            app(RefreshBitrix24AccessTokenAction::class)->handle($connection);
+            $this->fail('Expected refresh failure exception was not thrown.');
+        } catch (Bitrix24AuthRefreshException) {
+            $connection->refresh();
+
+            $this->assertSame(Bitrix24Connection::STATUS_ACTIVE, $connection->status);
+            $this->assertSame('OAuth endpoint is temporarily unavailable', $connection->last_error_message);
+        }
     }
 
     public function test_missing_install_critical_metadata_marks_connection_needs_reinstall(): void

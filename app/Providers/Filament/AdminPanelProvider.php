@@ -27,6 +27,11 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->login()
             ->brandName('Abrikosoff Connector')
+            ->favicon(fn (): string => asset(match (app()->environment()) {
+                'local' => 'favicons/favicon-local.svg',
+                'staging' => 'favicons/favicon-staging.svg',
+                default => 'favicons/favicon-production.svg',
+            }))
             ->sidebarFullyCollapsibleOnDesktop()
             ->maxContentWidth('fi-admin-content-wide')
             ->renderHook(
@@ -43,6 +48,12 @@ class AdminPanelProvider extends PanelProvider
                     'centered' => true,
                 ])->render(),
             )
+            ->navigationGroups([
+                'Аудитория',
+                'Интеграции',
+                'Команда',
+                'Настройки',
+            ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')
             ->pages([
