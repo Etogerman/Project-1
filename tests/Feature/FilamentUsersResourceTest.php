@@ -7,6 +7,7 @@ use App\Filament\Resources\Users\UserResource;
 use App\Models\User;
 use Database\Seeders\AdminUserSeeder;
 use Filament\Facades\Filament;
+use Filament\Livewire\Topbar;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -35,6 +36,8 @@ class FilamentUsersResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $member = User::factory()->create([
+            'name' => 'Геннадий',
+            'last_name' => 'Петров',
             'email' => 'member@example.com',
             'is_active' => true,
             'is_admin' => false,
@@ -43,7 +46,11 @@ class FilamentUsersResourceTest extends TestCase
         $this->actingAs($admin)
             ->get('/admin/users')
             ->assertOk()
-            ->assertSee('Сотрудники');
+            ->assertSee('Сотрудники')
+            ->assertSee('Фамилия')
+            ->assertSee('Последняя активность')
+            ->assertSee('Петров')
+            ->assertSee('Нет активности');
 
         $this->assertSame('Сотрудник', UserResource::getModelLabel());
         $this->assertSame('Сотрудники', UserResource::getPluralModelLabel());
@@ -120,6 +127,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callAction('create', [
                 'name' => 'Operator Created',
+                'last_name' => 'Operatorov',
                 'email' => 'operator-created@example.com',
                 'is_active' => true,
                 'is_admin' => false,
@@ -131,6 +139,7 @@ class FilamentUsersResourceTest extends TestCase
         $this->assertDatabaseHas(User::class, [
             'email' => 'operator-created@example.com',
             'name' => 'Operator Created',
+            'last_name' => 'Operatorov',
             'role' => User::ROLE_EMPLOYEE,
         ]);
 
@@ -138,6 +147,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callTableAction('edit', $record, [
                 'name' => 'Operator Updated',
+                'last_name' => 'Updatedov',
                 'email' => 'editable@example.com',
                 'is_active' => false,
                 'is_admin' => false,
@@ -149,6 +159,7 @@ class FilamentUsersResourceTest extends TestCase
         $record->refresh();
 
         $this->assertSame('Operator Updated', $record->name);
+        $this->assertSame('Updatedov', $record->last_name);
         $this->assertFalse($record->is_active);
     }
 
@@ -164,6 +175,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callAction('create', [
                 'name' => 'Manager',
+                'last_name' => '  Ivanov  ',
                 'email' => 'Manager@Example.com',
                 'is_active' => true,
                 'is_admin' => false,
@@ -174,6 +186,7 @@ class FilamentUsersResourceTest extends TestCase
 
         $this->assertDatabaseHas(User::class, [
             'name' => 'Manager',
+            'last_name' => 'Ivanov',
             'email' => 'manager@example.com',
             'is_active' => true,
             'is_admin' => false,
@@ -279,6 +292,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callTableAction('edit', $user, [
                 'name' => 'Editor Updated',
+                'last_name' => 'Editorov',
                 'email' => 'editor@example.com',
                 'is_active' => false,
                 'is_admin' => true,
@@ -290,6 +304,7 @@ class FilamentUsersResourceTest extends TestCase
         $user->refresh();
 
         $this->assertSame('Editor Updated', $user->name);
+        $this->assertSame('Editorov', $user->last_name);
         $this->assertFalse($user->is_active);
         $this->assertTrue($user->is_admin);
         $this->assertSame(User::ROLE_ADMIN, $user->role);
@@ -316,6 +331,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callTableAction('edit', $user, [
                 'name' => $user->name,
+                'last_name' => $user->last_name,
                 'email' => $user->email,
                 'is_active' => true,
                 'is_admin' => false,
@@ -348,6 +364,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callTableAction('edit', $user, [
                 'name' => 'Role Injection Updated',
+                'last_name' => null,
                 'email' => 'role-injection@example.com',
                 'is_active' => true,
                 'is_admin' => false,
@@ -365,10 +382,11 @@ class FilamentUsersResourceTest extends TestCase
 
     public function test_user_model_does_not_mass_assign_role_and_is_admin(): void
     {
-        $user = new User();
+        $user = new User;
 
         $user->fill([
             'name' => 'Mass Assignment Test',
+            'last_name' => '  Assignmentov  ',
             'email' => 'mass-assignment@example.com',
             'is_active' => true,
             'is_admin' => true,
@@ -377,9 +395,118 @@ class FilamentUsersResourceTest extends TestCase
         ]);
 
         $this->assertSame('Mass Assignment Test', $user->name);
+        $this->assertSame('Assignmentov', $user->last_name);
         $this->assertSame('mass-assignment@example.com', $user->email);
         $this->assertArrayNotHasKey('is_admin', $user->getAttributes());
         $this->assertArrayNotHasKey('role', $user->getAttributes());
+    }
+
+    public function test_filament_user_name_uses_first_and_last_name(): void
+    {
+        $user = User::factory()->make([
+            'name' => 'German',
+            'last_name' => 'Abrikosov',
+            'email' => 'admin@abrikosoff.local',
+        ]);
+
+        $this->assertSame('German Abrikosov', $user->getFilamentName());
+        $this->assertSame('German Abrikosov', Filament::getUserName($user));
+    }
+
+    public function test_filament_user_name_falls_back_to_email_when_name_is_empty(): void
+    {
+        $user = User::factory()->make([
+            'name' => '',
+            'last_name' => null,
+            'email' => 'admin@abrikosoff.local',
+        ]);
+
+        $this->assertSame('admin@abrikosoff.local', $user->getFilamentName());
+    }
+
+    public function test_editing_current_user_redirects_so_top_menu_refreshes(): void
+    {
+        $admin = User::factory()->create([
+            'name' => 'Admin',
+            'last_name' => 'Local',
+            'email' => 'admin@example.com',
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageUsers::class)
+            ->callTableAction('edit', $admin, [
+                'name' => 'German',
+                'last_name' => 'Abrikosov',
+                'email' => 'admin@example.com',
+                'is_active' => true,
+                'is_admin' => true,
+                'password' => '',
+                'password_confirmation' => '',
+            ])
+            ->assertHasNoTableActionErrors()
+            ->assertRedirect(UserResource::getUrl('index'));
+
+        $admin->refresh();
+
+        $this->assertSame('German Abrikosov', $admin->getFilamentName());
+    }
+
+    public function test_employee_can_update_own_profile_from_user_menu_without_users_access(): void
+    {
+        $user = User::factory()->create([
+            'name' => 'Герман',
+            'last_name' => null,
+            'email' => 'member@example.com',
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'users.view', false);
+        $this->assertFalse(Gate::forUser($user)->allows('viewAny', User::class));
+
+        Livewire::actingAs($user)
+            ->test(Topbar::class)
+            ->assertSee('Редактировать профиль')
+            ->callAction('editProfile', [
+                'name' => ' German ',
+                'last_name' => ' Abrikosov ',
+            ])
+            ->assertHasNoActionErrors();
+
+        $user->refresh();
+
+        $this->assertSame('German', $user->name);
+        $this->assertSame('Abrikosov', $user->last_name);
+        $this->assertSame('member@example.com', $user->email);
+        $this->assertFalse($user->is_admin);
+        $this->assertSame(User::ROLE_EMPLOYEE, $user->role);
+        $this->assertSame('German Abrikosov', $user->getFilamentName());
+    }
+
+    public function test_user_menu_profile_action_requires_name(): void
+    {
+        $user = User::factory()->create([
+            'name' => 'Герман',
+            'last_name' => 'Абрикосов',
+            'email' => 'member@example.com',
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        Livewire::actingAs($user)
+            ->test(Topbar::class)
+            ->callAction('editProfile', [
+                'name' => '',
+                'last_name' => 'Новиков',
+            ])
+            ->assertHasActionErrors(['name' => ['required']]);
+
+        $user->refresh();
+
+        $this->assertSame('Герман', $user->name);
+        $this->assertSame('Абрикосов', $user->last_name);
     }
 
     public function test_admin_user_seeder_creates_or_updates_superadmin_with_explicit_assignment(): void
@@ -403,9 +530,12 @@ class FilamentUsersResourceTest extends TestCase
         ]);
         $user = User::factory()->create([
             'name' => 'Геннадий',
+            'last_name' => 'Сергеев',
             'email' => 'g_e_n_a@mail.ru',
             'is_active' => true,
             'is_admin' => false,
+            'last_login_at' => '2026-05-09 10:30:00',
+            'last_seen_at' => '2026-05-09 10:45:00',
         ]);
 
         Livewire::actingAs($admin)
@@ -415,11 +545,17 @@ class FilamentUsersResourceTest extends TestCase
             ->assertMountedActionModalSee('Профиль сотрудника и права доступа в админке.')
             ->assertMountedActionModalSee('Основное')
             ->assertMountedActionModalSee('Доступ')
+            ->assertMountedActionModalSee('Активность')
             ->assertMountedActionModalSee('Служебное')
             ->assertMountedActionModalSee('Геннадий')
+            ->assertMountedActionModalSee('Сергеев')
             ->assertMountedActionModalSee('g_e_n_a@mail.ru')
             ->assertMountedActionModalSee('Активен')
             ->assertMountedActionModalSee('Сотрудник')
+            ->assertMountedActionModalSee('Последний вход')
+            ->assertMountedActionModalSee('09.05.2026 10:30')
+            ->assertMountedActionModalSee('Последняя активность')
+            ->assertMountedActionModalSee('09.05.2026 10:45')
             ->assertMountedActionModalSee('Создан')
             ->assertMountedActionModalSee('Обновлён');
     }
@@ -469,6 +605,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callTableAction('edit', $superadmin, [
                 'name' => 'Admin Updated',
+                'last_name' => null,
                 'email' => 'admin@abrikosoff.local',
                 'is_active' => true,
                 'is_admin' => false,
@@ -496,6 +633,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callTableAction('edit', $admin, [
                 'name' => $admin->name,
+                'last_name' => $admin->last_name,
                 'email' => $admin->email,
                 'is_active' => false,
                 'is_admin' => true,
@@ -522,6 +660,7 @@ class FilamentUsersResourceTest extends TestCase
             ->test(ManageUsers::class)
             ->callTableAction('edit', $admin, [
                 'name' => $admin->name,
+                'last_name' => $admin->last_name,
                 'email' => $admin->email,
                 'is_active' => true,
                 'is_admin' => false,

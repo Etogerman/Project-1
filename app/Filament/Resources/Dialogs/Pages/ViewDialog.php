@@ -92,7 +92,7 @@ class ViewDialog extends ViewRecord
 
     public function getSubheading(): ?string
     {
-        return $this->formatChannelLabel($this->getRecord()->channel, 'Неизвестный канал');
+        return null;
     }
 
     public function hasResourceBreadcrumbs(): bool

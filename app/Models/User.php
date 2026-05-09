@@ -2,18 +2,20 @@
 
 namespace App\Models;
 
+use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
-use Filament\Panel;
+use Filament\Models\Contracts\HasName;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Filament\Panel;
 use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\DB;
 
-class User extends Authenticatable implements FilamentUser
+class User extends Authenticatable implements FilamentUser, HasName
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
+    /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
 
     /**
@@ -34,6 +36,7 @@ class User extends Authenticatable implements FilamentUser
      */
     protected $fillable = [
         'name',
+        'last_name',
         'email',
         'is_active',
         'password',
@@ -53,6 +56,8 @@ class User extends Authenticatable implements FilamentUser
         'email_verified_at' => 'datetime',
         'is_active' => 'boolean',
         'is_admin' => 'boolean',
+        'last_login_at' => 'datetime',
+        'last_seen_at' => 'datetime',
         'role' => 'string',
         'table_preferences' => 'array',
         'password' => 'hashed',
@@ -81,6 +86,16 @@ class User extends Authenticatable implements FilamentUser
     public function canAccessPanel(Panel $panel): bool
     {
         return (bool) $this->is_active;
+    }
+
+    public function getFilamentName(): string
+    {
+        $fullName = trim(implode(' ', array_filter([
+            $this->name,
+            $this->last_name,
+        ], filled(...))));
+
+        return filled($fullName) ? $fullName : (string) $this->email;
     }
 
     public function resolvedRole(): string
@@ -263,6 +278,15 @@ class User extends Authenticatable implements FilamentUser
             set: fn (?string $value): ?string => filled($value)
                 ? mb_strtolower(trim($value))
                 : $value,
+        );
+    }
+
+    protected function lastName(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value): ?string => filled($value)
+                ? trim($value)
+                : null,
         );
     }
 

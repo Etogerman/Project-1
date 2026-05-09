@@ -51,7 +51,17 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('Диалог')
-            ->assertSee('Открыть контакт');
+            ->assertSee('Открыть контакт')
+            ->assertSee('Сообщения диалога')
+            ->assertSee('Написать клиенту')
+            ->assertSee('aria-label="Текст ответа"', false)
+            ->assertDontSee('Технический контекст')
+            ->assertDontSee('Маршрут и идентификаторы')
+            ->assertDontSee('Этот блок нужен для диагностики маршрута')
+            ->assertDontSee('История текущего канала')
+            ->assertDontSee('Сообщение уйдёт в этот диалог')
+            ->assertDontSee('Ответ будет отправлен от имени выбранного канала')
+            ->assertDontSee('<label for="conversation-reply-textarea" class="ac-field-label">', false);
     }
 
     public function test_active_admin_can_open_dialogs_inbox_page(): void
