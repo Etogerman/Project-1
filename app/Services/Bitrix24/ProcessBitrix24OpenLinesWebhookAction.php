@@ -347,6 +347,44 @@ class ProcessBitrix24OpenLinesWebhookAction
             return $recentSuccessfulSendResult;
         }
 
+        $selectedChatId = $this->selectedOpenLineBindingChatId($dialog);
+
+        if (
+            $selectedChatId !== null
+            && $messageData->sourceBitrixChatId !== null
+            && $this->canUseSelectedBindingShortcut($dialog, $messageData, $event->created_at)
+        ) {
+            if ($messageData->sourceBitrixChatId === $selectedChatId) {
+                return false;
+            }
+
+            $this->logBitrix24ApiCallAction->handle(
+                direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+                operation: self::STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION,
+                status: Bitrix24SyncLog::STATUS_SKIPPED,
+                requestPayload: [
+                    'webhook_event_id' => $event->id,
+                    'event_name' => $event->event_name,
+                    'dialog_id' => $dialog->id,
+                    'chat_id' => $messageData->chatId,
+                    'source_bitrix_chat_id' => $messageData->sourceBitrixChatId,
+                    'current_bitrix_chat_id' => $selectedChatId,
+                    'current_chat_source' => 'selected_verified_binding',
+                    'selected_user_code' => $dialog->bitrix24_open_line_user_code_override,
+                    'bitrix_message_id' => $messageData->bitrixMessageId,
+                    'connector_code' => $messageData->connectorCode,
+                    'line_id' => $messageData->lineId,
+                    'diagnostic_event_type' => 'duplicate_inbound_skipped',
+                    'decision_reason' => 'duplicate_inbound_stale_chat',
+                ],
+                connection: $event->connection,
+                entityType: 'openlines_webhook_event',
+                entityId: (string) $event->id,
+            );
+
+            return true;
+        }
+
         $connection = $event->connection ?? $this->resolveCurrentBitrix24ConnectionAction->handle();
         $currentChat = $this->resolveCurrentBitrix24OpenLineChatAction->handle(
             $dialog,
@@ -385,6 +423,44 @@ class ProcessBitrix24OpenLinesWebhookAction
         );
 
         return true;
+    }
+
+    private function canUseSelectedBindingShortcut(
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        ?Carbon $asOf,
+    ): bool {
+        $verifiedAt = $dialog->bitrix24_open_line_binding_verified_at;
+
+        if (! $verifiedAt instanceof Carbon) {
+            return false;
+        }
+
+        if ($verifiedAt->lt($this->normalizeDialogTimestampSecond($asOf)->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS))) {
+            return false;
+        }
+
+        $latestExport = $this->latestSuccessfulInboundClientExport($dialog, $messageData, $asOf);
+
+        return ! $latestExport instanceof Bitrix24MessageExport
+            || $latestExport->resolved_bitrix_chat_verified;
+    }
+
+    private function selectedOpenLineBindingChatId(Dialog $dialog): ?string
+    {
+        if ($dialog->bitrix24_open_line_binding_verified_at === null) {
+            return null;
+        }
+
+        $selectedChatId = $dialog->bitrix24_open_line_resolved_chat_id_override;
+
+        if (! is_scalar($selectedChatId)) {
+            return null;
+        }
+
+        $selectedChatId = trim((string) $selectedChatId);
+
+        return $selectedChatId === '' ? null : $selectedChatId;
     }
 
     private function ignoreByRecentSuccessfulSendChatIfNeeded(
