@@ -27,6 +27,11 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->login()
             ->brandName('Abrikosoff Connector')
+            ->favicon(fn (): string => asset(match (app()->environment()) {
+                'local' => 'favicons/favicon-local.svg',
+                'staging' => 'favicons/favicon-staging.svg',
+                default => 'favicons/favicon-production.svg',
+            }))
             ->sidebarFullyCollapsibleOnDesktop()
             ->maxContentWidth('fi-admin-content-wide')
             ->renderHook(
