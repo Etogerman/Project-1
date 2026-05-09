@@ -2,11 +2,12 @@
 
 namespace Tests\Feature;
 
-use App\Support\AppVersion;
 use App\Models\User;
+use App\Support\AppVersion;
 use Filament\Auth\Pages\Login;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -20,6 +21,13 @@ class FilamentAdminAuthTest extends TestCase
 
         Filament::setCurrentPanel(Filament::getPanel('admin'));
         Filament::bootCurrentPanel();
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+
+        parent::tearDown();
     }
 
     public function test_guest_is_redirected_to_the_filament_login_page(): void
@@ -39,6 +47,9 @@ class FilamentAdminAuthTest extends TestCase
             'is_active' => true,
             'is_admin' => false,
         ]);
+        $loginAt = Carbon::parse('2026-05-09 11:20:00');
+
+        Carbon::setTestNow($loginAt);
 
         Livewire::test(Login::class)
             ->fillForm([
@@ -50,6 +61,7 @@ class FilamentAdminAuthTest extends TestCase
             ->assertRedirect(route('filament.admin.pages.dashboard'));
 
         $this->assertAuthenticatedAs($user);
+        $this->assertSame($loginAt->toDateTimeString(), $user->refresh()->last_login_at?->toDateTimeString());
 
         $this->get('/admin')
             ->assertOk();
@@ -70,6 +82,42 @@ class FilamentAdminAuthTest extends TestCase
             ->get('/admin')
             ->assertOk()
             ->assertSee($version);
+    }
+
+    public function test_authenticated_admin_activity_is_tracked_with_five_minute_throttle(): void
+    {
+        $user = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'last_seen_at' => null,
+        ]);
+        $firstSeenAt = Carbon::parse('2026-05-09 12:00:00');
+
+        Carbon::setTestNow($firstSeenAt);
+
+        $this->actingAs($user)
+            ->get('/admin')
+            ->assertOk();
+
+        $this->assertSame($firstSeenAt->toDateTimeString(), $user->refresh()->last_seen_at?->toDateTimeString());
+
+        Carbon::setTestNow($firstSeenAt->copy()->addMinutes(4));
+
+        $this->actingAs($user)
+            ->get('/admin')
+            ->assertOk();
+
+        $this->assertSame($firstSeenAt->toDateTimeString(), $user->refresh()->last_seen_at?->toDateTimeString());
+
+        $nextSeenAt = $firstSeenAt->copy()->addMinutes(5);
+
+        Carbon::setTestNow($nextSeenAt);
+
+        $this->actingAs($user)
+            ->get('/admin')
+            ->assertOk();
+
+        $this->assertSame($nextSeenAt->toDateTimeString(), $user->refresh()->last_seen_at?->toDateTimeString());
     }
 
     public function test_employee_dashboard_hides_system_navigation_items(): void

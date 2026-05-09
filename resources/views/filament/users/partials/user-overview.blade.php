@@ -32,6 +32,10 @@
                     <p class="ac-meta__value">{{ $name }}</p>
                 </div>
                 <div class="ac-meta">
+                    <p class="ac-meta__label">Фамилия</p>
+                    <p class="ac-meta__value">{{ $lastNameLabel }}</p>
+                </div>
+                <div class="ac-meta">
                     <p class="ac-meta__label">Email</p>
                     <p class="ac-meta__value">{{ $email }}</p>
                 </div>
@@ -51,6 +55,21 @@
                 <span class="ac-pill" data-tone="{{ $roleTone }}">
                     {{ $roleLabel }}
                 </span>
+            </div>
+        </article>
+
+        <article class="ac-list-card ac-list-card--soft">
+            <p class="ac-list-card__title">Активность</p>
+
+            <div class="ac-meta-grid ac-meta-grid--compact ac-list-card__section">
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Последний вход</p>
+                    <p class="ac-meta__value">{{ $lastLoginAtLabel }}</p>
+                </div>
+                <div class="ac-meta">
+                    <p class="ac-meta__label">Последняя активность</p>
+                    <p class="ac-meta__value">{{ $lastSeenAtLabel }}</p>
+                </div>
             </div>
         </article>
 
