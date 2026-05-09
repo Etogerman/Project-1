@@ -207,6 +207,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $connection = $this->makeConnection([
             'profile_id' => $profile->id,
             'portal_domain' => $profile->portal_domain,
+            'application_name' => 'Герман-4',
         ]);
         $telegram = Channel::factory()->create([
             'name' => 'Локальный Telegram',
@@ -260,7 +261,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertStringNotContainsString('openlines_callback_url', $snippet);
         $this->assertStringContainsString("'connectors' =>", $snippet);
         $this->assertStringContainsString("'abc_telegram'", $snippet);
-        $this->assertStringContainsString("'name' => 'ABC Telegram'", $snippet);
+        $this->assertStringContainsString("'name' => 'Герман-4 Telegram'", $snippet);
         $this->assertStringContainsString("'component' => 'abrikosoff:imconnector.telegram'", $snippet);
         $this->assertStringContainsString("'line_id' => '9'", $snippet);
         $this->assertStringContainsString("'line_name' => '9 Локальный бот телеграм - Герман-1'", $snippet);
@@ -268,7 +269,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertStringContainsString("'label' => 'TG'", $snippet);
         $this->assertStringContainsString('9 =>', $snippet);
         $this->assertStringContainsString("'abc_max'", $snippet);
-        $this->assertStringContainsString("'name' => 'ABC MAX'", $snippet);
+        $this->assertStringContainsString("'name' => 'Герман-4 MAX'", $snippet);
         $this->assertStringContainsString("'component' => 'abrikosoff:imconnector.max'", $snippet);
         $this->assertStringContainsString("'line_id' => '8'", $snippet);
         $this->assertStringContainsString("'line_name' => '8 Локальный бот MAX - Герман-1'", $snippet);
@@ -1059,8 +1060,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     return $method === 'imconnector.register'
                         && $usedConnection->is($connection)
                         && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                        && ($params['NAME'] ?? null) === 'ABC Telegram'
-                        && ($params['COMMENT'] ?? null) === 'Настройки канала ABC Telegram'
+                        && ($params['NAME'] ?? null) === 'Герман-4 Telegram'
+                        && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 Telegram'
                         && data_get($params, 'ICON.COLOR') === '#2AABEE'
                         && data_get($params, 'ICON_DISABLED.COLOR') === '#99ADB3'
                         && str_contains($icon, '<path')
@@ -1075,7 +1076,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['CONNECTOR'] ?? null) === 'abc_telegram_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-777'
                     && data_get($params, 'DATA.ID') === 'channel:'.$channel->id.':connector:abc_telegram_dev_german_main:line:line-777'
-                    && data_get($params, 'DATA.NAME') === 'ABC Telegram')
+                    && data_get($params, 'DATA.NAME') === 'Герман-4 Telegram')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
@@ -1099,7 +1100,12 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         Livewire::actingAs($superadmin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->call('setupOpenLineRoute', $channel->id)
-            ->assertSet('openLineRouteErrorMessage', null);
+            ->assertSet('openLineRouteErrorMessage', null)
+            ->assertSet('openLineRouteSuccessMessage', sprintf(
+                'Открытая линия настроена: #%d Локальный бот, LINE_ID line-777.',
+                $channel->id,
+            ))
+            ->assertSee(sprintf('Открытая линия настроена: #%d Локальный бот, LINE_ID line-777.', $channel->id));
 
         $this->assertDatabaseHas('bitrix24_open_line_routes', [
             'bitrix24_profile_id' => $profile->id,
@@ -1123,6 +1129,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertSame('abc_telegram_dev_german_main', $profile->telegram_connector_code);
         $this->assertNull($profile->telegram_line_id);
         $this->assertSame('ABC_TELEGRAM_DEV_GERMAN_MAIN', $profile->telegram_source_id);
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->assertSee(sprintf('Открытые линии готовы: #%d Локальный бот, LINE_ID line-777.', $channel->id));
     }
 
     public function test_superadmin_can_auto_setup_max_open_line_route(): void
@@ -1167,8 +1177,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     return $method === 'imconnector.register'
                         && $usedConnection->is($connection)
                         && ($params['ID'] ?? null) === 'abc_max_dev_german_main'
-                        && ($params['NAME'] ?? null) === 'ABC MAX'
-                        && ($params['COMMENT'] ?? null) === 'Настройки канала ABC MAX'
+                        && ($params['NAME'] ?? null) === 'Герман-4 MAX'
+                        && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 MAX'
                         && data_get($params, 'ICON.COLOR') === '#7C3AED'
                         && data_get($params, 'ICON_DISABLED.COLOR') === '#99ADB3'
                         && str_contains($icon, '>MAX<');
@@ -1182,7 +1192,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['CONNECTOR'] ?? null) === 'abc_max_dev_german_main'
                     && ($params['LINE'] ?? null) === 'line-max'
                     && data_get($params, 'DATA.ID') === 'channel:'.$channel->id.':connector:abc_max_dev_german_main:line:line-max'
-                    && data_get($params, 'DATA.NAME') === 'ABC MAX')
+                    && data_get($params, 'DATA.NAME') === 'Герман-4 MAX')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldReceive('call')
@@ -1418,7 +1428,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'ABC Telegram')
+                    && ($params['NAME'] ?? null) === 'Герман-4 Telegram')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
@@ -1507,8 +1517,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'ABC Telegram'
-                    && ($params['COMMENT'] ?? null) === 'Настройки канала ABC Telegram')
+                    && ($params['NAME'] ?? null) === 'Герман-4 Telegram'
+                    && ($params['COMMENT'] ?? null) === 'Настройки канала Герман-4 Telegram')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
             $mock->shouldReceive('call')
@@ -1631,7 +1641,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && ($params['ID'] ?? null) === 'abc_telegram_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'ABC Telegram'
+                    && ($params['NAME'] ?? null) === 'Новое имя Telegram'
                     && ($params['ICON']['COLOR'] ?? null) === '#2AABEE')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
@@ -1640,7 +1650,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
                     && $usedConnection->is($connection)
                     && ($params['ID'] ?? null) === 'abc_max_dev_german_main'
-                    && ($params['NAME'] ?? null) === 'ABC MAX'
+                    && ($params['NAME'] ?? null) === 'Новое имя MAX'
                     && ($params['ICON']['COLOR'] ?? null) === '#7C3AED')
                 ->andReturn($this->bitrixResponse(true, ['result' => true]));
 
