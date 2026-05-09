@@ -29,6 +29,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         Bitrix24OpenLinesRouteData $route,
         bool $retryAfterSync = false,
         bool $applyLegacyFallbackSignature = false,
+        ?string $userIdOverride = null,
     ): array {
         $message->loadMissing([
             'dialog.channel',
@@ -46,7 +47,9 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         $text = $this->resolveMessageText($message, $channel, $applyLegacyFallbackSignature);
         $dialogBinding = $this->resolveDialogBindingAction->handle($dialog, $route);
         $chatKey = $dialogBinding?->connectorChatId ?? $this->resolveBitrix24LiveChatKeyAction->handle($dialog);
-        $userId = $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
+        $userId = filled($userIdOverride)
+            ? trim((string) $userIdOverride)
+            : $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $phones = $this->collectBitrix24ContactPhonesAction->handle($rootContact);
 

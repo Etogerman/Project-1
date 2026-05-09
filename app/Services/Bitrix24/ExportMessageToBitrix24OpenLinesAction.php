@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24CurrentOpenLineChatData;
+use App\Data\Bitrix24\Bitrix24OpenLinesIdentityDecisionData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
@@ -38,6 +39,7 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
+        private readonly ResolveBitrix24OpenLinesIdentityDecisionAction $resolveIdentityDecisionAction,
         private readonly ResolveCurrentBitrix24OpenLineChatAction $resolveCurrentOpenLineChatAction,
         private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
         private readonly RepairStaleBitrix24ContactForLiveExportAction $repairStaleBitrix24ContactForLiveExportAction,
@@ -49,8 +51,7 @@ class ExportMessageToBitrix24OpenLinesAction
         bool $retryAfterSync = false,
         ?string $liveBatchUuid = null,
         ?string $retryAfterSyncReason = null,
-    ): Message
-    {
+    ): Message {
         $message = $message instanceof Message
             ? $message
             : Message::query()->with(['dialog.channel', 'contact'])->findOrFail($message);
@@ -833,13 +834,29 @@ class ExportMessageToBitrix24OpenLinesAction
             return null;
         }
 
+        $identityDecision = $this->resolveIdentityDecisionAction->handle($message, $route, $connection);
+
         $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle(
             $message,
             $route,
             $retryAfterSync,
             false,
+            $identityDecision->userId,
         );
         $payloadChatId = $this->nonEmptyScalarString(data_get($payload, 'MESSAGES.0.chat.id'));
+        $payloadUserId = $this->nonEmptyScalarString(data_get($payload, 'MESSAGES.0.user.id'));
+        $this->logIdentityDecision(
+            message: $message,
+            dialog: $dialog,
+            rootContactId: $rootContactId,
+            bitrix24ContactId: $bitrix24ContactId,
+            route: $route,
+            connection: $connection,
+            identityDecision: $identityDecision,
+            payloadChatId: $payloadChatId,
+            payloadUserId: $payloadUserId,
+            fastPath: true,
+        );
 
         try {
             $response = $this->bitrix24ApiClient->call(
@@ -859,10 +876,11 @@ class ExportMessageToBitrix24OpenLinesAction
                     'contact_id' => $rootContactId,
                     'bitrix24_contact_id' => $bitrix24ContactId,
                     'payload_chat_id' => $payloadChatId,
+                    'payload_user_id' => $payloadUserId,
                     'connector_code' => $route->connectorCode,
                     'line_id' => $route->lineId,
                     'retry_after_sync' => $retryAfterSync,
-                ],
+                ] + $this->identityDecisionLogPayload($identityDecision),
                 connection: $connection,
                 errorMessage: $exception->getMessage(),
                 entityType: 'message',
@@ -889,10 +907,11 @@ class ExportMessageToBitrix24OpenLinesAction
                         'contact_id' => $rootContactId,
                         'bitrix24_contact_id' => $bitrix24ContactId,
                         'payload_chat_id' => $payloadChatId,
+                        'payload_user_id' => $payloadUserId,
                         'connector_code' => $route->connectorCode,
                         'line_id' => $route->lineId,
                         'retry_after_sync' => $retryAfterSync,
-                    ],
+                    ] + $this->identityDecisionLogPayload($identityDecision),
                     responsePayload: [
                         'result' => $response->result,
                         'rest_method' => $response->restMethod,
@@ -919,10 +938,11 @@ class ExportMessageToBitrix24OpenLinesAction
                     'contact_id' => $rootContactId,
                     'bitrix24_contact_id' => $bitrix24ContactId,
                     'payload_chat_id' => $payloadChatId,
+                    'payload_user_id' => $payloadUserId,
                     'connector_code' => $route->connectorCode,
                     'line_id' => $route->lineId,
                     'retry_after_sync' => $retryAfterSync,
-                ],
+                ] + $this->identityDecisionLogPayload($identityDecision),
                 responsePayload: [
                     'result' => $response->result,
                     'rest_method' => $response->restMethod,
@@ -960,10 +980,11 @@ class ExportMessageToBitrix24OpenLinesAction
                     'contact_id' => $rootContactId,
                     'bitrix24_contact_id' => $bitrix24ContactId,
                     'payload_chat_id' => $payloadChatId,
+                    'payload_user_id' => $payloadUserId,
                     'connector_code' => $route->connectorCode,
                     'line_id' => $route->lineId,
                     'retry_after_sync' => $retryAfterSync,
-                ],
+                ] + $this->identityDecisionLogPayload($identityDecision),
                 responsePayload: [
                     'result' => $response->result,
                     'rest_method' => $response->restMethod,
@@ -1014,11 +1035,12 @@ class ExportMessageToBitrix24OpenLinesAction
                     'contact_id' => $rootContactId,
                     'bitrix24_contact_id' => $bitrix24ContactId,
                     'payload_chat_id' => $payloadChatId,
+                    'payload_user_id' => $payloadUserId,
                     'expected_current_chat_id' => $expectedResolvedBitrixChatId,
                     'connector_code' => $route->connectorCode,
                     'line_id' => $route->lineId,
                     'retry_after_sync' => $retryAfterSync,
-                ],
+                ] + $this->identityDecisionLogPayload($identityDecision),
                 responsePayload: [
                     'result' => $response->result,
                     'rest_method' => $response->restMethod,
@@ -1075,11 +1097,14 @@ class ExportMessageToBitrix24OpenLinesAction
                 'returned_message_id' => $bitrixRemoteMessageId,
                 'binding_synced_from_response' => $bindingSynced,
                 'resolved_bitrix_chat_verified' => $resolvedBitrixChatVerified,
+                'identity_mode' => $identityDecision->identityMode,
+                'decision_reason' => $identityDecision->decisionReason,
             ],
             requestPayload: [
                 'fast_path' => true,
                 'payload_chat_id' => $payloadChatId,
-            ],
+                'payload_user_id' => $payloadUserId,
+            ] + $this->identityDecisionLogPayload($identityDecision),
             resolvedBitrixChatVerified: $resolvedBitrixChatVerified,
         );
     }
@@ -1295,13 +1320,27 @@ class ExportMessageToBitrix24OpenLinesAction
             );
         }
 
+        $identityDecision = $this->resolveIdentityDecisionAction->handle($message, $route, $connection);
         $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle(
             $message,
             $route,
             $retryAfterSync,
             $applyLegacyFallbackSignature,
+            $identityDecision->userId,
         );
         $payloadChatId = $this->nonEmptyScalarString(data_get($payload, 'MESSAGES.0.chat.id'));
+        $payloadUserId = $this->nonEmptyScalarString(data_get($payload, 'MESSAGES.0.user.id'));
+        $this->logIdentityDecision(
+            message: $message,
+            dialog: $dialog,
+            rootContactId: $rootContactId,
+            bitrix24ContactId: $bitrix24ContactId,
+            route: $route,
+            connection: $connection,
+            identityDecision: $identityDecision,
+            payloadChatId: $payloadChatId,
+            payloadUserId: $payloadUserId,
+        );
 
         try {
             $response = $this->bitrix24ApiClient->call(
@@ -1311,6 +1350,21 @@ class ExportMessageToBitrix24OpenLinesAction
                 transportRetry: false,
             );
         } catch (Bitrix24ApiException $exception) {
+            $this->logIdentityUncertain(
+                message: $message,
+                dialog: $dialog,
+                rootContactId: $rootContactId,
+                bitrix24ContactId: $bitrix24ContactId,
+                route: $route,
+                connection: $connection,
+                identityDecision: $identityDecision,
+                payloadChatId: $payloadChatId,
+                payloadUserId: $payloadUserId,
+                expectedResolvedBitrixChatId: $expectedResolvedBitrixChatId,
+                returnedResolvedBitrixChatId: null,
+                errorMessage: $exception->getMessage(),
+            );
+
             throw new Bitrix24LiveExportTransportException(
                 'Bitrix24 Open Lines live export transport outcome is uncertain.',
                 failureCode: Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
@@ -1324,6 +1378,29 @@ class ExportMessageToBitrix24OpenLinesAction
                 ? Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN
                 : Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED;
             $failureUncertain = $failureCode === Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN;
+
+            if ($failureUncertain) {
+                $this->logIdentityUncertain(
+                    message: $message,
+                    dialog: $dialog,
+                    rootContactId: $rootContactId,
+                    bitrix24ContactId: $bitrix24ContactId,
+                    route: $route,
+                    connection: $connection,
+                    identityDecision: $identityDecision,
+                    payloadChatId: $payloadChatId,
+                    payloadUserId: $payloadUserId,
+                    expectedResolvedBitrixChatId: $expectedResolvedBitrixChatId,
+                    returnedResolvedBitrixChatId: null,
+                    errorMessage: $response->errorMessage ?? 'Bitrix24 Open Lines message export failed with uncertain status.',
+                    responsePayload: [
+                        'result' => $response->result,
+                        'rest_method' => $response->restMethod,
+                    ],
+                    httpStatus: $response->httpStatus,
+                    errorCode: $response->errorCode,
+                );
+            }
 
             throw new Bitrix24LiveExportTransportException(
                 $response->errorMessage ?? 'Bitrix24 Open Lines message export failed.',
@@ -1353,6 +1430,24 @@ class ExportMessageToBitrix24OpenLinesAction
 
         if ($bindingSyncedFromResponse) {
             $this->syncVerifiedBindingToCurrentChat($dialog, $validatedReturnedChat);
+
+            if ($expectedResolvedBitrixChatId !== null && $resolvedBitrixChatId !== $expectedResolvedBitrixChatId) {
+                $this->logIdentityMigrationRebound(
+                    message: $message,
+                    dialog: $dialog->fresh() ?? $dialog,
+                    rootContactId: $rootContactId,
+                    bitrix24ContactId: $bitrix24ContactId,
+                    route: $route,
+                    connection: $connection,
+                    identityDecision: $identityDecision,
+                    payloadChatId: $payloadChatId,
+                    payloadUserId: $payloadUserId,
+                    expectedResolvedBitrixChatId: $expectedResolvedBitrixChatId,
+                    returnedResolvedBitrixChatId: $resolvedBitrixChatId,
+                    returnedConnectorUserId: $connectorUserId,
+                    bitrixRemoteMessageId: $bitrixRemoteMessageId,
+                );
+            }
         }
 
         $postRepairValidatedChat = $this->validateRetryAfterSyncInboundCrmBinding(
@@ -1399,6 +1494,32 @@ class ExportMessageToBitrix24OpenLinesAction
                     $bitrixRemoteMessageId,
                 )
             ) {
+                $this->logIdentityUncertain(
+                    message: $message,
+                    dialog: $dialog,
+                    rootContactId: $rootContactId,
+                    bitrix24ContactId: $bitrix24ContactId,
+                    route: $route,
+                    connection: $connection,
+                    identityDecision: $identityDecision,
+                    payloadChatId: $payloadChatId,
+                    payloadUserId: $payloadUserId,
+                    expectedResolvedBitrixChatId: $expectedResolvedBitrixChatId,
+                    returnedResolvedBitrixChatId: $resolvedBitrixChatId,
+                    returnedConnectorUserId: $connectorUserId,
+                    bitrixRemoteMessageId: $bitrixRemoteMessageId,
+                    errorMessage: sprintf(
+                        'Bitrix24 Open Lines verified binding legacy export returned unexpected chat id [%s], expected [%s].',
+                        $resolvedBitrixChatId ?? 'null',
+                        $expectedResolvedBitrixChatId,
+                    ),
+                    responsePayload: [
+                        'result' => $response->result,
+                        'rest_method' => $response->restMethod,
+                    ],
+                    httpStatus: $response->httpStatus,
+                );
+
                 throw new Bitrix24LiveExportTransportException(
                     sprintf(
                         'Bitrix24 Open Lines verified binding legacy export returned unexpected chat id [%s], expected [%s].',
@@ -1414,6 +1535,21 @@ class ExportMessageToBitrix24OpenLinesAction
 
             $bindingResyncedAfterChatMismatch = true;
             $resolvedBitrixChatVerified = true;
+            $this->logIdentityMigrationRebound(
+                message: $message,
+                dialog: $dialog->fresh() ?? $dialog,
+                rootContactId: $rootContactId,
+                bitrix24ContactId: $bitrix24ContactId,
+                route: $route,
+                connection: $connection,
+                identityDecision: $identityDecision,
+                payloadChatId: $payloadChatId,
+                payloadUserId: $payloadUserId,
+                expectedResolvedBitrixChatId: $expectedResolvedBitrixChatId,
+                returnedResolvedBitrixChatId: $resolvedBitrixChatId,
+                returnedConnectorUserId: $connectorUserId,
+                bitrixRemoteMessageId: $bitrixRemoteMessageId,
+            );
         }
 
         return $this->completeSuccessfulExport(
@@ -1440,14 +1576,173 @@ class ExportMessageToBitrix24OpenLinesAction
                 'inbound_client_binding_synced_from_response' => $bindingSyncedFromResponse,
                 'post_repair_crm_binding_validated' => $bindingValidatedAfterRepair,
                 'resolved_bitrix_chat_verified' => $resolvedBitrixChatVerified,
+                'identity_mode' => $identityDecision->identityMode,
+                'decision_reason' => $identityDecision->decisionReason,
             ] + $this->resolveLegacyExportAuditResponsePayload($operation, $resolvedBitrixChatId),
             requestPayload: $this->resolveLegacyExportAuditRequestPayload(
                 $operation,
                 $payloadChatId,
                 $expectedResolvedBitrixChatId,
-            ),
+            ) + [
+                'payload_user_id' => $payloadUserId,
+            ] + $this->identityDecisionLogPayload($identityDecision),
             resolvedBitrixChatVerified: $resolvedBitrixChatVerified,
         );
+    }
+
+    private function logIdentityDecision(
+        Message $message,
+        Dialog $dialog,
+        int $rootContactId,
+        string $bitrix24ContactId,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        Bitrix24OpenLinesIdentityDecisionData $identityDecision,
+        ?string $payloadChatId,
+        ?string $payloadUserId,
+        bool $fastPath = false,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'identity_mode_selected',
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'message_id' => $message->id,
+                'dialog_id' => $dialog->id,
+                'contact_id' => $rootContactId,
+                'bitrix24_contact_id' => $bitrix24ContactId,
+                'connector_code' => $route->connectorCode,
+                'line_id' => $route->lineId,
+                'payload_chat_id' => $payloadChatId,
+                'payload_user_id' => $payloadUserId,
+                'fast_path' => $fastPath,
+                'diagnostic_event_type' => 'identity_mode_selected',
+            ] + $this->identityDecisionLogPayload($identityDecision),
+            responsePayload: [
+                'diagnostic_event_type' => 'identity_mode_selected',
+                'identity_mode' => $identityDecision->identityMode,
+                'decision_reason' => $identityDecision->decisionReason,
+            ],
+            connection: $connection,
+            entityType: 'message',
+            entityId: (string) $message->id,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $responsePayload
+     */
+    private function logIdentityUncertain(
+        Message $message,
+        Dialog $dialog,
+        int $rootContactId,
+        string $bitrix24ContactId,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        Bitrix24OpenLinesIdentityDecisionData $identityDecision,
+        ?string $payloadChatId,
+        ?string $payloadUserId,
+        ?string $expectedResolvedBitrixChatId,
+        ?string $returnedResolvedBitrixChatId,
+        ?string $errorMessage,
+        ?string $returnedConnectorUserId = null,
+        ?string $bitrixRemoteMessageId = null,
+        ?array $responsePayload = null,
+        ?int $httpStatus = null,
+        ?string $errorCode = null,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'identity_uncertain',
+            status: Bitrix24SyncLog::STATUS_FAILED,
+            requestPayload: [
+                'message_id' => $message->id,
+                'dialog_id' => $dialog->id,
+                'contact_id' => $rootContactId,
+                'bitrix24_contact_id' => $bitrix24ContactId,
+                'connector_code' => $route->connectorCode,
+                'line_id' => $route->lineId,
+                'payload_chat_id' => $payloadChatId,
+                'payload_user_id' => $payloadUserId,
+                'expected_current_chat_id' => $expectedResolvedBitrixChatId,
+                'returned_session_chat_id' => $returnedResolvedBitrixChatId,
+                'returned_connector_user_id' => $returnedConnectorUserId,
+                'returned_message_id' => $bitrixRemoteMessageId,
+                'diagnostic_event_type' => 'identity_uncertain',
+            ] + $this->identityDecisionLogPayload($identityDecision),
+            responsePayload: [
+                'diagnostic_event_type' => 'identity_uncertain',
+                'human_status' => 'Возможно доставлено, автоматический повтор не выполняется',
+            ] + ($responsePayload ?? []),
+            connection: $connection,
+            httpStatus: $httpStatus,
+            errorCode: $errorCode,
+            errorMessage: $errorMessage,
+            entityType: 'message',
+            entityId: (string) $message->id,
+        );
+    }
+
+    private function logIdentityMigrationRebound(
+        Message $message,
+        Dialog $dialog,
+        int $rootContactId,
+        string $bitrix24ContactId,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        Bitrix24OpenLinesIdentityDecisionData $identityDecision,
+        ?string $payloadChatId,
+        ?string $payloadUserId,
+        ?string $expectedResolvedBitrixChatId,
+        ?string $returnedResolvedBitrixChatId,
+        ?string $returnedConnectorUserId,
+        ?string $bitrixRemoteMessageId,
+    ): void {
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: 'identity_migration_rebound',
+            status: Bitrix24SyncLog::STATUS_SUCCESS,
+            requestPayload: [
+                'message_id' => $message->id,
+                'dialog_id' => $dialog->id,
+                'contact_id' => $rootContactId,
+                'bitrix24_contact_id' => $bitrix24ContactId,
+                'connector_code' => $route->connectorCode,
+                'line_id' => $route->lineId,
+                'payload_chat_id' => $payloadChatId,
+                'payload_user_id' => $payloadUserId,
+                'expected_current_chat_id' => $expectedResolvedBitrixChatId,
+                'returned_session_chat_id' => $returnedResolvedBitrixChatId,
+                'returned_connector_user_id' => $returnedConnectorUserId,
+                'returned_message_id' => $bitrixRemoteMessageId,
+                'diagnostic_event_type' => 'identity_migration_rebound',
+            ] + $this->identityDecisionLogPayload($identityDecision),
+            responsePayload: [
+                'diagnostic_event_type' => 'identity_migration_rebound',
+                'selected_user_code' => $dialog->bitrix24_open_line_user_code_override,
+                'selected_chat_id' => $dialog->bitrix24_open_line_resolved_chat_id_override,
+            ],
+            connection: $connection,
+            entityType: 'message',
+            entityId: (string) $message->id,
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function identityDecisionLogPayload(Bitrix24OpenLinesIdentityDecisionData $identityDecision): array
+    {
+        return [
+            'identity_mode' => $identityDecision->identityMode,
+            'decision_reason' => $identityDecision->decisionReason,
+            'channel_aware_user_id' => $identityDecision->channelAwareUserId,
+            'legacy_external_user_id' => $identityDecision->legacyExternalUserId,
+            'selected_user_code' => $identityDecision->selectedUserCode,
+            'selected_chat_id' => $identityDecision->selectedChatId,
+            'selected_payload_chat_id' => $identityDecision->payloadChatId,
+            'legacy_candidate_count' => $identityDecision->legacyCandidateCount,
+        ];
     }
 
     private function validateRetryAfterSyncInboundCrmBinding(
