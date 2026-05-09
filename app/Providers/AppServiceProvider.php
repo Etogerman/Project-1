@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Listeners\RecordAdminUserLogin;
 use App\Models\AutoReplyCategory;
 use App\Models\AutoReplyRule;
 use App\Models\Bitrix24Connection;
@@ -20,8 +21,10 @@ use App\Policies\ContactPolicy;
 use App\Policies\DialogPolicy;
 use App\Policies\ScenarioPolicy;
 use App\Policies\UserPolicy;
+use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
@@ -50,6 +53,8 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(AutoReplyRule::class, AutoReplyRulePolicy::class);
         Gate::policy(AutoReplyCategory::class, AutoReplyCategoryPolicy::class);
         Gate::policy(Bitrix24Connection::class, Bitrix24ConnectionPolicy::class);
+
+        Event::listen(Login::class, RecordAdminUserLogin::class);
 
         RateLimiter::for('bitrix24-install', function (Request $request): array {
             return $this->resolveBitrix24CallbackRateLimits(

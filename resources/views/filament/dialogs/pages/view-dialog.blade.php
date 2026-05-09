@@ -160,17 +160,6 @@
                             @endif
                         </div>
 
-                        <div class="ac-surface__title-group">
-                            <p class="ac-surface__eyebrow">
-                                Технический контекст
-                            </p>
-                            <h3 class="ac-surface__title">
-                                Маршрут и идентификаторы
-                            </h3>
-                            <p class="ac-surface__subtitle">
-                                Этот блок нужен для диагностики маршрута и проверки канала, когда что-то идёт не по плану.
-                            </p>
-                        </div>
                     </div>
 
                     <span
@@ -375,9 +364,6 @@
             >
                 <div class="ac-surface__header ac-surface__header--centered">
                     <div class="ac-surface__title-group">
-                        <p class="ac-surface__eyebrow">
-                            История текущего канала
-                        </p>
                         <h3 class="ac-surface__title">
                             Сообщения диалога
                         </h3>

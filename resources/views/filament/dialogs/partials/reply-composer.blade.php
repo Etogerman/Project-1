@@ -12,11 +12,7 @@
 
     <div class="ac-inline-split">
         <div class="ac-surface__title-group">
-            <p class="ac-surface__eyebrow">Ручной ответ</p>
             <h3 class="ac-surface__title">Написать клиенту</h3>
-            <p class="ac-surface__subtitle">
-                Сообщение уйдёт в этот диалог и сразу сохранится в истории переписки.
-            </p>
         </div>
 
         <p class="ac-note">
@@ -36,9 +32,6 @@
             </p>
         @endif
 
-        <label for="conversation-reply-textarea" class="ac-field-label">
-            Сообщение
-        </label>
         <div class="ac-button-group">
             @foreach ($replyFormatOptions as $replyFormatValue => $replyFormatLabel)
                 <button
@@ -59,6 +52,7 @@
             id="conversation-reply-textarea"
             data-role="conversation-reply-textarea"
             wire:model.defer="{{ $replyTextModel }}"
+            aria-label="Текст ответа"
             rows="4"
             maxlength="2000"
             placeholder="Введите текст ответа клиенту"
@@ -79,11 +73,7 @@
         @enderror
     </div>
 
-    <div class="ac-actions ac-actions--between">
-        <p class="ac-note ac-actions__hint">
-            Ответ будет отправлен от имени выбранного канала и попадёт в историю этого диалога.
-        </p>
-
+    <div class="ac-actions">
         <button
             data-role="conversation-reply-submit"
             type="button"
