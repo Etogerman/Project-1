@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Users;
 use App\Filament\Resources\Users\Pages\ManageUsers;
 use App\Models\User;
 use BackedEnum;
+use Filament\Actions\Action;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\TextInput;
@@ -65,6 +66,11 @@ class UserResource extends Resource
                             ->extraFieldWrapperAttributes(['class' => 'ac-user-form-field'])
                             ->required()
                             ->maxLength(255),
+                        TextInput::make('last_name')
+                            ->label('Фамилия')
+                            ->extraFieldWrapperAttributes(['class' => 'ac-user-form-field'])
+                            ->dehydrateStateUsing(fn (?string $state): ?string => static::normalizeNullableText($state))
+                            ->maxLength(255),
                         TextInput::make('email')
                             ->label('Email')
                             ->email()
@@ -102,7 +108,7 @@ class UserResource extends Resource
                 Section::make('Пароль')
                     ->description(fn (string $operation): string => $operation === 'create'
                         ? 'Укажите пароль для нового сотрудника.'
-                        : 'Оставьте поля пустыми, если пароль менять не нужно.')
+                        : 'Заполните, чтобы установить новый пароль. Оставьте пустым, чтобы не менять.')
                     ->extraAttributes(['class' => 'ac-user-form-section ac-user-form-section--password'])
                     ->columnSpanFull()
                     ->schema([
@@ -115,7 +121,7 @@ class UserResource extends Resource
                             ->dehydrated(fn (?string $state): bool => filled($state))
                             ->same('password_confirmation')
                             ->minLength(8)
-                            ->helperText('Оставьте пустым, если пароль не нужно менять.'),
+                            ->helperText('Заполните, чтобы установить новый пароль. Оставьте пустым, чтобы не менять.'),
                         TextInput::make('password_confirmation')
                             ->label('Подтверждение пароля')
                             ->password()
@@ -160,6 +166,12 @@ class UserResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->toggleable(),
+                TextColumn::make('last_name')
+                    ->label('Фамилия')
+                    ->placeholder('—')
+                    ->searchable()
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('email')
                     ->label('Email')
                     ->searchable()
@@ -187,6 +199,12 @@ class UserResource extends Resource
                     ->dateTime('d.m.Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('last_seen_at')
+                    ->label('Последняя активность')
+                    ->dateTime('d.m.Y H:i')
+                    ->placeholder('Нет активности')
+                    ->sortable()
+                    ->toggleable(),
             ])
             ->filters([
                 TernaryFilter::make('is_active')
@@ -204,9 +222,9 @@ class UserResource extends Resource
             ])
             ->columnManager()
             ->deferColumnManager(false)
-            ->columnManagerWidth(\Filament\Support\Enums\Width::Medium)
+            ->columnManagerWidth(Width::Medium)
             ->columnManagerTriggerAction(
-                fn (\Filament\Actions\Action $action): \Filament\Actions\Action => $action
+                fn (Action $action): Action => $action
                     ->tooltip('Столбцы')
                     ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
             )
@@ -242,7 +260,10 @@ class UserResource extends Resource
                     })
                     ->using(function (array $data, User $record): void {
                         static::updateUserFromFormData($record, $data);
-                    }),
+                    })
+                    ->successRedirectUrl(fn (User $record): ?string => auth()->id() === $record->id
+                        ? static::getUrl('index')
+                        : null),
             ])
             ->toolbarActions([]);
     }
@@ -252,7 +273,7 @@ class UserResource extends Resource
      */
     public static function createUserFromFormData(array $data): User
     {
-        $user = new User();
+        $user = new User;
 
         static::persistUserFromFormData($user, $data);
 
@@ -280,12 +301,15 @@ class UserResource extends Resource
     /**
      * @return array{
      *     name: string,
+     *     lastNameLabel: string,
      *     email: string,
      *     idLabel: string,
      *     activeLabel: string,
      *     activeTone: string,
      *     roleLabel: string,
      *     roleTone: string,
+     *     lastLoginAtLabel: string,
+     *     lastSeenAtLabel: string,
      *     createdAtLabel: string,
      *     updatedAtLabel: string
      * }
@@ -294,12 +318,15 @@ class UserResource extends Resource
     {
         return [
             'name' => $record->name,
+            'lastNameLabel' => static::formatNullableText($record->last_name),
             'email' => $record->email,
             'idLabel' => (string) $record->id,
             'activeLabel' => $record->is_active ? 'Активен' : 'Отключён',
             'activeTone' => $record->is_active ? 'success' : 'danger',
             'roleLabel' => static::roleLabel($record),
             'roleTone' => static::roleTone($record),
+            'lastLoginAtLabel' => static::formatUserTimestamp($record->last_login_at, 'Никогда не входил'),
+            'lastSeenAtLabel' => static::formatUserTimestamp($record->last_seen_at, 'Нет активности'),
             'createdAtLabel' => static::formatUserTimestamp($record->created_at),
             'updatedAtLabel' => static::formatUserTimestamp($record->updated_at),
         ];
@@ -312,6 +339,20 @@ class UserResource extends Resource
         }
 
         return mb_strtolower(trim($value));
+    }
+
+    protected static function normalizeNullableText(?string $value): ?string
+    {
+        if (! filled($value)) {
+            return null;
+        }
+
+        return trim($value);
+    }
+
+    protected static function formatNullableText(?string $value): string
+    {
+        return filled($value) ? $value : '—';
     }
 
     protected static function guardAgainstSelfLockout(User $record, array $data): void
@@ -386,8 +427,8 @@ class UserResource extends Resource
         };
     }
 
-    protected static function formatUserTimestamp(mixed $timestamp): string
+    protected static function formatUserTimestamp(mixed $timestamp, string $emptyLabel = '—'): string
     {
-        return $timestamp?->format('d.m.Y H:i') ?? '—';
+        return $timestamp?->format('d.m.Y H:i') ?? $emptyLabel;
     }
 }

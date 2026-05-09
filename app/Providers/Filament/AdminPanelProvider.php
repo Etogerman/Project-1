@@ -2,6 +2,11 @@
 
 namespace App\Providers\Filament;
 
+use App\Http\Middleware\TrackAdminUserActivity;
+use App\Models\User;
+use Filament\Actions\Action;
+use Filament\Facades\Filament as FilamentFacade;
+use Filament\Forms\Components\TextInput;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -9,6 +14,8 @@ use Filament\Http\Middleware\DispatchServingFilamentEvent;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
+use Filament\Support\Enums\Width;
+use Filament\Support\Icons\Heroicon;
 use Filament\View\PanelsRenderHook;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
@@ -54,6 +61,48 @@ class AdminPanelProvider extends PanelProvider
                 'Команда',
                 'Настройки',
             ])
+            ->userMenuItems([
+                'profile' => fn (Action $action): Action => $action->sort(-2),
+                Action::make('editProfile')
+                    ->label('Редактировать профиль')
+                    ->icon(Heroicon::OutlinedPencilSquare)
+                    ->sort(-1)
+                    ->modalHeading('Редактировать профиль')
+                    ->modalDescription('Измените имя и фамилию, которые видны в админке.')
+                    ->modalSubmitActionLabel('Сохранить')
+                    ->modalWidth(Width::Medium)
+                    ->fillForm(fn (): array => [
+                        'name' => auth()->user()?->name,
+                        'last_name' => auth()->user()?->last_name,
+                    ])
+                    ->form([
+                        TextInput::make('name')
+                            ->label('Имя')
+                            ->required()
+                            ->dehydrateStateUsing(fn (?string $state): string => trim((string) $state))
+                            ->maxLength(255),
+                        TextInput::make('last_name')
+                            ->label('Фамилия')
+                            ->dehydrateStateUsing(fn (?string $state): ?string => filled($state) ? trim((string) $state) : null)
+                            ->maxLength(255),
+                    ])
+                    ->action(function (array $data): void {
+                        $user = auth()->user();
+
+                        if (! $user instanceof User) {
+                            return;
+                        }
+
+                        $user->fill([
+                            'name' => $data['name'],
+                            'last_name' => $data['last_name'] ?? null,
+                        ]);
+
+                        $user->save();
+                    })
+                    ->successNotificationTitle('Профиль обновлён')
+                    ->successRedirectUrl(fn (): string => request()->headers->get('referer') ?? FilamentFacade::getUrl()),
+            ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')
             ->pages([
@@ -74,6 +123,7 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->authMiddleware([
                 Authenticate::class,
+                TrackAdminUserActivity::class,
             ]);
     }
 }
