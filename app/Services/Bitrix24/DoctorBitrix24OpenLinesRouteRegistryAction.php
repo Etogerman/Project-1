@@ -24,6 +24,8 @@ class DoctorBitrix24OpenLinesRouteRegistryAction
             $registry = Arr::get($snapshot, 'registry', []);
             $registry = is_array($registry) ? $registry : [];
             $diffs = $this->diffs($profile, $registry);
+            $duplicateLineIds = $this->duplicateRemoteLineIds($registry);
+            $diffs = array_merge($diffs, $this->duplicateLineDiffs($duplicateLineIds));
             $extraOwners = $this->extraRemoteOwners($profile, $registry);
             $warnings = $this->warnings($extraOwners);
             $status = $diffs === []
@@ -98,6 +100,66 @@ class DoctorBitrix24OpenLinesRouteRegistryAction
         }
 
         return $diffs;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @return list<string>
+     */
+    private function duplicateRemoteLineIds(array $registry): array
+    {
+        $owners = is_array($registry['owners'] ?? null) ? $registry['owners'] : [];
+        $seenLineIds = [];
+        $duplicateLineIds = [];
+
+        foreach ($owners as $owner) {
+            if (! is_array($owner)) {
+                continue;
+            }
+
+            $routes = is_array($owner['routes'] ?? null) ? $owner['routes'] : [];
+
+            foreach ($routes as $route) {
+                if (! is_array($route) || ($route['active'] ?? false) !== true) {
+                    continue;
+                }
+
+                $lineId = trim((string) ($route['line_id'] ?? ''));
+
+                if ($lineId === '') {
+                    continue;
+                }
+
+                if (array_key_exists($lineId, $seenLineIds)) {
+                    $duplicateLineIds[$lineId] = true;
+
+                    continue;
+                }
+
+                $seenLineIds[$lineId] = true;
+            }
+        }
+
+        $lineIds = array_keys($duplicateLineIds);
+        sort($lineIds);
+
+        return $lineIds;
+    }
+
+    /**
+     * @param  list<string>  $duplicateLineIds
+     * @return list<string>
+     */
+    private function duplicateLineDiffs(array $duplicateLineIds): array
+    {
+        if ($duplicateLineIds === []) {
+            return [];
+        }
+
+        return array_map(
+            static fn (string $lineId): string => "portal_audit_duplicate_line_id: {$lineId}",
+            $duplicateLineIds,
+        );
     }
 
     /**

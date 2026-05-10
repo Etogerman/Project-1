@@ -370,6 +370,8 @@ final class RouteRegistry
             $ownerKey = (string) $payload['owner_profile_key'];
             $routes = self::normalizePublishRoutes($payload['routes'] ?? []);
             $conflicts = self::detectRouteConflicts($registry, $ownerKey, array_keys($routes));
+            $lineConflicts = self::detectActiveLineConflicts($registry, $ownerKey, $routes);
+            $conflicts = array_merge($conflicts, $lineConflicts);
 
             if ($conflicts !== []) {
                 self::logEvent($endpointConfig, 'route_registry_conflict', [
@@ -539,6 +541,8 @@ final class RouteRegistry
             return 'route_registry_too_many_routes';
         }
 
+        $activeLineIds = [];
+
         foreach ($payload['routes'] as $routeKey => $route) {
             if (! is_string($routeKey)) {
                 return 'route_registry_route_key_invalid';
@@ -579,6 +583,16 @@ final class RouteRegistry
 
             if (array_key_exists('active', $route) && ! is_bool($route['active'])) {
                 return 'route_registry_route_invalid';
+            }
+
+            $active = is_bool($route['active'] ?? null) ? $route['active'] : true;
+
+            if ($active) {
+                if (array_key_exists($lineId, $activeLineIds)) {
+                    return 'route_registry_duplicate_line_id';
+                }
+
+                $activeLineIds[$lineId] = true;
             }
         }
 
@@ -740,6 +754,64 @@ final class RouteRegistry
     }
 
     /**
+     * @param  array<string, mixed>  $registry
+     * @param  array<string, array<string, mixed>>  $routes
+     * @return list<array<string, string>>
+     */
+    private static function detectActiveLineConflicts(array $registry, string $ownerKey, array $routes): array
+    {
+        $conflicts = [];
+        $incomingLineIds = [];
+
+        foreach ($routes as $routeKey => $route) {
+            if (($route['active'] ?? false) !== true) {
+                continue;
+            }
+
+            $lineId = trim((string) ($route['line_id'] ?? ''));
+
+            if ($lineId === '') {
+                continue;
+            }
+
+            $incomingLineIds[$lineId] = (string) $routeKey;
+        }
+
+        if ($incomingLineIds === []) {
+            return [];
+        }
+
+        foreach (self::normalizeOwners($registry['owners'] ?? []) as $existingOwnerKey => $owner) {
+            if ($existingOwnerKey === $ownerKey) {
+                continue;
+            }
+
+            $existingRoutes = is_array($owner['routes'] ?? null) ? $owner['routes'] : [];
+
+            foreach ($existingRoutes as $existingRouteKey => $existingRoute) {
+                if (! is_string($existingRouteKey) || ! is_array($existingRoute) || ($existingRoute['active'] ?? false) !== true) {
+                    continue;
+                }
+
+                $lineId = trim((string) ($existingRoute['line_id'] ?? ''));
+
+                if ($lineId === '' || ! array_key_exists($lineId, $incomingLineIds)) {
+                    continue;
+                }
+
+                $conflicts[] = [
+                    'route_key' => $incomingLineIds[$lineId],
+                    'line_id' => $lineId,
+                    'owner_profile_key' => $existingOwnerKey,
+                    'conflict_route_key' => $existingRouteKey,
+                ];
+            }
+        }
+
+        return $conflicts;
+    }
+
+    /**
      * @param  array<string, mixed>  $runtimeConfig
      * @return array<string, mixed>|null
      */
@@ -791,6 +863,7 @@ final class RouteRegistry
         }
 
         $seenRouteKeys = [];
+        $seenActiveLineIds = [];
 
         foreach ($registry['owners'] as $ownerKey => $owner) {
             if (! is_string($ownerKey) || ! preg_match('/^[a-zA-Z0-9._-]{1,128}$/', $ownerKey) || ! is_array($owner)) {
@@ -821,6 +894,16 @@ final class RouteRegistry
                 }
 
                 $seenRouteKeys[$routeKey] = true;
+
+                if (($route['active'] ?? false) === true) {
+                    $lineId = trim((string) ($route['line_id'] ?? ''));
+
+                    if (array_key_exists($lineId, $seenActiveLineIds)) {
+                        return false;
+                    }
+
+                    $seenActiveLineIds[$lineId] = true;
+                }
             }
         }
 
