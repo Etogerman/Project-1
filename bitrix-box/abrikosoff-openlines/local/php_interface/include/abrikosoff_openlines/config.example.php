@@ -16,6 +16,16 @@ return [
         'status' => 'L',
     ],
 
+    'route_registry' => [
+        'enabled' => false,
+        'storage_dir' => '/home/bitrix/.abrikosoff_openlines',
+        'transition_fallback_routes' => [
+            'abc_telegram:32',
+            'abc_telegram:33',
+            'abc_max:31',
+        ],
+    ],
+
     'connectors' => [
         'abc_telegram' => [
             'name' => 'ABC Telegram',
