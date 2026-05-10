@@ -10,6 +10,10 @@
 3. используется как короткий reference перед staging/integration проверками и
    ручными setup-операциями.
 
+Документ рассчитан на приватный ops-контекст. Если выдержки уходят во внешний
+или публичный контур, реальные production/staging URL нужно предварительно
+редактировать.
+
 ## Production handoff values
 
 | Key | Value |
@@ -108,12 +112,53 @@ setup-runbook на staging или другом real integration target:
 | MAX SOURCE_ID | `ABC_MAX`, stored in Bitrix24 profile settings in admin |
 | Telegram LINE_ID | stored in the active Telegram channel route in admin |
 | MAX LINE_ID | stored in the active MAX channel route in admin |
-| Telegram connector_code | `abc_telegram`, stored in Bitrix24 profile settings in admin |
-| MAX connector_code | `abc_max`, stored in Bitrix24 profile settings in admin |
+| Telegram connector_code | `abrikosoff_telegram`, stored in Bitrix24 profile settings in admin |
+| MAX connector_code | `abrikosoff_max`, stored in Bitrix24 profile settings in admin |
 | `BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED` | `false` |
 | `BITRIX24_REVERSE_SYNC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_DELAY_SECONDS` | `90` |
+
+## OpenLines route registry staging gate
+
+Дата фиксации: `2026-05-11`.
+
+Текущее рабочее состояние staging для OpenLines route registry:
+
+- Laravel UI publish/doctor настроены.
+- Bitrix-side registry secret хранится только в Bitrix local config и encrypted
+  поле Laravel-профиля; secret не фиксируется в документации.
+- Registry snapshot опубликован для официальных staging routes.
+- Bitrix runtime registry на staging включён:
+  `route_registry.enabled=true` в box-side
+  `/home/bitrix/www/local/php_interface/include/abrikosoff_openlines/config.php`.
+- Официальные staging-линии:
+  - Telegram: `abrikosoff_telegram:2`
+  - MAX: `abrikosoff_max:3`
+- Smoke после включения registry пройден по линиям `2` и `3`: сообщения из
+  Bitrix доставляются в Laravel и дальше клиенту.
+
+Быстрая диагностика, если сообщения из Bitrix снова не уходят:
+
+1. Проверить Bitrix runtime log:
+
+   ```text
+   /home/bitrix/www/local/php_interface/include/abrikosoff_openlines/runtime.log
+   ```
+
+2. Если есть `duplicate_line_id_ignored`, проверить, что для официальных
+   staging-линий нет двух connector code:
+
+   ```text
+   line_id=2 -> только abrikosoff_telegram
+   line_id=3 -> только abrikosoff_max
+   ```
+
+3. Проверить, что `route_registry.enabled=true` и snapshot содержит только
+   ожидаемые active routes для официального staging.
+
+4. После исправления отправить тестовые сообщения из Bitrix по линиям `2` и
+   `3` и подтвердить доставку в Laravel admin/logs.
 
 ## Important rules
 
@@ -125,8 +170,9 @@ setup-runbook на staging или другом real integration target:
 - The current stable staging host is `project-1-staging-r4mo1y.laravel.cloud`.
 - Do not reuse the temporary `Abrikosoff Probe` source as a production `SOURCE_ID`.
 - Do not use obsolete `fake-*` connector placeholders for real staging or
-  production Open Lines. Current base connector codes are `abc_telegram` and
-  `abc_max`; dev profile variants use the same `abc_*` prefix.
+  production Open Lines. Current official staging connector codes are
+  `abrikosoff_telegram` and `abrikosoff_max`; dev profile variants may still
+  use the `abc_*` prefix until the legacy transition cleanup is complete.
 - Telegram and MAX must use different `connector_code` values.
 - Telegram and MAX must use different Open Lines.
 - Open Lines LINE_ID values are configured per concrete channel route in admin, not in `.env`.

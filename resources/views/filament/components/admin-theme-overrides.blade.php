@@ -1961,6 +1961,10 @@
         box-shadow: none;
     }
 
+    .ac-channel-form-modal .ac-channel-form-section--profile {
+        overflow: visible;
+    }
+
     .ac-channel-form-modal .ac-channel-form-section .fi-section-header {
         border: 0;
         border-bottom: 1px solid #9aa8ba;
