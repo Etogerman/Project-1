@@ -343,6 +343,12 @@ final class Runtime
     public static function laravelOpenlinesCallbackUrlForLine(string $connectorCode, string $lineId): string
     {
         $lineMeta = self::connectorLineMeta($connectorCode, $lineId);
+
+        $lineCallbackUrl = self::scalarString($lineMeta['openlines_callback_url'] ?? '');
+        if ($lineCallbackUrl !== '') {
+            return $lineCallbackUrl;
+        }
+
         $ownerCallbackBaseUrl = self::scalarString($lineMeta['owner_callback_base_url'] ?? '');
 
         if ($ownerCallbackBaseUrl === '') {
