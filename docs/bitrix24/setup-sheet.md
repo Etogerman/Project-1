@@ -121,7 +121,7 @@ setup-runbook на staging или другом real integration target:
 
 ## OpenLines route registry staging gate
 
-Дата фиксации: `2026-05-10`.
+Дата фиксации: `2026-05-11`.
 
 Текущее рабочее состояние staging для OpenLines route registry:
 
@@ -129,14 +129,14 @@ setup-runbook на staging или другом real integration target:
 - Bitrix-side registry secret хранится только в Bitrix local config и encrypted
   поле Laravel-профиля; secret не фиксируется в документации.
 - Registry snapshot опубликован для официальных staging routes.
-- Bitrix runtime registry на staging пока выключен:
-  `route_registry.enabled=false` в box-side
+- Bitrix runtime registry на staging включён:
+  `route_registry.enabled=true` в box-side
   `/home/bitrix/www/local/php_interface/include/abrikosoff_openlines/config.php`.
 - Официальные staging-линии:
   - Telegram: `abrikosoff_telegram:2`
   - MAX: `abrikosoff_max:3`
-- Перед включением `route_registry.enabled=true` нужен отдельный cleanup
-  legacy-дублей `line_id` и повторный smoke по линиям `2` и `3`.
+- Smoke после включения registry пройден по линиям `2` и `3`: сообщения из
+  Bitrix доставляются в Laravel и дальше клиенту.
 
 Быстрая диагностика, если сообщения из Bitrix снова не уходят:
 
@@ -154,11 +154,11 @@ setup-runbook на staging или другом real integration target:
    line_id=3 -> только abrikosoff_max
    ```
 
-3. Проверить, что `route_registry.enabled=false`, пока cleanup legacy-линий не
-   завершён.
+3. Проверить, что `route_registry.enabled=true` и snapshot содержит только
+   ожидаемые active routes для официального staging.
 
 4. После исправления отправить тестовые сообщения из Bitrix по линиям `2` и
-   `3`.
+   `3` и подтвердить доставку в Laravel admin/logs.
 
 ## Important rules
 
