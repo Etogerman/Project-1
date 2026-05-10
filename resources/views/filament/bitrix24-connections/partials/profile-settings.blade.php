@@ -7,6 +7,7 @@
     $formatText = static fn (mixed $value, string $empty = '—'): string => filled($value) ? (string) $value : $empty;
     $callbackOwners = $this->getCallbackOwnerCards();
     $callbackOwnerStatusOptions = $this->getCallbackOwnerStatusOptions();
+    $registry = $this->getOpenLinesRouteRegistryCard();
 @endphp
 
 @if (! $profile instanceof Bitrix24Profile)
@@ -24,6 +25,18 @@
         @if ($this->callbackOwnersErrorMessage)
             <div data-role="bitrix24-callback-owners-error" class="ac-bitrix-error">
                 {{ $this->callbackOwnersErrorMessage }}
+            </div>
+        @endif
+
+        @if ($this->openLinesRouteRegistryErrorMessage)
+            <div data-role="bitrix24-route-registry-error" class="ac-bitrix-error">
+                {{ $this->openLinesRouteRegistryErrorMessage }}
+            </div>
+        @endif
+
+        @if ($this->openLinesRouteRegistrySuccessMessage)
+            <div data-role="bitrix24-route-registry-success" class="ac-bitrix-success">
+                {{ $this->openLinesRouteRegistrySuccessMessage }}
             </div>
         @endif
 
@@ -57,6 +70,103 @@
             </div>
 
             <div class="ac-bitrix-profile-form">
+                @if (($registry['available'] ?? false) === true)
+                    <section class="ac-bitrix-profile-section ac-bitrix-profile-section--static" data-role="bitrix24-route-registry-card">
+                        <div class="ac-bitrix-profile-section-title">
+                            <span>OpenLines registry</span>
+                            <span data-tone="{{ $registry['last_status_tone'] }}" class="ac-pill">{{ $registry['last_status_label'] }}</span>
+                        </div>
+
+                        <div class="ac-bitrix-profile-section-body">
+                            <div class="ac-route-config-grid">
+                                <label class="ac-route-field ac-route-field--wide">
+                                    <span>Endpoint Bitrix</span>
+                                    <input type="text" value="{{ $registry['endpoint_url'] }}" readonly />
+                                </label>
+
+                                <label class="ac-route-field">
+                                    <span>Secret</span>
+                                    <input type="text" value="{{ $registry['secret_label'] }}" readonly />
+                                </label>
+
+                                <label class="ac-route-field">
+                                    <span>Владельцы</span>
+                                    <input type="text" value="{{ $registry['owner_count'] }}" readonly />
+                                </label>
+
+                                <label class="ac-route-field">
+                                    <span>Активные маршруты</span>
+                                    <input type="text" value="{{ $registry['route_count'] }}" readonly />
+                                </label>
+
+                                <label class="ac-route-field">
+                                    <span>Последняя проверка</span>
+                                    <input type="text" value="{{ $registry['last_checked_at'] }}" readonly />
+                                </label>
+
+                                <label class="ac-route-field">
+                                    <span>Последняя публикация</span>
+                                    <input type="text" value="{{ $registry['last_published_at'] }}" readonly />
+                                </label>
+
+                                <label class="ac-route-field ac-route-field--wide">
+                                    <span>Последняя ошибка/предупреждение</span>
+                                    <input type="text" value="{{ $registry['last_error'] }}" readonly />
+                                </label>
+
+                                <label class="ac-route-field ac-route-field--wide">
+                                    <span>Registry secret</span>
+                                    <input
+                                        type="password"
+                                        wire:model="openLinesRouteRegistryForm.secret"
+                                        placeholder="Вставьте secret с Bitrix-side config"
+                                        @disabled(! $this->canManageOpenLinesRouteRegistry())
+                                    />
+                                </label>
+                            </div>
+
+                            @if ($this->canManageOpenLinesRouteRegistry())
+                                <div class="ac-route-actions">
+                                    <x-filament::button
+                                        type="button"
+                                        wire:click="saveOpenLinesRouteRegistrySecret"
+                                        wire:loading.attr="disabled"
+                                        wire:target="saveOpenLinesRouteRegistrySecret"
+                                        size="sm"
+                                    >
+                                        Сохранить secret
+                                    </x-filament::button>
+
+                                    <x-filament::button
+                                        type="button"
+                                        wire:click="doctorOpenLinesRouteRegistry"
+                                        wire:loading.attr="disabled"
+                                        wire:target="doctorOpenLinesRouteRegistry"
+                                        :disabled="! $registry['secret_configured']"
+                                        color="gray"
+                                        size="sm"
+                                    >
+                                        Проверить
+                                    </x-filament::button>
+
+                                    <x-filament::button
+                                        type="button"
+                                        wire:click="publishOpenLinesRouteRegistry"
+                                        wire:confirm="Опубликовать маршруты OpenLines в Bitrix registry?"
+                                        wire:loading.attr="disabled"
+                                        wire:target="publishOpenLinesRouteRegistry"
+                                        :disabled="! $registry['secret_configured']"
+                                        color="warning"
+                                        size="sm"
+                                    >
+                                        Опубликовать
+                                    </x-filament::button>
+                                </div>
+                            @endif
+                        </div>
+                    </section>
+                @endif
+
                 <section class="ac-bitrix-profile-section ac-bitrix-profile-section--static">
                     <div class="ac-bitrix-profile-section-title">
                         <span>Callback-владельцы</span>
