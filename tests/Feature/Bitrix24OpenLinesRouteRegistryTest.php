@@ -247,6 +247,85 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $this->assertSame('portal_audit_extra_owners: stale-local', $profile->openlines_route_registry_last_error);
     }
 
+    public function test_doctor_marks_extra_remote_owner_duplicate_line_id_as_diff(): void
+    {
+        $secret = 'registry-secret-for-extra-owner-line-conflict-test';
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => $secret,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram staging',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => '2',
+            'line_name' => 'Telegram staging',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'ABRIKOSOFF_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+
+        Http::fake([
+            'https://stagecrm.fvds.ru/local/tools/abrikosoff_openlines/route-registry.php?action=snapshot' => Http::response([
+                'ok' => true,
+                'registry' => [
+                    'schema_version' => 1,
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'updated_at' => now()->toIso8601String(),
+                    'owners' => [
+                        $owner->owner_key => [
+                            'owner_profile_key' => $owner->owner_key,
+                            'owner_callback_base_url' => $owner->callback_base_url,
+                            'routes' => [
+                                'abrikosoff_telegram:2' => [
+                                    'connector_code' => 'abrikosoff_telegram',
+                                    'line_id' => '2',
+                                    'line_name' => 'Telegram staging',
+                                    'active' => true,
+                                ],
+                            ],
+                        ],
+                        'stale-local' => [
+                            'owner_profile_key' => 'stale-local',
+                            'owner_callback_base_url' => 'https://stale.example.test',
+                            'routes' => [
+                                'abc_max:2' => [
+                                    'connector_code' => 'abc_max',
+                                    'line_id' => '2',
+                                    'line_name' => 'Stale MAX',
+                                    'active' => true,
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $result = app(DoctorBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $result['status']);
+        $this->assertSame(1, $result['diff_count']);
+        $this->assertSame(['portal_audit_duplicate_line_id: 2'], $result['diffs']);
+        $this->assertSame(1, $result['warning_count']);
+        $this->assertSame(['portal_audit_extra_owners: stale-local'], $result['warnings']);
+
+        $profile->refresh();
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $profile->openlines_route_registry_last_status);
+        $this->assertSame('portal_audit_duplicate_line_id: 2; portal_audit_extra_owners: stale-local', $profile->openlines_route_registry_last_error);
+    }
+
     public function test_publish_marks_profile_failed_on_registry_transport_error(): void
     {
         $profile = $this->makeProfile([
