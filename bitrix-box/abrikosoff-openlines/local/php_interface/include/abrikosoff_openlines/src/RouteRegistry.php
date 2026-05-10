@@ -370,6 +370,8 @@ final class RouteRegistry
             $ownerKey = (string) $payload['owner_profile_key'];
             $routes = self::normalizePublishRoutes($payload['routes'] ?? []);
             $conflicts = self::detectRouteConflicts($registry, $ownerKey, array_keys($routes));
+            $lineConflicts = self::detectActiveLineConflicts($registry, $ownerKey, $routes);
+            $conflicts = array_merge($conflicts, $lineConflicts);
 
             if ($conflicts !== []) {
                 self::logEvent($endpointConfig, 'route_registry_conflict', [
@@ -539,6 +541,8 @@ final class RouteRegistry
             return 'route_registry_too_many_routes';
         }
 
+        $activeLineIds = [];
+
         foreach ($payload['routes'] as $routeKey => $route) {
             if (! is_string($routeKey)) {
                 return 'route_registry_route_key_invalid';
@@ -579,6 +583,16 @@ final class RouteRegistry
 
             if (array_key_exists('active', $route) && ! is_bool($route['active'])) {
                 return 'route_registry_route_invalid';
+            }
+
+            $active = is_bool($route['active'] ?? null) ? $route['active'] : true;
+
+            if ($active) {
+                if (array_key_exists($lineId, $activeLineIds)) {
+                    return 'route_registry_duplicate_line_id';
+                }
+
+                $activeLineIds[$lineId] = true;
             }
         }
 
@@ -740,15 +754,78 @@ final class RouteRegistry
     }
 
     /**
+     * @param  array<string, mixed>  $registry
+     * @param  array<string, array<string, mixed>>  $routes
+     * @return list<array<string, string>>
+     */
+    private static function detectActiveLineConflicts(array $registry, string $ownerKey, array $routes): array
+    {
+        $conflicts = [];
+        $incomingLineIds = [];
+
+        foreach ($routes as $routeKey => $route) {
+            if (($route['active'] ?? false) !== true) {
+                continue;
+            }
+
+            $lineId = trim((string) ($route['line_id'] ?? ''));
+
+            if ($lineId === '') {
+                continue;
+            }
+
+            $incomingLineIds[$lineId] = (string) $routeKey;
+        }
+
+        if ($incomingLineIds === []) {
+            return [];
+        }
+
+        foreach (self::normalizeOwners($registry['owners'] ?? []) as $existingOwnerKey => $owner) {
+            if ($existingOwnerKey === $ownerKey) {
+                continue;
+            }
+
+            $existingRoutes = is_array($owner['routes'] ?? null) ? $owner['routes'] : [];
+
+            foreach ($existingRoutes as $existingRouteKey => $existingRoute) {
+                if (! is_string($existingRouteKey) || ! is_array($existingRoute) || ($existingRoute['active'] ?? false) !== true) {
+                    continue;
+                }
+
+                $lineId = trim((string) ($existingRoute['line_id'] ?? ''));
+
+                if ($lineId === '' || ! array_key_exists($lineId, $incomingLineIds)) {
+                    continue;
+                }
+
+                $conflicts[] = [
+                    'route_key' => $incomingLineIds[$lineId],
+                    'line_id' => $lineId,
+                    'owner_profile_key' => $existingOwnerKey,
+                    'conflict_route_key' => $existingRouteKey,
+                ];
+            }
+        }
+
+        return $conflicts;
+    }
+
+    /**
      * @param  array<string, mixed>  $runtimeConfig
      * @return array<string, mixed>|null
      */
     private static function readRegistry(array $runtimeConfig): ?array
     {
         $file = self::storageDir($runtimeConfig).'/route_registry.json';
+        $expectedPortalDomain = self::expectedPortalDomain($runtimeConfig);
+
+        if ($expectedPortalDomain === '') {
+            return null;
+        }
 
         if (! is_file($file)) {
-            return self::emptyRegistry(self::expectedPortalDomain($runtimeConfig));
+            return self::emptyRegistry($expectedPortalDomain);
         }
 
         $raw = @file_get_contents($file);
@@ -763,18 +840,106 @@ final class RouteRegistry
             return null;
         }
 
-        $expectedPortalDomain = self::expectedPortalDomain($runtimeConfig);
         $registryPortalDomain = trim((string) ($decoded['portal_domain'] ?? ''));
 
-        if ($expectedPortalDomain === '' || $registryPortalDomain !== $expectedPortalDomain) {
+        if ($registryPortalDomain !== $expectedPortalDomain) {
             return null;
         }
 
-        if (isset($decoded['owners']) && (! is_array($decoded['owners']) || count($decoded['owners']) > self::MAX_OWNERS)) {
+        if (! self::storedRegistryIsValid($decoded)) {
             return null;
         }
 
         return $decoded;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     */
+    private static function storedRegistryIsValid(array $registry): bool
+    {
+        if (! isset($registry['owners']) || ! is_array($registry['owners']) || count($registry['owners']) > self::MAX_OWNERS) {
+            return false;
+        }
+
+        $seenRouteKeys = [];
+        $seenActiveLineIds = [];
+
+        foreach ($registry['owners'] as $ownerKey => $owner) {
+            if (! is_string($ownerKey) || ! preg_match('/^[a-zA-Z0-9._-]{1,128}$/', $ownerKey) || ! is_array($owner)) {
+                return false;
+            }
+
+            if (! is_scalar($owner['owner_profile_key'] ?? null) || trim((string) $owner['owner_profile_key']) !== $ownerKey) {
+                return false;
+            }
+
+            if (! is_scalar($owner['owner_callback_base_url'] ?? null)
+                || self::validateCallbackBaseUrl((string) $owner['owner_callback_base_url'], false) !== ''
+            ) {
+                return false;
+            }
+
+            if (! isset($owner['routes']) || ! is_array($owner['routes']) || count($owner['routes']) > self::MAX_ROUTES_PER_OWNER) {
+                return false;
+            }
+
+            foreach ($owner['routes'] as $routeKey => $route) {
+                if (! self::storedRouteIsValid($routeKey, $route)) {
+                    return false;
+                }
+
+                if (array_key_exists($routeKey, $seenRouteKeys)) {
+                    return false;
+                }
+
+                $seenRouteKeys[$routeKey] = true;
+
+                if (($route['active'] ?? false) === true) {
+                    $lineId = trim((string) ($route['line_id'] ?? ''));
+
+                    if (array_key_exists($lineId, $seenActiveLineIds)) {
+                        return false;
+                    }
+
+                    $seenActiveLineIds[$lineId] = true;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  mixed  $routeKey
+     * @param  mixed  $route
+     */
+    private static function storedRouteIsValid($routeKey, $route): bool
+    {
+        if (! is_string($routeKey) || ! self::validRouteKey($routeKey) || ! is_array($route)) {
+            return false;
+        }
+
+        if (! is_scalar($route['connector_code'] ?? null) || ! is_scalar($route['line_id'] ?? null)) {
+            return false;
+        }
+
+        $connectorCode = trim((string) $route['connector_code']);
+        $lineId = trim((string) $route['line_id']);
+
+        if ($connectorCode === '' || $lineId === '' || $routeKey !== self::routeKey($connectorCode, $lineId)) {
+            return false;
+        }
+
+        if (! array_key_exists('active', $route) || ! is_bool($route['active'])) {
+            return false;
+        }
+
+        if (isset($route['line_name']) && ! is_scalar($route['line_name'])) {
+            return false;
+        }
+
+        return strlen((string) ($route['line_name'] ?? '')) <= 255;
     }
 
     /**
