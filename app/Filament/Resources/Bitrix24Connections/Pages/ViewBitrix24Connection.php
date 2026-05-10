@@ -15,6 +15,9 @@ use App\Models\User;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
 use App\Services\Bitrix24\Bitrix24OpenLineRepairException;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
+use App\Services\Bitrix24\DoctorBitrix24OpenLinesRouteRegistryAction;
+use App\Services\Bitrix24\PublishBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\RepairStaleBitrix24OpenLineAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
@@ -86,6 +89,13 @@ class ViewBitrix24Connection extends ViewRecord
         'crm_gender_unknown_id' => '',
     ];
 
+    /**
+     * @var array{secret:string}
+     */
+    public array $openLinesRouteRegistryForm = [
+        'secret' => '',
+    ];
+
     public ?string $openLineRouteErrorMessage = null;
 
     public ?string $openLineRouteSuccessMessage = null;
@@ -93,6 +103,10 @@ class ViewBitrix24Connection extends ViewRecord
     public ?string $profileSettingsErrorMessage = null;
 
     public ?string $callbackOwnersErrorMessage = null;
+
+    public ?string $openLinesRouteRegistryErrorMessage = null;
+
+    public ?string $openLinesRouteRegistrySuccessMessage = null;
 
     public function mount(int|string $record): void
     {
@@ -102,6 +116,7 @@ class ViewBitrix24Connection extends ViewRecord
         $this->reloadApplicationNameForm();
         $this->reloadProfileSettingsForm();
         $this->reloadCallbackOwnerForms();
+        $this->reloadOpenLinesRouteRegistryForm();
     }
 
     public function getTitle(): string|Htmlable
@@ -362,6 +377,54 @@ class ViewBitrix24Connection extends ViewRecord
     public function canEditCallbackOwners(): bool
     {
         return $this->canEditProfileSettings();
+    }
+
+    public function canManageOpenLinesRouteRegistry(): bool
+    {
+        return $this->canEditProfileSettings();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getOpenLinesRouteRegistryCard(): array
+    {
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            return [
+                'available' => false,
+            ];
+        }
+
+        $ownerCount = Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->count();
+        $routeCount = Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
+            ->whereNotNull('connector_code')
+            ->whereNotNull('line_id')
+            ->count();
+        $lastStatus = (string) ($profile->openlines_route_registry_last_status ?? '');
+
+        return [
+            'available' => true,
+            'endpoint_url' => $profile->openLinesRouteRegistryEndpointUrl(),
+            'secret_configured' => $profile->hasOpenLinesRouteRegistrySecret(),
+            'secret_label' => $profile->hasOpenLinesRouteRegistrySecret() ? 'Настроен' : 'Не настроен',
+            'secret_tone' => $profile->hasOpenLinesRouteRegistrySecret() ? 'success' : 'danger',
+            'last_status' => $lastStatus !== '' ? $lastStatus : 'not_checked',
+            'last_status_label' => $this->formatOpenLinesRouteRegistryStatus($lastStatus),
+            'last_status_tone' => $this->openLinesRouteRegistryStatusTone($lastStatus),
+            'last_error' => filled($profile->openlines_route_registry_last_error)
+                ? (string) $profile->openlines_route_registry_last_error
+                : 'Ошибок не было',
+            'last_checked_at' => $this->formatTimestamp($profile->openlines_route_registry_last_checked_at),
+            'last_published_at' => $this->formatTimestamp($profile->openlines_route_registry_last_published_at),
+            'owner_count' => $ownerCount,
+            'route_count' => $routeCount,
+        ];
     }
 
     /**
@@ -741,6 +804,126 @@ class ViewBitrix24Connection extends ViewRecord
         Notification::make()
             ->success()
             ->title('Callback-владелец сохранён')
+            ->send();
+    }
+
+    public function saveOpenLinesRouteRegistrySecret(): void
+    {
+        abort_unless($this->canManageOpenLinesRouteRegistry(), 403);
+
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            $this->failOpenLinesRouteRegistry('Профиль Bitrix24 не найден.');
+
+            return;
+        }
+
+        $secret = trim((string) ($this->openLinesRouteRegistryForm['secret'] ?? ''));
+
+        if ($secret === '') {
+            $this->failOpenLinesRouteRegistry('Registry secret не заполнен.');
+
+            return;
+        }
+
+        if (mb_strlen($secret) < 32 || mb_strlen($secret) > 256) {
+            $this->failOpenLinesRouteRegistry('Registry secret должен быть длиной от 32 до 256 символов.');
+
+            return;
+        }
+
+        $profile->forceFill([
+            'openlines_route_registry_secret_encrypted' => $secret,
+            'openlines_route_registry_last_status' => null,
+            'openlines_route_registry_last_error' => null,
+        ])->save();
+
+        $this->getRecord()->refresh();
+        $this->openLinesRouteRegistryErrorMessage = null;
+        $this->openLinesRouteRegistrySuccessMessage = 'Registry secret сохранён. Значение скрыто и повторно не показывается.';
+        $this->reloadOpenLinesRouteRegistryForm();
+
+        Notification::make()
+            ->success()
+            ->title('Registry secret сохранён')
+            ->send();
+    }
+
+    public function doctorOpenLinesRouteRegistry(): void
+    {
+        abort_unless($this->canManageOpenLinesRouteRegistry(), 403);
+
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            $this->failOpenLinesRouteRegistry('Профиль Bitrix24 не найден.');
+
+            return;
+        }
+
+        try {
+            $result = app(DoctorBitrix24OpenLinesRouteRegistryAction::class)->handle($profile);
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->failOpenLinesRouteRegistry('Doctor завершился ошибкой: '.$exception->errorCode);
+
+            return;
+        }
+
+        $this->getRecord()->refresh();
+        $this->openLinesRouteRegistryErrorMessage = null;
+        $warningCount = (int) ($result['warning_count'] ?? 0);
+        $this->openLinesRouteRegistrySuccessMessage = match (true) {
+            $result['status'] === Bitrix24Profile::ROUTE_REGISTRY_STATUS_SYNCED && $warningCount === 0 => 'Doctor: Bitrix registry синхронизирован.',
+            $result['status'] === Bitrix24Profile::ROUTE_REGISTRY_STATUS_SYNCED => sprintf('Doctor: owner scope синхронизирован, предупреждений: %d.', $warningCount),
+            $warningCount > 0 => sprintf('Doctor: найдено отличий: %d, предупреждений: %d.', $result['diff_count'], $warningCount),
+            default => sprintf('Doctor: найдено отличий: %d.', $result['diff_count']),
+        };
+
+        $notification = Notification::make()
+            ->title($this->openLinesRouteRegistrySuccessMessage);
+
+        if ($result['status'] === Bitrix24Profile::ROUTE_REGISTRY_STATUS_SYNCED) {
+            $notification->success();
+        } else {
+            $notification->warning();
+        }
+
+        $notification->send();
+    }
+
+    public function publishOpenLinesRouteRegistry(): void
+    {
+        abort_unless($this->canManageOpenLinesRouteRegistry(), 403);
+
+        $profile = $this->getBitrix24Profile();
+
+        if (! $profile instanceof Bitrix24Profile) {
+            $this->failOpenLinesRouteRegistry('Профиль Bitrix24 не найден.');
+
+            return;
+        }
+
+        try {
+            $result = app(PublishBitrix24OpenLinesRouteRegistryAction::class)->handle($profile);
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->failOpenLinesRouteRegistry('Publish завершился ошибкой: '.$exception->errorCode);
+
+            return;
+        }
+
+        $this->getRecord()->refresh();
+        $this->openLinesRouteRegistryErrorMessage = null;
+        $this->openLinesRouteRegistrySuccessMessage = sprintf(
+            'Registry опубликован: owners %d, routes %d.',
+            $result['published_owners'],
+            $result['published_routes'],
+        );
+
+        Notification::make()
+            ->success()
+            ->title('OpenLines registry опубликован')
+            ->body($this->openLinesRouteRegistrySuccessMessage)
             ->send();
     }
 
@@ -1160,6 +1343,13 @@ class ViewBitrix24Connection extends ViewRecord
         ];
     }
 
+    public function reloadOpenLinesRouteRegistryForm(): void
+    {
+        $this->openLinesRouteRegistryForm = [
+            'secret' => '',
+        ];
+    }
+
     protected function formatTimestamp(mixed $value): string
     {
         if (! $value instanceof \DateTimeInterface) {
@@ -1167,6 +1357,28 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         return $value->format('d.m.Y H:i:s');
+    }
+
+    protected function formatOpenLinesRouteRegistryStatus(string $status): string
+    {
+        return match ($status) {
+            Bitrix24Profile::ROUTE_REGISTRY_STATUS_SYNCED => 'Синхронизирован',
+            Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF => 'Есть отличия',
+            Bitrix24Profile::ROUTE_REGISTRY_STATUS_FAILED => 'Ошибка',
+            Bitrix24Profile::ROUTE_REGISTRY_STATUS_PUBLISHED => 'Опубликован',
+            default => 'Не проверялся',
+        };
+    }
+
+    protected function openLinesRouteRegistryStatusTone(string $status): string
+    {
+        return match ($status) {
+            Bitrix24Profile::ROUTE_REGISTRY_STATUS_SYNCED,
+            Bitrix24Profile::ROUTE_REGISTRY_STATUS_PUBLISHED => 'success',
+            Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF => 'warning',
+            Bitrix24Profile::ROUTE_REGISTRY_STATUS_FAILED => 'danger',
+            default => 'gray',
+        };
     }
 
     protected function formatQueueCountWithAge(int $count, ?int $ageSeconds): string
@@ -1894,6 +2106,16 @@ class ViewBitrix24Connection extends ViewRecord
     protected function failCallbackOwnerSave(string $message): void
     {
         $this->callbackOwnersErrorMessage = $message;
+
+        Notification::make()
+            ->danger()
+            ->title($message)
+            ->send();
+    }
+
+    protected function failOpenLinesRouteRegistry(string $message): void
+    {
+        $this->openLinesRouteRegistryErrorMessage = $message;
 
         Notification::make()
             ->danger()
