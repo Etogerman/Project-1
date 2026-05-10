@@ -441,7 +441,7 @@ final class Runtime
         $matches = [];
 
         foreach (self::connectors() as $connectorCode => $meta) {
-            if (self::connectorHasLine($meta, $lineId)) {
+            if (self::connectorLineMeta((string) $connectorCode, $lineId) !== null) {
                 $matches[] = (string) $connectorCode;
             }
         }
@@ -536,14 +536,9 @@ final class Runtime
     /**
      * @param  array<string, mixed>  $meta
      */
-    private static function connectorHasLine(array $meta, string $lineId): bool
-    {
-        return self::connectorLineMetaFromMeta($meta, $lineId) !== null;
-    }
-
     private static function connectorOwnsLine(string $connectorCode, string $lineId): bool
     {
-        if (! self::connectorHasLine(self::connectorMeta($connectorCode), $lineId)) {
+        if (self::connectorLineMeta($connectorCode, $lineId) === null) {
             return false;
         }
 
@@ -559,7 +554,51 @@ final class Runtime
             return null;
         }
 
-        return self::connectorLineMetaFromMeta(self::connectorMeta($connectorCode), $lineId);
+        $staticLineMeta = self::connectorLineMetaFromMeta(self::connectorMeta($connectorCode), $lineId);
+        $registryDecision = self::routeRegistryDecision($connectorCode, $lineId);
+
+        if ($registryDecision['decision'] === 'disabled') {
+            return $staticLineMeta;
+        }
+
+        if ($registryDecision['decision'] === 'active' && is_array($registryDecision['route'])) {
+            return self::lineMetaFromRegistryRoute($registryDecision['route']);
+        }
+
+        if ($registryDecision['decision'] === 'fallback') {
+            return $staticLineMeta;
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{decision: string, route: array<string, mixed>|null, error_code: string}
+     */
+    private static function routeRegistryDecision(string $connectorCode, string $lineId): array
+    {
+        if (! class_exists(__NAMESPACE__.'\\RouteRegistry')) {
+            return [
+                'decision' => 'disabled',
+                'route' => null,
+                'error_code' => '',
+            ];
+        }
+
+        return RouteRegistry::resolveRuntimeRoute($connectorCode, $lineId, self::config());
+    }
+
+    /**
+     * @param  array<string, mixed>  $route
+     * @return array<string, mixed>
+     */
+    private static function lineMetaFromRegistryRoute(array $route): array
+    {
+        return [
+            'line_name' => self::scalarString($route['line_name'] ?? ''),
+            'owner_profile_key' => self::scalarString($route['owner_profile_key'] ?? ''),
+            'owner_callback_base_url' => self::scalarString($route['owner_callback_base_url'] ?? ''),
+        ];
     }
 
     /**
