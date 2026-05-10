@@ -746,9 +746,14 @@ final class RouteRegistry
     private static function readRegistry(array $runtimeConfig): ?array
     {
         $file = self::storageDir($runtimeConfig).'/route_registry.json';
+        $expectedPortalDomain = self::expectedPortalDomain($runtimeConfig);
+
+        if ($expectedPortalDomain === '') {
+            return null;
+        }
 
         if (! is_file($file)) {
-            return self::emptyRegistry(self::expectedPortalDomain($runtimeConfig));
+            return self::emptyRegistry($expectedPortalDomain);
         }
 
         $raw = @file_get_contents($file);
@@ -763,18 +768,95 @@ final class RouteRegistry
             return null;
         }
 
-        $expectedPortalDomain = self::expectedPortalDomain($runtimeConfig);
         $registryPortalDomain = trim((string) ($decoded['portal_domain'] ?? ''));
 
-        if ($expectedPortalDomain === '' || $registryPortalDomain !== $expectedPortalDomain) {
+        if ($registryPortalDomain !== $expectedPortalDomain) {
             return null;
         }
 
-        if (isset($decoded['owners']) && (! is_array($decoded['owners']) || count($decoded['owners']) > self::MAX_OWNERS)) {
+        if (! self::storedRegistryIsValid($decoded)) {
             return null;
         }
 
         return $decoded;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     */
+    private static function storedRegistryIsValid(array $registry): bool
+    {
+        if (! isset($registry['owners']) || ! is_array($registry['owners']) || count($registry['owners']) > self::MAX_OWNERS) {
+            return false;
+        }
+
+        $seenRouteKeys = [];
+
+        foreach ($registry['owners'] as $ownerKey => $owner) {
+            if (! is_string($ownerKey) || ! preg_match('/^[a-zA-Z0-9._-]{1,128}$/', $ownerKey) || ! is_array($owner)) {
+                return false;
+            }
+
+            if (! is_scalar($owner['owner_profile_key'] ?? null) || trim((string) $owner['owner_profile_key']) !== $ownerKey) {
+                return false;
+            }
+
+            if (! is_scalar($owner['owner_callback_base_url'] ?? null)
+                || self::validateCallbackBaseUrl((string) $owner['owner_callback_base_url'], false) !== ''
+            ) {
+                return false;
+            }
+
+            if (! isset($owner['routes']) || ! is_array($owner['routes']) || count($owner['routes']) > self::MAX_ROUTES_PER_OWNER) {
+                return false;
+            }
+
+            foreach ($owner['routes'] as $routeKey => $route) {
+                if (! self::storedRouteIsValid($routeKey, $route)) {
+                    return false;
+                }
+
+                if (array_key_exists($routeKey, $seenRouteKeys)) {
+                    return false;
+                }
+
+                $seenRouteKeys[$routeKey] = true;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  mixed  $routeKey
+     * @param  mixed  $route
+     */
+    private static function storedRouteIsValid($routeKey, $route): bool
+    {
+        if (! is_string($routeKey) || ! self::validRouteKey($routeKey) || ! is_array($route)) {
+            return false;
+        }
+
+        if (! is_scalar($route['connector_code'] ?? null) || ! is_scalar($route['line_id'] ?? null)) {
+            return false;
+        }
+
+        $connectorCode = trim((string) $route['connector_code']);
+        $lineId = trim((string) $route['line_id']);
+
+        if ($connectorCode === '' || $lineId === '' || $routeKey !== self::routeKey($connectorCode, $lineId)) {
+            return false;
+        }
+
+        if (! array_key_exists('active', $route) || ! is_bool($route['active'])) {
+            return false;
+        }
+
+        if (isset($route['line_name']) && ! is_scalar($route['line_name'])) {
+            return false;
+        }
+
+        return strlen((string) ($route['line_name'] ?? '')) <= 255;
     }
 
     /**
