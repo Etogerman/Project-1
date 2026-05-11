@@ -1419,7 +1419,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         MaxBotApiService $maxBotApiService,
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
-        QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        ?QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction = null,
     ): void {
         $this->sendReply(
             message: $message,
@@ -1436,7 +1436,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
 
         $contact->completeDataCollection();
-        $queueBitrix24ContactSyncAction->handle($contact);
+        ($queueBitrix24ContactSyncAction ?? app(QueueBitrix24ContactSyncAction::class))->handle($contact);
 
         $channelActivityLogger->info(
             $channel,
