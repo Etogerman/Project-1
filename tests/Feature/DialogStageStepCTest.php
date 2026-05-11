@@ -66,8 +66,7 @@ class DialogStageStepCTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSet('dialogStageSelection', Dialog::STAGE_PHONE_RECEIVED)
-            ->set('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPL)
-            ->call('updateDialogStage')
+            ->call('selectDialogStage', Dialog::STAGE_TRANSFERRED_TO_MPL)
             ->assertNotified()
             ->assertSet('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPL)
             ->assertSee('Оператор Оператор Этапа изменил этап диалога: Телефон получен -> МПЛ взял в работу');

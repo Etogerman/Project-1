@@ -165,6 +165,15 @@
         color: var(--ac-text-soft);
     }
 
+    .fi-page:has([data-role="dialog-page"]) .fi-header.fi-header-has-breadcrumbs {
+        align-items: center;
+        padding-block: 1.05rem 0.52rem;
+    }
+
+    .fi-page:has([data-role="dialog-page"]) .fi-header.fi-header-has-breadcrumbs .fi-breadcrumbs-list {
+        margin-bottom: 0;
+    }
+
     .fi-page-sub-navigation-tabs,
     .fi-page-sub-navigation-sidebar-ctn {
         border: 1px solid var(--ac-border);
@@ -2465,6 +2474,10 @@
         grid-template-columns: minmax(0, 1.45fr) minmax(22rem, 1fr);
     }
 
+    .ac-dialog-overview--single {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
     .ac-dialog-workspace {
         grid-template-columns: minmax(0, 1.45fr) minmax(22rem, 1fr);
     }
@@ -2550,6 +2563,258 @@
         text-transform: uppercase;
     }
 
+    .ac-dialog-summary {
+        display: grid;
+        gap: 0;
+    }
+
+    .ac-dialog-summary__top {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .ac-dialog-summary__identity {
+        display: flex;
+        min-width: min(100%, 28rem);
+        align-items: center;
+        gap: 0.9rem;
+    }
+
+    .ac-dialog-summary__title-row {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 0.55rem;
+        flex-wrap: wrap;
+    }
+
+    .ac-dialog-summary__actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .ac-dialog-summary__stage {
+        margin-top: 0.9rem;
+    }
+
+    .ac-dialog-summary__sections {
+        display: grid;
+        grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.35fr);
+        gap: 1rem;
+        align-items: start;
+        margin-top: 0.95rem;
+    }
+
+    .ac-dialog-summary__section {
+        min-width: 0;
+    }
+
+    .ac-dialog-summary__section-title {
+        margin: 0 0 0.65rem;
+        color: var(--ac-text-soft);
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        line-height: 1.2;
+        text-transform: uppercase;
+    }
+
+    .ac-dialog-stage-strip {
+        --stage-active-top: #74e1ec;
+        --stage-active-bottom: #50cad8;
+        --stage-active-outline: #1596a8;
+        --stage-active-text: #0f2a37;
+        --stage-active-shadow: rgba(21, 150, 168, 0.18);
+        display: grid;
+        min-width: 0;
+        gap: 0.4rem;
+    }
+
+    .ac-dialog-stage-strip[data-current-tone="gray"] {
+        --stage-active-top: #d6dee8;
+        --stage-active-bottom: #bdc8d7;
+        --stage-active-outline: #8391a4;
+        --stage-active-text: #1f2d40;
+        --stage-active-shadow: rgba(82, 96, 114, 0.16);
+    }
+
+    .ac-dialog-stage-strip[data-current-tone="info"] {
+        --stage-active-top: #75d8ff;
+        --stage-active-bottom: #42bdea;
+        --stage-active-outline: #1896c4;
+        --stage-active-text: #0d2d3f;
+        --stage-active-shadow: rgba(24, 150, 196, 0.18);
+    }
+
+    .ac-dialog-stage-strip[data-current-tone="success"] {
+        --stage-active-top: #7fdc9d;
+        --stage-active-bottom: #4fc477;
+        --stage-active-outline: #259852;
+        --stage-active-text: #0d321d;
+        --stage-active-shadow: rgba(37, 152, 82, 0.18);
+    }
+
+    .ac-dialog-stage-strip[data-current-tone="warning"] {
+        --stage-active-top: #ffe993;
+        --stage-active-bottom: #ffd24f;
+        --stage-active-outline: #c99316;
+        --stage-active-text: #34250b;
+        --stage-active-shadow: rgba(201, 147, 22, 0.18);
+    }
+
+    .ac-dialog-stage-strip[data-current-tone="primary"] {
+        --stage-active-top: #8fc7ff;
+        --stage-active-bottom: #5fa7ef;
+        --stage-active-outline: #2f7fc9;
+        --stage-active-text: #102b4a;
+        --stage-active-shadow: rgba(47, 127, 201, 0.18);
+    }
+
+    .ac-dialog-stage-strip__track {
+        display: flex;
+        min-width: 0;
+        overflow-x: auto;
+        gap: 0.9rem;
+        padding-right: 0.8rem;
+        padding-bottom: 0.1rem;
+        scrollbar-width: thin;
+    }
+
+    .ac-dialog-stage-step {
+        --stage-arrow-width: 0.78rem;
+        --stage-border-width: 1px;
+        --stage-fill-top: rgba(247, 249, 252, 0.96);
+        --stage-fill-bottom: rgba(225, 231, 239, 0.96);
+        --stage-outline: rgba(112, 127, 148, 0.3);
+        --stage-shape: polygon(
+            0 0,
+            calc(100% - var(--stage-arrow-width)) 0,
+            100% 50%,
+            calc(100% - var(--stage-arrow-width)) 100%,
+            0 100%
+        );
+        position: relative;
+        display: inline-flex;
+        flex: 1 0 9.75rem;
+        min-width: 9.75rem;
+        min-height: 2.75rem;
+        align-items: center;
+        justify-content: center;
+        isolation: isolate;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        padding: 0.55rem 0.95rem 0.55rem 1.1rem;
+        background: transparent;
+        color: #4a5870;
+        font-size: 0.82rem;
+        font-weight: 800;
+        line-height: 1.2;
+        text-align: center;
+        transition:
+            filter 0.16s ease,
+            color 0.16s ease;
+    }
+
+    .ac-dialog-stage-step::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--stage-outline);
+        clip-path: var(--stage-shape);
+        transition: background 0.16s ease;
+        z-index: 0;
+    }
+
+    .ac-dialog-stage-step::after {
+        content: "";
+        position: absolute;
+        inset: var(--stage-border-width);
+        background: linear-gradient(180deg, var(--stage-fill-top) 0%, var(--stage-fill-bottom) 100%);
+        clip-path: var(--stage-shape);
+        transition: background 0.16s ease, inset 0.16s ease;
+        z-index: 1;
+    }
+
+    .ac-dialog-stage-step__label {
+        display: block;
+        min-width: 0;
+        position: relative;
+        z-index: 2;
+        overflow-wrap: anywhere;
+    }
+
+    .ac-dialog-stage-step[data-state="completed"] {
+        --stage-fill-top: var(--stage-active-top);
+        --stage-fill-bottom: var(--stage-active-bottom);
+        --stage-outline: var(--stage-active-outline);
+        color: var(--stage-active-text);
+    }
+
+    .ac-dialog-stage-step[data-state="current"] {
+        --stage-fill-top: var(--stage-active-top);
+        --stage-fill-bottom: var(--stage-active-bottom);
+        --stage-outline: var(--stage-active-outline);
+        --stage-border-width: 2px;
+        color: var(--stage-active-text);
+        filter: drop-shadow(0 0.75rem 1.1rem var(--stage-active-shadow));
+        z-index: 1;
+    }
+
+    .ac-dialog-stage-step[data-state="available"] {
+        --stage-fill-top: rgba(244, 247, 251, 0.96);
+        --stage-fill-bottom: rgba(220, 227, 236, 0.96);
+        --stage-outline: rgba(122, 136, 155, 0.46);
+        color: #526072;
+        cursor: pointer;
+    }
+
+    .ac-dialog-stage-step[data-state="available"]:hover,
+    .ac-dialog-stage-step[data-state="available"]:focus-visible {
+        --stage-fill-top: #f6fcfd;
+        --stage-fill-bottom: #e7f7fa;
+        --stage-outline: #3cb8c8;
+        color: #20364a;
+        filter: drop-shadow(0 0.7rem 1rem rgba(37, 137, 154, 0.14));
+        outline: none;
+        z-index: 2;
+    }
+
+    .ac-dialog-stage-step[data-state="available"]:active {
+        --stage-fill-top: #fff2b6;
+        --stage-fill-bottom: #ffd95a;
+        --stage-outline: #c18c14;
+        --stage-border-width: 2px;
+        color: #17283a;
+        filter: drop-shadow(0 0.55rem 0.9rem rgba(193, 140, 20, 0.16));
+    }
+
+    .ac-dialog-stage-step[data-state="locked"] {
+        --stage-fill-top: rgba(243, 246, 250, 0.9);
+        --stage-fill-bottom: rgba(219, 226, 235, 0.9);
+        --stage-outline: rgba(122, 136, 155, 0.36);
+        color: #7b8798;
+    }
+
+    .ac-dialog-stage-step:disabled {
+        cursor: default;
+    }
+
+    .ac-dialog-stage-strip__hint {
+        margin: 0;
+        color: var(--ac-danger);
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1.35;
+    }
+
     .ac-surface__eyebrow {
         margin: 0;
         font-size: 0.72rem;
@@ -2593,6 +2858,10 @@
 
     .ac-meta-grid--compact {
         grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    }
+
+    .ac-meta-grid--dialog-summary {
+        grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
     }
 
     .ac-card-grid {
@@ -4071,11 +4340,13 @@
     }
 
     .ac-message--system .ac-message__bubble {
-        align-items: center;
-        max-width: min(34rem, 90%);
-        border-radius: 999px;
-        border-color: color-mix(in srgb, var(--ac-text-soft) 12%, var(--ac-border));
-        background: color-mix(in srgb, var(--ac-surface-strong) 88%, white);
+        align-items: flex-start;
+        max-width: min(36rem, 90%);
+        border-radius: 14px;
+        border-color: color-mix(in srgb, var(--ac-text-soft) 18%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-surface-muted) 74%, var(--ac-surface-strong));
+        padding: 0.45rem 0.65rem;
+        box-shadow: 0 8px 20px -22px rgba(15, 23, 42, 0.36);
     }
 
     .ac-message__meta {
@@ -4094,12 +4365,63 @@
         flex-wrap: wrap;
     }
 
+    .ac-message__meta > .ac-message__meta-main > .ac-pill {
+        min-height: auto;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        padding: 0;
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0;
+        line-height: 1.15;
+        box-shadow: none;
+    }
+
+    .ac-message__meta > .ac-message__meta-main > .ac-pill[data-tone="info"] {
+        color: var(--ac-primary);
+    }
+
+    .ac-message__meta > .ac-message__meta-main > .ac-pill[data-tone="success"] {
+        color: var(--ac-success);
+    }
+
+    .ac-message__meta > .ac-message__meta-main > .ac-pill[data-tone="primary"] {
+        color: var(--ac-primary);
+    }
+
+    .ac-message__meta > .ac-message__meta-main > .ac-pill[data-tone="warning"] {
+        color: var(--ac-warning);
+    }
+
+    .ac-message__meta > .ac-message__meta-main > .ac-pill[data-tone="danger"] {
+        color: var(--ac-danger);
+    }
+
+    .ac-message__meta > .ac-message__meta-main > .ac-pill[data-tone="gray"] {
+        color: var(--ac-text-soft);
+    }
+
+    .ac-message__meta > .ac-message__meta-main > .ac-pill:not(:first-child)::before {
+        content: "·";
+        margin-right: 0.35rem;
+        color: color-mix(in srgb, var(--ac-text-soft) 58%, transparent);
+    }
+
     .ac-message--system .ac-message__meta {
-        justify-content: center;
+        width: 100%;
+        justify-content: space-between;
+        gap: 0.45rem;
+        margin-bottom: 0.24rem;
     }
 
     .ac-message--system .ac-message__meta-main {
-        justify-content: center;
+        justify-content: flex-start;
+        gap: 0.32rem;
+    }
+
+    .ac-message--system .ac-pill {
+        color: var(--ac-text-soft);
     }
 
     .ac-message__text {
@@ -4112,7 +4434,10 @@
     }
 
     .ac-message--system .ac-message__text {
-        text-align: center;
+        color: #374151;
+        font-size: 0.9rem;
+        line-height: 1.36;
+        text-align: left;
     }
 
     .ac-message__text--html a {
@@ -5124,6 +5449,10 @@
             grid-template-columns: minmax(0, 1fr);
         }
 
+        .ac-dialog-summary__sections {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
         .ac-composer {
             position: static;
         }
@@ -5142,6 +5471,23 @@
     }
 
     @media (max-width: 768px) {
+        .ac-dialog-summary__identity,
+        .ac-dialog-summary__actions {
+            align-items: flex-start;
+            justify-content: flex-start;
+        }
+
+        .ac-dialog-summary__identity {
+            width: 100%;
+        }
+
+        .ac-dialog-stage-step {
+            flex-basis: 8.5rem;
+            min-width: 8.5rem;
+            padding-inline: 0.85rem;
+            font-size: 0.78rem;
+        }
+
         .ac-form-grid {
             grid-template-columns: minmax(0, 1fr);
         }
