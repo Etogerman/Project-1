@@ -52,11 +52,14 @@
             id="conversation-reply-textarea"
             data-role="conversation-reply-textarea"
             wire:model.defer="{{ $replyTextModel }}"
+            onkeydown="if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.isComposing) { event.preventDefault(); this.closest('[data-role=conversation-reply-form]').querySelector('[data-role=conversation-reply-submit]').click(); }"
             aria-label="Текст ответа"
             rows="4"
             maxlength="2000"
             placeholder="Введите текст ответа клиенту"
             @disabled(! $canReply)
+            wire:loading.attr="disabled"
+            wire:target="{{ $submitMethod }}"
             class="ac-textarea ac-textarea--composer"
         ></textarea>
 
