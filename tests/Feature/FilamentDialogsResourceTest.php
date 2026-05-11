@@ -2104,7 +2104,9 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Ответ')
-            ->assertSee('Отправить');
+            ->assertSee('Отправить')
+            ->assertSee('onkeydown="if (event.key === \'Enter\'', false)
+            ->assertSee('querySelector(\'[data-role=conversation-reply-submit]\').click()', false);
     }
 
     public function test_dialog_view_can_send_reply_and_append_message_without_losing_loaded_history(): void
