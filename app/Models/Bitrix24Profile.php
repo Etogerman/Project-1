@@ -24,6 +24,16 @@ class Bitrix24Profile extends Model
 
     public const ADMIN_OAUTH_CALLBACK_PATH = '/admin/bitrix24/oauth/callback';
 
+    public const OPENLINES_ROUTE_REGISTRY_ENDPOINT_PATH = '/local/tools/abrikosoff_openlines/route-registry.php';
+
+    public const ROUTE_REGISTRY_STATUS_SYNCED = 'synced';
+
+    public const ROUTE_REGISTRY_STATUS_DIFF = 'diff';
+
+    public const ROUTE_REGISTRY_STATUS_FAILED = 'failed';
+
+    public const ROUTE_REGISTRY_STATUS_PUBLISHED = 'published';
+
     /**
      * @var list<string>
      */
@@ -34,6 +44,11 @@ class Bitrix24Profile extends Model
         'display_name',
         'client_id',
         'application_code',
+        'openlines_route_registry_secret_encrypted',
+        'openlines_route_registry_last_status',
+        'openlines_route_registry_last_error',
+        'openlines_route_registry_last_checked_at',
+        'openlines_route_registry_last_published_at',
         'callback_base_url',
         'telegram_source_id',
         'max_source_id',
@@ -64,9 +79,19 @@ class Bitrix24Profile extends Model
     ];
 
     /**
+     * @var list<string>
+     */
+    protected $hidden = [
+        'openlines_route_registry_secret_encrypted',
+    ];
+
+    /**
      * @var array<string, string>
      */
     protected $casts = [
+        'openlines_route_registry_secret_encrypted' => 'encrypted',
+        'openlines_route_registry_last_checked_at' => 'datetime',
+        'openlines_route_registry_last_published_at' => 'datetime',
         'default_assigned_user_id' => 'integer',
         'default_deal_category_id' => 'integer',
         'crm_name_source_automatic_id' => 'integer',
@@ -129,6 +154,18 @@ class Bitrix24Profile extends Model
     public function adminOAuthCallbackUrl(): string
     {
         return $this->buildCallbackUrl(self::ADMIN_OAUTH_CALLBACK_PATH);
+    }
+
+    public function openLinesRouteRegistryEndpointUrl(): string
+    {
+        $portalDomain = trim((string) $this->portal_domain);
+
+        return 'https://'.$portalDomain.self::OPENLINES_ROUTE_REGISTRY_ENDPOINT_PATH;
+    }
+
+    public function hasOpenLinesRouteRegistrySecret(): bool
+    {
+        return filled($this->openlines_route_registry_secret_encrypted);
     }
 
     public function allowsCallbackType(string $callbackType): bool
