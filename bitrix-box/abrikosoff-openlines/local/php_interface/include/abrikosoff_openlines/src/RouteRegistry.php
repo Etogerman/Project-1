@@ -166,6 +166,7 @@ final class RouteRegistry
 
             return self::response(200, true, '', [
                 'registry' => $registry,
+                'transition_fallback_routes' => self::transitionFallbackRouteKeys($endpointConfig),
             ]);
         }
 
@@ -1033,13 +1034,37 @@ final class RouteRegistry
      */
     private static function transitionFallbackAllowed(array $runtimeConfig, string $routeKey): bool
     {
-        $routes = self::arrayGet($runtimeConfig, 'route_registry.transition_fallback_routes', []);
+        $routes = self::transitionFallbackRouteKeys($runtimeConfig);
+
+        return in_array('*', $routes, true) || in_array($routeKey, $routes, true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $config
+     * @return list<string>
+     */
+    private static function transitionFallbackRouteKeys(array $config): array
+    {
+        $routes = $config['transition_fallback_routes'] ?? self::arrayGet($config, 'route_registry.transition_fallback_routes', []);
 
         if (! is_array($routes)) {
-            return false;
+            return [];
         }
 
-        return in_array('*', $routes, true) || in_array($routeKey, array_map('strval', $routes), true);
+        $routeKeys = [];
+
+        foreach ($routes as $routeKey) {
+            $routeKey = trim((string) $routeKey);
+
+            if ($routeKey === '*' || self::validRouteKey($routeKey)) {
+                $routeKeys[$routeKey] = true;
+            }
+        }
+
+        $routeKeys = array_keys($routeKeys);
+        sort($routeKeys);
+
+        return $routeKeys;
     }
 
     /**
@@ -1081,6 +1106,34 @@ final class RouteRegistry
     private static function loadEndpointConfig(): array
     {
         $file = self::DEFAULT_STORAGE_DIR.'/route_registry_config.php';
+
+        if (! is_file($file)) {
+            return [];
+        }
+
+        $config = require $file;
+
+        $config = is_array($config) ? $config : [];
+        $runtimeConfig = self::loadRuntimeConfig();
+        $runtimeFallbackRoutes = self::arrayGet($runtimeConfig, 'route_registry.transition_fallback_routes', []);
+
+        if (is_array($runtimeFallbackRoutes)
+            && $runtimeFallbackRoutes !== []
+            && ! isset($config['transition_fallback_routes'])
+            && ! isset($config['route_registry']['transition_fallback_routes'])) {
+            $config['route_registry'] = is_array($config['route_registry'] ?? null) ? $config['route_registry'] : [];
+            $config['route_registry']['transition_fallback_routes'] = $runtimeFallbackRoutes;
+        }
+
+        return $config;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function loadRuntimeConfig(): array
+    {
+        $file = dirname(__DIR__).'/config.php';
 
         if (! is_file($file)) {
             return [];

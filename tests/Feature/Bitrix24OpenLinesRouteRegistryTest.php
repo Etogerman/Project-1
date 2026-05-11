@@ -247,6 +247,145 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $this->assertSame('portal_audit_extra_owners: stale-local', $profile->openlines_route_registry_last_error);
     }
 
+    public function test_doctor_marks_local_known_transition_fallback_route_as_fallback_only(): void
+    {
+        $secret = 'registry-secret-for-fallback-only-test';
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => $secret,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram disabled',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => '32',
+            'line_name' => 'Telegram disabled',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'ABRIKOSOFF_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
+        ]);
+
+        Http::fake([
+            'https://stagecrm.fvds.ru/local/tools/abrikosoff_openlines/route-registry.php?action=snapshot' => Http::response([
+                'ok' => true,
+                'transition_fallback_routes' => ['abrikosoff_telegram:32'],
+                'registry' => [
+                    'schema_version' => 1,
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'updated_at' => now()->toIso8601String(),
+                    'owners' => [
+                        $owner->owner_key => [
+                            'owner_profile_key' => $owner->owner_key,
+                            'owner_callback_base_url' => $owner->callback_base_url,
+                            'routes' => [],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $result = app(DoctorBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $result['status']);
+        $this->assertSame(1, $result['diff_count']);
+        $this->assertSame(['fallback_only: abrikosoff_telegram:32'], $result['diffs']);
+
+        $profile->refresh();
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $profile->openlines_route_registry_last_status);
+        $this->assertSame('fallback_only: abrikosoff_telegram:32', $profile->openlines_route_registry_last_error);
+    }
+
+    public function test_doctor_marks_transition_fallback_wildcard_as_diff(): void
+    {
+        $secret = 'registry-secret-for-fallback-wildcard-test';
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => $secret,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+
+        Http::fake([
+            'https://stagecrm.fvds.ru/local/tools/abrikosoff_openlines/route-registry.php?action=snapshot' => Http::response([
+                'ok' => true,
+                'transition_fallback_routes' => ['*'],
+                'registry' => [
+                    'schema_version' => 1,
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'updated_at' => now()->toIso8601String(),
+                    'owners' => [
+                        $owner->owner_key => [
+                            'owner_profile_key' => $owner->owner_key,
+                            'owner_callback_base_url' => $owner->callback_base_url,
+                            'routes' => [],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $result = app(DoctorBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $result['status']);
+        $this->assertSame(1, $result['diff_count']);
+        $this->assertSame(['fallback_wildcard: *'], $result['diffs']);
+
+        $profile->refresh();
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $profile->openlines_route_registry_last_status);
+        $this->assertSame('fallback_wildcard: *', $profile->openlines_route_registry_last_error);
+    }
+
+    public function test_doctor_marks_unknown_transition_fallback_route_as_diff(): void
+    {
+        $secret = 'registry-secret-for-fallback-unknown-test';
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => $secret,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+
+        Http::fake([
+            'https://stagecrm.fvds.ru/local/tools/abrikosoff_openlines/route-registry.php?action=snapshot' => Http::response([
+                'ok' => true,
+                'transition_fallback_routes' => ['abc_telegram:32'],
+                'registry' => [
+                    'schema_version' => 1,
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'updated_at' => now()->toIso8601String(),
+                    'owners' => [
+                        $owner->owner_key => [
+                            'owner_profile_key' => $owner->owner_key,
+                            'owner_callback_base_url' => $owner->callback_base_url,
+                            'routes' => [],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $result = app(DoctorBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $result['status']);
+        $this->assertSame(1, $result['diff_count']);
+        $this->assertSame(['fallback_unknown: abc_telegram:32'], $result['diffs']);
+
+        $profile->refresh();
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $profile->openlines_route_registry_last_status);
+        $this->assertSame('fallback_unknown: abc_telegram:32', $profile->openlines_route_registry_last_error);
+    }
+
     public function test_doctor_marks_extra_remote_owner_duplicate_line_id_as_diff(): void
     {
         $secret = 'registry-secret-for-extra-owner-line-conflict-test';
