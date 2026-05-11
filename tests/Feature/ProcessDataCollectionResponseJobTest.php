@@ -901,6 +901,61 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame(Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED, $contact->distance_to_moscow_status);
     }
 
+    public function test_job_completes_after_country_reply_when_age_range_already_exists(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.completion_message', 'Спасибо, данные сохранили.');
+
+        Queue::fake([SyncContactToBitrix24Job::class]);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::sequence()
+                ->push($this->geminiResponse([
+                    'decision' => 'accept',
+                    'country' => 'Россия',
+                ]))
+                ->push($this->geminiResponse([
+                    'decision' => 'accept',
+                    'city' => 'Москва',
+                ])),
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9962],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $message = $this->createInboundUserMessage($channel, [
+            'text' => 'Я из России',
+        ], [], [
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_COUNTRY,
+            'first_name' => 'Герман',
+            'city' => 'Москва',
+            'age_range' => '24_29',
+        ]);
+        $contact = $message->contact()->firstOrFail();
+        ContactPhoneNumber::factory()->for($contact)->create([
+            'is_primary' => true,
+        ]);
+
+        ProcessDataCollectionResponseJob::dispatchSync($message->id);
+
+        $contact = $contact->fresh();
+
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertNull($contact->data_collection_current_field);
+        $this->assertDatabaseHas('messages', [
+            'contact_id' => $contact->id,
+            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            'reply_to_message_id' => $message->id,
+            'text' => 'Спасибо, данные сохранили.',
+        ]);
+        Queue::assertPushed(SyncContactToBitrix24Job::class, function (SyncContactToBitrix24Job $job) use ($contact): bool {
+            return $job->contactId === $contact->id;
+        });
+    }
+
     public function test_job_dispatches_distance_calculation_after_russian_region_confirmation(): void
     {
         Queue::fake([CalculateDistanceToMoscowJob::class]);
