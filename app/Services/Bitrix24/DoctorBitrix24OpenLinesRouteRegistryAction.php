@@ -155,13 +155,13 @@ class DoctorBitrix24OpenLinesRouteRegistryAction
                 continue;
             }
 
-            if (! isset($localKnownRouteKeys[$routeKey])
-                || isset($expectedRouteKeys[$routeKey])
-                || isset($remoteActiveRouteKeys[$routeKey])) {
+            if (isset($expectedRouteKeys[$routeKey]) || isset($remoteActiveRouteKeys[$routeKey])) {
                 continue;
             }
 
-            $diffs[] = "fallback_only: {$routeKey}";
+            $diffs[] = isset($localKnownRouteKeys[$routeKey])
+                ? "fallback_only: {$routeKey}"
+                : "fallback_unknown: {$routeKey}";
         }
 
         return $diffs;

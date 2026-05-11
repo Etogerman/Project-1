@@ -346,6 +346,46 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $this->assertSame('fallback_wildcard: *', $profile->openlines_route_registry_last_error);
     }
 
+    public function test_doctor_marks_unknown_transition_fallback_route_as_diff(): void
+    {
+        $secret = 'registry-secret-for-fallback-unknown-test';
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => $secret,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+
+        Http::fake([
+            'https://stagecrm.fvds.ru/local/tools/abrikosoff_openlines/route-registry.php?action=snapshot' => Http::response([
+                'ok' => true,
+                'transition_fallback_routes' => ['abc_telegram:32'],
+                'registry' => [
+                    'schema_version' => 1,
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'updated_at' => now()->toIso8601String(),
+                    'owners' => [
+                        $owner->owner_key => [
+                            'owner_profile_key' => $owner->owner_key,
+                            'owner_callback_base_url' => $owner->callback_base_url,
+                            'routes' => [],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $result = app(DoctorBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $result['status']);
+        $this->assertSame(1, $result['diff_count']);
+        $this->assertSame(['fallback_unknown: abc_telegram:32'], $result['diffs']);
+
+        $profile->refresh();
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_DIFF, $profile->openlines_route_registry_last_status);
+        $this->assertSame('fallback_unknown: abc_telegram:32', $profile->openlines_route_registry_last_error);
+    }
+
     public function test_doctor_marks_extra_remote_owner_duplicate_line_id_as_diff(): void
     {
         $secret = 'registry-secret-for-extra-owner-line-conflict-test';
