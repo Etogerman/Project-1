@@ -9,6 +9,7 @@ use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
 use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
+use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
@@ -85,9 +86,9 @@ class ViewDialog extends ViewRecord
         return 'Диалог';
     }
 
-    public function getHeading(): string|Htmlable
+    public function getHeading(): string|Htmlable|null
     {
-        return 'Диалог';
+        return null;
     }
 
     public function getSubheading(): ?string
@@ -245,6 +246,13 @@ class ViewDialog extends ViewRecord
         }
     }
 
+    public function selectDialogStage(string $stage): void
+    {
+        $this->dialogStageSelection = $stage;
+
+        $this->updateDialogStage();
+    }
+
     public function sendDialogReply(): void
     {
         $validated = $this->validate([
@@ -363,8 +371,8 @@ class ViewDialog extends ViewRecord
     protected function getConversationDisplayModeOptions(): array
     {
         return [
-            self::CONVERSATION_DISPLAY_MODE_FORMATTED => 'Форматированный',
-            self::CONVERSATION_DISPLAY_MODE_HTML => 'HTML',
+            self::CONVERSATION_DISPLAY_MODE_FORMATTED => 'Обычный вид',
+            self::CONVERSATION_DISPLAY_MODE_HTML => 'HTML-код',
         ];
     }
 
@@ -401,23 +409,46 @@ class ViewDialog extends ViewRecord
      *     blocked_reason:?string,
      *     stage_model:string,
      *     update_method:string,
-     *     options:array<string, string>
+     *     options:array<string, string>,
+     *     steps:list<array{
+     *         value:string,
+     *         label:string,
+     *         tone:string,
+     *         is_current:bool,
+     *         is_clickable:bool,
+     *         is_completed:bool
+     *     }>
      * }
      */
     protected function getDialogStageViewData(): array
     {
         $dialog = $this->getRecord();
         $currentStage = $this->resolveEffectiveDialogStage($dialog);
+        $isEditable = $this->canCurrentUserManageDialogStages()
+            && $this->getDialogStageBlockedReason() === null;
+        $allowedTargets = Dialog::allowedManualTransitionTargets($currentStage);
+        $workingStages = Dialog::workingStages();
+        $currentIndex = array_search($currentStage, $workingStages, true);
 
         return [
             'current_label' => Dialog::stageLabel($currentStage),
             'current_tone' => Dialog::stageTone($currentStage),
-            'is_editable' => $this->canCurrentUserManageDialogStages()
-                && $this->getDialogStageBlockedReason() === null,
+            'is_editable' => $isEditable,
             'blocked_reason' => $this->getDialogStageBlockedReason(),
             'stage_model' => 'dialogStageSelection',
             'update_method' => 'updateDialogStage',
             'options' => Dialog::manualTransitionOptions($currentStage),
+            'steps' => collect($workingStages)
+                ->map(fn (string $stage, int $index): array => [
+                    'value' => $stage,
+                    'label' => Dialog::stageLabel($stage),
+                    'tone' => Dialog::stageTone($stage),
+                    'is_current' => $stage === $currentStage,
+                    'is_clickable' => $isEditable && in_array($stage, $allowedTargets, true),
+                    'is_completed' => $currentIndex !== false && $index < $currentIndex,
+                ])
+                ->values()
+                ->all(),
         ];
     }
 
@@ -523,7 +554,7 @@ class ViewDialog extends ViewRecord
      * @return array{
      *     contact_label:string,
      *     contact_id:int|null,
-     *     phone_label:string,
+     *     phones_label:string,
      *     assigned_user_label:string
      * }
      */
@@ -537,7 +568,7 @@ class ViewDialog extends ViewRecord
                 ? app(ResolveContactDisplayNameAction::class)->handle($contact, $dialog)
                 : 'Контакт не найден',
             'contact_id' => $contact?->id,
-            'phone_label' => $this->resolvePrimaryPhoneRaw($contact) ?? '—',
+            'phones_label' => $this->formatContactPhonesLabel($contact),
             'assigned_user_label' => $this->formatAssignedUserLabel($contact),
         ];
     }
@@ -832,15 +863,23 @@ class ViewDialog extends ViewRecord
         };
     }
 
-    protected function resolvePrimaryPhoneRaw(?Contact $contact): ?string
+    protected function formatContactPhonesLabel(?Contact $contact): string
     {
         if (! $contact instanceof Contact) {
-            return null;
+            return '—';
         }
 
-        $primaryPhone = $contact->phoneNumbers->first();
+        $phoneNumbers = ($contact->relationLoaded('phoneNumbers')
+            ? $contact->phoneNumbers
+            : $contact->phoneNumbers()->get())
+            ->map(fn (ContactPhoneNumber $phoneNumber): ?string => $phoneNumber->phone_raw ?: $phoneNumber->phone_normalized)
+            ->filter(fn (?string $phone): bool => filled($phone))
+            ->unique()
+            ->values();
 
-        return $primaryPhone?->phone_raw;
+        return $phoneNumbers->isEmpty()
+            ? '—'
+            : $phoneNumbers->implode(', ');
     }
 
     protected function formatAssignedUserLabel(?Contact $contact): string
