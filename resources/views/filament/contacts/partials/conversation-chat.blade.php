@@ -27,6 +27,7 @@
                     @php($previousDateKey = $message['date_key'])
                 @endif
 
+                @php($isSystemMessage = $message['is_system_message'] ?? ($message['is_system_event'] ?? false))
                 <div
                     wire:key="conversation-message-{{ $message['id'] }}"
                     data-role="conversation-message"
@@ -34,9 +35,9 @@
                     data-kind="{{ $message['kind'] }}"
                     @class([
                         'ac-message',
-                        'ac-message--system' => $message['is_system_event'] ?? false,
-                        'ac-message--outbound' => $message['is_outbound'] && ! ($message['is_system_event'] ?? false),
-                        'ac-message--inbound' => ! $message['is_outbound'] && ! ($message['is_system_event'] ?? false),
+                        'ac-message--system' => $isSystemMessage,
+                        'ac-message--outbound' => $message['is_outbound'] && ! $isSystemMessage,
+                        'ac-message--inbound' => ! $message['is_outbound'] && ! $isSystemMessage,
                     ])
                 >
                     <article class="ac-message__bubble">
@@ -49,7 +50,7 @@
                                     {{ $message['direction_label'] ?? ($message['is_outbound'] ? 'Исходящее' : 'Входящее') }}
                                 </span>
 
-                                @if (filled($message['sender_label']))
+                                @if (! $isSystemMessage && filled($message['sender_label']))
                                     <span
                                         data-role="conversation-sender"
                                         class="ac-pill"
@@ -59,9 +60,6 @@
                                     </span>
                                 @endif
 
-                                <span data-role="conversation-channel" class="ac-pill">
-                                    {{ $message['channel_label'] }}
-                                </span>
                             </div>
 
                             <div class="ac-message__timestamp">
