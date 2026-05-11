@@ -27,6 +27,7 @@ class BuildConversationFeedViewDataAction
                 $messageAt = $this->resolveMessageSortAt($message);
                 $mediaBadges = $this->resolveConversationMediaBadges($message);
                 $mediaStateBadges = $this->resolveConversationMediaStateBadges($message);
+                $isSystemMessage = $this->isConversationSystemMessage($message);
 
                 return [
                     'id' => $message->id,
@@ -35,6 +36,7 @@ class BuildConversationFeedViewDataAction
                     'direction' => $message->direction,
                     'kind' => $message->message_kind ?? 'unknown',
                     'is_system_event' => $message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT,
+                    'is_system_message' => $isSystemMessage,
                     'dialog_id' => $message->dialog_id,
                     'has_dialog' => $message->dialog_id !== null,
                     'channel_label' => $this->resolveConversationChannelLabel($message),
@@ -60,6 +62,14 @@ class BuildConversationFeedViewDataAction
                 ];
             })
             ->all();
+    }
+
+    protected function isConversationSystemMessage(Message $message): bool
+    {
+        return in_array($message->message_kind, [
+            Message::KIND_INBOUND_SYSTEM_EVENT,
+            Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+        ], true);
     }
 
     public function resolveMessageSortAt(Message $message): ?Carbon
@@ -119,11 +129,11 @@ class BuildConversationFeedViewDataAction
     protected function resolveConversationDirectionLabel(Message $message): string
     {
         if ($message->message_kind === Message::KIND_INBOUND_SYSTEM_EVENT) {
-            return 'Системное';
+            return 'Системное уведомление';
         }
 
         if ($message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE) {
-            return 'Системное';
+            return 'Системное уведомление';
         }
 
         return $message->direction === Message::DIRECTION_OUTBOUND

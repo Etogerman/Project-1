@@ -51,6 +51,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('Диалог')
+            ->assertDontSee('<h1 class="fi-header-heading', false)
             ->assertSee('Открыть контакт')
             ->assertSee('Сообщения диалога')
             ->assertSee('Написать клиенту')
@@ -493,13 +494,47 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Требует ответа')
             ->assertSee('Не требует ответа')
             ->assertSee('data-role="dialog-inbox-status-select"', escape: false)
-            ->assertSee('data-role="dialog-inbox-status-help"', escape: false)
-            ->assertSee('data-role="dialog-inbox-status-help-panel"', escape: false)
-            ->assertSee('aria-controls="dialog-inbox-status-help-panel"', escape: false)
-            ->assertSee('aria-label="Показать подсказку: новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».', escape: false)
+            ->assertDontSee('data-role="dialog-inbox-status-help"', escape: false)
+            ->assertDontSee('data-role="dialog-inbox-status-help-panel"', escape: false)
+            ->assertDontSee('Новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».')
             ->assertDontSee('<p class="ac-field-help">', escape: false)
             ->assertDontSee('Рабочее место оператора')
             ->assertDontSee('Здесь показаны только сообщения текущего диалога в хронологическом порядке.');
+    }
+
+    public function test_dialog_view_renders_dialog_stage_strip_instead_of_stage_select(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $dialog->contact()->update([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $dialog->forceFill([
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+        ])->save();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-role="dialog-stage-strip"', false)
+            ->assertSee('data-current-tone="warning"', false)
+            ->assertSee('class="ac-dialog-stage-strip ac-dialog-summary__stage"', false)
+            ->assertSee('data-role="dialog-stage-step"', false)
+            ->assertSee('Новый диалог')
+            ->assertSee('Телефон получен')
+            ->assertSee('Анкета заполнена')
+            ->assertSee('МПЛ взял в работу')
+            ->assertSee('Передан в МПП')
+            ->assertSee('data-state="current"', false)
+            ->assertSee('data-state="available"', false)
+            ->assertDontSee('<p class="ac-dialog-stage-strip__label">', false)
+            ->assertDontSee('class="ac-dialog-stage-strip ac-surface__divider"', false)
+            ->assertDontSee('data-role="dialog-stage-select"', false);
     }
 
     public function test_dialog_view_uses_yellow_highlight_buttons_and_green_send_button(): void
@@ -520,7 +555,7 @@ class FilamentDialogsResourceTest extends TestCase
             $html,
         );
         $this->assertMatchesRegularExpression(
-            '~class="[^"]*ac-button[^"]*ac-button--warning-soft[^"]*"[^>]*>\s*Форматированный\s*</button>~su',
+            '~class="[^"]*ac-button[^"]*ac-button--warning-soft[^"]*"[^>]*>\s*Обычный вид\s*</button>~su',
             $html,
         );
         $this->assertMatchesRegularExpression(
@@ -546,7 +581,42 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('Имя из мессенджера')
             ->assertSee('data-role="dialog-messenger-name"', false)
+            ->assertSee('data-role="dialog-channel-label"', false)
+            ->assertDontSee('<p class="ac-surface__subtitle">', false)
             ->assertSee('Telegram Клиент');
+    }
+
+    public function test_dialog_view_renders_messenger_phone_and_contact_phones_separately(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $contact = $dialog->contact()->firstOrFail();
+
+        $dialog->forceFill([
+            'confirmed_phone_raw' => '+7 999 000 00 01',
+            'confirmed_phone_normalized' => '+79990000001',
+        ])->save();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 900 111 22 33',
+            'phone_normalized' => '+79001112233',
+            'is_primary' => false,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('Телефон мессенджера')
+            ->assertSee('+7 999 000 00 01')
+            ->assertSee('Телефоны контакта')
+            ->assertSee('+7 926 352 71 11')
+            ->assertSee('+7 900 111 22 33')
+            ->assertDontSee('<p class="ac-dialog-summary__section-title">Диалог</p>', false)
+            ->assertDontSee('<p class="ac-dialog-summary__section-title">Контакт и канал</p>', false);
     }
 
     public function test_dialog_view_renders_identity_avatar_in_dialog_header_when_avatar_exists(): void
@@ -1316,9 +1386,50 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('Клиент заблокировал бота')
-            ->assertSee('Системное')
-            ->assertSee('Система')
+            ->assertSee('Системное уведомление')
+            ->assertDontSee('data-role="conversation-sender"', false)
             ->assertDontSee('Входящее');
+    }
+
+    public function test_dialog_view_renders_dialog_stage_history_as_system_message(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $contact = $dialog->contact;
+        $identity = $dialog->currentContactIdentity;
+        $channel = $dialog->channel;
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact?->id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $channel?->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'text' => 'Оператор Герман изменил этап диалога: Анкета заполнена -> МПЛ взял в работу',
+            'received_at' => now(),
+        ]);
+
+        $html = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('Системное уведомление')
+            ->assertDontSee('data-role="conversation-sender"', false)
+            ->getContent();
+
+        $this->assertMatchesRegularExpression(
+            '~data-kind="outbound_dialog_status_change"[^>]*class="[^"]*ac-message--system[^"]*"~su',
+            $html,
+        );
+        $this->assertDoesNotMatchRegularExpression(
+            '~data-kind="outbound_dialog_status_change"[^>]*class="[^"]*ac-message--outbound[^"]*"~su',
+            $html,
+        );
     }
 
     public function test_dialog_view_route_status_matches_inbox_route_badge_for_same_dialog(): void
@@ -1779,7 +1890,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Автоответчик')
             ->assertSee('Автоответ')
-            ->assertSee('Поделился номером телефона');
+            ->assertSee('Поделился номером телефона')
+            ->assertDontSee('data-role="conversation-channel"', false);
     }
 
     public function test_dialog_view_shows_bitrix24_sender_label_for_bitrix24_openlines_message(): void
@@ -1992,7 +2104,9 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Ответ')
-            ->assertSee('Отправить');
+            ->assertSee('Отправить')
+            ->assertSee('onkeydown="if (event.key === \'Enter\'', false)
+            ->assertSee('querySelector(\'[data-role=conversation-reply-submit]\').click()', false);
     }
 
     public function test_dialog_view_can_send_reply_and_append_message_without_losing_loaded_history(): void
