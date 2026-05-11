@@ -2689,9 +2689,17 @@
 
     .ac-dialog-stage-step {
         --stage-arrow-width: 0.78rem;
+        --stage-border-width: 1px;
         --stage-fill-top: rgba(247, 249, 252, 0.96);
         --stage-fill-bottom: rgba(225, 231, 239, 0.96);
         --stage-outline: rgba(112, 127, 148, 0.3);
+        --stage-shape: polygon(
+            0 0,
+            calc(100% - var(--stage-arrow-width)) 0,
+            100% 50%,
+            calc(100% - var(--stage-arrow-width)) 100%,
+            0 100%
+        );
         position: relative;
         display: inline-flex;
         flex: 1 0 9.75rem;
@@ -2719,26 +2727,27 @@
         content: "";
         position: absolute;
         inset: 0;
-        background: linear-gradient(180deg, var(--stage-fill-top) 0%, var(--stage-fill-bottom) 100%);
-        box-shadow: inset 0 0 0 1px var(--stage-outline);
-        clip-path: polygon(
-            0 0,
-            calc(100% - var(--stage-arrow-width)) 0,
-            100% 50%,
-            calc(100% - var(--stage-arrow-width)) 100%,
-            0 100%
-        );
-        transition:
-            background 0.16s ease,
-            box-shadow 0.16s ease;
+        background: var(--stage-outline);
+        clip-path: var(--stage-shape);
+        transition: background 0.16s ease;
         z-index: 0;
+    }
+
+    .ac-dialog-stage-step::after {
+        content: "";
+        position: absolute;
+        inset: var(--stage-border-width);
+        background: linear-gradient(180deg, var(--stage-fill-top) 0%, var(--stage-fill-bottom) 100%);
+        clip-path: var(--stage-shape);
+        transition: background 0.16s ease, inset 0.16s ease;
+        z-index: 1;
     }
 
     .ac-dialog-stage-step__label {
         display: block;
         min-width: 0;
         position: relative;
-        z-index: 1;
+        z-index: 2;
         overflow-wrap: anywhere;
     }
 
@@ -2753,13 +2762,10 @@
         --stage-fill-top: var(--stage-active-top);
         --stage-fill-bottom: var(--stage-active-bottom);
         --stage-outline: var(--stage-active-outline);
+        --stage-border-width: 2px;
         color: var(--stage-active-text);
         filter: drop-shadow(0 0.75rem 1.1rem var(--stage-active-shadow));
         z-index: 1;
-    }
-
-    .ac-dialog-stage-step[data-state="current"]::before {
-        box-shadow: inset 0 0 0 2px var(--stage-active-outline);
     }
 
     .ac-dialog-stage-step[data-state="available"] {
@@ -2781,21 +2787,13 @@
         z-index: 2;
     }
 
-    .ac-dialog-stage-step[data-state="available"]:hover::before,
-    .ac-dialog-stage-step[data-state="available"]:focus-visible::before {
-        box-shadow: inset 0 0 0 1px rgba(60, 184, 200, 0.58);
-    }
-
     .ac-dialog-stage-step[data-state="available"]:active {
         --stage-fill-top: #fff2b6;
         --stage-fill-bottom: #ffd95a;
         --stage-outline: #c18c14;
+        --stage-border-width: 2px;
         color: #17283a;
         filter: drop-shadow(0 0.55rem 0.9rem rgba(193, 140, 20, 0.16));
-    }
-
-    .ac-dialog-stage-step[data-state="available"]:active::before {
-        box-shadow: inset 0 0 0 2px rgba(193, 140, 20, 0.54);
     }
 
     .ac-dialog-stage-step[data-state="locked"] {
