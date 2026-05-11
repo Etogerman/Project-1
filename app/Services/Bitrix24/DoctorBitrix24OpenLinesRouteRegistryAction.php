@@ -149,8 +149,13 @@ class DoctorBitrix24OpenLinesRouteRegistryAction
         $diffs = [];
 
         foreach ($transitionFallbackRouteKeys as $routeKey) {
-            if ($routeKey === '*'
-                || ! isset($localKnownRouteKeys[$routeKey])
+            if ($routeKey === '*') {
+                $diffs[] = 'fallback_wildcard: *';
+
+                continue;
+            }
+
+            if (! isset($localKnownRouteKeys[$routeKey])
                 || isset($expectedRouteKeys[$routeKey])
                 || isset($remoteActiveRouteKeys[$routeKey])) {
                 continue;
