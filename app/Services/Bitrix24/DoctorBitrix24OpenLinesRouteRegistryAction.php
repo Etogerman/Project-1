@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24CallbackOwner;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
@@ -23,7 +24,8 @@ class DoctorBitrix24OpenLinesRouteRegistryAction
             $snapshot = $this->client->snapshot($profile);
             $registry = Arr::get($snapshot, 'registry', []);
             $registry = is_array($registry) ? $registry : [];
-            $diffs = $this->diffs($profile, $registry);
+            $transitionFallbackRouteKeys = $this->transitionFallbackRouteKeys($snapshot);
+            $diffs = $this->diffs($profile, $registry, $transitionFallbackRouteKeys);
             $duplicateLineIds = $this->duplicateRemoteLineIds($registry);
             $diffs = array_merge($diffs, $this->duplicateLineDiffs($duplicateLineIds));
             $extraOwners = $this->extraRemoteOwners($profile, $registry);
@@ -63,9 +65,10 @@ class DoctorBitrix24OpenLinesRouteRegistryAction
 
     /**
      * @param  array<string, mixed>  $registry
+     * @param  list<string>  $transitionFallbackRouteKeys
      * @return list<string>
      */
-    private function diffs(Bitrix24Profile $profile, array $registry): array
+    private function diffs(Bitrix24Profile $profile, array $registry, array $transitionFallbackRouteKeys): array
     {
         $diffs = [];
         $owners = is_array($registry['owners'] ?? null) ? $registry['owners'] : [];
@@ -99,7 +102,156 @@ class DoctorBitrix24OpenLinesRouteRegistryAction
             }
         }
 
+        $diffs = array_merge($diffs, $this->fallbackOnlyDiffs($profile, $registry, $transitionFallbackRouteKeys));
+
         return $diffs;
+    }
+
+    /**
+     * @param  array<string, mixed>  $snapshot
+     * @return list<string>
+     */
+    private function transitionFallbackRouteKeys(array $snapshot): array
+    {
+        $routeKeys = is_array($snapshot['transition_fallback_routes'] ?? null)
+            ? $snapshot['transition_fallback_routes']
+            : [];
+        $normalized = [];
+
+        foreach ($routeKeys as $routeKey) {
+            $routeKey = trim((string) $routeKey);
+
+            if ($routeKey !== '') {
+                $normalized[$routeKey] = true;
+            }
+        }
+
+        $routeKeys = array_keys($normalized);
+        sort($routeKeys);
+
+        return $routeKeys;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @param  list<string>  $transitionFallbackRouteKeys
+     * @return list<string>
+     */
+    private function fallbackOnlyDiffs(Bitrix24Profile $profile, array $registry, array $transitionFallbackRouteKeys): array
+    {
+        if ($transitionFallbackRouteKeys === []) {
+            return [];
+        }
+
+        $expectedRouteKeys = array_fill_keys($this->expectedRouteKeys($profile), true);
+        $remoteActiveRouteKeys = array_fill_keys($this->remoteActiveRouteKeys($registry), true);
+        $localKnownRouteKeys = array_fill_keys($this->localKnownRouteKeys($profile), true);
+        $diffs = [];
+
+        foreach ($transitionFallbackRouteKeys as $routeKey) {
+            if ($routeKey === '*') {
+                $diffs[] = 'fallback_wildcard: *';
+
+                continue;
+            }
+
+            if (isset($expectedRouteKeys[$routeKey]) || isset($remoteActiveRouteKeys[$routeKey])) {
+                continue;
+            }
+
+            $diffs[] = isset($localKnownRouteKeys[$routeKey])
+                ? "fallback_only: {$routeKey}"
+                : "fallback_unknown: {$routeKey}";
+        }
+
+        return $diffs;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function expectedRouteKeys(Bitrix24Profile $profile): array
+    {
+        $routeKeys = [];
+
+        foreach ($profile->callbackOwners()->orderBy('owner_key')->get() as $owner) {
+            if (! $owner instanceof Bitrix24CallbackOwner) {
+                continue;
+            }
+
+            $expected = $this->buildOwnerSnapshotAction->handle($profile, $owner);
+            $routes = is_array($expected['routes'] ?? null) ? $expected['routes'] : [];
+
+            foreach (array_keys($routes) as $routeKey) {
+                $routeKeys[] = trim((string) $routeKey);
+            }
+        }
+
+        $routeKeys = array_values(array_filter(array_unique($routeKeys), static fn (string $routeKey): bool => $routeKey !== ''));
+        sort($routeKeys);
+
+        return $routeKeys;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @return list<string>
+     */
+    private function remoteActiveRouteKeys(array $registry): array
+    {
+        $owners = is_array($registry['owners'] ?? null) ? $registry['owners'] : [];
+        $routeKeys = [];
+
+        foreach ($owners as $owner) {
+            if (! is_array($owner)) {
+                continue;
+            }
+
+            $routes = is_array($owner['routes'] ?? null) ? $owner['routes'] : [];
+
+            foreach ($routes as $routeKey => $route) {
+                if (! is_array($route) || ($route['active'] ?? false) !== true) {
+                    continue;
+                }
+
+                $routeKey = trim((string) $routeKey);
+
+                if ($routeKey !== '') {
+                    $routeKeys[] = $routeKey;
+                }
+            }
+        }
+
+        $routeKeys = array_values(array_unique($routeKeys));
+        sort($routeKeys);
+
+        return $routeKeys;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function localKnownRouteKeys(Bitrix24Profile $profile): array
+    {
+        $routeKeys = Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->whereNotNull('connector_code')
+            ->whereNotNull('line_id')
+            ->get()
+            ->map(static function (Bitrix24OpenLineRoute $route): string {
+                $connectorCode = trim((string) $route->connector_code);
+                $lineId = trim((string) $route->line_id);
+
+                return $connectorCode === '' || $lineId === '' ? '' : "{$connectorCode}:{$lineId}";
+            })
+            ->filter(static fn (string $routeKey): bool => $routeKey !== '')
+            ->unique()
+            ->values()
+            ->all();
+
+        sort($routeKeys);
+
+        return $routeKeys;
     }
 
     /**
