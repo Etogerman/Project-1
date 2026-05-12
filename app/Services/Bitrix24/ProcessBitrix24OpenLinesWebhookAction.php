@@ -3,12 +3,14 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24CurrentOpenLineChatData;
+use App\Data\Bitrix24\Bitrix24OpenLinesDialogBindingData;
 use App\Data\Bitrix24\Bitrix24OpenLinesOperatorMessageData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotDialogTextSendResult;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Jobs\ProcessBitrix24WebhookEventJob;
+use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
@@ -398,6 +400,21 @@ class ProcessBitrix24OpenLinesWebhookAction
             return false;
         }
 
+        $durableVerifiedBindingResult = $this->handleDurableVerifiedBindingIfNeeded(
+            $event,
+            $dialog,
+            $messageData,
+            $route,
+            $connection,
+            $currentChat,
+            $selectedBinding,
+            $selectedChatId,
+        );
+
+        if ($durableVerifiedBindingResult !== null) {
+            return $durableVerifiedBindingResult;
+        }
+
         $this->syncCurrentOpenLineBinding($dialog, $currentChat);
 
         if ($messageData->sourceBitrixChatId === null || $messageData->sourceBitrixChatId === $currentChat->chatId) {
@@ -418,6 +435,80 @@ class ProcessBitrix24OpenLinesWebhookAction
                 'bitrix_message_id' => $messageData->bitrixMessageId,
                 'connector_code' => $messageData->connectorCode,
                 'line_id' => $messageData->lineId,
+            ],
+            connection: $event->connection,
+            entityType: 'openlines_webhook_event',
+            entityId: (string) $event->id,
+        );
+
+        return true;
+    }
+
+    private function handleDurableVerifiedBindingIfNeeded(
+        Bitrix24WebhookEvent $event,
+        Dialog $dialog,
+        Bitrix24OpenLinesOperatorMessageData $messageData,
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        Bitrix24CurrentOpenLineChatData $currentChat,
+        ?Bitrix24OpenLinesDialogBindingData $selectedBinding,
+        ?string $selectedChatId,
+    ): ?bool {
+        if (
+            $selectedBinding === null
+            || $selectedChatId === null
+            || $currentChat->chatId === $selectedChatId
+            || ! $dialog->bitrix24_open_line_binding_verified_at instanceof Carbon
+            || $dialog->bitrix24_open_line_binding_verified_at->gt($this->normalizeDialogTimestampSecond($event->created_at))
+            || $this->hasConflictingInboundClientSendStateAfter(
+                $dialog,
+                $selectedChatId,
+                $dialog->bitrix24_open_line_binding_verified_at,
+                $event->created_at,
+            )
+        ) {
+            return null;
+        }
+
+        try {
+            $verifiedChat = $this->resolveCurrentBitrix24OpenLineChatAction->handleMatchingChatId(
+                $dialog,
+                $route,
+                $connection,
+                $selectedChatId,
+            );
+        } catch (Bitrix24ApiException) {
+            return null;
+        }
+
+        if (! $verifiedChat instanceof Bitrix24CurrentOpenLineChatData) {
+            return null;
+        }
+
+        $this->syncCurrentOpenLineBinding($dialog, $verifiedChat);
+
+        if ($messageData->sourceBitrixChatId === null || $messageData->sourceBitrixChatId === $selectedChatId) {
+            return false;
+        }
+
+        $this->logBitrix24ApiCallAction->handle(
+            direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
+            operation: self::STALE_OPEN_LINE_MESSAGE_IGNORED_OPERATION,
+            status: Bitrix24SyncLog::STATUS_SKIPPED,
+            requestPayload: [
+                'webhook_event_id' => $event->id,
+                'event_name' => $event->event_name,
+                'dialog_id' => $dialog->id,
+                'chat_id' => $messageData->chatId,
+                'source_bitrix_chat_id' => $messageData->sourceBitrixChatId,
+                'current_bitrix_chat_id' => $selectedChatId,
+                'current_chat_source' => 'durable_verified_binding',
+                'selected_user_code' => $selectedBinding->userCode,
+                'bitrix_message_id' => $messageData->bitrixMessageId,
+                'connector_code' => $messageData->connectorCode,
+                'line_id' => $messageData->lineId,
+                'diagnostic_event_type' => 'duplicate_inbound_skipped',
+                'decision_reason' => 'durable_verified_binding_still_resolves',
             ],
             connection: $event->connection,
             entityType: 'openlines_webhook_event',
@@ -738,6 +829,30 @@ class ProcessBitrix24OpenLinesWebhookAction
         }
 
         return $query->exists();
+    }
+
+    private function hasConflictingInboundClientSendStateAfter(
+        Dialog $dialog,
+        string $selectedChatId,
+        ?Carbon $asOf = null,
+        ?Carbon $eventAt = null,
+    ): bool {
+        $asOf = $this->normalizeEventSecond($asOf);
+        $eventAt = $this->normalizeEventSecond($eventAt);
+
+        if ($this->successfulInboundClientExportQuery($dialog)
+            ->where('bitrix24_message_exports.exported_at', '>=', $asOf)
+            ->where('bitrix24_message_exports.resolved_bitrix_chat_verified', true)
+            ->where('bitrix24_message_exports.resolved_bitrix_chat_id', '!=', $selectedChatId)
+            ->exists()) {
+            return true;
+        }
+
+        return $this->successfulInboundClientExportQuery($dialog)
+            ->where('bitrix24_message_exports.exported_at', '>=', $asOf)
+            ->where('bitrix24_message_exports.exported_at', '>=', $eventAt->copy()->subSeconds(self::SUCCESSFUL_SEND_EXPECTED_REPLY_WINDOW_SECONDS))
+            ->where('bitrix24_message_exports.resolved_bitrix_chat_verified', false)
+            ->exists();
     }
 
     private function hasNewerSuccessfulSendStateAfter(
