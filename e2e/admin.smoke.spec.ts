@@ -64,8 +64,10 @@ test.describe('Admin smoke', () => {
 
         await expect(page).toHaveURL(/\/admin\/dialogs\/[^/?#]+(?:\?.*)?$/);
         await expect(page.locator('[data-role="dialog-page"]')).toBeVisible();
-        await expect(page.locator('[data-role="dialog-contact-summary"]')).toBeVisible();
+        await expect(page.locator('[data-role="dialog-overview"]')).toBeVisible();
         await expect(page.locator('[data-role="dialog-header"]')).toBeVisible();
+        await expect(page.locator('[data-role="dialog-contact-avatar"]')).toBeVisible();
+        await expect(page.locator('[data-role="dialog-route-status"]')).toBeVisible();
         await expect(page.locator('[data-role="dialog-history"]')).toBeVisible();
         await expect(page.locator('[data-role="conversation-thread"]')).toBeVisible();
         await expect(page.locator('[data-role="conversation-reply-form"]')).toBeVisible();

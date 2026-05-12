@@ -46,6 +46,7 @@ class ResolveBitrix24OpenLinesIdentityDecisionAction
         $legacyCandidates = $this->resolveLegacyExternalUserIds(
             $payloadChatId,
             $dialogBinding?->resolvedBitrixChatId,
+            $dialogBinding?->connectorUserId,
             $route,
             $connection,
             $channelAwareUserId,
@@ -86,13 +87,15 @@ class ResolveBitrix24OpenLinesIdentityDecisionAction
     private function resolveLegacyExternalUserIds(
         string $payloadChatId,
         ?string $expectedResolvedBitrixChatId,
+        ?string $expectedConnectorUserId,
         Bitrix24OpenLinesRouteData $route,
         Bitrix24Connection $connection,
         string $channelAwareUserId,
     ): array {
         $expectedResolvedBitrixChatId = $this->nonEmptyScalarString($expectedResolvedBitrixChatId);
+        $expectedConnectorUserId = $this->nonEmptyScalarString($expectedConnectorUserId);
 
-        if ($expectedResolvedBitrixChatId === null) {
+        if ($expectedResolvedBitrixChatId === null && $expectedConnectorUserId === null) {
             return [];
         }
 
@@ -104,7 +107,24 @@ class ResolveBitrix24OpenLinesIdentityDecisionAction
             ->where('request_payload->params->CONNECTOR', $route->connectorCode)
             ->where('request_payload->params->LINE', $route->lineId)
             ->where('request_payload->params->MESSAGES->0->chat->id', $payloadChatId)
-            ->where('response_payload->result->DATA->RESULT->0->session->CHAT_ID', $expectedResolvedBitrixChatId)
+            ->where(function ($query) use ($expectedResolvedBitrixChatId, $expectedConnectorUserId): void {
+                if ($expectedResolvedBitrixChatId !== null) {
+                    $query->where(
+                        'response_payload->result->DATA->RESULT->0->session->CHAT_ID',
+                        $expectedResolvedBitrixChatId,
+                    );
+                }
+
+                if ($expectedConnectorUserId !== null) {
+                    $method = $expectedResolvedBitrixChatId === null ? 'where' : 'orWhere';
+
+                    $query->{$method}(function ($fallbackQuery) use ($expectedConnectorUserId): void {
+                        $fallbackQuery
+                            ->whereNull('response_payload->result->DATA->RESULT->0->session->CHAT_ID')
+                            ->where('response_payload->result->DATA->RESULT->0->user', $expectedConnectorUserId);
+                    });
+                }
+            })
             ->orderByDesc('id')
             ->limit(self::LEGACY_LOOKUP_LOG_LIMIT)
             ->get(['request_payload', 'response_payload']);
@@ -124,7 +144,11 @@ class ResolveBitrix24OpenLinesIdentityDecisionAction
                 continue;
             }
 
-            if (! $this->responseHasReturnedSessionChatId($log->response_payload, $expectedResolvedBitrixChatId)) {
+            if (! $this->responseMatchesExpectedBinding(
+                $log->response_payload,
+                $expectedResolvedBitrixChatId,
+                $expectedConnectorUserId,
+            )) {
                 continue;
             }
 
@@ -140,8 +164,11 @@ class ResolveBitrix24OpenLinesIdentityDecisionAction
         return array_keys($userIds);
     }
 
-    private function responseHasReturnedSessionChatId(mixed $responsePayload, string $expectedResolvedBitrixChatId): bool
-    {
+    private function responseMatchesExpectedBinding(
+        mixed $responsePayload,
+        ?string $expectedResolvedBitrixChatId,
+        ?string $expectedConnectorUserId,
+    ): bool {
         if (! is_array($responsePayload)) {
             return false;
         }
@@ -158,8 +185,17 @@ class ResolveBitrix24OpenLinesIdentityDecisionAction
             }
 
             $chatId = $this->nonEmptyScalarString(data_get($item, 'session.CHAT_ID'));
+            $connectorUserId = $this->nonEmptyScalarString(data_get($item, 'user'));
 
-            if ($chatId === $expectedResolvedBitrixChatId) {
+            if ($chatId !== null) {
+                if ($expectedResolvedBitrixChatId !== null && $chatId === $expectedResolvedBitrixChatId) {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if ($expectedConnectorUserId !== null && $connectorUserId === $expectedConnectorUserId) {
                 return true;
             }
         }
