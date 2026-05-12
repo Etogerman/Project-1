@@ -4,6 +4,9 @@ namespace App\Services\Bots;
 
 use App\Models\BotConstructorBlock;
 use App\Models\BotConstructorBlockRun;
+use App\Models\BotConstructorDialogState;
+use App\Models\BotConstructorExecution;
+use App\Models\BotConstructorExecutionBlockRun;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
@@ -12,6 +15,7 @@ use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use App\Services\TelegramAccount\QueueTelegramAccountSystemReplyAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class ProcessBotConstructorBlocksAction
@@ -32,8 +36,9 @@ class ProcessBotConstructorBlocksAction
         $message->loadMissing(['channel', 'contactIdentity', 'contact', 'dialog']);
 
         $channel = $message->channel;
+        $dialog = $message->dialog;
 
-        if (! $channel instanceof Channel) {
+        if (! $channel instanceof Channel || ! $dialog instanceof Dialog) {
             return false;
         }
 
@@ -43,14 +48,30 @@ class ProcessBotConstructorBlocksAction
             return false;
         }
 
-        foreach ($matchedBlocks as $block) {
-            $run = $this->createRunMarker($message, $block);
+        $execution = $this->runningInboundExecution($message);
 
-            if (! $run instanceof BotConstructorBlockRun) {
+        foreach ($matchedBlocks as $block) {
+            $runs = $this->prepareInboundBlockRuns($message, $channel, $dialog, $block, $execution);
+
+            if ($runs === null) {
                 continue;
             }
 
-            $this->executeBlock($message, $channel, $block, $run);
+            [$legacyRun, $executionBlockRun] = $runs;
+
+            if ($executionBlockRun->status === BotConstructorExecutionBlockRun::STATUS_PROCESSING) {
+                $this->executeBlock($message, $channel, $dialog, $block, $legacyRun, $executionBlockRun);
+            }
+        }
+
+        if (
+            $execution instanceof BotConstructorExecution
+            && $execution->status === BotConstructorExecution::STATUS_RUNNING
+            && ! $this->hasProcessingExecutionBlockRuns($execution)
+        ) {
+            $execution->forceFill([
+                'status' => BotConstructorExecution::STATUS_COMPLETED,
+            ])->save();
         }
 
         return true;
@@ -71,19 +92,56 @@ class ProcessBotConstructorBlocksAction
             ->values();
     }
 
-    private function createRunMarker(Message $message, BotConstructorBlock $block): ?BotConstructorBlockRun
-    {
+    /**
+     * @return array{0:BotConstructorBlockRun,1:BotConstructorExecutionBlockRun}|null
+     */
+    private function prepareInboundBlockRuns(
+        Message $message,
+        Channel $channel,
+        Dialog $dialog,
+        BotConstructorBlock $block,
+        ?BotConstructorExecution &$execution,
+    ): ?array {
         try {
-            $run = BotConstructorBlockRun::query()->firstOrCreate(
-                [
+            return DB::transaction(function () use ($message, $channel, $dialog, $block, &$execution): ?array {
+                $legacyRun = BotConstructorBlockRun::query()
+                    ->where('inbound_message_id', $message->id)
+                    ->where('bot_constructor_block_id', $block->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($legacyRun instanceof BotConstructorBlockRun) {
+                    if ($this->hasExecutionTrace($message, $block)) {
+                        return null;
+                    }
+
+                    $execution = $this->ensureExecution($execution, $message, $channel, $dialog);
+
+                    return [
+                        $legacyRun,
+                        $this->createRecoveryExecutionBlockRun($execution, $dialog, $channel, $block, $legacyRun),
+                    ];
+                }
+
+                $execution = $this->ensureExecution($execution, $message, $channel, $dialog);
+                $legacyRun = BotConstructorBlockRun::query()->create([
                     'inbound_message_id' => $message->id,
                     'bot_constructor_block_id' => $block->id,
-                ],
-                [
                     'status' => BotConstructorBlockRun::STATUS_FAILED,
                     'error_message' => self::STARTED_BUT_NOT_FINISHED,
-                ],
-            );
+                ]);
+                $executionBlockRun = $this->createExecutionBlockRun(
+                    $execution,
+                    $dialog,
+                    $channel,
+                    $block,
+                    BotConstructorExecutionBlockRun::STATUS_PROCESSING,
+                    null,
+                    now(),
+                );
+
+                return [$legacyRun, $executionBlockRun];
+            });
         } catch (QueryException $exception) {
             if ($this->wasUniqueConstraintViolation($exception)) {
                 return null;
@@ -91,23 +149,143 @@ class ProcessBotConstructorBlocksAction
 
             throw $exception;
         }
+    }
 
-        return $run->wasRecentlyCreated ? $run : null;
+    private function hasExecutionTrace(Message $message, BotConstructorBlock $block): bool
+    {
+        return BotConstructorExecutionBlockRun::query()
+            ->where('bot_constructor_block_id', $block->id)
+            ->whereHas('execution', function ($query) use ($message): void {
+                $query->where('root_inbound_message_id', $message->id);
+            })
+            ->exists();
+    }
+
+    private function ensureExecution(
+        ?BotConstructorExecution $execution,
+        Message $message,
+        Channel $channel,
+        Dialog $dialog,
+    ): BotConstructorExecution {
+        if ($execution instanceof BotConstructorExecution) {
+            return $execution;
+        }
+
+        $existingExecution = $this->runningInboundExecution($message, true);
+
+        if ($existingExecution instanceof BotConstructorExecution) {
+            return $existingExecution;
+        }
+
+        return BotConstructorExecution::query()->create([
+            'root_inbound_message_id' => $message->id,
+            'parent_execution_id' => null,
+            'started_by_arrow_run_id' => null,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'trigger_type' => BotConstructorExecution::TRIGGER_INBOUND,
+            'auto_transition_count' => 0,
+            'next_sequence_number' => 1,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+    }
+
+    private function runningInboundExecution(Message $message, bool $lock = false): ?BotConstructorExecution
+    {
+        $query = BotConstructorExecution::query()
+            ->where('root_inbound_message_id', $message->id)
+            ->where('trigger_type', BotConstructorExecution::TRIGGER_INBOUND)
+            ->where('status', BotConstructorExecution::STATUS_RUNNING);
+
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        return $query->first();
+    }
+
+    private function hasProcessingExecutionBlockRuns(BotConstructorExecution $execution): bool
+    {
+        return BotConstructorExecutionBlockRun::query()
+            ->where('bot_constructor_execution_id', $execution->id)
+            ->where('status', BotConstructorExecutionBlockRun::STATUS_PROCESSING)
+            ->exists();
+    }
+
+    private function createExecutionBlockRun(
+        BotConstructorExecution $execution,
+        Dialog $dialog,
+        Channel $channel,
+        BotConstructorBlock $block,
+        string $status,
+        ?string $errorMessage = null,
+        mixed $processingStartedAt = null,
+        ?int $outboundMessageId = null,
+    ): BotConstructorExecutionBlockRun {
+        $lockedExecution = BotConstructorExecution::query()
+            ->whereKey($execution->id)
+            ->lockForUpdate()
+            ->firstOrFail();
+        $sequenceNumber = (int) $lockedExecution->next_sequence_number;
+
+        $lockedExecution->forceFill([
+            'next_sequence_number' => $sequenceNumber + 1,
+        ])->save();
+
+        $execution->setRawAttributes($lockedExecution->getAttributes(), true);
+
+        return BotConstructorExecutionBlockRun::query()->create([
+            'bot_constructor_execution_id' => $lockedExecution->id,
+            'bot_constructor_block_id' => $block->id,
+            'bot_constructor_arrow_run_id' => null,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'sequence_number' => $sequenceNumber,
+            'status' => $status,
+            'outbound_message_id' => $outboundMessageId,
+            'processing_started_at' => $processingStartedAt,
+            'error_message' => $errorMessage,
+        ]);
+    }
+
+    private function createRecoveryExecutionBlockRun(
+        BotConstructorExecution $execution,
+        Dialog $dialog,
+        Channel $channel,
+        BotConstructorBlock $block,
+        BotConstructorBlockRun $legacyRun,
+    ): BotConstructorExecutionBlockRun {
+        return $this->createExecutionBlockRun(
+            $execution,
+            $dialog,
+            $channel,
+            $block,
+            BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN,
+            'Старый факт обработки уже существовал, trace восстановлен после частичного сбоя.',
+            null,
+            $legacyRun->outbound_message_id === null ? null : (int) $legacyRun->outbound_message_id,
+        );
     }
 
     private function executeBlock(
         Message $message,
         Channel $channel,
+        Dialog $dialog,
         BotConstructorBlock $block,
         BotConstructorBlockRun $run,
+        BotConstructorExecutionBlockRun $executionBlockRun,
     ): void {
         $replyText = (string) $block->response_text;
 
         if (BotConstructorBlock::isNoReply($replyText)) {
-            $run->forceFill([
-                'status' => BotConstructorBlockRun::STATUS_NO_REPLY,
-                'error_message' => null,
-            ])->save();
+            $this->markSucceeded(
+                $run,
+                $executionBlockRun,
+                $dialog,
+                $block,
+                BotConstructorBlockRun::STATUS_NO_REPLY,
+                BotConstructorExecutionBlockRun::STATUS_NO_REPLY,
+            );
 
             $this->channelActivityLogger->info(
                 $channel,
@@ -120,7 +298,11 @@ class ProcessBotConstructorBlocksAction
         }
 
         if (! $channel->isReadyForConstructorAutoReplies()) {
-            $this->markFailed($run, 'Канал сейчас не готов к отправке ответа: '.$channel->getHealthStatusLabel());
+            $this->markFailed(
+                $run,
+                $executionBlockRun,
+                'Канал сейчас не готов к отправке ответа: '.$channel->getHealthStatusLabel(),
+            );
 
             $this->channelActivityLogger->info(
                 $channel,
@@ -136,7 +318,7 @@ class ProcessBotConstructorBlocksAction
 
         try {
             if ($this->shouldQueueThroughTelegramAccountGateway($channel)) {
-                $this->queueTelegramAccountGatewayReply($message, $channel, $block, $run, $replyText);
+                $this->queueTelegramAccountGatewayReply($message, $channel, $dialog, $block, $run, $executionBlockRun, $replyText);
 
                 return;
             }
@@ -146,6 +328,7 @@ class ProcessBotConstructorBlocksAction
             if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
                 $this->markFailed(
                     $run,
+                    $executionBlockRun,
                     $this->safeErrorMessage($sendResult->routeStatus->blockedReason
                         ?? $sendResult->routeStatus->label
                         ?? 'Маршрут ответа недоступен.', $channel),
@@ -171,11 +354,15 @@ class ProcessBotConstructorBlocksAction
                 $sendResult->dialog instanceof Dialog ? $sendResult->dialog : null,
             );
 
-            $run->forceFill([
-                'outbound_message_id' => $outboundMessage->id,
-                'status' => BotConstructorBlockRun::STATUS_SENT,
-                'error_message' => null,
-            ])->save();
+            $this->markSucceeded(
+                $run,
+                $executionBlockRun,
+                $dialog,
+                $block,
+                BotConstructorBlockRun::STATUS_SENT,
+                BotConstructorExecutionBlockRun::STATUS_SENT,
+                $outboundMessage->id,
+            );
 
             $channel->markReplySent();
 
@@ -192,7 +379,7 @@ class ProcessBotConstructorBlocksAction
             $safeErrorMessage = $this->safeErrorMessage($throwable->getMessage(), $channel);
 
             $channel->markError($safeErrorMessage);
-            $this->markFailed($run, $safeErrorMessage);
+            $this->markFailed($run, $executionBlockRun, $safeErrorMessage);
 
             $this->channelActivityLogger->error(
                 $channel,
@@ -208,14 +395,16 @@ class ProcessBotConstructorBlocksAction
     private function queueTelegramAccountGatewayReply(
         Message $message,
         Channel $channel,
+        Dialog $dialog,
         BotConstructorBlock $block,
         BotConstructorBlockRun $run,
+        BotConstructorExecutionBlockRun $executionBlockRun,
         string $replyText,
     ): void {
         $routeDialog = $this->resolveReplyDialog($message);
 
         if (! $routeDialog instanceof Dialog) {
-            $this->markFailed($run, 'Маршрут ответа недоступен.');
+            $this->markFailed($run, $executionBlockRun, 'Маршрут ответа недоступен.');
 
             $this->channelActivityLogger->info(
                 $channel,
@@ -235,6 +424,7 @@ class ProcessBotConstructorBlocksAction
         if (! $routeStatus->isSendable) {
             $this->markFailed(
                 $run,
+                $executionBlockRun,
                 $this->safeErrorMessage($routeStatus->blockedReason
                     ?? $routeStatus->label
                     ?? 'Маршрут ответа недоступен.', $channel),
@@ -260,11 +450,15 @@ class ProcessBotConstructorBlocksAction
             Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
         );
 
-        $run->forceFill([
-            'outbound_message_id' => $outboundMessage->id,
-            'status' => BotConstructorBlockRun::STATUS_SENT,
-            'error_message' => null,
-        ])->save();
+        $this->markSucceeded(
+            $run,
+            $executionBlockRun,
+            $dialog,
+            $block,
+            BotConstructorBlockRun::STATUS_SENT,
+            BotConstructorExecutionBlockRun::STATUS_SENT,
+            $outboundMessage->id,
+        );
 
         $this->channelActivityLogger->info(
             $channel,
@@ -302,12 +496,58 @@ class ProcessBotConstructorBlocksAction
             && $channel->platform === Channel::PLATFORM_TELEGRAM;
     }
 
-    private function markFailed(BotConstructorBlockRun $run, string $message): void
-    {
-        $run->forceFill([
-            'status' => BotConstructorBlockRun::STATUS_FAILED,
-            'error_message' => mb_substr(trim($message), 0, 1000),
-        ])->save();
+    private function markSucceeded(
+        BotConstructorBlockRun $run,
+        BotConstructorExecutionBlockRun $executionBlockRun,
+        Dialog $dialog,
+        BotConstructorBlock $block,
+        string $legacyStatus,
+        string $executionStatus,
+        ?int $outboundMessageId = null,
+    ): void {
+        DB::transaction(function () use ($run, $executionBlockRun, $dialog, $block, $legacyStatus, $executionStatus, $outboundMessageId): void {
+            $run->forceFill([
+                'outbound_message_id' => $outboundMessageId,
+                'status' => $legacyStatus,
+                'error_message' => null,
+            ])->save();
+
+            $executionBlockRun->forceFill([
+                'outbound_message_id' => $outboundMessageId,
+                'status' => $executionStatus,
+                'processing_started_at' => null,
+                'error_message' => null,
+            ])->save();
+
+            BotConstructorDialogState::query()->updateOrCreate(
+                ['dialog_id' => $dialog->id],
+                [
+                    'current_block_id' => $block->id,
+                    'last_execution_id' => $executionBlockRun->bot_constructor_execution_id,
+                ],
+            );
+        });
+    }
+
+    private function markFailed(
+        BotConstructorBlockRun $run,
+        BotConstructorExecutionBlockRun $executionBlockRun,
+        string $message,
+    ): void {
+        $safeMessage = mb_substr(trim($message), 0, 1000);
+
+        DB::transaction(function () use ($run, $executionBlockRun, $safeMessage): void {
+            $run->forceFill([
+                'status' => BotConstructorBlockRun::STATUS_FAILED,
+                'error_message' => $safeMessage,
+            ])->save();
+
+            $executionBlockRun->forceFill([
+                'status' => BotConstructorExecutionBlockRun::STATUS_FAILED,
+                'processing_started_at' => null,
+                'error_message' => $safeMessage,
+            ])->save();
+        });
     }
 
     private function safeErrorMessage(string $message, Channel $channel): string
