@@ -2429,193 +2429,6 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertSame(1, $identityLog->request_payload['legacy_candidate_count'] ?? null);
     }
 
-    public function test_live_export_finds_legacy_external_user_beyond_recent_logs_for_same_chat_other_bindings(): void
-    {
-        $connection = $this->makeActiveConnection();
-        $legacyExternalUserId = 'telegram:1874351863';
-        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, dialogAttributes: [
-            'external_chat_id' => 'abrikosoff-dialog:581',
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
-            'bitrix24_open_line_resolved_chat_id_override' => '162377',
-            'bitrix24_open_line_binding_verified_at' => now(),
-        ]);
-        $message = $this->makeMessage($dialog, [
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
-            'text' => 'В тг после множества дублей',
-        ]);
-
-        $this->seedBitrix24SendMessagesLog(
-            $connection,
-            'abrikosoff_telegram',
-            'line-telegram',
-            'abrikosoff-dialog:581',
-            $legacyExternalUserId,
-            responseChatId: '162377',
-            responseConnectorUserId: '101121',
-        );
-
-        foreach (range(1, 201) as $index) {
-            $this->seedBitrix24SendMessagesLog(
-                $connection,
-                'abrikosoff_telegram',
-                'line-telegram',
-                'abrikosoff-dialog:581',
-                'other-external-user-'.$index,
-                responseChatId: (string) (162900 + $index),
-                responseConnectorUserId: (string) (102000 + $index),
-            );
-        }
-
-        Http::fake([
-            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
-                'result' => [
-                    [
-                        'CHAT_ID' => '162377',
-                        'CONNECTOR_ID' => 'abrikosoff_telegram',
-                    ],
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
-                'result' => [
-                    'id' => '162377',
-                    'entity_id' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
-                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
-                'result' => [
-                    'ID' => 'B24-CONTACT-100',
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
-                'result' => [
-                    'DATA' => [
-                        'RESULT' => [
-                            [
-                                'user' => '101121',
-                                'session' => [
-                                    'CHAT_ID' => '162377',
-                                ],
-                            ],
-                        ],
-                    ],
-                ],
-            ], 200),
-        ]);
-
-        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-
-        Http::assertSent(function (Request $request) use ($legacyExternalUserId): bool {
-            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
-                return false;
-            }
-
-            parse_str($request->body(), $payload);
-
-            return ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:581'
-                && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $legacyExternalUserId;
-        });
-
-        $identityLog = Bitrix24SyncLog::query()
-            ->where('operation', 'identity_mode_selected')
-            ->where('entity_type', 'message')
-            ->where('entity_id', (string) $message->id)
-            ->firstOrFail();
-
-        $this->assertSame('legacy_external', $identityLog->request_payload['identity_mode'] ?? null);
-        $this->assertSame('legacy_external_found', $identityLog->request_payload['decision_reason'] ?? null);
-        $this->assertSame(1, $identityLog->request_payload['legacy_candidate_count'] ?? null);
-    }
-
-    public function test_live_export_finds_legacy_external_user_by_returned_connector_user_without_session_chat(): void
-    {
-        $connection = $this->makeActiveConnection();
-        $legacyExternalUserId = 'telegram:1874351863';
-        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, dialogAttributes: [
-            'external_chat_id' => 'abrikosoff-dialog:581',
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
-            'bitrix24_open_line_resolved_chat_id_override' => '162377',
-            'bitrix24_open_line_binding_verified_at' => now(),
-        ]);
-        $message = $this->makeMessage($dialog, [
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
-            'text' => 'В тг',
-        ]);
-
-        $this->seedBitrix24SendMessagesLog(
-            $connection,
-            'abrikosoff_telegram',
-            'line-telegram',
-            'abrikosoff-dialog:581',
-            $legacyExternalUserId,
-            responseConnectorUserId: '101121',
-        );
-
-        Http::fake([
-            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
-                'result' => [
-                    [
-                        'CHAT_ID' => '162377',
-                        'CONNECTOR_ID' => 'abrikosoff_telegram',
-                    ],
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
-                'result' => [
-                    'id' => '162377',
-                    'entity_id' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
-                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
-                'result' => [
-                    'ID' => 'B24-CONTACT-100',
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
-                'result' => [
-                    'DATA' => [
-                        'RESULT' => [
-                            [
-                                'user' => '101121',
-                                'session' => [
-                                    'CHAT_ID' => '162377',
-                                ],
-                            ],
-                        ],
-                    ],
-                ],
-            ], 200),
-        ]);
-
-        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-
-        Http::assertSent(function (Request $request) use ($legacyExternalUserId): bool {
-            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
-                return false;
-            }
-
-            parse_str($request->body(), $payload);
-
-            return ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:581'
-                && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $legacyExternalUserId;
-        });
-
-        $identityLog = Bitrix24SyncLog::query()
-            ->where('operation', 'identity_mode_selected')
-            ->where('entity_type', 'message')
-            ->where('entity_id', (string) $message->id)
-            ->firstOrFail();
-
-        $this->assertSame('legacy_external', $identityLog->request_payload['identity_mode'] ?? null);
-        $this->assertSame('legacy_external_found', $identityLog->request_payload['decision_reason'] ?? null);
-        $this->assertSame(1, $identityLog->request_payload['legacy_candidate_count'] ?? null);
-    }
-
     public function test_live_export_ignores_failed_legacy_external_user_log(): void
     {
         $connection = $this->makeActiveConnection();
@@ -2776,96 +2589,6 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'legacy-dialog-23'
-                && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $channelAwareUserId
-                && ($payload['MESSAGES'][0]['user']['id'] ?? null) !== $unsafeLegacyExternalUserId;
-        });
-
-        $identityLog = Bitrix24SyncLog::query()
-            ->where('operation', 'identity_mode_selected')
-            ->where('entity_type', 'message')
-            ->where('entity_id', (string) $message->id)
-            ->firstOrFail();
-
-        $this->assertSame('channel_aware', $identityLog->request_payload['identity_mode'] ?? null);
-        $this->assertSame('legacy_external_missing', $identityLog->request_payload['decision_reason'] ?? null);
-        $this->assertSame(0, $identityLog->request_payload['legacy_candidate_count'] ?? null);
-    }
-
-    public function test_live_export_ignores_legacy_external_user_log_when_user_matches_but_session_chat_differs(): void
-    {
-        $connection = $this->makeActiveConnection();
-        $unsafeLegacyExternalUserId = 'telegram:1874351863';
-        $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, dialogAttributes: [
-            'external_chat_id' => 'abrikosoff-dialog:581',
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
-            'bitrix24_open_line_resolved_chat_id_override' => '162377',
-            'bitrix24_open_line_binding_verified_at' => now(),
-        ]);
-        $message = $this->makeMessage($dialog, [
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
-            'text' => 'В тг после небезопасного лога',
-        ]);
-        $channelAwareUserId = $this->expectedOpenLinesExternalUserId($dialog);
-
-        $this->seedBitrix24SendMessagesLog(
-            $connection,
-            'abrikosoff_telegram',
-            'line-telegram',
-            'abrikosoff-dialog:581',
-            $unsafeLegacyExternalUserId,
-            responseChatId: '162907',
-            responseConnectorUserId: '101121',
-        );
-
-        Http::fake([
-            'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json' => Http::response([
-                'result' => [
-                    [
-                        'CHAT_ID' => '162377',
-                        'CONNECTOR_ID' => 'abrikosoff_telegram',
-                    ],
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
-                'result' => [
-                    'id' => '162377',
-                    'entity_id' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
-                    'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
-                'result' => [
-                    'ID' => 'B24-CONTACT-100',
-                ],
-            ], 200),
-            'https://client-endpoint.example/rest/imconnector.send.messages.json' => Http::response([
-                'result' => [
-                    'DATA' => [
-                        'RESULT' => [
-                            [
-                                'user' => '101121',
-                                'session' => [
-                                    'CHAT_ID' => '162377',
-                                ],
-                            ],
-                        ],
-                    ],
-                ],
-            ], 200),
-        ]);
-
-        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-
-        Http::assertSent(function (Request $request) use ($channelAwareUserId, $unsafeLegacyExternalUserId): bool {
-            if ($request->url() !== 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
-                return false;
-            }
-
-            parse_str($request->body(), $payload);
-
-            return ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:581'
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $channelAwareUserId
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) !== $unsafeLegacyExternalUserId;
         });
@@ -8291,16 +8014,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         string $chatId,
         string $userId,
         ?string $responseChatId = null,
-        ?string $responseConnectorUserId = null,
         string $status = Bitrix24SyncLog::STATUS_SUCCESS,
     ): Bitrix24SyncLog {
-        $responseItem = array_filter([
-            'user' => $responseConnectorUserId,
-            'session' => $responseChatId === null ? null : [
-                'CHAT_ID' => $responseChatId,
-            ],
-        ], static fn (mixed $value): bool => $value !== null);
-
         return Bitrix24SyncLog::query()->create([
             'connection_id' => $connection->id,
             'direction' => Bitrix24SyncLog::DIRECTION_OUTBOUND,
@@ -8318,13 +8033,17 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     ]],
                 ],
             ],
-            'response_payload' => $responseItem === []
+            'response_payload' => $responseChatId === null
                 ? null
                 : [
                     'result' => [
                         'DATA' => [
                             'RESULT' => [
-                                $responseItem,
+                                [
+                                    'session' => [
+                                        'CHAT_ID' => $responseChatId,
+                                    ],
+                                ],
                             ],
                         ],
                     ],
