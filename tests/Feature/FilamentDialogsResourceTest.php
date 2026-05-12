@@ -537,6 +537,38 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('data-role="dialog-stage-select"', false);
     }
 
+    public function test_dialog_view_keeps_clickable_previous_stage_colored_as_completed(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $dialog->contact()->update([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $dialog->forceFill([
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPP,
+        ])->save();
+
+        $html = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-current-tone="primary"', false)
+            ->getContent();
+
+        $this->assertMatchesRegularExpression(
+            '~<button[^>]*data-role="dialog-stage-step"[^>]*data-state="completed"[^>]*data-tone="warning"[^>]*>\s*<span class="ac-dialog-stage-step__label">\s*МПЛ взял в работу\s*</span>~su',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '~<button[^>]*data-role="dialog-stage-step"[^>]*data-state="current"[^>]*data-tone="primary"[^>]*>\s*<span class="ac-dialog-stage-step__label">\s*Передан в МПП\s*</span>~su',
+            $html,
+        );
+    }
+
     public function test_dialog_view_uses_yellow_highlight_buttons_and_green_send_button(): void
     {
         $admin = User::factory()->create([
