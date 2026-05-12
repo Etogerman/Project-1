@@ -112,6 +112,11 @@ class ProcessBotConstructorScheduledArrowAction
             if ($this->processBotConstructorArrowsAction->blockRunSucceeded($blockRun)) {
                 $this->processBotConstructorArrowsAction->markArrowPassed($arrowRun);
                 $this->processBotConstructorArrowsAction->handle($childExecution, $dialog, $rootMessage, $targetBlock);
+            } elseif ($this->processBotConstructorArrowsAction->blockRunDeliveryUncertain($blockRun)) {
+                $this->processBotConstructorArrowsAction->markArrowDeliveryUncertain(
+                    $arrowRun,
+                    $blockRun->error_message ?: 'Доставка целевого блока не подтверждена.',
+                );
             } else {
                 $this->processBotConstructorArrowsAction->markArrowFailed(
                     $arrowRun,

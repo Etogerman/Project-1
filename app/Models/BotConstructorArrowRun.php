@@ -21,6 +21,8 @@ class BotConstructorArrowRun extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    public const STATUS_DELIVERY_UNCERTAIN = 'delivery_uncertain';
+
     public const STATUS_LIMIT_REACHED = 'limit_reached';
 
     /**
@@ -73,6 +75,7 @@ class BotConstructorArrowRun extends Model
             self::STATUS_PASSED,
             self::STATUS_CANCELLED,
             self::STATUS_FAILED,
+            self::STATUS_DELIVERY_UNCERTAIN,
             self::STATUS_LIMIT_REACHED,
         ];
     }
@@ -86,6 +89,7 @@ class BotConstructorArrowRun extends Model
             self::STATUS_SCHEDULED,
             self::STATUS_PROCESSING,
             self::STATUS_PASSED,
+            self::STATUS_DELIVERY_UNCERTAIN,
         ];
     }
 

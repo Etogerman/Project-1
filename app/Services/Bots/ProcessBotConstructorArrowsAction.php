@@ -29,15 +29,27 @@ class ProcessBotConstructorArrowsAction
         Dialog $dialog,
         Message $rootMessage,
         BotConstructorBlock $sourceBlock,
+        ?array $onlyArrowIds = null,
     ): void {
         $sourceBlock->loadMissing('sourceArrows.targetBlock');
 
-        $arrows = $sourceBlock->sourceArrows()
+        $arrowQuery = $sourceBlock->sourceArrows()
             ->active()
             ->with('targetBlock')
             ->orderBy('priority')
-            ->orderBy('id')
-            ->get();
+            ->orderBy('id');
+
+        if ($onlyArrowIds !== null) {
+            $onlyArrowIds = array_values(array_unique(array_map('intval', $onlyArrowIds)));
+
+            if ($onlyArrowIds === []) {
+                return;
+            }
+
+            $arrowQuery->whereIn('id', $onlyArrowIds);
+        }
+
+        $arrows = $arrowQuery->get();
 
         foreach ($arrows as $arrow) {
             $execution->refresh();
@@ -91,6 +103,15 @@ class ProcessBotConstructorArrowsAction
             if ($this->blockRunSucceeded($blockRun)) {
                 $this->markArrowPassed($arrowRun);
                 $this->handle($execution, $dialog, $rootMessage, $targetBlock);
+
+                continue;
+            }
+
+            if ($this->blockRunDeliveryUncertain($blockRun)) {
+                $this->markArrowDeliveryUncertain(
+                    $arrowRun,
+                    $blockRun->error_message ?: 'Доставка целевого блока не подтверждена.',
+                );
 
                 continue;
             }
@@ -404,12 +425,26 @@ class ProcessBotConstructorArrowsAction
         ])->save();
     }
 
+    public function markArrowDeliveryUncertain(BotConstructorArrowRun $arrowRun, string $errorMessage): void
+    {
+        $arrowRun->forceFill([
+            'status' => BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN,
+            'processing_started_at' => null,
+            'error_message' => $this->safeErrorMessage($errorMessage),
+        ])->save();
+    }
+
     public function blockRunSucceeded(BotConstructorExecutionBlockRun $blockRun): bool
     {
         return in_array($blockRun->status, [
             BotConstructorExecutionBlockRun::STATUS_SENT,
             BotConstructorExecutionBlockRun::STATUS_NO_REPLY,
         ], true);
+    }
+
+    public function blockRunDeliveryUncertain(BotConstructorExecutionBlockRun $blockRun): bool
+    {
+        return $blockRun->status === BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN;
     }
 
     private function safeErrorMessage(?string $message): ?string

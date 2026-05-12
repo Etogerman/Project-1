@@ -79,6 +79,10 @@ class ExecuteBotConstructorBlockAction
             return $executionBlockRun->fresh() ?? $executionBlockRun;
         }
 
+        $deliveryAccepted = false;
+        $blockFinalized = false;
+        $outboundMessageId = null;
+
         try {
             if ($this->shouldQueueThroughTelegramAccountGateway($channel)) {
                 return $this->queueTelegramAccountGatewayReply($rootMessage, $channel, $dialog, $block, $legacyRun, $executionBlockRun, $replyText);
@@ -108,12 +112,14 @@ class ExecuteBotConstructorBlockAction
                 return $executionBlockRun->fresh() ?? $executionBlockRun;
             }
 
+            $deliveryAccepted = true;
             $outboundMessage = $this->storeOutboundBotConstructorBlockMessageAction->handle(
                 $channel,
                 $rootMessage,
                 $sendResult->deliveryResult,
                 $sendResult->dialog instanceof Dialog ? $sendResult->dialog : $dialog,
             );
+            $outboundMessageId = $outboundMessage->id;
 
             $this->markSucceeded(
                 $legacyRun,
@@ -124,6 +130,7 @@ class ExecuteBotConstructorBlockAction
                 BotConstructorExecutionBlockRun::STATUS_SENT,
                 $outboundMessage->id,
             );
+            $blockFinalized = true;
 
             $channel->markReplySent();
 
@@ -139,7 +146,30 @@ class ExecuteBotConstructorBlockAction
         } catch (Throwable $throwable) {
             $safeErrorMessage = $this->safeErrorMessage($throwable->getMessage(), $channel);
 
+            if ($blockFinalized) {
+                report($throwable);
+
+                return $executionBlockRun->fresh() ?? $executionBlockRun;
+            }
+
             $channel->markError($safeErrorMessage);
+
+            if ($deliveryAccepted) {
+                $this->markDeliveryUncertain($legacyRun, $executionBlockRun, $safeErrorMessage, $outboundMessageId);
+
+                $this->channelActivityLogger->warning(
+                    $channel,
+                    'bot.constructor_block_delivery_uncertain',
+                    'Стартовое условие отправило ответ, но локальная фиксация доставки не подтверждена.',
+                    $this->logContext($rootMessage, $block) + [
+                        'error' => $safeErrorMessage,
+                        'outbound_message_id' => $outboundMessageId,
+                    ],
+                );
+
+                return $executionBlockRun->fresh() ?? $executionBlockRun;
+            }
+
             $this->markFailed($legacyRun, $executionBlockRun, $safeErrorMessage);
 
             $this->channelActivityLogger->error(
@@ -164,58 +194,91 @@ class ExecuteBotConstructorBlockAction
         BotConstructorExecutionBlockRun $executionBlockRun,
         string $replyText,
     ): BotConstructorExecutionBlockRun {
-        $routeStatus = $this->resolveDialogRouteStatusAction->handle($dialog);
+        $outboundMessage = null;
+        $blockFinalized = false;
 
-        if (! $routeStatus->isSendable) {
-            $this->markFailed(
+        try {
+            $routeStatus = $this->resolveDialogRouteStatusAction->handle($dialog);
+
+            if (! $routeStatus->isSendable) {
+                $this->markFailed(
+                    $legacyRun,
+                    $executionBlockRun,
+                    $this->safeErrorMessage($routeStatus->blockedReason
+                        ?? $routeStatus->label
+                        ?? 'Маршрут ответа недоступен.', $channel),
+                );
+
+                $this->channelActivityLogger->info(
+                    $channel,
+                    'bot.constructor_block_failed',
+                    'Стартовое условие сработало, но ответ не отправлен.',
+                    $this->logContext($rootMessage, $block) + [
+                        'route_status_code' => $routeStatus->code,
+                        'blocked_reason' => $routeStatus->blockedReason,
+                    ],
+                );
+
+                return $executionBlockRun->fresh() ?? $executionBlockRun;
+            }
+
+            $outboundMessage = $this->queueTelegramAccountSystemReplyAction->handle(
+                $dialog,
+                $replyText,
+                $rootMessage,
+                Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
+            );
+
+            $this->markSucceeded(
                 $legacyRun,
                 $executionBlockRun,
-                $this->safeErrorMessage($routeStatus->blockedReason
-                    ?? $routeStatus->label
-                    ?? 'Маршрут ответа недоступен.', $channel),
+                $dialog,
+                $block,
+                BotConstructorBlockRun::STATUS_SENT,
+                BotConstructorExecutionBlockRun::STATUS_SENT,
+                $outboundMessage->id,
             );
+            $blockFinalized = true;
 
             $this->channelActivityLogger->info(
                 $channel,
-                'bot.constructor_block_failed',
-                'Стартовое условие сработало, но ответ не отправлен.',
+                'bot.constructor_block_queued',
+                'Стартовое условие поставило ответ в очередь Gateway.',
                 $this->logContext($rootMessage, $block) + [
-                    'route_status_code' => $routeStatus->code,
-                    'blocked_reason' => $routeStatus->blockedReason,
+                    'outbound_message_id' => $outboundMessage->id,
+                    'outgoing_message_id' => data_get($outboundMessage->raw_payload, 'outgoing_message_id'),
                 ],
             );
 
             return $executionBlockRun->fresh() ?? $executionBlockRun;
+        } catch (Throwable $throwable) {
+            if ($blockFinalized) {
+                report($throwable);
+
+                return $executionBlockRun->fresh() ?? $executionBlockRun;
+            }
+
+            if ($outboundMessage instanceof Message) {
+                $safeErrorMessage = $this->safeErrorMessage($throwable->getMessage(), $channel);
+
+                $this->markDeliveryUncertain($legacyRun, $executionBlockRun, $safeErrorMessage, $outboundMessage->id);
+
+                $this->channelActivityLogger->warning(
+                    $channel,
+                    'bot.constructor_block_delivery_uncertain',
+                    'Стартовое условие поставило ответ в очередь Gateway, но локальная фиксация доставки не подтверждена.',
+                    $this->logContext($rootMessage, $block) + [
+                        'error' => $safeErrorMessage,
+                        'outbound_message_id' => $outboundMessage->id,
+                        'outgoing_message_id' => data_get($outboundMessage->raw_payload, 'outgoing_message_id'),
+                    ],
+                );
+
+                return $executionBlockRun->fresh() ?? $executionBlockRun;
+            }
+
+            throw $throwable;
         }
-
-        $outboundMessage = $this->queueTelegramAccountSystemReplyAction->handle(
-            $dialog,
-            $replyText,
-            $rootMessage,
-            Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
-        );
-
-        $this->markSucceeded(
-            $legacyRun,
-            $executionBlockRun,
-            $dialog,
-            $block,
-            BotConstructorBlockRun::STATUS_SENT,
-            BotConstructorExecutionBlockRun::STATUS_SENT,
-            $outboundMessage->id,
-        );
-
-        $this->channelActivityLogger->info(
-            $channel,
-            'bot.constructor_block_queued',
-            'Стартовое условие поставило ответ в очередь Gateway.',
-            $this->logContext($rootMessage, $block) + [
-                'outbound_message_id' => $outboundMessage->id,
-                'outgoing_message_id' => data_get($outboundMessage->raw_payload, 'outgoing_message_id'),
-            ],
-        );
-
-        return $executionBlockRun->fresh() ?? $executionBlockRun;
     }
 
     private function shouldQueueThroughTelegramAccountGateway(Channel $channel): bool
@@ -276,6 +339,34 @@ class ExecuteBotConstructorBlockAction
 
             $executionBlockRun->forceFill([
                 'status' => BotConstructorExecutionBlockRun::STATUS_FAILED,
+                'processing_started_at' => null,
+                'error_message' => $safeMessage,
+            ])->save();
+        });
+
+        return $executionBlockRun->fresh() ?? $executionBlockRun;
+    }
+
+    private function markDeliveryUncertain(
+        ?BotConstructorBlockRun $legacyRun,
+        BotConstructorExecutionBlockRun $executionBlockRun,
+        string $message,
+        ?int $outboundMessageId = null,
+    ): BotConstructorExecutionBlockRun {
+        $safeMessage = mb_substr(trim($message), 0, 1000);
+
+        DB::transaction(function () use ($legacyRun, $executionBlockRun, $safeMessage, $outboundMessageId): void {
+            if ($legacyRun instanceof BotConstructorBlockRun) {
+                $legacyRun->forceFill([
+                    'outbound_message_id' => $outboundMessageId,
+                    'status' => BotConstructorBlockRun::STATUS_DELIVERY_UNCERTAIN,
+                    'error_message' => $safeMessage,
+                ])->save();
+            }
+
+            $executionBlockRun->forceFill([
+                'outbound_message_id' => $outboundMessageId,
+                'status' => BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN,
                 'processing_started_at' => null,
                 'error_message' => $safeMessage,
             ])->save();

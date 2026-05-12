@@ -17,6 +17,8 @@ class BotConstructorBlockRun extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    public const STATUS_DELIVERY_UNCERTAIN = 'delivery_uncertain';
+
     /**
      * @var list<string>
      */
@@ -52,6 +54,7 @@ class BotConstructorBlockRun extends Model
             self::STATUS_SENT,
             self::STATUS_NO_REPLY,
             self::STATUS_FAILED,
+            self::STATUS_DELIVERY_UNCERTAIN,
         ];
     }
 

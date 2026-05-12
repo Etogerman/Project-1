@@ -67,7 +67,7 @@ class BotConstructorArrow extends Model
     protected static function booted(): void
     {
         static::saving(function (BotConstructorArrow $arrow): void {
-            $arrow->delay_value = max(0, (int) $arrow->delay_value);
+            $arrow->delay_value = (int) $arrow->delay_value;
             $arrow->priority = (int) $arrow->priority;
             $arrow->delay_unit = trim((string) $arrow->delay_unit);
             $arrow->condition_match_type = trim((string) $arrow->condition_match_type);
@@ -176,6 +176,12 @@ class BotConstructorArrow extends Model
         if (! in_array($this->delay_unit, self::delayUnits(), true)) {
             throw ValidationException::withMessages([
                 'delay_unit' => 'Выберите поддерживаемую единицу задержки.',
+            ]);
+        }
+
+        if ((int) $this->delay_value < 0) {
+            throw ValidationException::withMessages([
+                'delay_value' => 'Задержка не может быть отрицательной.',
             ]);
         }
 

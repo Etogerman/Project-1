@@ -91,6 +91,15 @@ class BotConstructorSlice2SchemaTest extends TestCase
             ]),
             'delay_value',
         );
+
+        $this->assertValidationFails(
+            fn () => BotConstructorArrow::factory()->create([
+                'source_block_id' => $block->id,
+                'target_block_id' => $block->id,
+                'delay_value' => -1,
+            ]),
+            'delay_value',
+        );
     }
 
     public function test_runtime_trace_models_can_be_persisted_and_related(): void

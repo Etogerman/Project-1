@@ -47,7 +47,11 @@ class ProcessBotConstructorBlocksAction
             $runs = $this->prepareInboundBlockRuns($message, $channel, $dialog, $block, $execution);
 
             if ($runs === null) {
-                $this->processMissingOutgoingArrowsForExistingTrace($message, $dialog, $block);
+                $recoveredExecution = $this->processMissingOutgoingArrowsForExistingTrace($message, $dialog, $block);
+
+                if ($recoveredExecution instanceof BotConstructorExecution) {
+                    $execution = $recoveredExecution;
+                }
 
                 continue;
             }
@@ -170,27 +174,31 @@ class ProcessBotConstructorBlocksAction
         Message $message,
         Dialog $dialog,
         BotConstructorBlock $block,
-    ): void {
+    ): ?BotConstructorExecution {
         if (! $block->sourceArrows()->active()->exists()) {
-            return;
+            return null;
         }
 
         $executionBlockRun = $this->successfulDirectExecutionBlockRun($message, $block);
         $execution = $executionBlockRun?->execution;
 
         if (! $executionBlockRun instanceof BotConstructorExecutionBlockRun || ! $execution instanceof BotConstructorExecution) {
-            return;
+            return null;
         }
 
         if ($execution->status !== BotConstructorExecution::STATUS_RUNNING) {
-            return;
+            return null;
         }
 
-        if ($this->hasOutgoingArrowRuns($executionBlockRun)) {
-            return;
+        $missingArrowIds = $this->missingOutgoingArrowIds($executionBlockRun);
+
+        if ($missingArrowIds === []) {
+            return $execution;
         }
 
-        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block);
+        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds);
+
+        return $execution;
     }
 
     private function successfulDirectExecutionBlockRun(
@@ -214,12 +222,30 @@ class ProcessBotConstructorBlocksAction
             ->first();
     }
 
-    private function hasOutgoingArrowRuns(BotConstructorExecutionBlockRun $executionBlockRun): bool
+    /**
+     * @return list<int>
+     */
+    private function missingOutgoingArrowIds(BotConstructorExecutionBlockRun $executionBlockRun): array
     {
-        return BotConstructorArrowRun::query()
+        $expectedArrowIds = $executionBlockRun->block?->sourceArrows()
+            ->active()
+            ->pluck('id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all() ?? [];
+
+        if ($expectedArrowIds === []) {
+            return [];
+        }
+
+        $existingArrowIds = BotConstructorArrowRun::query()
             ->where('bot_constructor_execution_id', $executionBlockRun->bot_constructor_execution_id)
             ->where('source_block_id', $executionBlockRun->bot_constructor_block_id)
-            ->exists();
+            ->whereIn('bot_constructor_arrow_id', $expectedArrowIds)
+            ->pluck('bot_constructor_arrow_id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
+
+        return array_values(array_diff($expectedArrowIds, $existingArrowIds));
     }
 
     private function shouldProcessOutgoingArrows(BotConstructorExecutionBlockRun $run): bool
