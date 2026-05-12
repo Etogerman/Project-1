@@ -54,15 +54,22 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
 
                 $arrow = BotConstructorArrow::withTrashed()->find($run->bot_constructor_arrow_id);
                 $isCancelled = ! $arrow instanceof BotConstructorArrow || $arrow->trashed() || ! $arrow->is_active;
+                $hasUncertainDelivery = $this->hasRelatedUncertainDeliveryBlockRun($run);
+                $status = match (true) {
+                    $isCancelled => BotConstructorArrowRun::STATUS_CANCELLED,
+                    $hasUncertainDelivery => BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN,
+                    default => BotConstructorArrowRun::STATUS_FAILED,
+                };
+                $errorMessage = match ($status) {
+                    BotConstructorArrowRun::STATUS_CANCELLED => 'Стрелка удалена или выключена во время выполнения.',
+                    BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN => 'Доставка целевого блока не подтверждена: выполнение стрелки зависло и было остановлено по таймауту.',
+                    default => 'Выполнение стрелки зависло и было остановлено по таймауту.',
+                };
 
                 $run->forceFill([
-                    'status' => $isCancelled
-                        ? BotConstructorArrowRun::STATUS_CANCELLED
-                        : BotConstructorArrowRun::STATUS_FAILED,
+                    'status' => $status,
                     'processing_started_at' => null,
-                    'error_message' => $isCancelled
-                        ? 'Стрелка удалена или выключена во время выполнения.'
-                        : 'Выполнение стрелки зависло и было остановлено по таймауту.',
+                    'error_message' => $errorMessage,
                 ])->save();
 
                 $this->failRelatedExecution($run);
@@ -71,6 +78,17 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
         }
 
         return $count;
+    }
+
+    private function hasRelatedUncertainDeliveryBlockRun(BotConstructorArrowRun $run): bool
+    {
+        return BotConstructorExecutionBlockRun::query()
+            ->where('bot_constructor_arrow_run_id', $run->id)
+            ->whereIn('status', [
+                BotConstructorExecutionBlockRun::STATUS_PROCESSING,
+                BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN,
+            ])
+            ->exists();
     }
 
     private function cleanupBlockRuns(mixed $threshold): int

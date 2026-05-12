@@ -227,11 +227,22 @@ class ProcessBotConstructorBlocksAction
      */
     private function missingOutgoingArrowIds(BotConstructorExecutionBlockRun $executionBlockRun): array
     {
-        $expectedArrowIds = $executionBlockRun->block?->sourceArrows()
-            ->active()
+        $block = $executionBlockRun->block;
+
+        if (! $block instanceof BotConstructorBlock) {
+            return [];
+        }
+
+        $expectedArrowIdsQuery = $block->sourceArrows()->active();
+
+        if ($executionBlockRun->created_at !== null) {
+            $expectedArrowIdsQuery->where('created_at', '<=', $executionBlockRun->created_at);
+        }
+
+        $expectedArrowIds = $expectedArrowIdsQuery
             ->pluck('id')
             ->map(fn (mixed $id): int => (int) $id)
-            ->all() ?? [];
+            ->all();
 
         if ($expectedArrowIds === []) {
             return [];
