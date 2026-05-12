@@ -63,3 +63,11 @@ Artisan::command('channels:check-connections {--channel= : ID одного ка�
 Schedule::command('channels:check-connections --limit=100')
     ->everyMinute()
     ->withoutOverlapping();
+
+Schedule::command('bot-constructor:run-scheduled-arrows')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
+
+Schedule::command('bot-constructor:cleanup-processing-runs')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
