@@ -2,6 +2,7 @@
 
 namespace App\Services\Bots;
 
+use App\Models\BotConstructorArrowRun;
 use App\Models\BotConstructorBlock;
 use App\Models\BotConstructorBlockRun;
 use App\Models\BotConstructorExecution;
@@ -46,6 +47,8 @@ class ProcessBotConstructorBlocksAction
             $runs = $this->prepareInboundBlockRuns($message, $channel, $dialog, $block, $execution);
 
             if ($runs === null) {
+                $this->processMissingOutgoingArrowsForExistingTrace($message, $dialog, $block);
+
                 continue;
             }
 
@@ -160,6 +163,62 @@ class ProcessBotConstructorBlocksAction
             ->whereHas('execution', function ($query) use ($message): void {
                 $query->where('root_inbound_message_id', $message->id);
             })
+            ->exists();
+    }
+
+    private function processMissingOutgoingArrowsForExistingTrace(
+        Message $message,
+        Dialog $dialog,
+        BotConstructorBlock $block,
+    ): void {
+        if (! $block->sourceArrows()->active()->exists()) {
+            return;
+        }
+
+        $executionBlockRun = $this->successfulDirectExecutionBlockRun($message, $block);
+        $execution = $executionBlockRun?->execution;
+
+        if (! $executionBlockRun instanceof BotConstructorExecutionBlockRun || ! $execution instanceof BotConstructorExecution) {
+            return;
+        }
+
+        if ($execution->status !== BotConstructorExecution::STATUS_RUNNING) {
+            return;
+        }
+
+        if ($this->hasOutgoingArrowRuns($executionBlockRun)) {
+            return;
+        }
+
+        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block);
+    }
+
+    private function successfulDirectExecutionBlockRun(
+        Message $message,
+        BotConstructorBlock $block,
+    ): ?BotConstructorExecutionBlockRun {
+        return BotConstructorExecutionBlockRun::query()
+            ->with('execution')
+            ->where('bot_constructor_block_id', $block->id)
+            ->whereNull('bot_constructor_arrow_run_id')
+            ->whereIn('status', [
+                BotConstructorExecutionBlockRun::STATUS_SENT,
+                BotConstructorExecutionBlockRun::STATUS_NO_REPLY,
+            ])
+            ->whereHas('execution', function ($query) use ($message): void {
+                $query
+                    ->where('root_inbound_message_id', $message->id)
+                    ->where('trigger_type', BotConstructorExecution::TRIGGER_INBOUND);
+            })
+            ->orderBy('id')
+            ->first();
+    }
+
+    private function hasOutgoingArrowRuns(BotConstructorExecutionBlockRun $executionBlockRun): bool
+    {
+        return BotConstructorArrowRun::query()
+            ->where('bot_constructor_execution_id', $executionBlockRun->bot_constructor_execution_id)
+            ->where('source_block_id', $executionBlockRun->bot_constructor_block_id)
             ->exists();
     }
 
