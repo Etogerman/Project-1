@@ -2758,6 +2758,10 @@
         color: var(--stage-active-text);
     }
 
+    .ac-dialog-stage-step[data-state="completed"]:not(:disabled) {
+        cursor: pointer;
+    }
+
     .ac-dialog-stage-step[data-state="current"] {
         --stage-fill-top: var(--stage-active-top);
         --stage-fill-bottom: var(--stage-active-bottom);

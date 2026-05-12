@@ -82,9 +82,9 @@
                             @php
                                 $stageState = $stageStep['is_current']
                                     ? 'current'
-                                    : ($stageStep['is_clickable']
-                                        ? 'available'
-                                        : ($stageStep['is_completed'] ? 'completed' : 'locked'));
+                                    : ($stageStep['is_completed']
+                                        ? 'completed'
+                                        : ($stageStep['is_clickable'] ? 'available' : 'locked'));
                             @endphp
                             <button
                                 type="button"
