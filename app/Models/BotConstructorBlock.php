@@ -159,6 +159,21 @@ class BotConstructorBlock extends Model
         return $this->hasMany(BotConstructorBlockRun::class);
     }
 
+    public function sourceArrows(): HasMany
+    {
+        return $this->hasMany(BotConstructorArrow::class, 'source_block_id');
+    }
+
+    public function targetArrows(): HasMany
+    {
+        return $this->hasMany(BotConstructorArrow::class, 'target_block_id');
+    }
+
+    public function executionRuns(): HasMany
+    {
+        return $this->hasMany(BotConstructorExecutionBlockRun::class, 'bot_constructor_block_id');
+    }
+
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('is_active', true);
