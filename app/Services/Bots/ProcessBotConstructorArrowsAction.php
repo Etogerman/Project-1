@@ -89,7 +89,13 @@ class ProcessBotConstructorArrowsAction
                 continue;
             }
 
-            $prepared = $this->prepareImmediateArrow($execution, $dialog, $rootMessage, $arrow);
+            $prepared = $this->prepareImmediateArrow(
+                $execution,
+                $dialog,
+                $rootMessage,
+                $arrow,
+                $preserveCutoffForDelayedChain ? $cutoff : null,
+            );
 
             if ($prepared['stop'] === true) {
                 return;
@@ -156,8 +162,9 @@ class ProcessBotConstructorArrowsAction
         Dialog $dialog,
         Message $rootMessage,
         BotConstructorArrow $arrow,
+        mixed $schemaCutoffAt = null,
     ): array {
-        return DB::transaction(function () use ($execution, $dialog, $rootMessage, $arrow): array {
+        return DB::transaction(function () use ($execution, $dialog, $rootMessage, $arrow, $schemaCutoffAt): array {
             $lockedExecution = $this->lockExecution($execution);
 
             if ($this->emergencyLimitReached($lockedExecution)) {
@@ -194,6 +201,7 @@ class ProcessBotConstructorArrowsAction
                 $arrow,
                 BotConstructorArrowRun::STATUS_PROCESSING,
                 processingStartedAt: $now,
+                schemaCutoffAt: $schemaCutoffAt,
             );
 
             $lockedExecution->forceFill([

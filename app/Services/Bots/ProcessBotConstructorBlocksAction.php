@@ -78,7 +78,8 @@ class ProcessBotConstructorBlocksAction
             }
         }
 
-        $this->completeExecutionIfReady($execution);
+        $this->recoverMissingOutgoingArrowsForSuccessfulExecutionBlockRuns($message, $dialog);
+        $this->completeRunningExecutionsForMessageIfReady($message);
 
         return true;
     }
@@ -145,7 +146,8 @@ class ProcessBotConstructorBlocksAction
             }
         }
 
-        $this->completeExecutionIfReady($execution);
+        $handled = $this->recoverMissingOutgoingArrowsForSuccessfulExecutionBlockRuns($message, $dialog) || $handled;
+        $this->completeRunningExecutionsForMessageIfReady($message);
 
         return $handled;
     }
@@ -268,6 +270,68 @@ class ProcessBotConstructorBlocksAction
         $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff, true);
 
         return $execution;
+    }
+
+    private function recoverMissingOutgoingArrowsForSuccessfulExecutionBlockRuns(Message $message, Dialog $dialog): bool
+    {
+        $runs = BotConstructorExecutionBlockRun::query()
+            ->with(['arrowRun', 'block', 'execution'])
+            ->whereIn('status', [
+                BotConstructorExecutionBlockRun::STATUS_SENT,
+                BotConstructorExecutionBlockRun::STATUS_NO_REPLY,
+            ])
+            ->whereHas('execution', function ($query) use ($message): void {
+                $query
+                    ->where('root_inbound_message_id', $message->id)
+                    ->where('status', BotConstructorExecution::STATUS_RUNNING);
+            })
+            ->orderBy('bot_constructor_execution_id')
+            ->orderBy('sequence_number')
+            ->orderBy('id')
+            ->get();
+
+        $handled = false;
+
+        foreach ($runs as $run) {
+            $execution = $run->execution;
+            $block = $run->block;
+
+            if (! $execution instanceof BotConstructorExecution || ! $block instanceof BotConstructorBlock) {
+                continue;
+            }
+
+            $cutoff = $this->recoveryCutoffForExecutionBlockRun($message, $run);
+            $missingArrowIds = $this->missingOutgoingArrowIds($run, $cutoff);
+
+            if ($missingArrowIds === []) {
+                continue;
+            }
+
+            $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff, true);
+            $handled = true;
+        }
+
+        return $handled;
+    }
+
+    private function recoveryCutoffForExecutionBlockRun(Message $message, BotConstructorExecutionBlockRun $run): mixed
+    {
+        $arrowRun = $run->arrowRun;
+
+        if ($arrowRun instanceof BotConstructorArrowRun && $arrowRun->schema_cutoff_at !== null) {
+            return $arrowRun->schema_cutoff_at;
+        }
+
+        if ($arrowRun instanceof BotConstructorArrowRun) {
+            return $run->created_at;
+        }
+
+        $legacyRun = BotConstructorBlockRun::query()
+            ->where('inbound_message_id', $message->id)
+            ->where('bot_constructor_block_id', $run->bot_constructor_block_id)
+            ->first();
+
+        return $legacyRun?->created_at ?? $run->created_at;
     }
 
     private function successfulDirectExecutionBlockRun(
@@ -411,6 +475,16 @@ class ProcessBotConstructorBlocksAction
                 'status' => BotConstructorExecution::STATUS_COMPLETED,
             ])->save();
         }
+    }
+
+    private function completeRunningExecutionsForMessageIfReady(Message $message): void
+    {
+        BotConstructorExecution::query()
+            ->where('root_inbound_message_id', $message->id)
+            ->where('status', BotConstructorExecution::STATUS_RUNNING)
+            ->orderBy('id')
+            ->get()
+            ->each(fn (BotConstructorExecution $execution): mixed => $this->completeExecutionIfReady($execution));
     }
 
     private function createRecoveryExecutionBlockRun(

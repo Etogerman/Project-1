@@ -2364,6 +2364,137 @@ class BotConstructorTest extends TestCase
         ]);
     }
 
+    public function test_retry_recovers_downstream_arrow_after_cleanup_marks_target_arrow_passed(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7001],
+            ]),
+        ]);
+
+        $channel = $this->readyTelegramChannel();
+        $startBlock = BotConstructorBlock::factory()->active()->create([
+            'match_type' => BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD,
+            'match_values' => ['старт'],
+            'response_text' => '#{none}',
+        ]);
+        $middleBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Средний блок уже отправлен',
+        ]);
+        $targetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Downstream восстановлен',
+        ]);
+        $startBlock->channels()->attach($channel->id);
+
+        $createdAt = now()->subMinutes(10);
+        $blockRunCreatedAt = $createdAt->copy()->addMinute();
+        $middleBlock->forceFill([
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ])->save();
+        $targetBlock->forceFill([
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ])->save();
+
+        $firstArrow = BotConstructorArrow::factory()->manualLimit(5)->create([
+            'source_block_id' => $startBlock->id,
+            'target_block_id' => $middleBlock->id,
+        ]);
+        $secondArrow = BotConstructorArrow::factory()->manualLimit(5)->create([
+            'source_block_id' => $middleBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $firstArrow->forceFill([
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ])->save();
+        $secondArrow->forceFill([
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ])->save();
+
+        $message = $this->createInboundMessage($channel, [
+            'text' => 'старт',
+            'provider_event_key' => 'constructor-cleanup-downstream-recovery',
+            'auto_reply_sent_at' => now(),
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'next_sequence_number' => 3,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        BotConstructorBlockRun::query()->create([
+            'inbound_message_id' => $message->id,
+            'bot_constructor_block_id' => $startBlock->id,
+            'status' => BotConstructorBlockRun::STATUS_NO_REPLY,
+            'error_message' => null,
+        ]);
+        BotConstructorExecutionBlockRun::query()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $startBlock->id,
+            'bot_constructor_arrow_run_id' => null,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+            'status' => BotConstructorExecutionBlockRun::STATUS_NO_REPLY,
+            'processing_started_at' => null,
+            'error_message' => null,
+        ]);
+        $firstArrowRun = BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $firstArrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $startBlock->id,
+            'target_block_id' => $middleBlock->id,
+            'inbound_message_id' => $message->id,
+            'processing_started_at' => now()->subMinutes(20),
+            'status' => BotConstructorArrowRun::STATUS_PROCESSING,
+        ]);
+        $middleBlockRun = BotConstructorExecutionBlockRun::query()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $middleBlock->id,
+            'bot_constructor_arrow_run_id' => $firstArrowRun->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 2,
+            'status' => BotConstructorExecutionBlockRun::STATUS_SENT,
+            'processing_started_at' => null,
+            'error_message' => null,
+        ]);
+        $middleBlockRun->forceFill([
+            'created_at' => $blockRunCreatedAt,
+            'updated_at' => $blockRunCreatedAt,
+        ])->save();
+
+        $this->artisan('bot-constructor:cleanup-processing-runs')
+            ->assertExitCode(0);
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $firstArrowRun->id,
+            'status' => BotConstructorArrowRun::STATUS_PASSED,
+        ]);
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'bot_constructor_arrow_id' => $secondArrow->id,
+            'source_block_id' => $middleBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'status' => BotConstructorArrowRun::STATUS_PASSED,
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'reply_to_message_id' => $message->id,
+            'text' => 'Downstream восстановлен',
+        ]);
+        $this->assertDatabaseHas('bot_constructor_executions', [
+            'id' => $execution->id,
+            'status' => BotConstructorExecution::STATUS_COMPLETED,
+        ]);
+    }
+
     public function test_cleanup_marks_stale_processing_runs_safely(): void
     {
         $channel = $this->readyTelegramChannel();
