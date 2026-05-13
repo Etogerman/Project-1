@@ -148,6 +148,8 @@ class ProcessAutoReplyJob implements ShouldQueue
         }
 
         if ($message->hasSuccessfulAutoReply()) {
+            $processBotConstructorBlocksAction->recoverAlreadyProcessedInbound($message);
+
             return;
         }
 

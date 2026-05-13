@@ -78,17 +78,76 @@ class ProcessBotConstructorBlocksAction
             }
         }
 
-        if (
-            $execution instanceof BotConstructorExecution
-            && $execution->status === BotConstructorExecution::STATUS_RUNNING
-            && ! $this->hasProcessingExecutionBlockRuns($execution)
-        ) {
-            $execution->forceFill([
-                'status' => BotConstructorExecution::STATUS_COMPLETED,
-            ])->save();
-        }
+        $this->completeExecutionIfReady($execution);
 
         return true;
+    }
+
+    public function recoverAlreadyProcessedInbound(Message $message): bool
+    {
+        $message->loadMissing(['channel', 'dialog']);
+
+        $channel = $message->channel;
+        $dialog = $message->dialog;
+
+        if (! $channel instanceof Channel || ! $dialog instanceof Dialog) {
+            return false;
+        }
+
+        $legacyRuns = BotConstructorBlockRun::query()
+            ->where('inbound_message_id', $message->id)
+            ->orderBy('bot_constructor_block_id')
+            ->get();
+
+        if ($legacyRuns->isEmpty()) {
+            return false;
+        }
+
+        $execution = $this->runningInboundExecution($message);
+        $handled = false;
+
+        foreach ($legacyRuns as $legacyRun) {
+            $block = BotConstructorBlock::query()->find($legacyRun->bot_constructor_block_id);
+
+            if (! $block instanceof BotConstructorBlock) {
+                continue;
+            }
+
+            if ($this->hasExecutionTrace($message, $block)) {
+                $recoveredExecution = $this->processMissingOutgoingArrowsForExistingTrace($message, $dialog, $block);
+
+                if ($recoveredExecution instanceof BotConstructorExecution) {
+                    $execution = $recoveredExecution;
+                    $handled = true;
+                }
+
+                continue;
+            }
+
+            $execution = $this->ensureExecution($execution, $message, $channel, $dialog);
+            $executionBlockRun = $this->createRecoveryExecutionBlockRun($execution, $dialog, $channel, $block, $legacyRun);
+            $handled = true;
+
+            if ($this->shouldProcessOutgoingArrows($executionBlockRun)) {
+                $arrowIds = $this->outgoingArrowIdsAvailableAt($block, $legacyRun->created_at);
+
+                if ($arrowIds !== []) {
+                    $this->processBotConstructorArrowsAction->handle(
+                        $execution,
+                        $dialog,
+                        $message,
+                        $block,
+                        $arrowIds,
+                        $legacyRun->created_at,
+                        true,
+                    );
+                }
+            }
+        }
+
+        $this->completeExecutionIfReady($execution);
+
+        return $handled;
     }
 
     /**
@@ -206,7 +265,7 @@ class ProcessBotConstructorBlocksAction
             return $execution;
         }
 
-        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff);
+        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff, true);
 
         return $execution;
     }
@@ -339,6 +398,19 @@ class ProcessBotConstructorBlocksAction
             ->where('bot_constructor_execution_id', $execution->id)
             ->where('status', BotConstructorExecutionBlockRun::STATUS_PROCESSING)
             ->exists();
+    }
+
+    private function completeExecutionIfReady(?BotConstructorExecution $execution): void
+    {
+        if (
+            $execution instanceof BotConstructorExecution
+            && $execution->status === BotConstructorExecution::STATUS_RUNNING
+            && ! $this->hasProcessingExecutionBlockRuns($execution)
+        ) {
+            $execution->forceFill([
+                'status' => BotConstructorExecution::STATUS_COMPLETED,
+            ])->save();
+        }
     }
 
     private function createRecoveryExecutionBlockRun(

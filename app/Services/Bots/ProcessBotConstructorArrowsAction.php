@@ -31,6 +31,7 @@ class ProcessBotConstructorArrowsAction
         BotConstructorBlock $sourceBlock,
         ?array $onlyArrowIds = null,
         mixed $cutoff = null,
+        bool $preserveCutoffForDelayedChain = false,
     ): void {
         $sourceBlock->loadMissing('sourceArrows.targetBlock');
 
@@ -73,7 +74,13 @@ class ProcessBotConstructorArrowsAction
             }
 
             if ($arrow->delayInSeconds() > 0) {
-                $this->scheduleDelayedArrow($execution, $dialog, $rootMessage, $arrow);
+                $this->scheduleDelayedArrow(
+                    $execution,
+                    $dialog,
+                    $rootMessage,
+                    $arrow,
+                    $preserveCutoffForDelayedChain ? $cutoff : null,
+                );
 
                 if ($execution->fresh()?->status === BotConstructorExecution::STATUS_STOPPED_BY_LIMIT) {
                     return;
@@ -112,7 +119,15 @@ class ProcessBotConstructorArrowsAction
 
             if ($this->blockRunSucceeded($blockRun)) {
                 $this->markArrowPassed($arrowRun);
-                $this->handle($execution, $dialog, $rootMessage, $targetBlock, null, $cutoff);
+                $this->handle(
+                    $execution,
+                    $dialog,
+                    $rootMessage,
+                    $targetBlock,
+                    null,
+                    $cutoff,
+                    $preserveCutoffForDelayedChain,
+                );
 
                 continue;
             }
@@ -205,8 +220,9 @@ class ProcessBotConstructorArrowsAction
         Dialog $dialog,
         Message $rootMessage,
         BotConstructorArrow $arrow,
+        mixed $schemaCutoffAt = null,
     ): void {
-        $arrowRun = DB::transaction(function () use ($execution, $dialog, $rootMessage, $arrow): ?BotConstructorArrowRun {
+        $arrowRun = DB::transaction(function () use ($execution, $dialog, $rootMessage, $arrow, $schemaCutoffAt): ?BotConstructorArrowRun {
             $lockedExecution = $this->lockExecution($execution);
 
             if ($this->emergencyLimitReached($lockedExecution)) {
@@ -243,6 +259,7 @@ class ProcessBotConstructorArrowsAction
                 $arrow,
                 BotConstructorArrowRun::STATUS_SCHEDULED,
                 scheduledFor: $scheduledFor,
+                schemaCutoffAt: $schemaCutoffAt,
             );
 
             $lockedExecution->forceFill([
@@ -367,6 +384,7 @@ class ProcessBotConstructorArrowsAction
         string $status,
         ?Carbon $scheduledFor = null,
         ?Carbon $processingStartedAt = null,
+        mixed $schemaCutoffAt = null,
         ?string $errorMessage = null,
     ): BotConstructorArrowRun {
         return BotConstructorArrowRun::query()->create([
@@ -378,6 +396,7 @@ class ProcessBotConstructorArrowsAction
             'inbound_message_id' => $rootMessage->id,
             'scheduled_for' => $scheduledFor,
             'processing_started_at' => $processingStartedAt,
+            'schema_cutoff_at' => $schemaCutoffAt,
             'status' => $status,
             'error_message' => $this->safeErrorMessage($errorMessage),
         ]);

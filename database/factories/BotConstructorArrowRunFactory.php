@@ -34,6 +34,7 @@ class BotConstructorArrowRunFactory extends Factory
             'inbound_message_id' => null,
             'scheduled_for' => null,
             'processing_started_at' => now(),
+            'schema_cutoff_at' => null,
             'status' => BotConstructorArrowRun::STATUS_PROCESSING,
             'error_message' => null,
         ];

@@ -111,7 +111,15 @@ class ProcessBotConstructorScheduledArrowAction
 
             if ($this->processBotConstructorArrowsAction->blockRunSucceeded($blockRun)) {
                 $this->processBotConstructorArrowsAction->markArrowPassed($arrowRun);
-                $this->processBotConstructorArrowsAction->handle($childExecution, $dialog, $rootMessage, $targetBlock);
+                $this->processBotConstructorArrowsAction->handle(
+                    $childExecution,
+                    $dialog,
+                    $rootMessage,
+                    $targetBlock,
+                    null,
+                    $arrowRun->schema_cutoff_at,
+                    $arrowRun->schema_cutoff_at !== null,
+                );
             } elseif ($this->processBotConstructorArrowsAction->blockRunDeliveryUncertain($blockRun)) {
                 $this->processBotConstructorArrowsAction->markArrowDeliveryUncertain(
                     $arrowRun,

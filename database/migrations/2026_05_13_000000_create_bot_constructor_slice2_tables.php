@@ -124,6 +124,7 @@ return new class extends Migration
                 ->nullOnDelete();
             $table->timestamp('scheduled_for')->nullable();
             $table->timestamp('processing_started_at')->nullable();
+            $table->timestamp('schema_cutoff_at')->nullable();
             $table->string('status', 30)->index();
             $table->string('error_message', 1000)->nullable();
             $table->timestamps();

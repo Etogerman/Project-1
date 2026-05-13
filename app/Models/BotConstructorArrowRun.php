@@ -37,6 +37,7 @@ class BotConstructorArrowRun extends Model
         'inbound_message_id',
         'scheduled_for',
         'processing_started_at',
+        'schema_cutoff_at',
         'status',
         'error_message',
     ];
@@ -47,6 +48,7 @@ class BotConstructorArrowRun extends Model
     protected $casts = [
         'scheduled_for' => 'datetime',
         'processing_started_at' => 'datetime',
+        'schema_cutoff_at' => 'datetime',
     ];
 
     protected static function booted(): void
