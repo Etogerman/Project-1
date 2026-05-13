@@ -204,7 +204,16 @@ class ViewBitrix24Connection extends ViewRecord
         $record = $this->getRecord();
         $now = now();
         $staleThresholdSeconds = 30;
-        $trackedQueues = ['default', 'bitrix-live'];
+        $trackedQueues = collect([
+            'default',
+            config('bots.auto_reply_queue', 'default'),
+            config('bitrix24.openlines.live_export_queue', 'default'),
+        ])
+            ->map(fn (mixed $queue): string => trim((string) $queue))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
 
         $pendingOpenLinesQuery = Bitrix24WebhookEvent::query()
             ->where('callback_type', Bitrix24WebhookEvent::TYPE_OPENLINES)
@@ -290,7 +299,7 @@ class ViewBitrix24Connection extends ViewRecord
         };
 
         $recommendation = $tone === 'danger'
-            ? 'Запустите локальные worker-ы: default и bitrix-live.'
+            ? 'Запустите worker-ы очередей: '.implode(', ', $trackedQueues).'.'
             : '';
 
         return [

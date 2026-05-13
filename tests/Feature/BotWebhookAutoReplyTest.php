@@ -68,7 +68,8 @@ class BotWebhookAutoReplyTest extends TestCase
         $inboundMessage = $this->inboundMessages()->firstOrFail();
 
         Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($inboundMessage): bool {
-            return $job->inboundMessageId === $inboundMessage->id;
+            return $job->inboundMessageId === $inboundMessage->id
+                && $job->queue === ProcessAutoReplyJob::queueName();
         });
 
         $channel->refresh();

@@ -9,6 +9,8 @@ use App\Models\ContactIdentity;
 
 class QueueContactIdentityAvatarSyncAction
 {
+    public const SYNC_DELAY_SECONDS = 10;
+
     public function handle(Channel $channel, ContactIdentity $identity, IncomingBotMessage $message): void
     {
         if (! $this->shouldQueue($channel, $identity, $message)) {
@@ -19,7 +21,9 @@ class QueueContactIdentityAvatarSyncAction
             $identity->id,
             $channel->platform === Channel::PLATFORM_MAX ? $message->avatarUrl : null,
             $channel->platform === Channel::PLATFORM_MAX ? $message->externalChatId : null,
-        )->afterCommit();
+        )
+            ->delay(now()->addSeconds(self::SYNC_DELAY_SECONDS))
+            ->afterCommit();
     }
 
     protected function shouldQueue(Channel $channel, ContactIdentity $identity, IncomingBotMessage $message): bool
