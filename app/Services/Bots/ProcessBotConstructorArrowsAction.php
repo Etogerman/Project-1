@@ -32,6 +32,7 @@ class ProcessBotConstructorArrowsAction
         ?array $onlyArrowIds = null,
         mixed $cutoff = null,
         bool $preserveCutoffForDelayedChain = false,
+        ?BotConstructorExecutionBlockRun $sourceExecutionBlockRun = null,
     ): void {
         $sourceBlock->loadMissing('sourceArrows.targetBlock');
 
@@ -80,6 +81,7 @@ class ProcessBotConstructorArrowsAction
                     $rootMessage,
                     $arrow,
                     $preserveCutoffForDelayedChain ? $cutoff : null,
+                    $sourceExecutionBlockRun,
                 );
 
                 if ($execution->fresh()?->status === BotConstructorExecution::STATUS_STOPPED_BY_LIMIT) {
@@ -95,6 +97,7 @@ class ProcessBotConstructorArrowsAction
                 $rootMessage,
                 $arrow,
                 $preserveCutoffForDelayedChain ? $cutoff : null,
+                $sourceExecutionBlockRun,
             );
 
             if ($prepared['stop'] === true) {
@@ -133,6 +136,7 @@ class ProcessBotConstructorArrowsAction
                     null,
                     $cutoff,
                     $preserveCutoffForDelayedChain,
+                    $blockRun,
                 );
 
                 continue;
@@ -163,12 +167,13 @@ class ProcessBotConstructorArrowsAction
         Message $rootMessage,
         BotConstructorArrow $arrow,
         mixed $schemaCutoffAt = null,
+        ?BotConstructorExecutionBlockRun $sourceExecutionBlockRun = null,
     ): array {
-        return DB::transaction(function () use ($execution, $dialog, $rootMessage, $arrow, $schemaCutoffAt): array {
+        return DB::transaction(function () use ($execution, $dialog, $rootMessage, $arrow, $schemaCutoffAt, $sourceExecutionBlockRun): array {
             $lockedExecution = $this->lockExecution($execution);
 
             if ($this->emergencyLimitReached($lockedExecution)) {
-                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут аварийный лимит выполнения цепочки.');
+                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут аварийный лимит выполнения цепочки.', $sourceExecutionBlockRun);
                 $lockedExecution->forceFill([
                     'status' => BotConstructorExecution::STATUS_STOPPED_BY_LIMIT,
                 ])->save();
@@ -180,7 +185,7 @@ class ProcessBotConstructorArrowsAction
             $passLimit = $this->resolvePassLimit($arrow);
 
             if ($passLimit['error'] !== null) {
-                $this->createFailedRun($lockedExecution, $dialog, $rootMessage, $arrow, $passLimit['error']);
+                $this->createFailedRun($lockedExecution, $dialog, $rootMessage, $arrow, $passLimit['error'], $sourceExecutionBlockRun);
 
                 return ['stop' => false, 'arrow_run' => null, 'block_run' => null];
             }
@@ -188,7 +193,7 @@ class ProcessBotConstructorArrowsAction
             $this->lockArrowDialogLimit($arrow, $dialog);
 
             if ($this->arrowPassLimitReached($arrow, $dialog, (int) $passLimit['value'])) {
-                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут лимит переходов клиента по этой стрелке.');
+                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут лимит переходов клиента по этой стрелке.', $sourceExecutionBlockRun);
 
                 return ['stop' => false, 'arrow_run' => null, 'block_run' => null];
             }
@@ -202,6 +207,7 @@ class ProcessBotConstructorArrowsAction
                 BotConstructorArrowRun::STATUS_PROCESSING,
                 processingStartedAt: $now,
                 schemaCutoffAt: $schemaCutoffAt,
+                sourceExecutionBlockRun: $sourceExecutionBlockRun,
             );
 
             $lockedExecution->forceFill([
@@ -229,12 +235,13 @@ class ProcessBotConstructorArrowsAction
         Message $rootMessage,
         BotConstructorArrow $arrow,
         mixed $schemaCutoffAt = null,
+        ?BotConstructorExecutionBlockRun $sourceExecutionBlockRun = null,
     ): void {
-        $arrowRun = DB::transaction(function () use ($execution, $dialog, $rootMessage, $arrow, $schemaCutoffAt): ?BotConstructorArrowRun {
+        $arrowRun = DB::transaction(function () use ($execution, $dialog, $rootMessage, $arrow, $schemaCutoffAt, $sourceExecutionBlockRun): ?BotConstructorArrowRun {
             $lockedExecution = $this->lockExecution($execution);
 
             if ($this->emergencyLimitReached($lockedExecution)) {
-                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут аварийный лимит выполнения цепочки.');
+                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут аварийный лимит выполнения цепочки.', $sourceExecutionBlockRun);
                 $lockedExecution->forceFill([
                     'status' => BotConstructorExecution::STATUS_STOPPED_BY_LIMIT,
                 ])->save();
@@ -246,7 +253,7 @@ class ProcessBotConstructorArrowsAction
             $passLimit = $this->resolvePassLimit($arrow);
 
             if ($passLimit['error'] !== null) {
-                $this->createFailedRun($lockedExecution, $dialog, $rootMessage, $arrow, $passLimit['error']);
+                $this->createFailedRun($lockedExecution, $dialog, $rootMessage, $arrow, $passLimit['error'], $sourceExecutionBlockRun);
 
                 return null;
             }
@@ -254,7 +261,7 @@ class ProcessBotConstructorArrowsAction
             $this->lockArrowDialogLimit($arrow, $dialog);
 
             if ($this->arrowPassLimitReached($arrow, $dialog, (int) $passLimit['value'])) {
-                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут лимит переходов клиента по этой стрелке.');
+                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут лимит переходов клиента по этой стрелке.', $sourceExecutionBlockRun);
 
                 return null;
             }
@@ -268,6 +275,7 @@ class ProcessBotConstructorArrowsAction
                 BotConstructorArrowRun::STATUS_SCHEDULED,
                 scheduledFor: $scheduledFor,
                 schemaCutoffAt: $schemaCutoffAt,
+                sourceExecutionBlockRun: $sourceExecutionBlockRun,
             );
 
             $lockedExecution->forceFill([
@@ -393,6 +401,7 @@ class ProcessBotConstructorArrowsAction
         ?Carbon $scheduledFor = null,
         ?Carbon $processingStartedAt = null,
         mixed $schemaCutoffAt = null,
+        ?BotConstructorExecutionBlockRun $sourceExecutionBlockRun = null,
         ?string $errorMessage = null,
     ): BotConstructorArrowRun {
         return BotConstructorArrowRun::query()->create([
@@ -402,6 +411,7 @@ class ProcessBotConstructorArrowsAction
             'source_block_id' => $arrow->source_block_id,
             'target_block_id' => $arrow->target_block_id,
             'inbound_message_id' => $rootMessage->id,
+            'source_execution_block_run_id' => $sourceExecutionBlockRun?->id,
             'scheduled_for' => $scheduledFor,
             'processing_started_at' => $processingStartedAt,
             'schema_cutoff_at' => $schemaCutoffAt,
@@ -416,6 +426,7 @@ class ProcessBotConstructorArrowsAction
         Message $rootMessage,
         BotConstructorArrow $arrow,
         string $errorMessage,
+        ?BotConstructorExecutionBlockRun $sourceExecutionBlockRun = null,
     ): BotConstructorArrowRun {
         return $this->createArrowRun(
             $execution,
@@ -423,6 +434,7 @@ class ProcessBotConstructorArrowsAction
             $rootMessage,
             $arrow,
             BotConstructorArrowRun::STATUS_FAILED,
+            sourceExecutionBlockRun: $sourceExecutionBlockRun,
             errorMessage: $errorMessage,
         );
     }
@@ -433,6 +445,7 @@ class ProcessBotConstructorArrowsAction
         Message $rootMessage,
         BotConstructorArrow $arrow,
         string $errorMessage,
+        ?BotConstructorExecutionBlockRun $sourceExecutionBlockRun = null,
     ): BotConstructorArrowRun {
         return $this->createArrowRun(
             $execution,
@@ -440,6 +453,7 @@ class ProcessBotConstructorArrowsAction
             $rootMessage,
             $arrow,
             BotConstructorArrowRun::STATUS_LIMIT_REACHED,
+            sourceExecutionBlockRun: $sourceExecutionBlockRun,
             errorMessage: $errorMessage,
         );
     }

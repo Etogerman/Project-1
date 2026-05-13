@@ -1347,7 +1347,7 @@ class BotConstructorTest extends TestCase
             'status' => BotConstructorBlockRun::STATUS_SENT,
             'error_message' => null,
         ]);
-        BotConstructorExecutionBlockRun::query()->create([
+        $startExecutionBlockRun = BotConstructorExecutionBlockRun::query()->create([
             'bot_constructor_execution_id' => $execution->id,
             'bot_constructor_block_id' => $startBlock->id,
             'bot_constructor_arrow_run_id' => null,
@@ -1366,6 +1366,7 @@ class BotConstructorTest extends TestCase
             'source_block_id' => $startBlock->id,
             'target_block_id' => $firstTargetBlock->id,
             'inbound_message_id' => $message->id,
+            'source_execution_block_run_id' => $startExecutionBlockRun->id,
             'scheduled_for' => null,
             'processing_started_at' => null,
             'status' => BotConstructorArrowRun::STATUS_PASSED,
@@ -2433,7 +2434,7 @@ class BotConstructorTest extends TestCase
             'status' => BotConstructorBlockRun::STATUS_NO_REPLY,
             'error_message' => null,
         ]);
-        BotConstructorExecutionBlockRun::query()->create([
+        $startExecutionBlockRun = BotConstructorExecutionBlockRun::query()->create([
             'bot_constructor_execution_id' => $execution->id,
             'bot_constructor_block_id' => $startBlock->id,
             'bot_constructor_arrow_run_id' => null,
@@ -2451,6 +2452,7 @@ class BotConstructorTest extends TestCase
             'source_block_id' => $startBlock->id,
             'target_block_id' => $middleBlock->id,
             'inbound_message_id' => $message->id,
+            'source_execution_block_run_id' => $startExecutionBlockRun->id,
             'processing_started_at' => now()->subMinutes(20),
             'status' => BotConstructorArrowRun::STATUS_PROCESSING,
         ]);
@@ -2492,6 +2494,159 @@ class BotConstructorTest extends TestCase
         $this->assertDatabaseHas('bot_constructor_executions', [
             'id' => $execution->id,
             'status' => BotConstructorExecution::STATUS_COMPLETED,
+        ]);
+    }
+
+    public function test_retry_recovers_self_loop_arrow_for_each_block_run(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 7002],
+            ]),
+        ]);
+
+        $channel = $this->readyTelegramChannel();
+        $menuBlock = BotConstructorBlock::factory()->active()->create([
+            'match_type' => BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD,
+            'match_values' => ['меню'],
+            'response_text' => 'Меню',
+        ]);
+        $menuBlock->channels()->attach($channel->id);
+
+        $createdAt = now()->subMinutes(10);
+        $firstRunCreatedAt = $createdAt->copy()->addMinute();
+        $menuBlock->forceFill([
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ])->save();
+
+        $loopArrow = BotConstructorArrow::factory()->manualLimit(2)->create([
+            'source_block_id' => $menuBlock->id,
+            'target_block_id' => $menuBlock->id,
+        ]);
+        $loopArrow->forceFill([
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ])->save();
+
+        $message = $this->createInboundMessage($channel, [
+            'text' => 'меню',
+            'provider_event_key' => 'constructor-self-loop-recovery',
+            'auto_reply_sent_at' => now(),
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'auto_transition_count' => 1,
+            'next_sequence_number' => 3,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        $firstOutboundMessage = Message::factory()->create([
+            'dialog_id' => $message->dialog_id,
+            'contact_id' => $message->contact_id,
+            'contact_identity_id' => $message->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
+            'reply_to_message_id' => $message->id,
+            'external_chat_id' => $message->external_chat_id,
+            'external_message_id' => 'already-sent-menu-start',
+            'text' => 'Меню',
+        ]);
+        $secondOutboundMessage = Message::factory()->create([
+            'dialog_id' => $message->dialog_id,
+            'contact_id' => $message->contact_id,
+            'contact_identity_id' => $message->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
+            'reply_to_message_id' => $message->id,
+            'external_chat_id' => $message->external_chat_id,
+            'external_message_id' => 'already-sent-menu-loop',
+            'text' => 'Меню',
+        ]);
+        BotConstructorBlockRun::query()->create([
+            'inbound_message_id' => $message->id,
+            'bot_constructor_block_id' => $menuBlock->id,
+            'outbound_message_id' => $firstOutboundMessage->id,
+            'status' => BotConstructorBlockRun::STATUS_SENT,
+            'error_message' => null,
+        ]);
+        $directBlockRun = BotConstructorExecutionBlockRun::query()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $menuBlock->id,
+            'bot_constructor_arrow_run_id' => null,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+            'status' => BotConstructorExecutionBlockRun::STATUS_SENT,
+            'outbound_message_id' => $firstOutboundMessage->id,
+            'processing_started_at' => null,
+            'error_message' => null,
+        ]);
+        $firstLoopArrowRun = BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $loopArrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $menuBlock->id,
+            'target_block_id' => $menuBlock->id,
+            'inbound_message_id' => $message->id,
+            'source_execution_block_run_id' => $directBlockRun->id,
+            'processing_started_at' => null,
+            'status' => BotConstructorArrowRun::STATUS_PASSED,
+        ]);
+        $loopBlockRun = BotConstructorExecutionBlockRun::query()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $menuBlock->id,
+            'bot_constructor_arrow_run_id' => $firstLoopArrowRun->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 2,
+            'status' => BotConstructorExecutionBlockRun::STATUS_SENT,
+            'outbound_message_id' => $secondOutboundMessage->id,
+            'processing_started_at' => null,
+            'error_message' => null,
+        ]);
+        $loopBlockRun->forceFill([
+            'created_at' => $firstRunCreatedAt,
+            'updated_at' => $firstRunCreatedAt,
+        ])->save();
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertSentCount(1);
+        $this->assertSame(
+            [
+                BotConstructorArrowRun::STATUS_PASSED,
+                BotConstructorArrowRun::STATUS_PASSED,
+                BotConstructorArrowRun::STATUS_LIMIT_REACHED,
+            ],
+            BotConstructorArrowRun::query()
+                ->where('bot_constructor_arrow_id', $loopArrow->id)
+                ->orderBy('id')
+                ->pluck('status')
+                ->all(),
+        );
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'bot_constructor_arrow_id' => $loopArrow->id,
+            'source_execution_block_run_id' => $loopBlockRun->id,
+            'status' => BotConstructorArrowRun::STATUS_PASSED,
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'reply_to_message_id' => $message->id,
+            'text' => 'Меню',
+            'external_message_id' => '7002',
+        ]);
+        $this->assertDatabaseHas('bot_constructor_executions', [
+            'id' => $execution->id,
+            'status' => BotConstructorExecution::STATUS_COMPLETED,
+            'auto_transition_count' => 2,
         ]);
     }
 

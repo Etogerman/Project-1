@@ -35,6 +35,7 @@ class BotConstructorArrowRun extends Model
         'source_block_id',
         'target_block_id',
         'inbound_message_id',
+        'source_execution_block_run_id',
         'scheduled_for',
         'processing_started_at',
         'schema_cutoff_at',
@@ -123,5 +124,10 @@ class BotConstructorArrowRun extends Model
     public function inboundMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'inbound_message_id');
+    }
+
+    public function sourceExecutionBlockRun(): BelongsTo
+    {
+        return $this->belongsTo(BotConstructorExecutionBlockRun::class, 'source_execution_block_run_id');
     }
 }

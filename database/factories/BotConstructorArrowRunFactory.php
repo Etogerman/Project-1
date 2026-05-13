@@ -32,6 +32,7 @@ class BotConstructorArrowRunFactory extends Factory
                 return BotConstructorArrow::query()->findOrFail($attributes['bot_constructor_arrow_id'])->target_block_id;
             },
             'inbound_message_id' => null,
+            'source_execution_block_run_id' => null,
             'scheduled_for' => null,
             'processing_started_at' => now(),
             'schema_cutoff_at' => null,

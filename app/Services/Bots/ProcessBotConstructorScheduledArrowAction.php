@@ -125,6 +125,7 @@ class ProcessBotConstructorScheduledArrowAction
                     null,
                     $arrowRun->schema_cutoff_at,
                     $arrowRun->schema_cutoff_at !== null,
+                    $blockRun,
                 );
             } elseif ($this->processBotConstructorArrowsAction->blockRunDeliveryUncertain($blockRun)) {
                 $this->processBotConstructorArrowsAction->markArrowDeliveryUncertain(

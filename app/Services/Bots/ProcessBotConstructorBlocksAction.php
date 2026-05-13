@@ -73,7 +73,15 @@ class ProcessBotConstructorBlocksAction
                 $arrowIds = $this->outgoingArrowIdsAvailableAt($block, $legacyRun->created_at);
 
                 if ($arrowIds !== []) {
-                    $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $arrowIds, $legacyRun->created_at);
+                    $this->processBotConstructorArrowsAction->handle(
+                        $execution,
+                        $dialog,
+                        $message,
+                        $block,
+                        $arrowIds,
+                        $legacyRun->created_at,
+                        sourceExecutionBlockRun: $executionBlockRun,
+                    );
                 }
             }
         }
@@ -141,6 +149,7 @@ class ProcessBotConstructorBlocksAction
                         $arrowIds,
                         $legacyRun->created_at,
                         true,
+                        $executionBlockRun,
                     );
                 }
             }
@@ -267,7 +276,7 @@ class ProcessBotConstructorBlocksAction
             return $execution;
         }
 
-        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff, true);
+        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff, true, $executionBlockRun);
 
         return $execution;
     }
@@ -307,7 +316,7 @@ class ProcessBotConstructorBlocksAction
                 continue;
             }
 
-            $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff, true);
+            $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff, true, $run);
             $handled = true;
         }
 
@@ -374,6 +383,7 @@ class ProcessBotConstructorBlocksAction
 
         $existingArrowIds = BotConstructorArrowRun::query()
             ->where('bot_constructor_execution_id', $executionBlockRun->bot_constructor_execution_id)
+            ->where('source_execution_block_run_id', $executionBlockRun->id)
             ->where('source_block_id', $executionBlockRun->bot_constructor_block_id)
             ->whereIn('bot_constructor_arrow_id', $expectedArrowIds)
             ->pluck('bot_constructor_arrow_id')
