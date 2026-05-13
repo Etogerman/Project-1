@@ -127,7 +127,14 @@ class ProcessBotConstructorScheduledArrowAction
             $this->completeExecutionIfRunning($childExecution);
         } catch (Throwable $throwable) {
             report($throwable);
-            $this->failRun($arrowRun, $throwable->getMessage());
+            $arrowRun->refresh();
+
+            if (! in_array($arrowRun->status, [
+                BotConstructorArrowRun::STATUS_PASSED,
+                BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN,
+            ], true)) {
+                $this->failRun($arrowRun, $throwable->getMessage());
+            }
 
             if ($childExecution instanceof BotConstructorExecution) {
                 $childExecution->forceFill([

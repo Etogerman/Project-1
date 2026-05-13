@@ -112,7 +112,7 @@ class ProcessBotConstructorArrowsAction
 
             if ($this->blockRunSucceeded($blockRun)) {
                 $this->markArrowPassed($arrowRun);
-                $this->handle($execution, $dialog, $rootMessage, $targetBlock);
+                $this->handle($execution, $dialog, $rootMessage, $targetBlock, null, $cutoff);
 
                 continue;
             }
