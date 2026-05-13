@@ -196,6 +196,35 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertStringStartsWith('1 · 1 мин', $health['details'][2]['value']);
     }
 
+    public function test_bitrix24_connection_queue_health_tracks_configured_bot_reply_queue(): void
+    {
+        config()->set('bots.auto_reply_queue', 'bot-replies');
+
+        $admin = $this->makeAdmin();
+        $connection = $this->makeConnection([
+            'portal_domain' => 'crm.bot-replies-queue.test',
+        ]);
+        $queuedAt = now()->subMinute();
+
+        DB::table('jobs')->insert([
+            'queue' => 'bot-replies',
+            'payload' => json_encode(['displayName' => 'App\\Jobs\\ProcessAutoReplyJob'], JSON_THROW_ON_ERROR),
+            'attempts' => 0,
+            'reserved_at' => null,
+            'available_at' => $queuedAt->timestamp,
+            'created_at' => $queuedAt->timestamp,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()]);
+
+        $health = $component->instance()->getQueueHealthCard();
+
+        $this->assertSame('danger', $health['tone']);
+        $this->assertStringStartsWith('1 · 1 мин', $health['details'][2]['value']);
+        $this->assertSame('Запустите worker-ы очередей: default, bot-replies.', $health['recommendation']);
+    }
+
     public function test_bitrix24_connection_view_builds_bitrix_box_config_snippet(): void
     {
         $admin = $this->makeAdmin();

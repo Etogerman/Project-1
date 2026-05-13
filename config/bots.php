@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'auto_reply_queue' => env('BOT_AUTO_REPLY_QUEUE', 'bot-replies'),
+    'auto_reply_queue' => env('BOT_AUTO_REPLY_QUEUE', 'default'),
 
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY'),

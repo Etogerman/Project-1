@@ -70,7 +70,11 @@ class ProcessBotConstructorBlocksAction
             }
 
             if ($this->shouldProcessOutgoingArrows($executionBlockRun)) {
-                $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block);
+                $arrowIds = $this->outgoingArrowIdsAvailableAt($block, $legacyRun->created_at);
+
+                if ($arrowIds !== []) {
+                    $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $arrowIds);
+                }
             }
         }
 
@@ -191,7 +195,12 @@ class ProcessBotConstructorBlocksAction
             return null;
         }
 
-        $missingArrowIds = $this->missingOutgoingArrowIds($executionBlockRun);
+        $legacyRun = BotConstructorBlockRun::query()
+            ->where('inbound_message_id', $message->id)
+            ->where('bot_constructor_block_id', $block->id)
+            ->first();
+        $cutoff = $legacyRun?->created_at ?? $executionBlockRun->created_at;
+        $missingArrowIds = $this->missingOutgoingArrowIds($executionBlockRun, $cutoff);
 
         if ($missingArrowIds === []) {
             return $execution;
@@ -226,7 +235,7 @@ class ProcessBotConstructorBlocksAction
     /**
      * @return list<int>
      */
-    private function missingOutgoingArrowIds(BotConstructorExecutionBlockRun $executionBlockRun): array
+    private function missingOutgoingArrowIds(BotConstructorExecutionBlockRun $executionBlockRun, mixed $cutoff): array
     {
         $block = $executionBlockRun->block;
 
@@ -234,16 +243,7 @@ class ProcessBotConstructorBlocksAction
             return [];
         }
 
-        $expectedArrowIdsQuery = $block->sourceArrows()->active();
-
-        if ($executionBlockRun->created_at !== null) {
-            $expectedArrowIdsQuery->where('created_at', '<=', $executionBlockRun->created_at);
-        }
-
-        $expectedArrowIds = $expectedArrowIdsQuery
-            ->pluck('id')
-            ->map(fn (mixed $id): int => (int) $id)
-            ->all();
+        $expectedArrowIds = $this->outgoingArrowIdsAvailableAt($block, $cutoff);
 
         if ($expectedArrowIds === []) {
             return [];
@@ -258,6 +258,25 @@ class ProcessBotConstructorBlocksAction
             ->all();
 
         return array_values(array_diff($expectedArrowIds, $existingArrowIds));
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function outgoingArrowIdsAvailableAt(BotConstructorBlock $block, mixed $cutoff): array
+    {
+        $query = $block->sourceArrows()->active();
+
+        if ($cutoff !== null) {
+            $query
+                ->where('created_at', '<=', $cutoff)
+                ->where('updated_at', '<=', $cutoff);
+        }
+
+        return $query
+            ->pluck('id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
     }
 
     private function shouldProcessOutgoingArrows(BotConstructorExecutionBlockRun $run): bool

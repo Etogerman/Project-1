@@ -89,9 +89,14 @@ class BotConstructor extends Page
 
     public ?int $draftArrowPassLimitValue = null;
 
+    public int $draftArrowPassLimitConstant = BotConstructorConstant::DEFAULT_ARROW_PASS_LIMIT;
+
     public function mount(): void
     {
         abort_unless(static::canAccess(), 403);
+
+        $this->draftArrowPassLimitConstant = $this->currentArrowPassLimitConstantValue()
+            ?? BotConstructorConstant::DEFAULT_ARROW_PASS_LIMIT;
 
         $firstBlock = BotConstructorBlock::query()
             ->orderBy('id')
@@ -206,19 +211,13 @@ class BotConstructor extends Page
             ->first();
 
         if (! $targetBlock instanceof BotConstructorBlock) {
-            Notification::make()
-                ->danger()
-                ->title('Нет целевого блока')
-                ->body('Для стрелки нужно минимум два блока.')
-                ->send();
-
-            return;
+            $targetBlock = $sourceBlock;
         }
 
         $arrow = BotConstructorArrow::query()->create([
             'source_block_id' => $sourceBlock->id,
             'target_block_id' => $targetBlock->id,
-            'is_active' => true,
+            'is_active' => false,
             'delay_value' => 0,
             'delay_unit' => BotConstructorArrow::DELAY_UNIT_SECONDS,
             'cancel_if_left_source_block' => false,
@@ -234,7 +233,7 @@ class BotConstructor extends Page
         Notification::make()
             ->success()
             ->title('Стрелка добавлена')
-            ->body('Проверьте настройки соединения и нажмите «Сохранить».')
+            ->body('Стрелка создана выключенной. Проверьте настройки, включите её и нажмите «Сохранить».')
             ->send();
     }
 
@@ -373,6 +372,36 @@ class BotConstructor extends Page
             ->send();
     }
 
+    public function saveArrowPassLimitConstant(): void
+    {
+        abort_unless(static::canAccess(), 403);
+
+        $value = (int) $this->draftArrowPassLimitConstant;
+
+        if ($value < 1) {
+            throw ValidationException::withMessages([
+                'draftArrowPassLimitConstant' => 'Лимит переходов должен быть больше 0.',
+            ]);
+        }
+
+        BotConstructorConstant::query()->updateOrCreate(
+            ['key' => BotConstructorConstant::KEY_ARROW_PASS_LIMIT],
+            [
+                'name' => 'Лимит переходов клиента по стрелке',
+                'value_type' => BotConstructorConstant::VALUE_TYPE_INTEGER,
+                'value' => (string) $value,
+                'description' => 'Значение по умолчанию для стрелок конструктора в режиме константы.',
+            ],
+        );
+
+        $this->draftArrowPassLimitConstant = $value;
+
+        Notification::make()
+            ->success()
+            ->title('Константа сохранена')
+            ->send();
+    }
+
     /**
      * @return list<array{
      *     id:int,
@@ -508,10 +537,7 @@ class BotConstructor extends Page
 
     public function arrowPassLimitConstantLabel(): string
     {
-        $constant = BotConstructorConstant::query()
-            ->where('key', BotConstructorConstant::KEY_ARROW_PASS_LIMIT)
-            ->first();
-        $value = $constant?->integerValue();
+        $value = $this->currentArrowPassLimitConstantValue();
 
         return $value === null ? 'константа не задана' : (string) $value;
     }
@@ -552,7 +578,16 @@ class BotConstructor extends Page
 
     public function canCreateArrow(): bool
     {
-        return BotConstructorBlock::query()->count() >= 2;
+        return BotConstructorBlock::query()->exists();
+    }
+
+    private function currentArrowPassLimitConstantValue(): ?int
+    {
+        $constant = BotConstructorConstant::query()
+            ->where('key', BotConstructorConstant::KEY_ARROW_PASS_LIMIT)
+            ->first();
+
+        return $constant?->integerValue();
     }
 
     private function loadBlock(?BotConstructorBlock $block): void

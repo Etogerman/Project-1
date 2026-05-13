@@ -365,6 +365,24 @@
                             @enderror
                         </div>
 
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-limit-constant" title="Лимит переходов клиента по стрелке">Константа лимита</label>
+                            <div class="ac-bot-constructor-inline-grid">
+                                <input
+                                    id="bot-constructor-arrow-limit-constant"
+                                    type="number"
+                                    min="1"
+                                    wire:model.live="draftArrowPassLimitConstant"
+                                />
+                                <button type="button" class="ac-button ac-button--secondary" wire:click="saveArrowPassLimitConstant">
+                                    Сохранить
+                                </button>
+                            </div>
+                            @error('draftArrowPassLimitConstant')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
                         @if ($draftArrowPassLimitMode === \App\Models\BotConstructorArrow::PASS_LIMIT_MODE_MANUAL)
                             <div class="ac-scenario-builder-fieldset">
                                 <label for="bot-constructor-arrow-limit-value" title="Лимит переходов клиента по этой стрелке">Ручной лимит</label>

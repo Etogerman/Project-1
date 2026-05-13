@@ -23,7 +23,7 @@ use Throwable;
 
 class ProcessAutoReplyJob implements ShouldQueue
 {
-    public const DEFAULT_QUEUE = 'bot-replies';
+    public const DEFAULT_QUEUE = 'default';
 
     private const RESUME_COMPLETED_EVENT = 'bot.reply_resume_completed';
 

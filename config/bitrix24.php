@@ -60,7 +60,7 @@ return [
     'openlines' => [
         'telegram_connector_code' => env('BITRIX24_TELEGRAM_CONNECTOR_CODE'),
         'max_connector_code' => env('BITRIX24_MAX_CONNECTOR_CODE'),
-        'live_export_queue' => env('BITRIX24_OPENLINES_LIVE_EXPORT_QUEUE', 'bitrix-live'),
+        'live_export_queue' => env('BITRIX24_OPENLINES_LIVE_EXPORT_QUEUE', 'default'),
         'runtime_application_token_hashes' => array_values(array_filter(array_map(
             static fn (string $hash): string => trim($hash),
             explode(',', (string) env(

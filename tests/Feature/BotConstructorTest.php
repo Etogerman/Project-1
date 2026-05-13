@@ -10,6 +10,7 @@ use App\Models\BotConstructorArrow;
 use App\Models\BotConstructorArrowRun;
 use App\Models\BotConstructorBlock;
 use App\Models\BotConstructorBlockRun;
+use App\Models\BotConstructorConstant;
 use App\Models\BotConstructorExecution;
 use App\Models\BotConstructorExecutionBlockRun;
 use App\Models\Channel;
@@ -245,9 +246,12 @@ class BotConstructorTest extends TestCase
 
         $arrow = BotConstructorArrow::query()->firstOrFail();
 
+        $this->assertFalse($arrow->is_active);
+
         $component
             ->assertSet('selectedArrowId', $arrow->id)
             ->assertSee('Настройки соединения')
+            ->set('draftArrowIsActive', true)
             ->set('draftArrowTargetBlockId', $targetBlock->id)
             ->set('draftArrowDelayValue', 5)
             ->set('draftArrowDelayUnit', BotConstructorArrow::DELAY_UNIT_MINUTES)
@@ -304,6 +308,67 @@ class BotConstructorTest extends TestCase
             'id' => $scheduledRun->id,
             'status' => BotConstructorArrowRun::STATUS_CANCELLED,
         ]);
+    }
+
+    public function test_admin_can_create_disabled_self_loop_arrow_when_only_one_block_exists(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $block = BotConstructorBlock::factory()->create([
+            'title' => 'Меню',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->call('selectBlock', $block->id)
+            ->call('addArrow')
+            ->assertHasNoErrors()
+            ->assertSet('draftArrowIsActive', false)
+            ->assertSet('draftArrowSourceBlockId', $block->id)
+            ->assertSet('draftArrowTargetBlockId', $block->id);
+
+        $arrow = BotConstructorArrow::query()->firstOrFail();
+
+        $this->assertFalse($arrow->is_active);
+        $this->assertSame($block->id, $arrow->source_block_id);
+        $this->assertSame($block->id, $arrow->target_block_id);
+    }
+
+    public function test_admin_can_update_arrow_pass_limit_constant_from_constructor_ui(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        BotConstructorBlock::factory()->create();
+
+        Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->set('draftArrowPassLimitConstant', 17)
+            ->call('saveArrowPassLimitConstant')
+            ->assertHasNoErrors();
+
+        $constant = BotConstructorConstant::query()
+            ->where('key', BotConstructorConstant::KEY_ARROW_PASS_LIMIT)
+            ->firstOrFail();
+
+        $this->assertSame(17, $constant->integerValue());
+    }
+
+    public function test_arrow_pass_limit_constant_must_be_positive(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->set('draftArrowPassLimitConstant', 0)
+            ->call('saveArrowPassLimitConstant')
+            ->assertHasErrors(['draftArrowPassLimitConstant']);
     }
 
     public function test_arrow_ui_requires_condition_value_for_conditional_match(): void
@@ -1188,6 +1253,9 @@ class BotConstructorTest extends TestCase
         $oldTargetBlock = BotConstructorBlock::factory()->active()->create([
             'response_text' => 'Старая ветка восстановлена',
         ]);
+        $changedTargetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Изменённая ветка не должна запускаться',
+        ]);
         $newTargetBlock = BotConstructorBlock::factory()->active()->create([
             'response_text' => 'Новая ветка не должна запускаться',
         ]);
@@ -1204,6 +1272,14 @@ class BotConstructorTest extends TestCase
         $oldArrow->forceFill([
             'created_at' => $oldArrowCreatedAt,
             'updated_at' => $oldArrowCreatedAt,
+        ])->save();
+        $changedArrow = BotConstructorArrow::factory()->manualLimit(5)->create([
+            'source_block_id' => $startBlock->id,
+            'target_block_id' => $changedTargetBlock->id,
+        ]);
+        $changedArrow->forceFill([
+            'created_at' => $oldArrowCreatedAt,
+            'updated_at' => $newArrowCreatedAt,
         ])->save();
         $newArrow = BotConstructorArrow::factory()->manualLimit(5)->create([
             'source_block_id' => $startBlock->id,
@@ -1243,13 +1319,17 @@ class BotConstructorTest extends TestCase
             'next_sequence_number' => 2,
             'status' => BotConstructorExecution::STATUS_RUNNING,
         ]);
-        BotConstructorBlockRun::query()->create([
+        $legacyRun = BotConstructorBlockRun::query()->create([
             'inbound_message_id' => $message->id,
             'bot_constructor_block_id' => $startBlock->id,
             'outbound_message_id' => $oldOutboundMessage->id,
             'status' => BotConstructorBlockRun::STATUS_SENT,
             'error_message' => null,
         ]);
+        $legacyRun->forceFill([
+            'created_at' => $blockRunCreatedAt,
+            'updated_at' => $blockRunCreatedAt,
+        ])->save();
         $executionBlockRun = BotConstructorExecutionBlockRun::query()->create([
             'bot_constructor_execution_id' => $execution->id,
             'bot_constructor_block_id' => $startBlock->id,
@@ -1279,6 +1359,9 @@ class BotConstructorTest extends TestCase
         ]);
         $this->assertDatabaseMissing('bot_constructor_arrow_runs', [
             'bot_constructor_arrow_id' => $newArrow->id,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_arrow_runs', [
+            'bot_constructor_arrow_id' => $changedArrow->id,
         ]);
         $this->assertSame(
             [
