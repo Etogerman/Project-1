@@ -2163,6 +2163,9 @@ class BotConstructorTest extends TestCase
         $targetBlock = BotConstructorBlock::factory()->active()->create([
             'response_text' => '#{none}',
         ]);
+        $newDownstreamTargetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Новая delayed ветка не должна запускаться',
+        ]);
         $startBlock->channels()->attach($channel->id);
         BotConstructorArrow::factory()->delayed(5, BotConstructorArrow::DELAY_UNIT_MINUTES)->create([
             'source_block_id' => $startBlock->id,
@@ -2178,6 +2181,17 @@ class BotConstructorTest extends TestCase
         Queue::assertPushed(ProcessBotConstructorScheduledArrowJob::class);
 
         $arrowRun = BotConstructorArrowRun::query()->firstOrFail();
+        $this->assertNotNull($arrowRun->schema_cutoff_at);
+
+        $newDownstreamArrow = BotConstructorArrow::factory()->manualLimit(5)->create([
+            'source_block_id' => $targetBlock->id,
+            'target_block_id' => $newDownstreamTargetBlock->id,
+        ]);
+        $newDownstreamArrow->forceFill([
+            'created_at' => $arrowRun->schema_cutoff_at->copy()->addMinute(),
+            'updated_at' => $arrowRun->schema_cutoff_at->copy()->addMinute(),
+        ])->save();
+
         $arrowRun->forceFill([
             'scheduled_for' => now()->subSecond(),
         ])->save();
@@ -2187,7 +2201,11 @@ class BotConstructorTest extends TestCase
 
         $arrowRun->refresh();
 
+        Http::assertNothingSent();
         $this->assertSame(BotConstructorArrowRun::STATUS_PASSED, $arrowRun->status);
+        $this->assertDatabaseMissing('bot_constructor_arrow_runs', [
+            'bot_constructor_arrow_id' => $newDownstreamArrow->id,
+        ]);
         $this->assertDatabaseHas('bot_constructor_executions', [
             'trigger_type' => BotConstructorExecution::TRIGGER_SCHEDULED_ARROW,
             'parent_execution_id' => $arrowRun->bot_constructor_execution_id,

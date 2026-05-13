@@ -80,7 +80,7 @@ class ProcessBotConstructorArrowsAction
                     $dialog,
                     $rootMessage,
                     $arrow,
-                    $preserveCutoffForDelayedChain ? $cutoff : null,
+                    $cutoff,
                     $sourceExecutionBlockRun,
                 );
 
