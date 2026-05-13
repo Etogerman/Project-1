@@ -80,7 +80,9 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
                     'error_message' => $errorMessage,
                 ])->save();
 
-                $this->failRelatedExecution($run);
+                if ($status !== BotConstructorArrowRun::STATUS_PASSED) {
+                    $this->failRelatedExecution($run);
+                }
                 $count++;
             });
         }

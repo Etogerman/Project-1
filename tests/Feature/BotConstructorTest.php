@@ -2360,7 +2360,7 @@ class BotConstructorTest extends TestCase
         ]);
         $this->assertDatabaseHas('bot_constructor_executions', [
             'id' => $execution->id,
-            'status' => BotConstructorExecution::STATUS_FAILED,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
         ]);
     }
 
