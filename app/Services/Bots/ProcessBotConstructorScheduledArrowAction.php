@@ -80,6 +80,12 @@ class ProcessBotConstructorScheduledArrowAction
                 return;
             }
 
+            if (! $this->canContinueAutomation($rootMessage)) {
+                $this->cancelRun($arrowRun, 'Автоматизация контакта выключена или контакт сейчас собирает данные.');
+
+                return;
+            }
+
             $childExecution = BotConstructorExecution::query()->create([
                 'root_inbound_message_id' => $parentExecution->root_inbound_message_id,
                 'parent_execution_id' => $parentExecution->id,
@@ -182,6 +188,30 @@ class ProcessBotConstructorScheduledArrowAction
 
         return ! $state instanceof BotConstructorDialogState
             || (int) $state->current_block_id !== (int) $arrowRun->source_block_id;
+    }
+
+    private function canContinueAutomation(Message $message): bool
+    {
+        $message->loadMissing(['channel', 'contact']);
+
+        $contact = $message->contact;
+
+        if ($contact === null || ! $contact->isAutoReplyEnabled()) {
+            return false;
+        }
+
+        if ($contact->isInDataCollection() && ! $this->isAutoReplyOnlyMaxBotStartedEvent($message)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function isAutoReplyOnlyMaxBotStartedEvent(Message $message): bool
+    {
+        return $message->channel?->platform === Channel::PLATFORM_MAX
+            && data_get($message->raw_payload, 'update_type') === 'bot_started'
+            && filled($message->message_parameter);
     }
 
     private function cancelRun(BotConstructorArrowRun $arrowRun, string $message): void

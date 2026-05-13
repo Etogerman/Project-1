@@ -1177,6 +1177,93 @@ class BotConstructorTest extends TestCase
         ]);
     }
 
+    public function test_auto_reply_retry_does_not_recover_constructor_when_contact_auto_reply_is_disabled(): void
+    {
+        Http::fake();
+
+        $channel = $this->readyTelegramChannel();
+        $startBlock = BotConstructorBlock::factory()->active()->create([
+            'match_type' => BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD,
+            'match_values' => ['старт'],
+            'response_text' => 'Уже отправленный старт',
+        ]);
+        $targetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Ответ по стрелке не должен уйти',
+        ]);
+        $startBlock->channels()->attach($channel->id);
+        $arrow = BotConstructorArrow::factory()->manualLimit(5)->create([
+            'source_block_id' => $startBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $message = $this->createInboundMessage($channel, [
+            'text' => 'старт',
+            'provider_event_key' => 'constructor-disabled-contact-recovery',
+            'auto_reply_sent_at' => now(),
+        ]);
+        $message->contact?->forceFill([
+            'is_auto_reply_enabled' => false,
+        ])->save();
+        $oldOutboundMessage = Message::factory()->create([
+            'dialog_id' => $message->dialog_id,
+            'contact_id' => $message->contact_id,
+            'contact_identity_id' => $message->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
+            'reply_to_message_id' => $message->id,
+            'external_chat_id' => $message->external_chat_id,
+            'external_message_id' => 'already-sent-disabled-contact',
+            'text' => 'Уже отправленный старт',
+        ]);
+        $execution = BotConstructorExecution::query()->create([
+            'root_inbound_message_id' => $message->id,
+            'parent_execution_id' => null,
+            'started_by_arrow_run_id' => null,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'trigger_type' => BotConstructorExecution::TRIGGER_INBOUND,
+            'auto_transition_count' => 0,
+            'next_sequence_number' => 2,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        BotConstructorBlockRun::query()->create([
+            'inbound_message_id' => $message->id,
+            'bot_constructor_block_id' => $startBlock->id,
+            'outbound_message_id' => $oldOutboundMessage->id,
+            'status' => BotConstructorBlockRun::STATUS_SENT,
+            'error_message' => null,
+        ]);
+        BotConstructorExecutionBlockRun::query()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $startBlock->id,
+            'bot_constructor_arrow_run_id' => null,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+            'status' => BotConstructorExecutionBlockRun::STATUS_SENT,
+            'outbound_message_id' => $oldOutboundMessage->id,
+            'processing_started_at' => null,
+            'error_message' => null,
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('bot_constructor_arrow_runs', [
+            'bot_constructor_arrow_id' => $arrow->id,
+        ]);
+        $this->assertSame(
+            ['Уже отправленный старт'],
+            Message::query()
+                ->where('reply_to_message_id', $message->id)
+                ->orderBy('id')
+                ->pluck('text')
+                ->all(),
+        );
+    }
+
     public function test_retry_recovers_only_missing_outgoing_arrows_by_arrow_id(): void
     {
         Http::fake([
@@ -2115,6 +2202,58 @@ class BotConstructorTest extends TestCase
         $this->assertDatabaseHas('bot_constructor_dialog_states', [
             'dialog_id' => $message->dialog_id,
             'current_block_id' => $targetBlock->id,
+        ]);
+    }
+
+    public function test_scheduled_arrow_is_cancelled_when_contact_auto_reply_is_disabled(): void
+    {
+        Http::fake();
+
+        $channel = $this->readyTelegramChannel();
+        $sourceBlock = BotConstructorBlock::factory()->active()->create();
+        $targetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Отложенный ответ не должен уйти',
+        ]);
+        $arrow = BotConstructorArrow::factory()->manualLimit(5)->delayed()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-disabled-contact-scheduled',
+        ]);
+        $message->contact?->forceFill([
+            'is_auto_reply_enabled' => false,
+        ])->save();
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'status' => BotConstructorExecution::STATUS_COMPLETED,
+        ]);
+        $arrowRun = BotConstructorArrowRun::factory()->scheduled()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'inbound_message_id' => $message->id,
+            'scheduled_for' => now()->subSecond(),
+        ]);
+
+        $this->artisan('bot-constructor:run-scheduled-arrows')
+            ->assertExitCode(0);
+
+        Http::assertNothingSent();
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $arrowRun->id,
+            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_execution_block_runs', [
+            'bot_constructor_arrow_run_id' => $arrowRun->id,
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $message->id,
+            'text' => 'Отложенный ответ не должен уйти',
         ]);
     }
 
