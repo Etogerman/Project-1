@@ -73,7 +73,7 @@ class ProcessBotConstructorBlocksAction
                 $arrowIds = $this->outgoingArrowIdsAvailableAt($block, $legacyRun->created_at);
 
                 if ($arrowIds !== []) {
-                    $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $arrowIds);
+                    $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $arrowIds, $legacyRun->created_at);
                 }
             }
         }
@@ -206,7 +206,7 @@ class ProcessBotConstructorBlocksAction
             return $execution;
         }
 
-        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds);
+        $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block, $missingArrowIds, $cutoff);
 
         return $execution;
     }
@@ -270,7 +270,10 @@ class ProcessBotConstructorBlocksAction
         if ($cutoff !== null) {
             $query
                 ->where('created_at', '<=', $cutoff)
-                ->where('updated_at', '<=', $cutoff);
+                ->where('updated_at', '<=', $cutoff)
+                ->whereHas('targetBlock', function ($targetQuery) use ($cutoff): void {
+                    $targetQuery->where('updated_at', '<=', $cutoff);
+                });
         }
 
         return $query

@@ -30,6 +30,7 @@ class ProcessBotConstructorArrowsAction
         Message $rootMessage,
         BotConstructorBlock $sourceBlock,
         ?array $onlyArrowIds = null,
+        mixed $cutoff = null,
     ): void {
         $sourceBlock->loadMissing('sourceArrows.targetBlock');
 
@@ -47,6 +48,15 @@ class ProcessBotConstructorArrowsAction
             }
 
             $arrowQuery->whereIn('id', $onlyArrowIds);
+        }
+
+        if ($cutoff !== null) {
+            $arrowQuery
+                ->where('created_at', '<=', $cutoff)
+                ->where('updated_at', '<=', $cutoff)
+                ->whereHas('targetBlock', function ($targetQuery) use ($cutoff): void {
+                    $targetQuery->where('updated_at', '<=', $cutoff);
+                });
         }
 
         $arrows = $arrowQuery->get();
