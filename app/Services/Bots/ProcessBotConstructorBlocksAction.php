@@ -5,6 +5,7 @@ namespace App\Services\Bots;
 use App\Models\BotConstructorArrowRun;
 use App\Models\BotConstructorBlock;
 use App\Models\BotConstructorBlockRun;
+use App\Models\BotConstructorDialogState;
 use App\Models\BotConstructorExecution;
 use App\Models\BotConstructorExecutionBlockRun;
 use App\Models\Channel;
@@ -66,10 +67,10 @@ class ProcessBotConstructorBlocksAction
                     $executionBlockRun,
                     $legacyRun,
                 );
+            }
 
-                if ($this->shouldProcessOutgoingArrows($executionBlockRun)) {
-                    $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block);
-                }
+            if ($this->shouldProcessOutgoingArrows($executionBlockRun)) {
+                $this->processBotConstructorArrowsAction->handle($execution, $dialog, $message, $block);
             }
         }
 
@@ -325,15 +326,36 @@ class ProcessBotConstructorBlocksAction
         BotConstructorBlock $block,
         BotConstructorBlockRun $legacyRun,
     ): BotConstructorExecutionBlockRun {
-        return $this->createExecutionBlockRunAction->handle(
+        $status = match ($legacyRun->status) {
+            BotConstructorBlockRun::STATUS_SENT => BotConstructorExecutionBlockRun::STATUS_SENT,
+            BotConstructorBlockRun::STATUS_NO_REPLY => BotConstructorExecutionBlockRun::STATUS_NO_REPLY,
+            BotConstructorBlockRun::STATUS_FAILED => BotConstructorExecutionBlockRun::STATUS_FAILED,
+            default => BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN,
+        };
+
+        $run = $this->createExecutionBlockRunAction->handle(
             $execution,
             $dialog,
             $channel,
             $block,
-            BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN,
-            errorMessage: 'Старый факт обработки уже существовал, trace восстановлен после частичного сбоя.',
+            $status,
+            errorMessage: $status === BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN
+                ? 'Старый факт обработки уже существовал, trace восстановлен после частичного сбоя.'
+                : $legacyRun->error_message,
             outboundMessageId: $legacyRun->outbound_message_id === null ? null : (int) $legacyRun->outbound_message_id,
         );
+
+        if ($this->shouldProcessOutgoingArrows($run)) {
+            BotConstructorDialogState::query()->updateOrCreate(
+                ['dialog_id' => $dialog->id],
+                [
+                    'current_block_id' => $block->id,
+                    'last_execution_id' => $execution->id,
+                ],
+            );
+        }
+
+        return $run;
     }
 
     private function wasUniqueConstraintViolation(QueryException $exception): bool

@@ -13,6 +13,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\ContactStartTag;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bots\QueueContactIdentityAvatarSyncAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\MergeContactsAction;
@@ -26,6 +27,13 @@ use Tests\TestCase;
 class StoreInboundMessageActionTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+
+        parent::tearDown();
+    }
 
     public function test_store_inbound_message_persists_received_at_in_application_timezone(): void
     {
@@ -100,6 +108,8 @@ class StoreInboundMessageActionTest extends TestCase
     public function test_store_inbound_message_queues_telegram_avatar_sync_job(): void
     {
         Queue::fake();
+        $now = Carbon::parse('2026-04-17 15:00:05');
+        Carbon::setTestNow($now);
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
@@ -119,15 +129,19 @@ class StoreInboundMessageActionTest extends TestCase
             ),
         );
 
-        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult): bool {
+        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult, $now): bool {
             return $job->contactIdentityId === $storedResult->message->contact_identity_id
-                && $job->avatarUrl === null;
+                && $job->avatarUrl === null
+                && $job->delay instanceof Carbon
+                && $job->delay->equalTo($now->copy()->addSeconds(QueueContactIdentityAvatarSyncAction::SYNC_DELAY_SECONDS));
         });
     }
 
     public function test_store_inbound_message_queues_max_avatar_sync_job_when_payload_contains_avatar_url(): void
     {
         Queue::fake();
+        $now = Carbon::parse('2026-04-17 15:05:05');
+        Carbon::setTestNow($now);
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_MAX,
@@ -154,16 +168,20 @@ class StoreInboundMessageActionTest extends TestCase
             ),
         );
 
-        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult): bool {
+        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult, $now): bool {
             return $job->contactIdentityId === $storedResult->message->contact_identity_id
                 && $job->avatarUrl === 'https://cdn.max.example/avatar.png'
-                && $job->externalChatId === '700';
+                && $job->externalChatId === '700'
+                && $job->delay instanceof Carbon
+                && $job->delay->equalTo($now->copy()->addSeconds(QueueContactIdentityAvatarSyncAction::SYNC_DELAY_SECONDS));
         });
     }
 
     public function test_store_inbound_message_queues_max_avatar_sync_job_when_payload_has_chat_id_without_avatar_url(): void
     {
         Queue::fake();
+        $now = Carbon::parse('2026-04-19 10:00:05');
+        Carbon::setTestNow($now);
 
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_MAX,
@@ -190,10 +208,12 @@ class StoreInboundMessageActionTest extends TestCase
             ),
         );
 
-        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult): bool {
+        Queue::assertPushed(SyncContactIdentityAvatarJob::class, function (SyncContactIdentityAvatarJob $job) use ($storedResult, $now): bool {
             return $job->contactIdentityId === $storedResult->message->contact_identity_id
                 && $job->avatarUrl === null
-                && $job->externalChatId === '701';
+                && $job->externalChatId === '701'
+                && $job->delay instanceof Carbon
+                && $job->delay->equalTo($now->copy()->addSeconds(QueueContactIdentityAvatarSyncAction::SYNC_DELAY_SECONDS));
         });
     }
 

@@ -1,6 +1,8 @@
 <?php
 
 return [
+    'auto_reply_queue' => env('BOT_AUTO_REPLY_QUEUE', 'bot-replies'),
+
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY'),
         'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),

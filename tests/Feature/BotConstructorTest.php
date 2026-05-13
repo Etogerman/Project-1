@@ -722,17 +722,103 @@ class BotConstructorTest extends TestCase
         $this->assertDatabaseHas('bot_constructor_execution_block_runs', [
             'bot_constructor_block_id' => $block->id,
             'outbound_message_id' => $oldOutboundMessage->id,
-            'status' => BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN,
+            'status' => BotConstructorExecutionBlockRun::STATUS_SENT,
             'sequence_number' => 1,
         ]);
-        $this->assertDatabaseMissing('bot_constructor_dialog_states', [
+        $this->assertDatabaseHas('bot_constructor_dialog_states', [
             'dialog_id' => $message->dialog_id,
+            'current_block_id' => $block->id,
         ]);
         $this->assertSame(
             BotConstructorExecution::STATUS_COMPLETED,
             BotConstructorExecution::query()->firstOrFail()->status,
         );
         $this->assertSame(2, Message::query()->count());
+    }
+
+    public function test_existing_legacy_run_without_execution_trace_runs_missing_outgoing_arrows(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                    'result' => ['message_id' => 2201],
+                ]),
+        ]);
+
+        $channel = $this->readyTelegramChannel();
+        $startBlock = BotConstructorBlock::factory()->active()->create([
+            'match_type' => BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD,
+            'match_values' => ['старт'],
+            'response_text' => 'Уже отправленный старт',
+        ]);
+        $targetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Ответ по стрелке после recovery',
+        ]);
+        $startBlock->channels()->attach($channel->id);
+        $arrow = BotConstructorArrow::factory()->manualLimit(5)->create([
+            'source_block_id' => $startBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $message = $this->createInboundMessage($channel, [
+            'text' => 'старт',
+            'provider_event_key' => 'constructor-partial-recovery-arrow',
+        ]);
+        $oldOutboundMessage = Message::factory()->create([
+            'dialog_id' => $message->dialog_id,
+            'contact_id' => $message->contact_id,
+            'contact_identity_id' => $message->contact_identity_id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
+            'reply_to_message_id' => $message->id,
+            'provider_event_key' => null,
+            'external_chat_id' => $message->external_chat_id,
+            'external_message_id' => 'already-sent-start',
+            'text' => 'Уже отправленный старт',
+        ]);
+        BotConstructorBlockRun::query()->create([
+            'inbound_message_id' => $message->id,
+            'bot_constructor_block_id' => $startBlock->id,
+            'outbound_message_id' => $oldOutboundMessage->id,
+            'status' => BotConstructorBlockRun::STATUS_SENT,
+            'error_message' => null,
+        ]);
+
+        app(ProcessBotConstructorBlocksAction::class)->handle($message);
+        app(ProcessBotConstructorBlocksAction::class)->handle($message);
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseCount('bot_constructor_block_runs', 1);
+        $this->assertDatabaseCount('bot_constructor_executions', 1);
+        $this->assertDatabaseCount('bot_constructor_arrow_runs', 1);
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'bot_constructor_arrow_id' => $arrow->id,
+            'source_block_id' => $startBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'status' => BotConstructorArrowRun::STATUS_PASSED,
+        ]);
+        $this->assertSame(
+            [
+                [$startBlock->id, BotConstructorExecutionBlockRun::STATUS_SENT, 1],
+                [$targetBlock->id, BotConstructorExecutionBlockRun::STATUS_SENT, 2],
+            ],
+            BotConstructorExecutionBlockRun::query()
+                ->orderBy('sequence_number')
+                ->get(['bot_constructor_block_id', 'status', 'sequence_number'])
+                ->map(fn (BotConstructorExecutionBlockRun $run): array => [
+                    $run->bot_constructor_block_id,
+                    $run->status,
+                    $run->sequence_number,
+                ])
+                ->all(),
+        );
+        $this->assertDatabaseHas('messages', [
+            'reply_to_message_id' => $message->id,
+            'text' => 'Ответ по стрелке после recovery',
+        ]);
     }
 
     public function test_retry_reuses_running_inbound_execution_when_only_part_of_start_blocks_were_traced(): void

@@ -23,6 +23,8 @@ use Throwable;
 
 class ProcessAutoReplyJob implements ShouldQueue
 {
+    public const DEFAULT_QUEUE = 'bot-replies';
+
     private const RESUME_COMPLETED_EVENT = 'bot.reply_resume_completed';
 
     use Dispatchable;
@@ -32,7 +34,17 @@ class ProcessAutoReplyJob implements ShouldQueue
 
     public int $tries = 3;
 
-    public function __construct(public int $inboundMessageId) {}
+    public function __construct(public int $inboundMessageId)
+    {
+        $this->onQueue(self::queueName());
+    }
+
+    public static function queueName(): string
+    {
+        $queue = trim((string) config('bots.auto_reply_queue', self::DEFAULT_QUEUE));
+
+        return $queue !== '' ? $queue : self::DEFAULT_QUEUE;
+    }
 
     /**
      * @return list<int>
