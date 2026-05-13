@@ -54,13 +54,21 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
 
                 $arrow = BotConstructorArrow::withTrashed()->find($run->bot_constructor_arrow_id);
                 $isCancelled = ! $arrow instanceof BotConstructorArrow || $arrow->trashed() || ! $arrow->is_active;
-                $hasUncertainDelivery = $this->hasRelatedUncertainDeliveryBlockRun($run);
+                $relatedBlockRunStatus = $this->relatedBlockRunStatus($run);
                 $status = match (true) {
                     $isCancelled => BotConstructorArrowRun::STATUS_CANCELLED,
-                    $hasUncertainDelivery => BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN,
+                    in_array($relatedBlockRunStatus, [
+                        BotConstructorExecutionBlockRun::STATUS_SENT,
+                        BotConstructorExecutionBlockRun::STATUS_NO_REPLY,
+                    ], true) => BotConstructorArrowRun::STATUS_PASSED,
+                    in_array($relatedBlockRunStatus, [
+                        BotConstructorExecutionBlockRun::STATUS_PROCESSING,
+                        BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN,
+                    ], true) => BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN,
                     default => BotConstructorArrowRun::STATUS_FAILED,
                 };
                 $errorMessage = match ($status) {
+                    BotConstructorArrowRun::STATUS_PASSED => null,
                     BotConstructorArrowRun::STATUS_CANCELLED => 'Стрелка удалена или выключена во время выполнения.',
                     BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN => 'Доставка целевого блока не подтверждена: выполнение стрелки зависло и было остановлено по таймауту.',
                     default => 'Выполнение стрелки зависло и было остановлено по таймауту.',
@@ -80,15 +88,12 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
         return $count;
     }
 
-    private function hasRelatedUncertainDeliveryBlockRun(BotConstructorArrowRun $run): bool
+    private function relatedBlockRunStatus(BotConstructorArrowRun $run): ?string
     {
         return BotConstructorExecutionBlockRun::query()
             ->where('bot_constructor_arrow_run_id', $run->id)
-            ->whereIn('status', [
-                BotConstructorExecutionBlockRun::STATUS_PROCESSING,
-                BotConstructorExecutionBlockRun::STATUS_DELIVERY_UNCERTAIN,
-            ])
-            ->exists();
+            ->orderByDesc('id')
+            ->value('status');
     }
 
     private function cleanupBlockRuns(mixed $threshold): int

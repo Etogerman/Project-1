@@ -2312,6 +2312,58 @@ class BotConstructorTest extends TestCase
         ]);
     }
 
+    public function test_cleanup_marks_stale_arrow_with_successful_block_as_passed(): void
+    {
+        $channel = $this->readyTelegramChannel();
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-cleanup-passed-arrow',
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->active()->create();
+        $targetBlock = BotConstructorBlock::factory()->active()->create();
+        $arrow = BotConstructorArrow::factory()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        $arrowRun = BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'processing_started_at' => now()->subMinutes(20),
+            'status' => BotConstructorArrowRun::STATUS_PROCESSING,
+        ]);
+        BotConstructorExecutionBlockRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $targetBlock->id,
+            'bot_constructor_arrow_run_id' => $arrowRun->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+            'status' => BotConstructorExecutionBlockRun::STATUS_SENT,
+        ]);
+
+        $this->artisan('bot-constructor:cleanup-processing-runs')
+            ->assertExitCode(0);
+
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $arrowRun->id,
+            'status' => BotConstructorArrowRun::STATUS_PASSED,
+            'processing_started_at' => null,
+            'error_message' => null,
+        ]);
+        $this->assertDatabaseHas('bot_constructor_executions', [
+            'id' => $execution->id,
+            'status' => BotConstructorExecution::STATUS_FAILED,
+        ]);
+    }
+
     public function test_cleanup_marks_stale_processing_runs_safely(): void
     {
         $channel = $this->readyTelegramChannel();
