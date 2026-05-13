@@ -1533,6 +1533,7 @@
     }
 
     .ac-bot-constructor-arrow__hit {
+        fill: none;
         stroke: transparent;
         stroke-width: 18;
         pointer-events: stroke;
@@ -1540,10 +1541,16 @@
     }
 
     .ac-bot-constructor-arrow__line {
+        fill: none;
         stroke: #8aa0bd;
         stroke-width: 2.5;
         stroke-linecap: round;
+        stroke-linejoin: round;
         pointer-events: none;
+    }
+
+    .ac-bot-constructor-arrow.is-self-loop .ac-bot-constructor-arrow__line {
+        stroke-width: 3;
     }
 
     .ac-bot-constructor-arrow.is-selected .ac-bot-constructor-arrow__line {
