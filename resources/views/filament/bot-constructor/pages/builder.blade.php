@@ -32,6 +32,68 @@
 
                     return Number.isFinite(y) ? y : 64;
                 },
+                nodeWidth() {
+                    return 224;
+                },
+                nodeHeight() {
+                    return 84;
+                },
+                gridSize() {
+                    return 32;
+                },
+                arrowPath(sourceBlockId, targetBlockId) {
+                    const sourceX = this.nodeX(sourceBlockId);
+                    const sourceY = this.nodeY(sourceBlockId);
+                    const targetX = this.nodeX(targetBlockId);
+                    const targetY = this.nodeY(targetBlockId);
+                    const width = this.nodeWidth();
+                    const height = this.nodeHeight();
+                    const grid = this.gridSize();
+                    const startX = sourceX + width;
+                    const startY = sourceY + (height / 2);
+
+                    if (Number(sourceBlockId) === Number(targetBlockId)) {
+                        const loopGap = grid / 2;
+                        const exitX = sourceX + (width * 0.56);
+                        const exitY = sourceY;
+                        const topY = Math.max(8, sourceY - loopGap);
+                        const rightX = sourceX + width + loopGap;
+                        const cornerRadius = 12;
+                        const entryX = sourceX + width;
+                        const entryY = sourceY + (height / 2);
+
+                        return `M ${exitX} ${exitY} L ${exitX} ${topY + cornerRadius} Q ${exitX} ${topY}, ${exitX + cornerRadius} ${topY} L ${rightX - cornerRadius} ${topY} Q ${rightX} ${topY}, ${rightX} ${topY + cornerRadius} L ${rightX} ${entryY - cornerRadius} Q ${rightX} ${entryY}, ${entryX} ${entryY}`;
+                    }
+
+                    return `M ${startX} ${startY} L ${targetX} ${targetY + (height / 2)}`;
+                },
+                arrowLabelX(sourceBlockId, targetBlockId) {
+                    if (Number(sourceBlockId) === Number(targetBlockId)) {
+                        const width = this.nodeWidth();
+                        const height = this.nodeHeight();
+                        const loopGap = this.gridSize() / 2;
+                        const cornerRadius = 12;
+                        const exitX = this.nodeX(sourceBlockId) + (width * 0.56);
+                        const rightX = this.nodeX(sourceBlockId) + width + loopGap;
+                        const topStartX = exitX + cornerRadius;
+                        const topEndX = rightX - cornerRadius;
+                        const topLength = topEndX - topStartX;
+                        const beforeTopLength = loopGap + cornerRadius;
+                        const afterTopLength = (height / 2) + loopGap + cornerRadius;
+                        const halfLength = (beforeTopLength + topLength + afterTopLength) / 2;
+
+                        return topStartX + Math.min(topLength, Math.max(0, halfLength - beforeTopLength));
+                    }
+
+                    return (this.nodeX(sourceBlockId) + this.nodeX(targetBlockId) + this.nodeWidth()) / 2;
+                },
+                arrowLabelY(sourceBlockId, targetBlockId) {
+                    if (Number(sourceBlockId) === Number(targetBlockId)) {
+                        return Math.max(20, this.nodeY(sourceBlockId) - (this.gridSize() / 2) - 8);
+                    }
+
+                    return (this.nodeY(sourceBlockId) + this.nodeY(targetBlockId) + this.nodeHeight()) / 2 - 8;
+                },
                 startPointer(event, blockId) {
                     if (this.isSavingPosition) {
                         return;
@@ -169,38 +231,32 @@
                     <div class="ac-scenario-builder-canvas__surface" x-ref="surface">
                         <svg class="ac-bot-constructor-arrows" width="100%" height="100%" aria-label="Стрелки конструктора">
                             <defs>
-                                <marker id="ac-bot-constructor-arrow-head" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
-                                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                                <marker id="ac-bot-constructor-arrow-head" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                                    <path d="M 0 0 L 8 4 L 0 8 z" />
                                 </marker>
-                                <marker id="ac-bot-constructor-arrow-head-selected" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
-                                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                                <marker id="ac-bot-constructor-arrow-head-selected" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                                    <path d="M 0 0 L 8 4 L 0 8 z" />
                                 </marker>
                             </defs>
                             @foreach ($arrows as $arrow)
                                 <g
                                     wire:key="bot-constructor-canvas-arrow-{{ $arrow['id'] }}"
-                                    class="ac-bot-constructor-arrow {{ $arrow['is_selected'] ? 'is-selected' : '' }} {{ $arrow['is_active'] ? '' : 'is-inactive' }}"
+                                    class="ac-bot-constructor-arrow {{ (int) $arrow['source_block_id'] === (int) $arrow['target_block_id'] ? 'is-self-loop' : '' }} {{ $arrow['is_selected'] ? 'is-selected' : '' }} {{ $arrow['is_active'] ? '' : 'is-inactive' }}"
                                 >
-                                    <line
+                                    <path
                                         class="ac-bot-constructor-arrow__hit"
-                                        x-bind:x1="nodeX({{ $arrow['source_block_id'] }}) + 224"
-                                        x-bind:y1="nodeY({{ $arrow['source_block_id'] }}) + 42"
-                                        x-bind:x2="nodeX({{ $arrow['target_block_id'] }})"
-                                        x-bind:y2="nodeY({{ $arrow['target_block_id'] }}) + 42"
+                                        x-bind:d="arrowPath({{ $arrow['source_block_id'] }}, {{ $arrow['target_block_id'] }})"
                                         wire:click.stop="selectArrow({{ $arrow['id'] }})"
                                     />
-                                    <line
+                                    <path
                                         class="ac-bot-constructor-arrow__line"
-                                        x-bind:x1="nodeX({{ $arrow['source_block_id'] }}) + 224"
-                                        x-bind:y1="nodeY({{ $arrow['source_block_id'] }}) + 42"
-                                        x-bind:x2="nodeX({{ $arrow['target_block_id'] }})"
-                                        x-bind:y2="nodeY({{ $arrow['target_block_id'] }}) + 42"
+                                        x-bind:d="arrowPath({{ $arrow['source_block_id'] }}, {{ $arrow['target_block_id'] }})"
                                         marker-end="{{ $arrow['is_selected'] ? 'url(#ac-bot-constructor-arrow-head-selected)' : 'url(#ac-bot-constructor-arrow-head)' }}"
                                     />
                                     <text
                                         class="ac-bot-constructor-arrow__label"
-                                        x-bind:x="(nodeX({{ $arrow['source_block_id'] }}) + nodeX({{ $arrow['target_block_id'] }}) + 224) / 2"
-                                        x-bind:y="(nodeY({{ $arrow['source_block_id'] }}) + nodeY({{ $arrow['target_block_id'] }}) + 84) / 2 - 8"
+                                        x-bind:x="arrowLabelX({{ $arrow['source_block_id'] }}, {{ $arrow['target_block_id'] }})"
+                                        x-bind:y="arrowLabelY({{ $arrow['source_block_id'] }}, {{ $arrow['target_block_id'] }})"
                                         wire:click.stop="selectArrow({{ $arrow['id'] }})"
                                     >
                                         {{ $arrow['delay_label'] }}
