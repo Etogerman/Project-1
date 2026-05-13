@@ -2,7 +2,10 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\BotConstructorArrow;
+use App\Models\BotConstructorArrowRun;
 use App\Models\BotConstructorBlock;
+use App\Models\BotConstructorConstant;
 use App\Models\Channel;
 use App\Models\User;
 use BackedEnum;
@@ -11,6 +14,7 @@ use Filament\Pages\Page;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -42,6 +46,8 @@ class BotConstructor extends Page
 
     public ?int $selectedBlockId = null;
 
+    public ?int $selectedArrowId = null;
+
     public string $draftTitle = self::DEFAULT_TITLE;
 
     public bool $draftIsActive = false;
@@ -60,6 +66,28 @@ class BotConstructor extends Page
     public int $draftX = self::DEFAULT_X;
 
     public int $draftY = self::DEFAULT_Y;
+
+    public int $draftArrowSourceBlockId = 0;
+
+    public int $draftArrowTargetBlockId = 0;
+
+    public bool $draftArrowIsActive = true;
+
+    public int $draftArrowDelayValue = 0;
+
+    public string $draftArrowDelayUnit = BotConstructorArrow::DELAY_UNIT_SECONDS;
+
+    public bool $draftArrowCancelIfLeftSourceBlock = false;
+
+    public string $draftArrowConditionMatchType = BotConstructorArrow::CONDITION_ALWAYS;
+
+    public string $draftArrowConditionValue = '';
+
+    public int $draftArrowPriority = 100;
+
+    public string $draftArrowPassLimitMode = BotConstructorArrow::PASS_LIMIT_MODE_CONSTANT;
+
+    public ?int $draftArrowPassLimitValue = null;
 
     public function mount(): void
     {
@@ -129,6 +157,13 @@ class BotConstructor extends Page
         $this->loadBlock($this->findBlock($blockId));
     }
 
+    public function selectArrow(int $arrowId): void
+    {
+        abort_unless(static::canAccess(), 403);
+
+        $this->loadArrow($this->findArrow($arrowId));
+    }
+
     public function moveBlock(int $blockId, int $x, int $y): void
     {
         abort_unless(static::canAccess(), 403);
@@ -145,6 +180,73 @@ class BotConstructor extends Page
         }
 
         $this->skipRender();
+    }
+
+    public function addArrow(): void
+    {
+        abort_unless(static::canAccess(), 403);
+
+        $sourceBlock = $this->selectedBlockId !== null
+            ? BotConstructorBlock::query()->find($this->selectedBlockId)
+            : BotConstructorBlock::query()->orderBy('id')->first();
+
+        if (! $sourceBlock instanceof BotConstructorBlock) {
+            Notification::make()
+                ->danger()
+                ->title('Нет исходного блока')
+                ->body('Сначала создайте стартовое условие.')
+                ->send();
+
+            return;
+        }
+
+        $targetBlock = BotConstructorBlock::query()
+            ->where('id', '!=', $sourceBlock->id)
+            ->orderBy('id')
+            ->first();
+
+        if (! $targetBlock instanceof BotConstructorBlock) {
+            Notification::make()
+                ->danger()
+                ->title('Нет целевого блока')
+                ->body('Для стрелки нужно минимум два блока.')
+                ->send();
+
+            return;
+        }
+
+        $arrow = BotConstructorArrow::query()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'is_active' => true,
+            'delay_value' => 0,
+            'delay_unit' => BotConstructorArrow::DELAY_UNIT_SECONDS,
+            'cancel_if_left_source_block' => false,
+            'condition_match_type' => BotConstructorArrow::CONDITION_ALWAYS,
+            'condition_value' => null,
+            'priority' => 100,
+            'pass_limit_mode' => BotConstructorArrow::PASS_LIMIT_MODE_CONSTANT,
+            'pass_limit_value' => null,
+        ]);
+
+        $this->loadArrow($arrow);
+
+        Notification::make()
+            ->success()
+            ->title('Стрелка добавлена')
+            ->body('Проверьте настройки соединения и нажмите «Сохранить».')
+            ->send();
+    }
+
+    public function saveSelectedElement(): void
+    {
+        if ($this->selectedArrowId !== null) {
+            $this->saveArrow();
+
+            return;
+        }
+
+        $this->saveBlock();
     }
 
     public function saveBlock(): void
@@ -184,6 +286,90 @@ class BotConstructor extends Page
         Notification::make()
             ->success()
             ->title('Блок сохранён')
+            ->send();
+    }
+
+    public function saveArrow(): void
+    {
+        abort_unless(static::canAccess(), 403);
+
+        if ($this->selectedArrowId === null) {
+            throw ValidationException::withMessages([
+                'selectedArrowId' => 'Сначала выберите стрелку.',
+            ]);
+        }
+
+        $arrow = $this->findArrow($this->selectedArrowId);
+        $sourceBlockId = (int) $this->draftArrowSourceBlockId;
+        $targetBlockId = (int) $this->draftArrowTargetBlockId;
+        $conditionMatchType = trim($this->draftArrowConditionMatchType);
+        $conditionValue = trim($this->draftArrowConditionValue);
+        $passLimitMode = trim($this->draftArrowPassLimitMode);
+        $passLimitValue = $passLimitMode === BotConstructorArrow::PASS_LIMIT_MODE_MANUAL
+            ? (int) $this->draftArrowPassLimitValue
+            : null;
+
+        $this->validateArrowDraft($sourceBlockId, $targetBlockId, $conditionMatchType, $conditionValue, $passLimitMode, $passLimitValue);
+
+        $arrow->forceFill([
+            'source_block_id' => $sourceBlockId,
+            'target_block_id' => $targetBlockId,
+            'is_active' => $this->draftArrowIsActive,
+            'delay_value' => (int) $this->draftArrowDelayValue,
+            'delay_unit' => $this->draftArrowDelayUnit,
+            'cancel_if_left_source_block' => $this->draftArrowCancelIfLeftSourceBlock,
+            'condition_match_type' => $conditionMatchType,
+            'condition_value' => $conditionMatchType === BotConstructorArrow::CONDITION_ALWAYS ? null : $conditionValue,
+            'priority' => (int) $this->draftArrowPriority,
+            'pass_limit_mode' => $passLimitMode,
+            'pass_limit_value' => $passLimitValue,
+        ])->save();
+
+        $this->loadArrow($arrow->fresh(['sourceBlock', 'targetBlock']));
+
+        Notification::make()
+            ->success()
+            ->title('Стрелка сохранена')
+            ->send();
+    }
+
+    public function deleteArrow(): void
+    {
+        abort_unless(static::canAccess(), 403);
+
+        if ($this->selectedArrowId === null) {
+            return;
+        }
+
+        $sourceBlockId = null;
+
+        DB::transaction(function () use (&$sourceBlockId): void {
+            $arrow = $this->findArrow($this->selectedArrowId);
+            $sourceBlockId = (int) $arrow->source_block_id;
+
+            $arrow->delete();
+
+            BotConstructorArrowRun::query()
+                ->where('bot_constructor_arrow_id', $arrow->id)
+                ->where('status', BotConstructorArrowRun::STATUS_SCHEDULED)
+                ->update([
+                    'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+                    'error_message' => 'Стрелка удалена администратором.',
+                    'updated_at' => now(),
+                ]);
+        });
+
+        $fallbackBlock = $sourceBlockId === null
+            ? BotConstructorBlock::query()->orderBy('id')->first()
+            : BotConstructorBlock::query()->find($sourceBlockId);
+
+        $this->loadBlock($fallbackBlock instanceof BotConstructorBlock
+            ? $fallbackBlock
+            : BotConstructorBlock::query()->orderBy('id')->first());
+
+        Notification::make()
+            ->success()
+            ->title('Стрелка удалена')
             ->send();
     }
 
@@ -228,11 +414,106 @@ class BotConstructor extends Page
     }
 
     /**
+     * @return list<array{
+     *     id:int,
+     *     source_block_id:int,
+     *     target_block_id:int,
+     *     is_active:bool,
+     *     is_selected:bool,
+     *     condition_label:string,
+     *     delay_label:string,
+     *     limit_label:string
+     * }>
+     */
+    public function arrows(): array
+    {
+        return BotConstructorArrow::query()
+            ->with(['sourceBlock', 'targetBlock'])
+            ->orderBy('priority')
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (BotConstructorArrow $arrow): bool => $arrow->sourceBlock instanceof BotConstructorBlock
+                && $arrow->targetBlock instanceof BotConstructorBlock)
+            ->map(fn (BotConstructorArrow $arrow): array => [
+                'id' => (int) $arrow->id,
+                'source_block_id' => (int) $arrow->source_block_id,
+                'target_block_id' => (int) $arrow->target_block_id,
+                'is_active' => (bool) $arrow->is_active,
+                'is_selected' => (int) $arrow->id === (int) $this->selectedArrowId,
+                'condition_label' => $this->arrowConditionLabel($arrow),
+                'delay_label' => $this->arrowDelayLabel($arrow),
+                'limit_label' => $this->arrowLimitLabel($arrow),
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function blockOptions(): array
+    {
+        return BotConstructorBlock::query()
+            ->orderBy('id')
+            ->get()
+            ->mapWithKeys(fn (BotConstructorBlock $block): array => [
+                (int) $block->id => '#'.$block->id.' '.$block->title,
+            ])
+            ->all();
+    }
+
+    /**
      * @return array<string, string>
      */
     public function matchTypeOptions(): array
     {
         return BotConstructorBlock::matchTypeOptions();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function arrowConditionTypeOptions(): array
+    {
+        return [
+            BotConstructorArrow::CONDITION_ALWAYS => 'Всегда',
+            BotConstructorArrow::CONDITION_EXACT_TEXT => 'Полное совпадение текста',
+            BotConstructorArrow::CONDITION_CONTAINS_TEXT => 'Содержит текст',
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function arrowDelayUnitOptions(): array
+    {
+        return [
+            BotConstructorArrow::DELAY_UNIT_SECONDS => 'Секунд',
+            BotConstructorArrow::DELAY_UNIT_MINUTES => 'Минут',
+            BotConstructorArrow::DELAY_UNIT_HOURS => 'Часов',
+            BotConstructorArrow::DELAY_UNIT_DAYS => 'Дней',
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function arrowPassLimitModeOptions(): array
+    {
+        return [
+            BotConstructorArrow::PASS_LIMIT_MODE_CONSTANT => 'Константа',
+            BotConstructorArrow::PASS_LIMIT_MODE_MANUAL => 'Ручное значение',
+        ];
+    }
+
+    public function arrowPassLimitConstantLabel(): string
+    {
+        $constant = BotConstructorConstant::query()
+            ->where('key', BotConstructorConstant::KEY_ARROW_PASS_LIMIT)
+            ->first();
+        $value = $constant?->integerValue();
+
+        return $value === null ? 'константа не задана' : (string) $value;
     }
 
     /**
@@ -258,10 +539,27 @@ class BotConstructor extends Page
             && BotConstructorBlock::query()->whereKey($this->selectedBlockId)->exists();
     }
 
+    public function hasSelectedArrow(): bool
+    {
+        return $this->selectedArrowId !== null
+            && BotConstructorArrow::query()->whereKey($this->selectedArrowId)->exists();
+    }
+
+    public function hasSelectedElement(): bool
+    {
+        return $this->hasSelectedBlock() || $this->hasSelectedArrow();
+    }
+
+    public function canCreateArrow(): bool
+    {
+        return BotConstructorBlock::query()->count() >= 2;
+    }
+
     private function loadBlock(?BotConstructorBlock $block): void
     {
         if (! $block instanceof BotConstructorBlock) {
             $this->selectedBlockId = null;
+            $this->selectedArrowId = null;
 
             return;
         }
@@ -269,6 +567,7 @@ class BotConstructor extends Page
         $block->loadMissing('channels');
 
         $this->selectedBlockId = (int) $block->id;
+        $this->selectedArrowId = null;
         $this->draftTitle = $block->title;
         $this->draftIsActive = (bool) $block->is_active;
         $this->draftChannelIds = $block->channels
@@ -283,9 +582,37 @@ class BotConstructor extends Page
         $this->draftY = (int) $block->y;
     }
 
+    private function loadArrow(?BotConstructorArrow $arrow): void
+    {
+        if (! $arrow instanceof BotConstructorArrow) {
+            $this->selectedArrowId = null;
+
+            return;
+        }
+
+        $this->selectedArrowId = (int) $arrow->id;
+        $this->selectedBlockId = null;
+        $this->draftArrowSourceBlockId = (int) $arrow->source_block_id;
+        $this->draftArrowTargetBlockId = (int) $arrow->target_block_id;
+        $this->draftArrowIsActive = (bool) $arrow->is_active;
+        $this->draftArrowDelayValue = (int) $arrow->delay_value;
+        $this->draftArrowDelayUnit = $arrow->delay_unit;
+        $this->draftArrowCancelIfLeftSourceBlock = (bool) $arrow->cancel_if_left_source_block;
+        $this->draftArrowConditionMatchType = $arrow->condition_match_type;
+        $this->draftArrowConditionValue = (string) ($arrow->condition_value ?? '');
+        $this->draftArrowPriority = (int) $arrow->priority;
+        $this->draftArrowPassLimitMode = $arrow->pass_limit_mode;
+        $this->draftArrowPassLimitValue = $arrow->pass_limit_value === null ? null : (int) $arrow->pass_limit_value;
+    }
+
     private function findBlock(int $blockId): BotConstructorBlock
     {
         return BotConstructorBlock::query()->findOrFail($blockId);
+    }
+
+    private function findArrow(int $arrowId): BotConstructorArrow
+    {
+        return BotConstructorArrow::query()->findOrFail($arrowId);
     }
 
     /**
@@ -317,6 +644,67 @@ class BotConstructor extends Page
         if ($errors !== []) {
             throw ValidationException::withMessages($errors);
         }
+    }
+
+    private function validateArrowDraft(
+        int $sourceBlockId,
+        int $targetBlockId,
+        string $conditionMatchType,
+        string $conditionValue,
+        string $passLimitMode,
+        ?int $passLimitValue,
+    ): void {
+        $errors = [];
+
+        if (! BotConstructorBlock::query()->whereKey($sourceBlockId)->exists()) {
+            $errors['draftArrowSourceBlockId'] = 'Выберите исходный блок.';
+        }
+
+        if (! BotConstructorBlock::query()->whereKey($targetBlockId)->exists()) {
+            $errors['draftArrowTargetBlockId'] = 'Выберите целевой блок.';
+        }
+
+        if (! in_array($conditionMatchType, BotConstructorArrow::conditionTypes(), true)) {
+            $errors['draftArrowConditionMatchType'] = 'Выберите тип условия стрелки.';
+        }
+
+        if ($conditionMatchType !== BotConstructorArrow::CONDITION_ALWAYS && $conditionValue === '') {
+            $errors['draftArrowConditionValue'] = 'Укажите условие соединения.';
+        }
+
+        if (! in_array($this->draftArrowDelayUnit, BotConstructorArrow::delayUnits(), true)) {
+            $errors['draftArrowDelayUnit'] = 'Выберите единицу задержки.';
+        }
+
+        if ((int) $this->draftArrowDelayValue < 0) {
+            $errors['draftArrowDelayValue'] = 'Задержка не может быть отрицательной.';
+        }
+
+        if ($this->draftArrowDelayInSeconds() > 30 * 24 * 60 * 60) {
+            $errors['draftArrowDelayValue'] = 'Задержка не может быть больше 30 дней.';
+        }
+
+        if (! in_array($passLimitMode, BotConstructorArrow::passLimitModes(), true)) {
+            $errors['draftArrowPassLimitMode'] = 'Выберите режим лимита.';
+        }
+
+        if ($passLimitMode === BotConstructorArrow::PASS_LIMIT_MODE_MANUAL && (int) $passLimitValue < 1) {
+            $errors['draftArrowPassLimitValue'] = 'Лимит переходов должен быть больше 0.';
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
+    private function draftArrowDelayInSeconds(): int
+    {
+        return match ($this->draftArrowDelayUnit) {
+            BotConstructorArrow::DELAY_UNIT_MINUTES => (int) $this->draftArrowDelayValue * 60,
+            BotConstructorArrow::DELAY_UNIT_HOURS => (int) $this->draftArrowDelayValue * 60 * 60,
+            BotConstructorArrow::DELAY_UNIT_DAYS => (int) $this->draftArrowDelayValue * 24 * 60 * 60,
+            default => (int) $this->draftArrowDelayValue,
+        };
     }
 
     /**
@@ -355,6 +743,35 @@ class BotConstructor extends Page
             ->values();
 
         return $labels->isEmpty() ? 'каналы не выбраны' : $labels->implode(', ');
+    }
+
+    private function arrowConditionLabel(BotConstructorArrow $arrow): string
+    {
+        return match ($arrow->condition_match_type) {
+            BotConstructorArrow::CONDITION_EXACT_TEXT => 'текст = '.($arrow->condition_value ?: 'не задано'),
+            BotConstructorArrow::CONDITION_CONTAINS_TEXT => 'содержит '.($arrow->condition_value ?: 'не задано'),
+            default => 'всегда',
+        };
+    }
+
+    private function arrowDelayLabel(BotConstructorArrow $arrow): string
+    {
+        if ($arrow->delayInSeconds() === 0) {
+            return 'сразу';
+        }
+
+        $unit = $this->arrowDelayUnitOptions()[$arrow->delay_unit] ?? $arrow->delay_unit;
+
+        return 'через '.$arrow->delay_value.' '.mb_strtolower($unit);
+    }
+
+    private function arrowLimitLabel(BotConstructorArrow $arrow): string
+    {
+        if ($arrow->pass_limit_mode === BotConstructorArrow::PASS_LIMIT_MODE_MANUAL) {
+            return 'лимит '.$arrow->pass_limit_value;
+        }
+
+        return 'лимит '.$this->arrowPassLimitConstantLabel();
     }
 
     private function channelLabel(Channel $channel): string

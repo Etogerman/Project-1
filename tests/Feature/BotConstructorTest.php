@@ -223,6 +223,108 @@ class BotConstructorTest extends TestCase
         $this->assertSame('После движения', $block->title);
     }
 
+    public function test_admin_can_create_save_and_delete_constructor_arrow_from_ui(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->create([
+            'title' => 'Меню',
+        ]);
+        $targetBlock = BotConstructorBlock::factory()->create([
+            'title' => 'Раздел 1',
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->assertSee('Добавить стрелку')
+            ->call('selectBlock', $sourceBlock->id)
+            ->call('addArrow')
+            ->assertHasNoErrors();
+
+        $arrow = BotConstructorArrow::query()->firstOrFail();
+
+        $component
+            ->assertSet('selectedArrowId', $arrow->id)
+            ->assertSee('Настройки соединения')
+            ->set('draftArrowTargetBlockId', $targetBlock->id)
+            ->set('draftArrowDelayValue', 5)
+            ->set('draftArrowDelayUnit', BotConstructorArrow::DELAY_UNIT_MINUTES)
+            ->set('draftArrowCancelIfLeftSourceBlock', true)
+            ->set('draftArrowConditionMatchType', BotConstructorArrow::CONDITION_CONTAINS_TEXT)
+            ->set('draftArrowConditionValue', 'назад')
+            ->set('draftArrowPriority', 20)
+            ->set('draftArrowPassLimitMode', BotConstructorArrow::PASS_LIMIT_MODE_MANUAL)
+            ->set('draftArrowPassLimitValue', 3)
+            ->call('saveArrow')
+            ->assertHasNoErrors();
+
+        $arrow->refresh();
+
+        $this->assertSame($sourceBlock->id, $arrow->source_block_id);
+        $this->assertSame($targetBlock->id, $arrow->target_block_id);
+        $this->assertTrue($arrow->is_active);
+        $this->assertSame(5, $arrow->delay_value);
+        $this->assertSame(BotConstructorArrow::DELAY_UNIT_MINUTES, $arrow->delay_unit);
+        $this->assertTrue($arrow->cancel_if_left_source_block);
+        $this->assertSame(BotConstructorArrow::CONDITION_CONTAINS_TEXT, $arrow->condition_match_type);
+        $this->assertSame('назад', $arrow->condition_value);
+        $this->assertSame(20, $arrow->priority);
+        $this->assertSame(BotConstructorArrow::PASS_LIMIT_MODE_MANUAL, $arrow->pass_limit_mode);
+        $this->assertSame(3, $arrow->pass_limit_value);
+
+        $channel = $this->readyTelegramChannel();
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-ui-delete-arrow',
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'status' => BotConstructorExecution::STATUS_COMPLETED,
+        ]);
+        $scheduledRun = BotConstructorArrowRun::factory()->scheduled()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'inbound_message_id' => $message->id,
+        ]);
+
+        $component
+            ->call('deleteArrow')
+            ->assertHasNoErrors()
+            ->assertSet('selectedArrowId', null)
+            ->assertSet('selectedBlockId', $sourceBlock->id);
+
+        $this->assertSoftDeleted('bot_constructor_arrows', ['id' => $arrow->id]);
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $scheduledRun->id,
+            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+        ]);
+    }
+
+    public function test_arrow_ui_requires_condition_value_for_conditional_match(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->create();
+        BotConstructorBlock::factory()->create();
+
+        Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->call('selectBlock', $sourceBlock->id)
+            ->call('addArrow')
+            ->set('draftArrowConditionMatchType', BotConstructorArrow::CONDITION_EXACT_TEXT)
+            ->set('draftArrowConditionValue', '   ')
+            ->call('saveArrow')
+            ->assertHasErrors(['draftArrowConditionValue']);
+    }
+
     public function test_constructor_does_not_crash_when_channel_credentials_cannot_be_decrypted(): void
     {
         $admin = User::factory()->create([

@@ -1,7 +1,8 @@
 <x-filament-panels::page>
     @php($blocks = $this->blocks())
+    @php($arrows = $this->arrows())
 
-    <form wire:submit.prevent="saveBlock" class="ac-scenario-builder-page">
+    <form wire:submit.prevent="saveSelectedElement" class="ac-scenario-builder-page">
         <div
             class="ac-scenario-builder-shell"
             x-data="{
@@ -146,8 +147,11 @@
                         <strong>Стартовые условия</strong>
                     </div>
                     <div class="ac-scenario-builder-workspace__actions">
-                        <button type="submit" class="ac-button ac-button--primary" @disabled(! $this->hasSelectedBlock())>
+                        <button type="submit" class="ac-button ac-button--primary" @disabled(! $this->hasSelectedElement())>
                             Сохранить
+                        </button>
+                        <button type="button" class="ac-button ac-button--secondary" wire:click="addArrow" @disabled(! $this->canCreateArrow())>
+                            Добавить стрелку
                         </button>
                         <button type="button" class="ac-button ac-button--success" wire:click="addBlock">
                             Добавить стартовое условие
@@ -163,6 +167,48 @@
                     x-on:pointercancel.window="finishPointer($event)"
                 >
                     <div class="ac-scenario-builder-canvas__surface" x-ref="surface">
+                        <svg class="ac-bot-constructor-arrows" width="100%" height="100%" aria-label="Стрелки конструктора">
+                            <defs>
+                                <marker id="ac-bot-constructor-arrow-head" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                                </marker>
+                                <marker id="ac-bot-constructor-arrow-head-selected" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                                </marker>
+                            </defs>
+                            @foreach ($arrows as $arrow)
+                                <g
+                                    wire:key="bot-constructor-canvas-arrow-{{ $arrow['id'] }}"
+                                    class="ac-bot-constructor-arrow {{ $arrow['is_selected'] ? 'is-selected' : '' }} {{ $arrow['is_active'] ? '' : 'is-inactive' }}"
+                                >
+                                    <line
+                                        class="ac-bot-constructor-arrow__hit"
+                                        x-bind:x1="nodeX({{ $arrow['source_block_id'] }}) + 224"
+                                        x-bind:y1="nodeY({{ $arrow['source_block_id'] }}) + 42"
+                                        x-bind:x2="nodeX({{ $arrow['target_block_id'] }})"
+                                        x-bind:y2="nodeY({{ $arrow['target_block_id'] }}) + 42"
+                                        wire:click.stop="selectArrow({{ $arrow['id'] }})"
+                                    />
+                                    <line
+                                        class="ac-bot-constructor-arrow__line"
+                                        x-bind:x1="nodeX({{ $arrow['source_block_id'] }}) + 224"
+                                        x-bind:y1="nodeY({{ $arrow['source_block_id'] }}) + 42"
+                                        x-bind:x2="nodeX({{ $arrow['target_block_id'] }})"
+                                        x-bind:y2="nodeY({{ $arrow['target_block_id'] }}) + 42"
+                                        marker-end="{{ $arrow['is_selected'] ? 'url(#ac-bot-constructor-arrow-head-selected)' : 'url(#ac-bot-constructor-arrow-head)' }}"
+                                    />
+                                    <text
+                                        class="ac-bot-constructor-arrow__label"
+                                        x-bind:x="(nodeX({{ $arrow['source_block_id'] }}) + nodeX({{ $arrow['target_block_id'] }}) + 224) / 2"
+                                        x-bind:y="(nodeY({{ $arrow['source_block_id'] }}) + nodeY({{ $arrow['target_block_id'] }}) + 84) / 2 - 8"
+                                        wire:click.stop="selectArrow({{ $arrow['id'] }})"
+                                    >
+                                        {{ $arrow['delay_label'] }}
+                                    </text>
+                                </g>
+                            @endforeach
+                        </svg>
+
                         @forelse ($blocks as $block)
                             <article
                                 class="ac-scenario-builder-node ac-scenario-builder-node--green ac-bot-constructor-node {{ $block['is_selected'] ? 'is-selected' : '' }} {{ $block['is_active'] ? '' : 'is-inactive' }}"
@@ -189,10 +235,150 @@
             </main>
 
             <aside class="ac-scenario-builder-palette">
-                @if (! $this->hasSelectedBlock())
+                @if (! $this->hasSelectedBlock() && ! $this->hasSelectedArrow())
                     <div class="ac-scenario-builder-panel__header">
                         <span>Элемент</span>
                         <strong>Блок не выбран</strong>
+                    </div>
+                @elseif ($this->hasSelectedArrow())
+                    <div class="ac-scenario-builder-settings">
+                        <div class="ac-scenario-builder-panel__header ac-scenario-builder-panel__header--with-action">
+                            <div>
+                                <span>Настройки соединения</span>
+                                <strong>Стрелка #{{ $selectedArrowId }}</strong>
+                            </div>
+                            <button
+                                type="button"
+                                class="ac-scenario-builder-panel__danger-action"
+                                wire:click="deleteArrow"
+                                wire:confirm="Удалить стрелку?"
+                            >
+                                Удалить
+                            </button>
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label>
+                                <input type="checkbox" wire:model.live="draftArrowIsActive" />
+                                Стрелка включена
+                            </label>
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-source">Откуда</label>
+                            <select id="bot-constructor-arrow-source" wire:model.live="draftArrowSourceBlockId">
+                                @foreach ($this->blockOptions() as $blockId => $label)
+                                    <option value="{{ $blockId }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            @error('draftArrowSourceBlockId')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-target">Куда</label>
+                            <select id="bot-constructor-arrow-target" wire:model.live="draftArrowTargetBlockId">
+                                @foreach ($this->blockOptions() as $blockId => $label)
+                                    <option value="{{ $blockId }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            @error('draftArrowTargetBlockId')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-delay-value">Задержка перед переходом</label>
+                            <div class="ac-bot-constructor-inline-grid">
+                                <input
+                                    id="bot-constructor-arrow-delay-value"
+                                    type="number"
+                                    min="0"
+                                    wire:model.live="draftArrowDelayValue"
+                                />
+                                <select wire:model.live="draftArrowDelayUnit" aria-label="Единица задержки">
+                                    @foreach ($this->arrowDelayUnitOptions() as $unit => $label)
+                                        <option value="{{ $unit }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            @error('draftArrowDelayValue')
+                                <p>{{ $message }}</p>
+                            @enderror
+                            @error('draftArrowDelayUnit')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label>
+                                <input type="checkbox" wire:model.live="draftArrowCancelIfLeftSourceBlock" />
+                                Отменить, если диалог ушёл из исходного блока
+                            </label>
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-condition-type">Условие стрелки</label>
+                            <select id="bot-constructor-arrow-condition-type" wire:model.live="draftArrowConditionMatchType">
+                                @foreach ($this->arrowConditionTypeOptions() as $type => $label)
+                                    <option value="{{ $type }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            @error('draftArrowConditionMatchType')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-condition-value">Значение условия</label>
+                            <input
+                                id="bot-constructor-arrow-condition-value"
+                                type="text"
+                                wire:model.live="draftArrowConditionValue"
+                                placeholder="1"
+                            />
+                            @error('draftArrowConditionValue')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-priority">Приоритет</label>
+                            <input
+                                id="bot-constructor-arrow-priority"
+                                type="number"
+                                wire:model.live="draftArrowPriority"
+                            />
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-limit-mode" title="Лимит переходов клиента по этой стрелке">Лимит переходов</label>
+                            <select id="bot-constructor-arrow-limit-mode" wire:model.live="draftArrowPassLimitMode">
+                                @foreach ($this->arrowPassLimitModeOptions() as $mode => $label)
+                                    <option value="{{ $mode }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            <p>Константа: {{ $this->arrowPassLimitConstantLabel() }}</p>
+                            @error('draftArrowPassLimitMode')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        @if ($draftArrowPassLimitMode === \App\Models\BotConstructorArrow::PASS_LIMIT_MODE_MANUAL)
+                            <div class="ac-scenario-builder-fieldset">
+                                <label for="bot-constructor-arrow-limit-value" title="Лимит переходов клиента по этой стрелке">Ручной лимит</label>
+                                <input
+                                    id="bot-constructor-arrow-limit-value"
+                                    type="number"
+                                    min="1"
+                                    wire:model.live="draftArrowPassLimitValue"
+                                />
+                                @error('draftArrowPassLimitValue')
+                                    <p>{{ $message }}</p>
+                                @enderror
+                            </div>
+                        @endif
                     </div>
                 @else
                     <div class="ac-scenario-builder-settings">
