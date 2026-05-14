@@ -2,6 +2,8 @@
 
 namespace App\Services\Bots;
 
+use App\Models\BotConstructorArrow;
+use App\Models\BotConstructorArrowRun;
 use App\Models\BotConstructorBlock;
 use App\Models\BotConstructorBlockRun;
 use App\Models\BotConstructorDialogState;
@@ -38,6 +40,15 @@ class ExecuteBotConstructorBlockAction
             return $this->markFailed($legacyRun, $executionBlockRun, 'Канал диалога не найден.');
         }
 
+        $runtimeBlock = $this->resolveRuntimeBlock($block, $executionBlockRun);
+
+        if (is_string($runtimeBlock)) {
+            $this->cancelLinkedArrowRun($executionBlockRun, $runtimeBlock);
+
+            return $this->markFailed($legacyRun, $executionBlockRun, $runtimeBlock);
+        }
+
+        $block = $runtimeBlock;
         $replyText = (string) $block->response_text;
 
         if (BotConstructorBlock::isNoReply($replyText)) {
@@ -285,6 +296,75 @@ class ExecuteBotConstructorBlockAction
     {
         return $channel->isAccountConnection()
             && $channel->platform === Channel::PLATFORM_TELEGRAM;
+    }
+
+    private function resolveRuntimeBlock(
+        BotConstructorBlock $block,
+        BotConstructorExecutionBlockRun $executionBlockRun,
+    ): BotConstructorBlock|string {
+        $currentBlock = BotConstructorBlock::withTrashed()
+            ->whereKey($executionBlockRun->bot_constructor_block_id ?: $block->id)
+            ->first();
+
+        if (! $currentBlock instanceof BotConstructorBlock || $currentBlock->trashed()) {
+            return 'Блок удалён администратором.';
+        }
+
+        if (! $currentBlock->is_active) {
+            return 'Блок выключен.';
+        }
+
+        if ($executionBlockRun->bot_constructor_arrow_run_id === null) {
+            return $currentBlock;
+        }
+
+        $arrowRun = BotConstructorArrowRun::query()
+            ->with(['arrow', 'sourceBlock', 'targetBlock'])
+            ->whereKey($executionBlockRun->bot_constructor_arrow_run_id)
+            ->first();
+
+        if (! $arrowRun instanceof BotConstructorArrowRun || $arrowRun->status !== BotConstructorArrowRun::STATUS_PROCESSING) {
+            return 'Проход стрелки уже не ожидает выполнения.';
+        }
+
+        if (! $arrowRun->arrow instanceof BotConstructorArrow || $arrowRun->arrow->trashed() || ! $arrowRun->arrow->is_active) {
+            return 'Стрелка удалена или выключена.';
+        }
+
+        if (! $arrowRun->sourceBlock instanceof BotConstructorBlock || $arrowRun->sourceBlock->trashed()) {
+            return 'Исходный блок удалён администратором.';
+        }
+
+        if (! $arrowRun->targetBlock instanceof BotConstructorBlock || $arrowRun->targetBlock->trashed()) {
+            return 'Целевой блок удалён администратором.';
+        }
+
+        if (! $arrowRun->targetBlock->is_active) {
+            return 'Целевой блок выключен.';
+        }
+
+        if ((int) $arrowRun->target_block_id !== (int) $currentBlock->id) {
+            return 'Целевой блок стрелки изменён.';
+        }
+
+        return $currentBlock;
+    }
+
+    private function cancelLinkedArrowRun(BotConstructorExecutionBlockRun $executionBlockRun, string $message): void
+    {
+        if ($executionBlockRun->bot_constructor_arrow_run_id === null) {
+            return;
+        }
+
+        BotConstructorArrowRun::query()
+            ->whereKey($executionBlockRun->bot_constructor_arrow_run_id)
+            ->where('status', BotConstructorArrowRun::STATUS_PROCESSING)
+            ->update([
+                'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+                'processing_started_at' => null,
+                'error_message' => mb_substr(trim($message), 0, 1000),
+                'updated_at' => now(),
+            ]);
     }
 
     private function markSucceeded(

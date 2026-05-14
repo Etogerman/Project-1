@@ -34,6 +34,10 @@ class ProcessBotConstructorArrowsAction
         bool $preserveCutoffForDelayedChain = false,
         ?BotConstructorExecutionBlockRun $sourceExecutionBlockRun = null,
     ): void {
+        if ($sourceBlock->trashed()) {
+            return;
+        }
+
         $sourceBlock->loadMissing('sourceArrows.targetBlock');
 
         $arrowQuery = $sourceBlock->sourceArrows()
@@ -57,7 +61,9 @@ class ProcessBotConstructorArrowsAction
                 ->where('created_at', '<=', $cutoff)
                 ->where('updated_at', '<=', $cutoff)
                 ->whereHas('targetBlock', function ($targetQuery) use ($cutoff): void {
-                    $targetQuery->where('updated_at', '<=', $cutoff);
+                    $targetQuery
+                        ->whereNull('deleted_at')
+                        ->where('updated_at', '<=', $cutoff);
                 });
         }
 
@@ -106,16 +112,13 @@ class ProcessBotConstructorArrowsAction
 
             $arrowRun = $prepared['arrow_run'];
             $blockRun = $prepared['block_run'];
+            $targetBlock = $prepared['target_block'];
 
-            if (! $arrowRun instanceof BotConstructorArrowRun || ! $blockRun instanceof BotConstructorExecutionBlockRun) {
-                continue;
-            }
-
-            $targetBlock = $arrow->targetBlock;
-
-            if (! $targetBlock instanceof BotConstructorBlock) {
-                $this->markArrowFailed($arrowRun, 'Целевой блок не найден.');
-
+            if (
+                ! $arrowRun instanceof BotConstructorArrowRun
+                || ! $blockRun instanceof BotConstructorExecutionBlockRun
+                || ! $targetBlock instanceof BotConstructorBlock
+            ) {
                 continue;
             }
 
@@ -151,6 +154,12 @@ class ProcessBotConstructorArrowsAction
                 continue;
             }
 
+            $arrowRun->refresh();
+
+            if ($arrowRun->status === BotConstructorArrowRun::STATUS_CANCELLED) {
+                continue;
+            }
+
             $this->markArrowFailed(
                 $arrowRun,
                 $blockRun->error_message ?: 'Целевой блок не был успешно выполнен.',
@@ -159,7 +168,7 @@ class ProcessBotConstructorArrowsAction
     }
 
     /**
-     * @return array{stop:bool,arrow_run:?BotConstructorArrowRun,block_run:?BotConstructorExecutionBlockRun}
+     * @return array{stop:bool,arrow_run:?BotConstructorArrowRun,block_run:?BotConstructorExecutionBlockRun,target_block:?BotConstructorBlock}
      */
     private function prepareImmediateArrow(
         BotConstructorExecution $execution,
@@ -179,23 +188,29 @@ class ProcessBotConstructorArrowsAction
                 ])->save();
                 $execution->setRawAttributes($lockedExecution->getAttributes(), true);
 
-                return ['stop' => true, 'arrow_run' => null, 'block_run' => null];
+                return ['stop' => true, 'arrow_run' => null, 'block_run' => null, 'target_block' => null];
             }
 
-            $passLimit = $this->resolvePassLimit($arrow);
+            $lockedArrow = $this->lockRunnableArrow($arrow);
+
+            if (! $lockedArrow instanceof BotConstructorArrow) {
+                return ['stop' => false, 'arrow_run' => null, 'block_run' => null, 'target_block' => null];
+            }
+
+            $passLimit = $this->resolvePassLimit($lockedArrow);
 
             if ($passLimit['error'] !== null) {
-                $this->createFailedRun($lockedExecution, $dialog, $rootMessage, $arrow, $passLimit['error'], $sourceExecutionBlockRun);
+                $this->createFailedRun($lockedExecution, $dialog, $rootMessage, $lockedArrow, $passLimit['error'], $sourceExecutionBlockRun);
 
-                return ['stop' => false, 'arrow_run' => null, 'block_run' => null];
+                return ['stop' => false, 'arrow_run' => null, 'block_run' => null, 'target_block' => null];
             }
 
-            $this->lockArrowDialogLimit($arrow, $dialog);
+            $this->lockArrowDialogLimit($lockedArrow, $dialog);
 
-            if ($this->arrowPassLimitReached($arrow, $dialog, (int) $passLimit['value'])) {
-                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут лимит переходов клиента по этой стрелке.', $sourceExecutionBlockRun);
+            if ($this->arrowPassLimitReached($lockedArrow, $dialog, (int) $passLimit['value'])) {
+                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $lockedArrow, 'Достигнут лимит переходов клиента по этой стрелке.', $sourceExecutionBlockRun);
 
-                return ['stop' => false, 'arrow_run' => null, 'block_run' => null];
+                return ['stop' => false, 'arrow_run' => null, 'block_run' => null, 'target_block' => null];
             }
 
             $now = now();
@@ -203,7 +218,7 @@ class ProcessBotConstructorArrowsAction
                 $lockedExecution,
                 $dialog,
                 $rootMessage,
-                $arrow,
+                $lockedArrow,
                 BotConstructorArrowRun::STATUS_PROCESSING,
                 processingStartedAt: $now,
                 schemaCutoffAt: $schemaCutoffAt,
@@ -219,13 +234,13 @@ class ProcessBotConstructorArrowsAction
                 $lockedExecution,
                 $dialog,
                 $dialog->channel,
-                $arrow->targetBlock,
+                $lockedArrow->targetBlock,
                 BotConstructorExecutionBlockRun::STATUS_PROCESSING,
                 $arrowRun,
                 processingStartedAt: $now,
             );
 
-            return ['stop' => false, 'arrow_run' => $arrowRun, 'block_run' => $blockRun];
+            return ['stop' => false, 'arrow_run' => $arrowRun, 'block_run' => $blockRun, 'target_block' => $lockedArrow->targetBlock];
         });
     }
 
@@ -250,28 +265,34 @@ class ProcessBotConstructorArrowsAction
                 return null;
             }
 
-            $passLimit = $this->resolvePassLimit($arrow);
+            $lockedArrow = $this->lockRunnableArrow($arrow);
+
+            if (! $lockedArrow instanceof BotConstructorArrow) {
+                return null;
+            }
+
+            $passLimit = $this->resolvePassLimit($lockedArrow);
 
             if ($passLimit['error'] !== null) {
-                $this->createFailedRun($lockedExecution, $dialog, $rootMessage, $arrow, $passLimit['error'], $sourceExecutionBlockRun);
+                $this->createFailedRun($lockedExecution, $dialog, $rootMessage, $lockedArrow, $passLimit['error'], $sourceExecutionBlockRun);
 
                 return null;
             }
 
-            $this->lockArrowDialogLimit($arrow, $dialog);
+            $this->lockArrowDialogLimit($lockedArrow, $dialog);
 
-            if ($this->arrowPassLimitReached($arrow, $dialog, (int) $passLimit['value'])) {
-                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $arrow, 'Достигнут лимит переходов клиента по этой стрелке.', $sourceExecutionBlockRun);
+            if ($this->arrowPassLimitReached($lockedArrow, $dialog, (int) $passLimit['value'])) {
+                $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $lockedArrow, 'Достигнут лимит переходов клиента по этой стрелке.', $sourceExecutionBlockRun);
 
                 return null;
             }
 
-            $scheduledFor = now()->addSeconds($arrow->delayInSeconds());
+            $scheduledFor = now()->addSeconds($lockedArrow->delayInSeconds());
             $arrowRun = $this->createArrowRun(
                 $lockedExecution,
                 $dialog,
                 $rootMessage,
-                $arrow,
+                $lockedArrow,
                 BotConstructorArrowRun::STATUS_SCHEDULED,
                 scheduledFor: $scheduledFor,
                 schemaCutoffAt: $schemaCutoffAt,
@@ -365,7 +386,30 @@ class ProcessBotConstructorArrowsAction
     private function canUseArrowTarget(BotConstructorArrow $arrow): bool
     {
         return $arrow->targetBlock instanceof BotConstructorBlock
+            && ! $arrow->targetBlock->trashed()
             && (bool) $arrow->targetBlock->is_active;
+    }
+
+    private function lockRunnableArrow(BotConstructorArrow $arrow): ?BotConstructorArrow
+    {
+        $lockedArrow = BotConstructorArrow::withTrashed()
+            ->with(['sourceBlock', 'targetBlock'])
+            ->whereKey($arrow->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (
+            ! ($lockedArrow instanceof BotConstructorArrow)
+            || $lockedArrow->trashed()
+            || ! $lockedArrow->is_active
+            || ! ($lockedArrow->sourceBlock instanceof BotConstructorBlock)
+            || $lockedArrow->sourceBlock->trashed()
+            || ! $this->canUseArrowTarget($lockedArrow)
+        ) {
+            return null;
+        }
+
+        return $lockedArrow;
     }
 
     private function conditionMatches(BotConstructorArrow $arrow, BotConstructorExecution $execution, Message $rootMessage): bool

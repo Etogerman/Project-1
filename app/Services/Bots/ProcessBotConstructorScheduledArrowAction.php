@@ -41,28 +41,6 @@ class ProcessBotConstructorScheduledArrowAction
         $childExecution = null;
 
         try {
-            $arrow = BotConstructorArrow::withTrashed()->find($arrowRun->bot_constructor_arrow_id);
-
-            if (! $arrow instanceof BotConstructorArrow || $arrow->trashed() || ! $arrow->is_active) {
-                $this->cancelRun($arrowRun, 'Стрелка удалена или выключена.');
-
-                return;
-            }
-
-            $targetBlock = BotConstructorBlock::query()->find($arrowRun->target_block_id);
-
-            if (! $targetBlock instanceof BotConstructorBlock || ! $targetBlock->is_active) {
-                $this->cancelRun($arrowRun, 'Целевой блок удалён или выключен.');
-
-                return;
-            }
-
-            if ($arrow->cancel_if_left_source_block && $this->dialogLeftSourceBlock($arrowRun)) {
-                $this->cancelRun($arrowRun, 'Диалог ушёл из исходного блока.');
-
-                return;
-            }
-
             $parentExecution = BotConstructorExecution::query()->find($arrowRun->bot_constructor_execution_id);
             $dialog = Dialog::query()->with('channel')->find($arrowRun->dialog_id);
 
@@ -86,27 +64,13 @@ class ProcessBotConstructorScheduledArrowAction
                 return;
             }
 
-            $childExecution = BotConstructorExecution::query()->create([
-                'root_inbound_message_id' => $parentExecution->root_inbound_message_id,
-                'parent_execution_id' => $parentExecution->id,
-                'started_by_arrow_run_id' => $arrowRun->id,
-                'dialog_id' => $dialog->id,
-                'channel_id' => $dialog->channel->id,
-                'trigger_type' => BotConstructorExecution::TRIGGER_SCHEDULED_ARROW,
-                'auto_transition_count' => 0,
-                'next_sequence_number' => 1,
-                'status' => BotConstructorExecution::STATUS_RUNNING,
-            ]);
+            $prepared = $this->prepareTargetBlockRun($arrowRun, $parentExecution, $dialog);
 
-            $blockRun = $this->createExecutionBlockRunAction->handle(
-                $childExecution,
-                $dialog,
-                $dialog->channel,
-                $targetBlock,
-                BotConstructorExecutionBlockRun::STATUS_PROCESSING,
-                $arrowRun,
-                processingStartedAt: now(),
-            );
+            if ($prepared === null) {
+                return;
+            }
+
+            [$arrowRun, $childExecution, $targetBlock, $blockRun] = $prepared;
 
             $blockRun = $this->executeBotConstructorBlockAction->handle(
                 $rootMessage,
@@ -133,10 +97,14 @@ class ProcessBotConstructorScheduledArrowAction
                     $blockRun->error_message ?: 'Доставка целевого блока не подтверждена.',
                 );
             } else {
-                $this->processBotConstructorArrowsAction->markArrowFailed(
-                    $arrowRun,
-                    $blockRun->error_message ?: 'Целевой блок не был успешно выполнен.',
-                );
+                $arrowRun->refresh();
+
+                if ($arrowRun->status !== BotConstructorArrowRun::STATUS_CANCELLED) {
+                    $this->processBotConstructorArrowsAction->markArrowFailed(
+                        $arrowRun,
+                        $blockRun->error_message ?: 'Целевой блок не был успешно выполнен.',
+                    );
+                }
             }
 
             $this->completeExecutionIfRunning($childExecution);
@@ -157,6 +125,84 @@ class ProcessBotConstructorScheduledArrowAction
                 ])->save();
             }
         }
+    }
+
+    /**
+     * @return array{0:BotConstructorArrowRun,1:BotConstructorExecution,2:BotConstructorBlock,3:BotConstructorExecutionBlockRun}|null
+     */
+    private function prepareTargetBlockRun(
+        BotConstructorArrowRun $arrowRun,
+        BotConstructorExecution $parentExecution,
+        Dialog $dialog,
+    ): ?array {
+        return DB::transaction(function () use ($arrowRun, $parentExecution, $dialog): ?array {
+            $lockedRun = BotConstructorArrowRun::query()
+                ->whereKey($arrowRun->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $lockedRun instanceof BotConstructorArrowRun || $lockedRun->status !== BotConstructorArrowRun::STATUS_PROCESSING) {
+                return null;
+            }
+
+            $arrow = BotConstructorArrow::withTrashed()
+                ->whereKey($lockedRun->bot_constructor_arrow_id)
+                ->lockForUpdate()
+                ->first();
+            $sourceBlock = BotConstructorBlock::withTrashed()
+                ->whereKey($lockedRun->source_block_id)
+                ->lockForUpdate()
+                ->first();
+            $targetBlock = BotConstructorBlock::withTrashed()
+                ->whereKey($lockedRun->target_block_id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ! ($arrow instanceof BotConstructorArrow)
+                || $arrow->trashed()
+                || ! $arrow->is_active
+                || ! ($sourceBlock instanceof BotConstructorBlock)
+                || $sourceBlock->trashed()
+                || ! ($targetBlock instanceof BotConstructorBlock)
+                || $targetBlock->trashed()
+                || ! $targetBlock->is_active
+            ) {
+                $this->cancelRun($lockedRun, 'Стрелка или блок удалены, либо выключены.');
+
+                return null;
+            }
+
+            if ($arrow->cancel_if_left_source_block && $this->dialogLeftSourceBlock($lockedRun)) {
+                $this->cancelRun($lockedRun, 'Диалог ушёл из исходного блока.');
+
+                return null;
+            }
+
+            $childExecution = BotConstructorExecution::query()->create([
+                'root_inbound_message_id' => $parentExecution->root_inbound_message_id,
+                'parent_execution_id' => $parentExecution->id,
+                'started_by_arrow_run_id' => $lockedRun->id,
+                'dialog_id' => $dialog->id,
+                'channel_id' => $dialog->channel->id,
+                'trigger_type' => BotConstructorExecution::TRIGGER_SCHEDULED_ARROW,
+                'auto_transition_count' => 0,
+                'next_sequence_number' => 1,
+                'status' => BotConstructorExecution::STATUS_RUNNING,
+            ]);
+
+            $blockRun = $this->createExecutionBlockRunAction->handle(
+                $childExecution,
+                $dialog,
+                $dialog->channel,
+                $targetBlock,
+                BotConstructorExecutionBlockRun::STATUS_PROCESSING,
+                $lockedRun,
+                processingStartedAt: now(),
+            );
+
+            return [$lockedRun, $childExecution, $targetBlock, $blockRun];
+        });
     }
 
     private function claimScheduledRun(BotConstructorArrowRun $arrowRun): ?BotConstructorArrowRun

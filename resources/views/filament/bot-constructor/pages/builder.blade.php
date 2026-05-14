@@ -456,9 +456,19 @@
                     </div>
                 @else
                     <div class="ac-scenario-builder-settings">
-                        <div class="ac-scenario-builder-panel__header">
-                            <span>Настройки элемента</span>
-                            <strong>Стартовое условие #{{ $selectedBlockId }}</strong>
+                        <div class="ac-scenario-builder-panel__header ac-scenario-builder-panel__header--with-action">
+                            <div>
+                                <span>Настройки элемента</span>
+                                <strong>Стартовое условие #{{ $selectedBlockId }}</strong>
+                            </div>
+                            <button
+                                type="button"
+                                class="ac-scenario-builder-panel__danger-action"
+                                wire:click="deleteBlock"
+                                wire:confirm="Удалить блок? Связанные стрелки будут удалены, запланированные переходы отменены. История сохранится."
+                            >
+                                Удалить
+                            </button>
                         </div>
 
                         <div class="ac-scenario-builder-fieldset">

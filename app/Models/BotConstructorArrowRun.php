@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Validation\ValidationException;
 
 class BotConstructorArrowRun extends Model
@@ -103,7 +104,7 @@ class BotConstructorArrowRun extends Model
 
     public function arrow(): BelongsTo
     {
-        return $this->belongsTo(BotConstructorArrow::class, 'bot_constructor_arrow_id');
+        return $this->belongsTo(BotConstructorArrow::class, 'bot_constructor_arrow_id')->withTrashed();
     }
 
     public function dialog(): BelongsTo
@@ -113,12 +114,12 @@ class BotConstructorArrowRun extends Model
 
     public function sourceBlock(): BelongsTo
     {
-        return $this->belongsTo(BotConstructorBlock::class, 'source_block_id');
+        return $this->belongsTo(BotConstructorBlock::class, 'source_block_id')->withTrashed();
     }
 
     public function targetBlock(): BelongsTo
     {
-        return $this->belongsTo(BotConstructorBlock::class, 'target_block_id');
+        return $this->belongsTo(BotConstructorBlock::class, 'target_block_id')->withTrashed();
     }
 
     public function inboundMessage(): BelongsTo
@@ -129,5 +130,10 @@ class BotConstructorArrowRun extends Model
     public function sourceExecutionBlockRun(): BelongsTo
     {
         return $this->belongsTo(BotConstructorExecutionBlockRun::class, 'source_execution_block_run_id');
+    }
+
+    public function executionBlockRun(): HasOne
+    {
+        return $this->hasOne(BotConstructorExecutionBlockRun::class, 'bot_constructor_arrow_run_id');
     }
 }
