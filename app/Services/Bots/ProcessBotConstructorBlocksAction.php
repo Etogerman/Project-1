@@ -305,7 +305,11 @@ class ProcessBotConstructorBlocksAction
             $execution = $run->execution;
             $block = $run->block;
 
-            if (! $execution instanceof BotConstructorExecution || ! $block instanceof BotConstructorBlock) {
+            if (
+                ! $execution instanceof BotConstructorExecution
+                || ! $block instanceof BotConstructorBlock
+                || $block->trashed()
+            ) {
                 continue;
             }
 
@@ -371,7 +375,7 @@ class ProcessBotConstructorBlocksAction
     {
         $block = $executionBlockRun->block;
 
-        if (! $block instanceof BotConstructorBlock) {
+        if (! $block instanceof BotConstructorBlock || $block->trashed()) {
             return [];
         }
 
@@ -398,6 +402,10 @@ class ProcessBotConstructorBlocksAction
      */
     private function outgoingArrowIdsAvailableAt(BotConstructorBlock $block, mixed $cutoff): array
     {
+        if ($block->trashed()) {
+            return [];
+        }
+
         $query = $block->sourceArrows()->active();
 
         if ($cutoff !== null) {
@@ -405,7 +413,9 @@ class ProcessBotConstructorBlocksAction
                 ->where('created_at', '<=', $cutoff)
                 ->where('updated_at', '<=', $cutoff)
                 ->whereHas('targetBlock', function ($targetQuery) use ($cutoff): void {
-                    $targetQuery->where('updated_at', '<=', $cutoff);
+                    $targetQuery
+                        ->whereNull('deleted_at')
+                        ->where('updated_at', '<=', $cutoff);
                 });
         }
 

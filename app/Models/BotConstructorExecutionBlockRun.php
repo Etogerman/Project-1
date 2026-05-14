@@ -83,7 +83,7 @@ class BotConstructorExecutionBlockRun extends Model
 
     public function block(): BelongsTo
     {
-        return $this->belongsTo(BotConstructorBlock::class, 'bot_constructor_block_id');
+        return $this->belongsTo(BotConstructorBlock::class, 'bot_constructor_block_id')->withTrashed();
     }
 
     public function arrowRun(): BelongsTo

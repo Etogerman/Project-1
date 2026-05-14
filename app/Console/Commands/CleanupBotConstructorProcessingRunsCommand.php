@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\BotConstructorArrow;
 use App\Models\BotConstructorArrowRun;
+use App\Models\BotConstructorBlock;
 use App\Models\BotConstructorExecution;
 use App\Models\BotConstructorExecutionBlockRun;
 use Illuminate\Console\Command;
@@ -52,11 +53,10 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
                     return;
                 }
 
-                $arrow = BotConstructorArrow::withTrashed()->find($run->bot_constructor_arrow_id);
-                $isCancelled = ! $arrow instanceof BotConstructorArrow || $arrow->trashed() || ! $arrow->is_active;
+                $shouldCancelBeforeBlockRun = $this->shouldCancelBeforeBlockRun($run);
                 $relatedBlockRunStatus = $this->relatedBlockRunStatus($run);
                 $status = match (true) {
-                    $isCancelled => BotConstructorArrowRun::STATUS_CANCELLED,
+                    $shouldCancelBeforeBlockRun => BotConstructorArrowRun::STATUS_CANCELLED,
                     in_array($relatedBlockRunStatus, [
                         BotConstructorExecutionBlockRun::STATUS_SENT,
                         BotConstructorExecutionBlockRun::STATUS_NO_REPLY,
@@ -69,7 +69,7 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
                 };
                 $errorMessage = match ($status) {
                     BotConstructorArrowRun::STATUS_PASSED => null,
-                    BotConstructorArrowRun::STATUS_CANCELLED => 'Стрелка удалена или выключена во время выполнения.',
+                    BotConstructorArrowRun::STATUS_CANCELLED => 'Стрелка или блок удалены, либо выключены во время выполнения.',
                     BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN => 'Доставка целевого блока не подтверждена: выполнение стрелки зависло и было остановлено по таймауту.',
                     default => 'Выполнение стрелки зависло и было остановлено по таймауту.',
                 };
@@ -88,6 +88,26 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
         }
 
         return $count;
+    }
+
+    private function shouldCancelBeforeBlockRun(BotConstructorArrowRun $run): bool
+    {
+        if ($this->relatedBlockRunStatus($run) !== null) {
+            return false;
+        }
+
+        $arrow = BotConstructorArrow::withTrashed()->find($run->bot_constructor_arrow_id);
+        $sourceBlock = $run->sourceBlock;
+        $targetBlock = $run->targetBlock;
+
+        return ! ($arrow instanceof BotConstructorArrow)
+            || $arrow->trashed()
+            || ! $arrow->is_active
+            || ! ($sourceBlock instanceof BotConstructorBlock)
+            || $sourceBlock->trashed()
+            || ! ($targetBlock instanceof BotConstructorBlock)
+            || $targetBlock->trashed()
+            || ! $targetBlock->is_active;
     }
 
     private function relatedBlockRunStatus(BotConstructorArrowRun $run): ?string

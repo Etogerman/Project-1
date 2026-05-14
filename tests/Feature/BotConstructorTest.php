@@ -22,6 +22,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\TelegramAccountOutgoingMessage;
 use App\Models\User;
+use App\Services\Bots\ExecuteBotConstructorBlockAction;
 use App\Services\Bots\ProcessBotConstructorBlocksAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundBotConstructorBlockMessageAction;
@@ -33,6 +34,7 @@ use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
 use RuntimeException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\TestCase;
 
 class BotConstructorTest extends TestCase
@@ -230,7 +232,7 @@ class BotConstructorTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
         ]);
-        $sourceBlock = BotConstructorBlock::factory()->create([
+        $sourceBlock = BotConstructorBlock::factory()->active()->create([
             'title' => 'Меню',
         ]);
         $targetBlock = BotConstructorBlock::factory()->create([
@@ -334,6 +336,400 @@ class BotConstructorTest extends TestCase
         $this->assertFalse($arrow->is_active);
         $this->assertSame($block->id, $arrow->source_block_id);
         $this->assertSame($block->id, $arrow->target_block_id);
+    }
+
+    public function test_admin_can_soft_delete_constructor_block_from_ui(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = $this->readyTelegramChannel();
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-delete-block',
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->active()->create([
+            'title' => 'Меню',
+        ]);
+        $targetBlock = BotConstructorBlock::factory()->create([
+            'title' => 'Раздел',
+        ]);
+        $arrow = BotConstructorArrow::factory()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        $scheduledRun = BotConstructorArrowRun::factory()->scheduled()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'inbound_message_id' => $message->id,
+        ]);
+        $processingRunWithoutBlockRun = BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'status' => BotConstructorArrowRun::STATUS_PROCESSING,
+        ]);
+        $processingRunWithBlockRun = BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'status' => BotConstructorArrowRun::STATUS_PROCESSING,
+        ]);
+        BotConstructorExecutionBlockRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $targetBlock->id,
+            'bot_constructor_arrow_run_id' => $processingRunWithBlockRun->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+            'status' => BotConstructorExecutionBlockRun::STATUS_PROCESSING,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->call('selectBlock', $sourceBlock->id)
+            ->call('deleteBlock')
+            ->assertHasNoErrors()
+            ->assertSet('selectedBlockId', null)
+            ->assertSet('selectedArrowId', null);
+
+        $this->assertSoftDeleted('bot_constructor_blocks', ['id' => $sourceBlock->id]);
+        $this->assertDatabaseHas('bot_constructor_blocks', [
+            'id' => $sourceBlock->id,
+            'is_active' => false,
+        ]);
+        $this->assertSoftDeleted('bot_constructor_arrows', ['id' => $arrow->id]);
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $scheduledRun->id,
+            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+            'error_message' => 'Блок удалён администратором.',
+        ]);
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $processingRunWithoutBlockRun->id,
+            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+            'error_message' => 'Блок удалён администратором.',
+        ]);
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $processingRunWithBlockRun->id,
+            'status' => BotConstructorArrowRun::STATUS_PROCESSING,
+        ]);
+    }
+
+    public function test_employee_cannot_delete_constructor_block_by_server_action(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $block = BotConstructorBlock::factory()->active()->create();
+
+        $this->actingAs($employee);
+        $page = app(BotConstructor::class);
+        $page->selectedBlockId = $block->id;
+
+        try {
+            $page->deleteBlock();
+            $this->fail('Expected constructor block delete to be forbidden.');
+        } catch (HttpException $exception) {
+            $this->assertSame(403, $exception->getStatusCode());
+        }
+
+        $this->assertDatabaseHas('bot_constructor_blocks', [
+            'id' => $block->id,
+            'is_active' => true,
+            'deleted_at' => null,
+        ]);
+    }
+
+    public function test_repeated_constructor_block_delete_is_safe_idempotent_cleanup(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = $this->readyTelegramChannel();
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-delete-block-repeat',
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->create();
+        $targetBlock = BotConstructorBlock::factory()->create();
+        $arrow = BotConstructorArrow::factory()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $sourceBlock->delete();
+        $arrow->delete();
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        $scheduledRun = BotConstructorArrowRun::factory()->scheduled()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'inbound_message_id' => $message->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->set('selectedBlockId', $sourceBlock->id)
+            ->call('deleteBlock')
+            ->assertHasNoErrors()
+            ->assertSet('selectedBlockId', null);
+
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $scheduledRun->id,
+            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+            'error_message' => 'Блок удалён администратором.',
+        ]);
+    }
+
+    public function test_non_existing_constructor_block_delete_returns_safe_error(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(BotConstructor::class)
+            ->set('selectedBlockId', 999_999)
+            ->call('deleteBlock')
+            ->assertHasNoErrors()
+            ->assertSet('selectedBlockId', null)
+            ->assertSet('selectedArrowId', null);
+    }
+
+    public function test_deleted_block_does_not_match_inbound(): void
+    {
+        Http::fake();
+
+        $channel = $this->readyTelegramChannel();
+        $block = BotConstructorBlock::factory()->active()->create([
+            'match_type' => BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD,
+            'match_values' => ['старт'],
+            'response_text' => 'Не отправлять',
+        ]);
+        $block->channels()->attach($channel->id);
+        $block->delete();
+        $message = $this->createInboundMessage($channel, [
+            'text' => 'старт',
+            'provider_event_key' => 'constructor-deleted-block-inbound',
+        ]);
+
+        $handled = app(ProcessBotConstructorBlocksAction::class)->handle($message);
+
+        $this->assertFalse($handled);
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('bot_constructor_block_runs', [
+            'inbound_message_id' => $message->id,
+            'bot_constructor_block_id' => $block->id,
+        ]);
+    }
+
+    public function test_deleted_target_block_is_not_executed_by_immediate_arrow(): void
+    {
+        Http::fake();
+
+        $channel = $this->readyTelegramChannel();
+        $sourceBlock = BotConstructorBlock::factory()->active()->create([
+            'match_type' => BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD,
+            'match_values' => ['старт'],
+            'response_text' => '#{none}',
+        ]);
+        $targetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Не отправлять',
+        ]);
+        $sourceBlock->channels()->attach($channel->id);
+        $arrow = BotConstructorArrow::factory()->manualLimit(5)->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $targetBlock->delete();
+        $message = $this->createInboundMessage($channel, [
+            'text' => 'старт',
+            'provider_event_key' => 'constructor-deleted-target-immediate',
+        ]);
+
+        app(ProcessBotConstructorBlocksAction::class)->handle($message);
+
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('bot_constructor_arrow_runs', [
+            'bot_constructor_arrow_id' => $arrow->id,
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $message->id,
+            'text' => 'Не отправлять',
+        ]);
+    }
+
+    public function test_deleted_target_block_is_not_executed_by_scheduled_arrow_after_claim(): void
+    {
+        Http::fake();
+
+        $channel = $this->readyTelegramChannel();
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-deleted-target-scheduled',
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->active()->create();
+        $targetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Не отправлять',
+        ]);
+        $arrow = BotConstructorArrow::factory()->manualLimit(5)->delayed()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'status' => BotConstructorExecution::STATUS_COMPLETED,
+        ]);
+        $arrowRun = BotConstructorArrowRun::factory()->scheduled()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'inbound_message_id' => $message->id,
+            'scheduled_for' => now()->subSecond(),
+        ]);
+        $targetBlock->delete();
+
+        $this->artisan('bot-constructor:run-scheduled-arrows')
+            ->assertExitCode(0);
+
+        Http::assertNothingSent();
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $arrowRun->id,
+            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_execution_block_runs', [
+            'bot_constructor_arrow_run_id' => $arrowRun->id,
+        ]);
+    }
+
+    public function test_deleted_target_block_is_not_sent_after_execution_block_run_was_created(): void
+    {
+        Http::fake();
+
+        $channel = $this->readyTelegramChannel();
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-deleted-target-after-block-run',
+        ]);
+        $dialog = Dialog::query()->findOrFail($message->dialog_id);
+        $sourceBlock = BotConstructorBlock::factory()->active()->create();
+        $targetBlock = BotConstructorBlock::factory()->active()->create([
+            'response_text' => 'Не отправлять после удаления',
+        ]);
+        $arrow = BotConstructorArrow::factory()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        $arrowRun = BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'status' => BotConstructorArrowRun::STATUS_PROCESSING,
+        ]);
+        $blockRun = BotConstructorExecutionBlockRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $targetBlock->id,
+            'bot_constructor_arrow_run_id' => $arrowRun->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+            'status' => BotConstructorExecutionBlockRun::STATUS_PROCESSING,
+        ]);
+
+        $targetBlock->delete();
+
+        $result = app(ExecuteBotConstructorBlockAction::class)->handle($message, $dialog, $targetBlock, $blockRun);
+
+        Http::assertNothingSent();
+        $this->assertSame(BotConstructorExecutionBlockRun::STATUS_FAILED, $result->status);
+        $this->assertSame('Блок удалён администратором.', $result->error_message);
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $arrowRun->id,
+            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+            'error_message' => 'Блок удалён администратором.',
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $message->id,
+            'text' => 'Не отправлять после удаления',
+        ]);
+    }
+
+    public function test_deleted_constructor_block_history_is_still_readable(): void
+    {
+        $channel = $this->readyTelegramChannel();
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-deleted-history',
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->create();
+        $targetBlock = BotConstructorBlock::factory()->create();
+        $arrow = BotConstructorArrow::factory()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+        ]);
+        $arrowRun = BotConstructorArrowRun::factory()->passed()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $blockRun = BotConstructorExecutionBlockRun::factory()->sent()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $targetBlock->id,
+            'bot_constructor_arrow_run_id' => $arrowRun->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+        ]);
+        $legacyRun = BotConstructorBlockRun::query()->create([
+            'inbound_message_id' => $message->id,
+            'bot_constructor_block_id' => $targetBlock->id,
+            'status' => BotConstructorBlockRun::STATUS_SENT,
+        ]);
+
+        $targetBlock->delete();
+        $arrow->delete();
+
+        $this->assertTrue($blockRun->fresh('block')->block->trashed());
+        $this->assertTrue($legacyRun->fresh('block')->block->trashed());
+        $this->assertTrue($arrowRun->fresh('arrow', 'targetBlock')->arrow->trashed());
+        $this->assertTrue($arrowRun->targetBlock->trashed());
     }
 
     public function test_admin_can_update_arrow_pass_limit_constant_from_constructor_ui(): void
@@ -2713,7 +3109,7 @@ class BotConstructorTest extends TestCase
 
         $this->assertDatabaseHas('bot_constructor_arrow_runs', [
             'id' => $arrowRun->id,
-            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+            'status' => BotConstructorArrowRun::STATUS_DELIVERY_UNCERTAIN,
         ]);
         $this->assertDatabaseHas('bot_constructor_execution_block_runs', [
             'bot_constructor_arrow_run_id' => $arrowRun->id,
@@ -2722,6 +3118,48 @@ class BotConstructorTest extends TestCase
         $this->assertDatabaseHas('bot_constructor_executions', [
             'id' => $execution->id,
             'status' => BotConstructorExecution::STATUS_FAILED,
+        ]);
+    }
+
+    public function test_cleanup_cancels_processing_arrow_without_block_run_when_block_was_deleted(): void
+    {
+        $channel = $this->readyTelegramChannel();
+        $message = $this->createInboundMessage($channel, [
+            'provider_event_key' => 'constructor-cleanup-deleted-before-block-run',
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->active()->create();
+        $targetBlock = BotConstructorBlock::factory()->active()->create();
+        $arrow = BotConstructorArrow::factory()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $channel->id,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        $arrowRun = BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $message->dialog_id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'processing_started_at' => now()->subMinutes(20),
+            'status' => BotConstructorArrowRun::STATUS_PROCESSING,
+        ]);
+
+        $targetBlock->delete();
+
+        $this->artisan('bot-constructor:cleanup-processing-runs')
+            ->assertExitCode(0);
+
+        $this->assertDatabaseHas('bot_constructor_arrow_runs', [
+            'id' => $arrowRun->id,
+            'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_execution_block_runs', [
+            'bot_constructor_arrow_run_id' => $arrowRun->id,
         ]);
     }
 

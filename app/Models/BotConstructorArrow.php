@@ -126,12 +126,12 @@ class BotConstructorArrow extends Model
 
     public function sourceBlock(): BelongsTo
     {
-        return $this->belongsTo(BotConstructorBlock::class, 'source_block_id');
+        return $this->belongsTo(BotConstructorBlock::class, 'source_block_id')->withTrashed();
     }
 
     public function targetBlock(): BelongsTo
     {
-        return $this->belongsTo(BotConstructorBlock::class, 'target_block_id');
+        return $this->belongsTo(BotConstructorBlock::class, 'target_block_id')->withTrashed();
     }
 
     public function runs(): HasMany

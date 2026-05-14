@@ -8,11 +8,13 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Validation\ValidationException;
 
 class BotConstructorBlock extends Model
 {
     use HasFactory;
+    use SoftDeletes;
 
     public const MATCH_TYPE_ANY_INBOUND = 'any_inbound';
 
@@ -47,6 +49,7 @@ class BotConstructorBlock extends Model
         'match_values' => 'array',
         'x' => 'integer',
         'y' => 'integer',
+        'deleted_at' => 'datetime',
     ];
 
     protected static function booted(): void
