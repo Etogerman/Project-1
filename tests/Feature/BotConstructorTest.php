@@ -2775,11 +2775,11 @@ class BotConstructorTest extends TestCase
         ]);
         $this->assertDatabaseHas('bot_constructor_executions', [
             'id' => $execution->id,
-            'status' => BotConstructorExecution::STATUS_RUNNING,
+            'status' => BotConstructorExecution::STATUS_COMPLETED,
         ]);
     }
 
-    public function test_retry_recovers_downstream_arrow_after_cleanup_marks_target_arrow_passed(): void
+    public function test_cleanup_continues_downstream_arrow_after_marking_target_arrow_passed(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
@@ -2888,7 +2888,6 @@ class BotConstructorTest extends TestCase
 
         $this->artisan('bot-constructor:cleanup-processing-runs')
             ->assertExitCode(0);
-        ProcessAutoReplyJob::dispatchSync($message->id);
 
         Http::assertSentCount(1);
         $this->assertDatabaseHas('bot_constructor_arrow_runs', [

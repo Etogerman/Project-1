@@ -7,6 +7,9 @@ use App\Models\BotConstructorArrowRun;
 use App\Models\BotConstructorBlock;
 use App\Models\BotConstructorExecution;
 use App\Models\BotConstructorExecutionBlockRun;
+use App\Models\Dialog;
+use App\Models\Message;
+use App\Services\Bots\ProcessBotConstructorArrowsAction;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -16,6 +19,12 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
         {--timeout=15 : Сколько минут processing-запись считается рабочей}';
 
     protected $description = 'Cleanup stale bot constructor processing runs.';
+
+    public function __construct(
+        private readonly ProcessBotConstructorArrowsAction $processBotConstructorArrowsAction,
+    ) {
+        parent::__construct();
+    }
 
     public function handle(): int
     {
@@ -43,18 +52,19 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
         $count = 0;
 
         foreach ($ids as $id) {
-            DB::transaction(function () use ($id, &$count): void {
+            $successfulBlockRun = DB::transaction(function () use ($id, &$count): ?BotConstructorExecutionBlockRun {
                 $run = BotConstructorArrowRun::query()
                     ->whereKey($id)
                     ->lockForUpdate()
                     ->first();
 
                 if (! $run instanceof BotConstructorArrowRun || $run->status !== BotConstructorArrowRun::STATUS_PROCESSING) {
-                    return;
+                    return null;
                 }
 
                 $shouldCancelBeforeBlockRun = $this->shouldCancelBeforeBlockRun($run);
-                $relatedBlockRunStatus = $this->relatedBlockRunStatus($run);
+                $relatedBlockRun = $this->relatedBlockRun($run);
+                $relatedBlockRunStatus = $relatedBlockRun?->status;
                 $status = match (true) {
                     $shouldCancelBeforeBlockRun => BotConstructorArrowRun::STATUS_CANCELLED,
                     in_array($relatedBlockRunStatus, [
@@ -84,7 +94,15 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
                     $this->failRelatedExecution($run);
                 }
                 $count++;
+
+                return $status === BotConstructorArrowRun::STATUS_PASSED
+                    ? $relatedBlockRun
+                    : null;
             });
+
+            if ($successfulBlockRun instanceof BotConstructorExecutionBlockRun) {
+                $this->continueDownstreamFromSuccessfulBlockRun($successfulBlockRun);
+            }
         }
 
         return $count;
@@ -112,10 +130,51 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
 
     private function relatedBlockRunStatus(BotConstructorArrowRun $run): ?string
     {
+        return $this->relatedBlockRun($run)?->status;
+    }
+
+    private function relatedBlockRun(BotConstructorArrowRun $run): ?BotConstructorExecutionBlockRun
+    {
         return BotConstructorExecutionBlockRun::query()
             ->where('bot_constructor_arrow_run_id', $run->id)
             ->orderByDesc('id')
-            ->value('status');
+            ->first();
+    }
+
+    private function continueDownstreamFromSuccessfulBlockRun(BotConstructorExecutionBlockRun $blockRun): void
+    {
+        $blockRun->loadMissing(['arrowRun', 'block', 'dialog', 'execution.rootInboundMessage']);
+
+        $execution = $blockRun->execution;
+        $dialog = $blockRun->dialog;
+        $message = $execution?->rootInboundMessage;
+        $block = $blockRun->block;
+
+        if (
+            ! $execution instanceof BotConstructorExecution
+            || $execution->status !== BotConstructorExecution::STATUS_RUNNING
+            || ! $dialog instanceof Dialog
+            || ! $message instanceof Message
+            || ! $block instanceof BotConstructorBlock
+            || $block->trashed()
+        ) {
+            return;
+        }
+
+        $cutoff = $blockRun->arrowRun?->schema_cutoff_at ?? $blockRun->created_at;
+
+        $this->processBotConstructorArrowsAction->handle(
+            $execution,
+            $dialog,
+            $message,
+            $block,
+            null,
+            $cutoff,
+            true,
+            $blockRun,
+        );
+
+        $this->completeExecutionIfReady($execution);
     }
 
     private function cleanupBlockRuns(mixed $threshold): int
@@ -185,5 +244,27 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
                 'status' => BotConstructorExecution::STATUS_FAILED,
             ])->save();
         }
+    }
+
+    private function completeExecutionIfReady(BotConstructorExecution $execution): void
+    {
+        $execution->refresh();
+
+        if ($execution->status !== BotConstructorExecution::STATUS_RUNNING) {
+            return;
+        }
+
+        $hasProcessingBlockRuns = BotConstructorExecutionBlockRun::query()
+            ->where('bot_constructor_execution_id', $execution->id)
+            ->where('status', BotConstructorExecutionBlockRun::STATUS_PROCESSING)
+            ->exists();
+
+        if ($hasProcessingBlockRuns) {
+            return;
+        }
+
+        $execution->forceFill([
+            'status' => BotConstructorExecution::STATUS_COMPLETED,
+        ])->save();
     }
 }
