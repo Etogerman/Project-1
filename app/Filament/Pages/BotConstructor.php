@@ -372,6 +372,130 @@ class BotConstructor extends Page
             ->send();
     }
 
+    public function deleteBlock(): void
+    {
+        abort_unless(static::canAccess(), 403);
+
+        if ($this->selectedBlockId === null) {
+            return;
+        }
+
+        $result = DB::transaction(function (): array {
+            $block = BotConstructorBlock::withTrashed()
+                ->whereKey($this->selectedBlockId)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $block instanceof BotConstructorBlock) {
+                return [
+                    'found' => false,
+                    'already_deleted' => false,
+                    'block_id' => (int) $this->selectedBlockId,
+                    'deleted_arrow_count' => 0,
+                    'cancelled_scheduled_run_count' => 0,
+                    'cancelled_processing_run_count' => 0,
+                ];
+            }
+
+            $alreadyDeleted = $block->trashed();
+
+            $relatedArrowIds = BotConstructorArrow::withTrashed()
+                ->where(function ($query) use ($block): void {
+                    $query
+                        ->where('source_block_id', $block->id)
+                        ->orWhere('target_block_id', $block->id);
+                })
+                ->lockForUpdate()
+                ->pluck('id')
+                ->map(fn (mixed $id): int => (int) $id)
+                ->all();
+
+            $deletedArrowCount = $relatedArrowIds === []
+                ? 0
+                : BotConstructorArrow::query()
+                    ->whereIn('id', $relatedArrowIds)
+                    ->count();
+
+            if (! $alreadyDeleted) {
+                $block->forceFill(['is_active' => false])->save();
+                $block->delete();
+            }
+
+            if ($relatedArrowIds !== []) {
+                BotConstructorArrow::query()
+                    ->whereIn('id', $relatedArrowIds)
+                    ->delete();
+            }
+
+            $cancelledScheduledRunCount = $relatedArrowIds === []
+                ? 0
+                : BotConstructorArrowRun::query()
+                    ->whereIn('bot_constructor_arrow_id', $relatedArrowIds)
+                    ->where('status', BotConstructorArrowRun::STATUS_SCHEDULED)
+                    ->update([
+                        'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+                        'processing_started_at' => null,
+                        'error_message' => 'Блок удалён администратором.',
+                        'updated_at' => now(),
+                    ]);
+
+            $cancelledProcessingRunCount = $relatedArrowIds === []
+                ? 0
+                : BotConstructorArrowRun::query()
+                    ->whereIn('bot_constructor_arrow_id', $relatedArrowIds)
+                    ->where('status', BotConstructorArrowRun::STATUS_PROCESSING)
+                    ->whereNotExists(function ($query): void {
+                        $query
+                            ->selectRaw('1')
+                            ->from('bot_constructor_execution_block_runs')
+                            ->whereColumn('bot_constructor_execution_block_runs.bot_constructor_arrow_run_id', 'bot_constructor_arrow_runs.id');
+                    })
+                    ->update([
+                        'status' => BotConstructorArrowRun::STATUS_CANCELLED,
+                        'processing_started_at' => null,
+                        'error_message' => 'Блок удалён администратором.',
+                        'updated_at' => now(),
+                    ]);
+
+            return [
+                'found' => true,
+                'already_deleted' => $alreadyDeleted,
+                'block_id' => (int) $block->id,
+                'deleted_arrow_count' => $deletedArrowCount,
+                'cancelled_scheduled_run_count' => $cancelledScheduledRunCount,
+                'cancelled_processing_run_count' => $cancelledProcessingRunCount,
+            ];
+        });
+
+        if ($result['found'] === false) {
+            $this->selectedBlockId = null;
+            $this->selectedArrowId = null;
+
+            Notification::make()
+                ->danger()
+                ->title('Блок не найден')
+                ->send();
+
+            return;
+        }
+
+        logger()->info('bot_constructor.block_deleted', [
+            'user_id' => auth()->id(),
+            'block_id' => $result['block_id'],
+            'deleted_arrow_count' => $result['deleted_arrow_count'],
+            'cancelled_scheduled_run_count' => $result['cancelled_scheduled_run_count'],
+            'cancelled_processing_run_count' => $result['cancelled_processing_run_count'],
+        ]);
+
+        $this->selectedBlockId = null;
+        $this->selectedArrowId = null;
+
+        Notification::make()
+            ->success()
+            ->title($result['already_deleted'] ? 'Блок уже удалён' : 'Блок удалён')
+            ->send();
+    }
+
     public function saveArrowPassLimitConstant(): void
     {
         abort_unless(static::canAccess(), 403);
@@ -462,7 +586,9 @@ class BotConstructor extends Page
             ->orderBy('id')
             ->get()
             ->filter(fn (BotConstructorArrow $arrow): bool => $arrow->sourceBlock instanceof BotConstructorBlock
-                && $arrow->targetBlock instanceof BotConstructorBlock)
+                && ! $arrow->sourceBlock->trashed()
+                && $arrow->targetBlock instanceof BotConstructorBlock
+                && ! $arrow->targetBlock->trashed())
             ->map(fn (BotConstructorArrow $arrow): array => [
                 'id' => (int) $arrow->id,
                 'source_block_id' => (int) $arrow->source_block_id,
