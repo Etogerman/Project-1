@@ -15,7 +15,6 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
-use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\BuildContactHistoryTimelineAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction;
@@ -340,6 +339,7 @@ class ContactResource extends Resource
     {
         return $table
             ->recordUrl(fn (Contact $record): string => static::getUrl('view', ['record' => $record]))
+            ->splitSearchTerms(false)
             ->columns([
                 TextColumn::make('display_name')
                     ->label('Контакт')
@@ -765,27 +765,70 @@ class ContactResource extends Resource
 
     protected static function applyTableSearch(Builder $query, string $search): Builder
     {
-        $normalizedPhoneSearch = AddContactPhoneAction::normalizePhone($search);
+        $search = trim($search);
+
+        if ($search === '') {
+            return $query;
+        }
+
+        $phoneSearchDigits = static::resolvePhoneSearchDigits($search);
+        $usernameSearch = static::resolveUsernameSearch($search);
         $likeSearch = "%{$search}%";
 
-        return $query->where(function (Builder $query) use ($likeSearch, $search, $normalizedPhoneSearch): void {
+        return $query->where(function (Builder $query) use ($likeSearch, $phoneSearchDigits, $usernameSearch): void {
             $query->where('first_name', 'ilike', $likeSearch)
                 ->orWhere('last_name', 'ilike', $likeSearch)
-                ->orWhereRaw("trim(concat_ws(' ', first_name, last_name)) ilike ?", [$likeSearch])
+                ->orWhereRaw("trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')) ilike ?", [$likeSearch])
+                ->orWhereRaw("trim(coalesce(last_name, '') || ' ' || coalesce(first_name, '')) ilike ?", [$likeSearch])
                 ->orWhere('name', 'ilike', $likeSearch)
-                ->orWhereHas('identities', function (Builder $identityQuery) use ($search): void {
+                ->orWhereHas('identities', function (Builder $identityQuery) use ($likeSearch, $usernameSearch): void {
                     $identityQuery
-                        ->where('display_name', 'ilike', "%{$search}%")
-                        ->orWhere('external_user_id', 'ilike', "%{$search}%")
-                        ->orWhere('external_username', 'ilike', "%{$search}%");
+                        ->where('display_name', 'ilike', $likeSearch)
+                        ->orWhere('external_user_id', 'ilike', $likeSearch)
+                        ->orWhere('external_username', 'ilike', $likeSearch);
+
+                    if ($usernameSearch !== null) {
+                        $identityQuery->orWhere('external_username', 'ilike', "%{$usernameSearch}%");
+                    }
                 });
 
-            if ($normalizedPhoneSearch !== '') {
-                $query->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($normalizedPhoneSearch): void {
-                    $phoneQuery->where('phone_normalized', 'ilike', "%{$normalizedPhoneSearch}%");
+            if ($phoneSearchDigits !== null) {
+                $query->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($phoneSearchDigits): void {
+                    static::whereDigitOnlyPhoneLike($phoneQuery, 'phone_raw', 'phone_normalized', $phoneSearchDigits);
                 });
             }
         });
+    }
+
+    protected static function resolveUsernameSearch(string $search): ?string
+    {
+        if (! str_starts_with($search, '@')) {
+            return null;
+        }
+
+        $username = ltrim($search, '@');
+
+        return $username !== '' ? $username : null;
+    }
+
+    protected static function resolvePhoneSearchDigits(string $search): ?string
+    {
+        if (preg_match('/^[0-9+\s()\-]+$/u', $search) !== 1) {
+            return null;
+        }
+
+        $digits = preg_replace('/\D/u', '', $search) ?? '';
+
+        return strlen($digits) >= 6 ? $digits : null;
+    }
+
+    protected static function whereDigitOnlyPhoneLike(Builder $query, string $rawColumn, string $normalizedColumn, string $digits): Builder
+    {
+        $likeDigits = "%{$digits}%";
+
+        return $query
+            ->whereRaw("regexp_replace({$rawColumn}, '[^0-9]', '', 'g') ilike ?", [$likeDigits])
+            ->orWhereRaw("regexp_replace({$normalizedColumn}, '[^0-9]', '', 'g') ilike ?", [$likeDigits]);
     }
 
     protected static function buildPrimaryPhoneSubquery(string $column): Builder
