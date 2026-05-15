@@ -1,7 +1,8 @@
 <x-filament-panels::page>
     @php($blocks = $this->blocks())
+    @php($arrows = $this->arrows())
 
-    <form wire:submit.prevent="saveBlock" class="ac-scenario-builder-page">
+    <form wire:submit.prevent="saveSelectedElement" class="ac-scenario-builder-page">
         <div
             class="ac-scenario-builder-shell"
             x-data="{
@@ -30,6 +31,68 @@
                     const y = Number(position.y);
 
                     return Number.isFinite(y) ? y : 64;
+                },
+                nodeWidth() {
+                    return 224;
+                },
+                nodeHeight() {
+                    return 84;
+                },
+                gridSize() {
+                    return 32;
+                },
+                arrowPath(sourceBlockId, targetBlockId) {
+                    const sourceX = this.nodeX(sourceBlockId);
+                    const sourceY = this.nodeY(sourceBlockId);
+                    const targetX = this.nodeX(targetBlockId);
+                    const targetY = this.nodeY(targetBlockId);
+                    const width = this.nodeWidth();
+                    const height = this.nodeHeight();
+                    const grid = this.gridSize();
+                    const startX = sourceX + width;
+                    const startY = sourceY + (height / 2);
+
+                    if (Number(sourceBlockId) === Number(targetBlockId)) {
+                        const loopGap = grid / 2;
+                        const exitX = sourceX + (width * 0.56);
+                        const exitY = sourceY;
+                        const topY = Math.max(8, sourceY - loopGap);
+                        const rightX = sourceX + width + loopGap;
+                        const cornerRadius = 12;
+                        const entryX = sourceX + width;
+                        const entryY = sourceY + (height / 2);
+
+                        return `M ${exitX} ${exitY} L ${exitX} ${topY + cornerRadius} Q ${exitX} ${topY}, ${exitX + cornerRadius} ${topY} L ${rightX - cornerRadius} ${topY} Q ${rightX} ${topY}, ${rightX} ${topY + cornerRadius} L ${rightX} ${entryY - cornerRadius} Q ${rightX} ${entryY}, ${entryX} ${entryY}`;
+                    }
+
+                    return `M ${startX} ${startY} L ${targetX} ${targetY + (height / 2)}`;
+                },
+                arrowLabelX(sourceBlockId, targetBlockId) {
+                    if (Number(sourceBlockId) === Number(targetBlockId)) {
+                        const width = this.nodeWidth();
+                        const height = this.nodeHeight();
+                        const loopGap = this.gridSize() / 2;
+                        const cornerRadius = 12;
+                        const exitX = this.nodeX(sourceBlockId) + (width * 0.56);
+                        const rightX = this.nodeX(sourceBlockId) + width + loopGap;
+                        const topStartX = exitX + cornerRadius;
+                        const topEndX = rightX - cornerRadius;
+                        const topLength = topEndX - topStartX;
+                        const beforeTopLength = loopGap + cornerRadius;
+                        const afterTopLength = (height / 2) + loopGap + cornerRadius;
+                        const halfLength = (beforeTopLength + topLength + afterTopLength) / 2;
+
+                        return topStartX + Math.min(topLength, Math.max(0, halfLength - beforeTopLength));
+                    }
+
+                    return (this.nodeX(sourceBlockId) + this.nodeX(targetBlockId) + this.nodeWidth()) / 2;
+                },
+                arrowLabelY(sourceBlockId, targetBlockId) {
+                    if (Number(sourceBlockId) === Number(targetBlockId)) {
+                        return Math.max(20, this.nodeY(sourceBlockId) - (this.gridSize() / 2) - 8);
+                    }
+
+                    return (this.nodeY(sourceBlockId) + this.nodeY(targetBlockId) + this.nodeHeight()) / 2 - 8;
                 },
                 startPointer(event, blockId) {
                     if (this.isSavingPosition) {
@@ -146,8 +209,11 @@
                         <strong>Стартовые условия</strong>
                     </div>
                     <div class="ac-scenario-builder-workspace__actions">
-                        <button type="submit" class="ac-button ac-button--primary" @disabled(! $this->hasSelectedBlock())>
+                        <button type="submit" class="ac-button ac-button--primary" @disabled(! $this->hasSelectedElement())>
                             Сохранить
+                        </button>
+                        <button type="button" class="ac-button ac-button--secondary" wire:click="addArrow" @disabled(! $this->canCreateArrow())>
+                            Добавить стрелку
                         </button>
                         <button type="button" class="ac-button ac-button--success" wire:click="addBlock">
                             Добавить стартовое условие
@@ -163,6 +229,42 @@
                     x-on:pointercancel.window="finishPointer($event)"
                 >
                     <div class="ac-scenario-builder-canvas__surface" x-ref="surface">
+                        <svg class="ac-bot-constructor-arrows" width="100%" height="100%" aria-label="Стрелки конструктора">
+                            <defs>
+                                <marker id="ac-bot-constructor-arrow-head" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                                    <path d="M 0 0 L 8 4 L 0 8 z" />
+                                </marker>
+                                <marker id="ac-bot-constructor-arrow-head-selected" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                                    <path d="M 0 0 L 8 4 L 0 8 z" />
+                                </marker>
+                            </defs>
+                            @foreach ($arrows as $arrow)
+                                <g
+                                    wire:key="bot-constructor-canvas-arrow-{{ $arrow['id'] }}"
+                                    class="ac-bot-constructor-arrow {{ (int) $arrow['source_block_id'] === (int) $arrow['target_block_id'] ? 'is-self-loop' : '' }} {{ $arrow['is_selected'] ? 'is-selected' : '' }} {{ $arrow['is_active'] ? '' : 'is-inactive' }}"
+                                >
+                                    <path
+                                        class="ac-bot-constructor-arrow__hit"
+                                        x-bind:d="arrowPath({{ $arrow['source_block_id'] }}, {{ $arrow['target_block_id'] }})"
+                                        wire:click.stop="selectArrow({{ $arrow['id'] }})"
+                                    />
+                                    <path
+                                        class="ac-bot-constructor-arrow__line"
+                                        x-bind:d="arrowPath({{ $arrow['source_block_id'] }}, {{ $arrow['target_block_id'] }})"
+                                        marker-end="{{ $arrow['is_selected'] ? 'url(#ac-bot-constructor-arrow-head-selected)' : 'url(#ac-bot-constructor-arrow-head)' }}"
+                                    />
+                                    <text
+                                        class="ac-bot-constructor-arrow__label"
+                                        x-bind:x="arrowLabelX({{ $arrow['source_block_id'] }}, {{ $arrow['target_block_id'] }})"
+                                        x-bind:y="arrowLabelY({{ $arrow['source_block_id'] }}, {{ $arrow['target_block_id'] }})"
+                                        wire:click.stop="selectArrow({{ $arrow['id'] }})"
+                                    >
+                                        {{ $arrow['delay_label'] }}
+                                    </text>
+                                </g>
+                            @endforeach
+                        </svg>
+
                         @forelse ($blocks as $block)
                             <article
                                 class="ac-scenario-builder-node ac-scenario-builder-node--green ac-bot-constructor-node {{ $block['is_selected'] ? 'is-selected' : '' }} {{ $block['is_active'] ? '' : 'is-inactive' }}"
@@ -189,16 +291,184 @@
             </main>
 
             <aside class="ac-scenario-builder-palette">
-                @if (! $this->hasSelectedBlock())
+                @if (! $this->hasSelectedBlock() && ! $this->hasSelectedArrow())
                     <div class="ac-scenario-builder-panel__header">
                         <span>Элемент</span>
                         <strong>Блок не выбран</strong>
                     </div>
+                @elseif ($this->hasSelectedArrow())
+                    <div class="ac-scenario-builder-settings">
+                        <div class="ac-scenario-builder-panel__header ac-scenario-builder-panel__header--with-action">
+                            <div>
+                                <span>Настройки соединения</span>
+                                <strong>Стрелка #{{ $selectedArrowId }}</strong>
+                            </div>
+                            <button
+                                type="button"
+                                class="ac-scenario-builder-panel__danger-action"
+                                wire:click="deleteArrow"
+                                wire:confirm="Удалить стрелку?"
+                            >
+                                Удалить
+                            </button>
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label>
+                                <input type="checkbox" wire:model.live="draftArrowIsActive" />
+                                Стрелка включена
+                            </label>
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-source">Откуда</label>
+                            <select id="bot-constructor-arrow-source" wire:model.live="draftArrowSourceBlockId">
+                                @foreach ($this->blockOptions() as $blockId => $label)
+                                    <option value="{{ $blockId }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            @error('draftArrowSourceBlockId')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-target">Куда</label>
+                            <select id="bot-constructor-arrow-target" wire:model.live="draftArrowTargetBlockId">
+                                @foreach ($this->blockOptions() as $blockId => $label)
+                                    <option value="{{ $blockId }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            @error('draftArrowTargetBlockId')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-delay-value">Задержка перед переходом</label>
+                            <div class="ac-bot-constructor-inline-grid">
+                                <input
+                                    id="bot-constructor-arrow-delay-value"
+                                    type="number"
+                                    min="0"
+                                    wire:model.live="draftArrowDelayValue"
+                                />
+                                <select wire:model.live="draftArrowDelayUnit" aria-label="Единица задержки">
+                                    @foreach ($this->arrowDelayUnitOptions() as $unit => $label)
+                                        <option value="{{ $unit }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            @error('draftArrowDelayValue')
+                                <p>{{ $message }}</p>
+                            @enderror
+                            @error('draftArrowDelayUnit')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label>
+                                <input type="checkbox" wire:model.live="draftArrowCancelIfLeftSourceBlock" />
+                                Отменить, если диалог ушёл из исходного блока
+                            </label>
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-condition-type">Условие стрелки</label>
+                            <select id="bot-constructor-arrow-condition-type" wire:model.live="draftArrowConditionMatchType">
+                                @foreach ($this->arrowConditionTypeOptions() as $type => $label)
+                                    <option value="{{ $type }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            @error('draftArrowConditionMatchType')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-condition-value">Значение условия</label>
+                            <input
+                                id="bot-constructor-arrow-condition-value"
+                                type="text"
+                                wire:model.live="draftArrowConditionValue"
+                                placeholder="1"
+                            />
+                            @error('draftArrowConditionValue')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-priority">Приоритет</label>
+                            <input
+                                id="bot-constructor-arrow-priority"
+                                type="number"
+                                wire:model.live="draftArrowPriority"
+                            />
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-limit-mode" title="Лимит переходов клиента по этой стрелке">Лимит переходов</label>
+                            <select id="bot-constructor-arrow-limit-mode" wire:model.live="draftArrowPassLimitMode">
+                                @foreach ($this->arrowPassLimitModeOptions() as $mode => $label)
+                                    <option value="{{ $mode }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            <p>Константа: {{ $this->arrowPassLimitConstantLabel() }}</p>
+                            @error('draftArrowPassLimitMode')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="ac-scenario-builder-fieldset">
+                            <label for="bot-constructor-arrow-limit-constant" title="Лимит переходов клиента по стрелке">Константа лимита</label>
+                            <div class="ac-bot-constructor-inline-grid">
+                                <input
+                                    id="bot-constructor-arrow-limit-constant"
+                                    type="number"
+                                    min="1"
+                                    wire:model.live="draftArrowPassLimitConstant"
+                                />
+                                <button type="button" class="ac-button ac-button--secondary" wire:click="saveArrowPassLimitConstant">
+                                    Сохранить
+                                </button>
+                            </div>
+                            @error('draftArrowPassLimitConstant')
+                                <p>{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        @if ($draftArrowPassLimitMode === \App\Models\BotConstructorArrow::PASS_LIMIT_MODE_MANUAL)
+                            <div class="ac-scenario-builder-fieldset">
+                                <label for="bot-constructor-arrow-limit-value" title="Лимит переходов клиента по этой стрелке">Ручной лимит</label>
+                                <input
+                                    id="bot-constructor-arrow-limit-value"
+                                    type="number"
+                                    min="1"
+                                    wire:model.live="draftArrowPassLimitValue"
+                                />
+                                @error('draftArrowPassLimitValue')
+                                    <p>{{ $message }}</p>
+                                @enderror
+                            </div>
+                        @endif
+                    </div>
                 @else
                     <div class="ac-scenario-builder-settings">
-                        <div class="ac-scenario-builder-panel__header">
-                            <span>Настройки элемента</span>
-                            <strong>Стартовое условие #{{ $selectedBlockId }}</strong>
+                        <div class="ac-scenario-builder-panel__header ac-scenario-builder-panel__header--with-action">
+                            <div>
+                                <span>Настройки элемента</span>
+                                <strong>Стартовое условие #{{ $selectedBlockId }}</strong>
+                            </div>
+                            <button
+                                type="button"
+                                class="ac-scenario-builder-panel__danger-action"
+                                wire:click="deleteBlock"
+                                wire:confirm="Удалить блок? Связанные стрелки будут удалены, запланированные переходы отменены. История сохранится."
+                            >
+                                Удалить
+                            </button>
                         </div>
 
                         <div class="ac-scenario-builder-fieldset">

@@ -107,7 +107,8 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertNotNull($runtimeState->last_gateway_heartbeat_at);
 
         Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($message): bool {
-            return $job->inboundMessageId === $message->id;
+            return $job->inboundMessageId === $message->id
+                && $job->queue === ProcessAutoReplyJob::queueName();
         });
         Queue::assertPushed(ProcessAutoReplyJob::class, 1);
         Queue::assertNotPushed(ProcessDataCollectionQuestionJob::class);

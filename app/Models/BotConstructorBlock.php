@@ -8,11 +8,13 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Validation\ValidationException;
 
 class BotConstructorBlock extends Model
 {
     use HasFactory;
+    use SoftDeletes;
 
     public const MATCH_TYPE_ANY_INBOUND = 'any_inbound';
 
@@ -47,6 +49,7 @@ class BotConstructorBlock extends Model
         'match_values' => 'array',
         'x' => 'integer',
         'y' => 'integer',
+        'deleted_at' => 'datetime',
     ];
 
     protected static function booted(): void
@@ -157,6 +160,21 @@ class BotConstructorBlock extends Model
     public function runs(): HasMany
     {
         return $this->hasMany(BotConstructorBlockRun::class);
+    }
+
+    public function sourceArrows(): HasMany
+    {
+        return $this->hasMany(BotConstructorArrow::class, 'source_block_id');
+    }
+
+    public function targetArrows(): HasMany
+    {
+        return $this->hasMany(BotConstructorArrow::class, 'target_block_id');
+    }
+
+    public function executionRuns(): HasMany
+    {
+        return $this->hasMany(BotConstructorExecutionBlockRun::class, 'bot_constructor_block_id');
     }
 
     public function scopeActive(Builder $query): Builder

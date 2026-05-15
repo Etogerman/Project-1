@@ -1512,6 +1512,86 @@
         filter: saturate(0.88);
     }
 
+    .ac-bot-constructor-arrows {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        overflow: visible;
+        pointer-events: none;
+    }
+
+    .ac-bot-constructor-arrows marker path {
+        fill: #8aa0bd;
+    }
+
+    .ac-bot-constructor-arrows #ac-bot-constructor-arrow-head-selected path {
+        fill: #3b82f6;
+    }
+
+    .ac-bot-constructor-arrow {
+        pointer-events: none;
+    }
+
+    .ac-bot-constructor-arrow__hit {
+        fill: none;
+        stroke: transparent;
+        stroke-width: 18;
+        pointer-events: stroke;
+        cursor: pointer;
+    }
+
+    .ac-bot-constructor-arrow__line {
+        fill: none;
+        stroke: #8aa0bd;
+        stroke-width: 2.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        pointer-events: none;
+    }
+
+    .ac-bot-constructor-arrow.is-self-loop .ac-bot-constructor-arrow__line {
+        stroke-width: 3;
+    }
+
+    .ac-bot-constructor-arrow.is-selected .ac-bot-constructor-arrow__line {
+        stroke: #3b82f6;
+        stroke-width: 3.5;
+    }
+
+    .ac-bot-constructor-arrow.is-inactive .ac-bot-constructor-arrow__line {
+        opacity: 0.42;
+        stroke-dasharray: 8 7;
+    }
+
+    .ac-bot-constructor-arrow__label {
+        fill: var(--ac-text);
+        paint-order: stroke;
+        stroke: var(--ac-page-bg);
+        stroke-width: 5px;
+        font-size: 0.76rem;
+        font-weight: 800;
+        pointer-events: auto;
+        cursor: pointer;
+        text-anchor: middle;
+    }
+
+    .ac-bot-constructor-inline-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.7fr);
+        gap: 0.55rem;
+    }
+
+    .ac-scenario-builder-panel__danger-action {
+        border: 1px solid color-mix(in srgb, var(--ac-danger) 46%, var(--ac-border));
+        border-radius: 12px;
+        background: var(--ac-danger-soft);
+        color: color-mix(in srgb, var(--ac-danger) 84%, var(--ac-text));
+        font-size: 0.78rem;
+        font-weight: 850;
+        line-height: 1;
+        padding: 0.55rem 0.75rem;
+    }
+
     .ac-scenario-builder-inline-meta {
         display: block;
         margin-top: 0.25rem;
