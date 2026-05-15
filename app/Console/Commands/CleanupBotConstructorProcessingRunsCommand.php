@@ -163,18 +163,83 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
 
         $cutoff = $blockRun->arrowRun?->schema_cutoff_at ?? $blockRun->created_at;
 
+        $missingArrowIds = $this->missingOutgoingArrowIds($blockRun, $cutoff);
+
+        if ($missingArrowIds === []) {
+            $this->completeExecutionIfReady($execution);
+
+            return;
+        }
+
         $this->processBotConstructorArrowsAction->handle(
             $execution,
             $dialog,
             $message,
             $block,
-            null,
+            $missingArrowIds,
             $cutoff,
             true,
             $blockRun,
         );
 
         $this->completeExecutionIfReady($execution);
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function missingOutgoingArrowIds(BotConstructorExecutionBlockRun $blockRun, mixed $cutoff): array
+    {
+        $block = $blockRun->block;
+
+        if (! $block instanceof BotConstructorBlock || $block->trashed()) {
+            return [];
+        }
+
+        $expectedArrowIds = $this->outgoingArrowIdsAvailableAt($block, $cutoff);
+
+        if ($expectedArrowIds === []) {
+            return [];
+        }
+
+        $existingArrowIds = BotConstructorArrowRun::query()
+            ->where('bot_constructor_execution_id', $blockRun->bot_constructor_execution_id)
+            ->where('source_execution_block_run_id', $blockRun->id)
+            ->where('source_block_id', $blockRun->bot_constructor_block_id)
+            ->whereIn('bot_constructor_arrow_id', $expectedArrowIds)
+            ->pluck('bot_constructor_arrow_id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
+
+        return array_values(array_diff($expectedArrowIds, $existingArrowIds));
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function outgoingArrowIdsAvailableAt(BotConstructorBlock $block, mixed $cutoff): array
+    {
+        if ($block->trashed()) {
+            return [];
+        }
+
+        $query = $block->sourceArrows()->active();
+
+        if ($cutoff !== null) {
+            $query
+                ->where('created_at', '<=', $cutoff)
+                ->where('updated_at', '<=', $cutoff)
+                ->whereHas('targetBlock', function ($targetQuery) use ($cutoff): void {
+                    $targetQuery
+                        ->whereNull('deleted_at')
+                        ->where('updated_at', '<=', $cutoff);
+                });
+        }
+
+        return $query
+            ->pluck('id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
     }
 
     private function cleanupBlockRuns(mixed $threshold): int
