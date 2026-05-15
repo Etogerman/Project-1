@@ -11,7 +11,6 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
-use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
@@ -124,6 +123,7 @@ class DialogResource extends Resource
     {
         return $table
             ->poll('10s')
+            ->splitSearchTerms(false)
             ->columns([
                 TextColumn::make('contact_label')
                     ->label('Контакт')
@@ -678,32 +678,80 @@ class DialogResource extends Resource
 
     protected static function applyTableSearch(Builder $query, string $search): Builder
     {
-        $normalizedPhoneSearch = AddContactPhoneAction::normalizePhone($search);
+        $search = trim($search);
 
+        if ($search === '') {
+            return $query;
+        }
+
+        $phoneSearchDigits = static::resolvePhoneSearchDigits($search);
+        $usernameSearch = static::resolveUsernameSearch($search);
         $likeSearch = "%{$search}%";
 
-        return $query->where(function (Builder $query) use ($search, $normalizedPhoneSearch, $likeSearch): void {
+        return $query->where(function (Builder $query) use ($phoneSearchDigits, $likeSearch, $usernameSearch): void {
             $query
                 ->where('external_chat_id', 'ilike', $likeSearch)
-                ->orWhereHas('contact', function (Builder $contactQuery) use ($search, $normalizedPhoneSearch, $likeSearch): void {
+                ->orWhereHas('contact', function (Builder $contactQuery) use ($phoneSearchDigits, $likeSearch): void {
                     $contactQuery
                         ->where('first_name', 'ilike', $likeSearch)
                         ->orWhere('last_name', 'ilike', $likeSearch)
-                        ->orWhereRaw("trim(concat_ws(' ', first_name, last_name)) ilike ?", [$likeSearch]);
+                        ->orWhereRaw("trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')) ilike ?", [$likeSearch])
+                        ->orWhereRaw("trim(coalesce(last_name, '') || ' ' || coalesce(first_name, '')) ilike ?", [$likeSearch]);
 
-                    if ($normalizedPhoneSearch !== '') {
-                        $contactQuery->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($normalizedPhoneSearch): void {
-                            $phoneQuery->where('phone_normalized', 'ilike', "%{$normalizedPhoneSearch}%");
+                    if ($phoneSearchDigits !== null) {
+                        $contactQuery->orWhereHas('phoneNumbers', function (Builder $phoneQuery) use ($phoneSearchDigits): void {
+                            static::whereDigitOnlyPhoneLike($phoneQuery, 'phone_raw', 'phone_normalized', $phoneSearchDigits);
                         });
                     }
                 })
-                ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($likeSearch): void {
+                ->orWhereHas('currentContactIdentity', function (Builder $identityQuery) use ($likeSearch, $usernameSearch): void {
                     $identityQuery
                         ->where('display_name', 'ilike', $likeSearch)
                         ->orWhere('external_user_id', 'ilike', $likeSearch)
                         ->orWhere('external_username', 'ilike', $likeSearch);
+
+                    if ($usernameSearch !== null) {
+                        $identityQuery->orWhere('external_username', 'ilike', "%{$usernameSearch}%");
+                    }
                 });
+
+            if ($phoneSearchDigits !== null) {
+                $query->orWhere(function (Builder $query) use ($phoneSearchDigits): void {
+                    static::whereDigitOnlyPhoneLike($query, 'confirmed_phone_raw', 'confirmed_phone_normalized', $phoneSearchDigits);
+                });
+            }
         });
+    }
+
+    protected static function resolveUsernameSearch(string $search): ?string
+    {
+        if (! str_starts_with($search, '@')) {
+            return null;
+        }
+
+        $username = ltrim($search, '@');
+
+        return $username !== '' ? $username : null;
+    }
+
+    protected static function resolvePhoneSearchDigits(string $search): ?string
+    {
+        if (preg_match('/^[0-9+\s()\-]+$/u', $search) !== 1) {
+            return null;
+        }
+
+        $digits = preg_replace('/\D/u', '', $search) ?? '';
+
+        return strlen($digits) >= 6 ? $digits : null;
+    }
+
+    protected static function whereDigitOnlyPhoneLike(Builder $query, string $rawColumn, string $normalizedColumn, string $digits): Builder
+    {
+        $likeDigits = "%{$digits}%";
+
+        return $query
+            ->whereRaw("regexp_replace({$rawColumn}, '[^0-9]', '', 'g') ilike ?", [$likeDigits])
+            ->orWhereRaw("regexp_replace({$normalizedColumn}, '[^0-9]', '', 'g') ilike ?", [$likeDigits]);
     }
 
     protected static function resolveDialogRouteStatus(Dialog $dialog): DialogRouteStatusData
