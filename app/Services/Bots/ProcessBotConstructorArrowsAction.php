@@ -207,6 +207,10 @@ class ProcessBotConstructorArrowsAction
 
             $this->lockArrowDialogLimit($lockedArrow, $dialog);
 
+            if ($this->sourceBlockRunAlreadyProcessedArrow($sourceExecutionBlockRun, $lockedArrow)) {
+                return ['stop' => false, 'arrow_run' => null, 'block_run' => null, 'target_block' => null];
+            }
+
             if ($this->arrowPassLimitReached($lockedArrow, $dialog, (int) $passLimit['value'])) {
                 $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $lockedArrow, 'Достигнут лимит переходов клиента по этой стрелке.', $sourceExecutionBlockRun);
 
@@ -280,6 +284,10 @@ class ProcessBotConstructorArrowsAction
             }
 
             $this->lockArrowDialogLimit($lockedArrow, $dialog);
+
+            if ($this->sourceBlockRunAlreadyProcessedArrow($sourceExecutionBlockRun, $lockedArrow)) {
+                return null;
+            }
 
             if ($this->arrowPassLimitReached($lockedArrow, $dialog, (int) $passLimit['value'])) {
                 $this->createLimitReachedRun($lockedExecution, $dialog, $rootMessage, $lockedArrow, 'Достигнут лимит переходов клиента по этой стрелке.', $sourceExecutionBlockRun);
@@ -381,6 +389,21 @@ class ProcessBotConstructorArrowsAction
             ->count();
 
         return $used >= $passLimit;
+    }
+
+    private function sourceBlockRunAlreadyProcessedArrow(
+        ?BotConstructorExecutionBlockRun $sourceExecutionBlockRun,
+        BotConstructorArrow $arrow,
+    ): bool {
+        if (! $sourceExecutionBlockRun instanceof BotConstructorExecutionBlockRun) {
+            return false;
+        }
+
+        return BotConstructorArrowRun::query()
+            ->where('source_execution_block_run_id', $sourceExecutionBlockRun->id)
+            ->where('bot_constructor_arrow_id', $arrow->id)
+            ->lockForUpdate()
+            ->exists();
     }
 
     private function canUseArrowTarget(BotConstructorArrow $arrow): bool

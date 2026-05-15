@@ -324,7 +324,12 @@ class CleanupBotConstructorProcessingRunsCommand extends Command
             ->where('status', BotConstructorExecutionBlockRun::STATUS_PROCESSING)
             ->exists();
 
-        if ($hasProcessingBlockRuns) {
+        $hasProcessingArrowRuns = BotConstructorArrowRun::query()
+            ->where('bot_constructor_execution_id', $execution->id)
+            ->where('status', BotConstructorArrowRun::STATUS_PROCESSING)
+            ->exists();
+
+        if ($hasProcessingBlockRuns || $hasProcessingArrowRuns) {
             return;
         }
 
