@@ -29,7 +29,6 @@
 - `[telegram-account-automated-replies-via-gateway-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-automated-replies-via-gateway-v1.md`; Spec revision: `892c2f783e38383efc63e107c17fcbb1fc63eb92`; status: `opened`; opened-at: `2026-04-28`
 - `[bitrix24-openlines-manual-reply-connector-mirror-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-openlines-manual-reply-connector-mirror-v1.md`; Spec revision: `474c0576011e0e95dbcffd8a3276438e12f5c69d`; status: `opened`; opened-at: `2026-05-05`
 - `[bitrix24-openlines-dynamic-route-registry-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-bitrix24-openlines-dynamic-route-registry-v1.md`; Spec revision: `c16f2cdf0736bfc913dd9a03507ec4e5a2d57bc9`; status: `opened`; opened-at: `2026-05-10`
-- `[admin-dialogs-contacts-search-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/tz-admin-dialogs-contacts-search-v1.md`; Spec revision: `4124718138fd317edd79a45b33feff334db1f3ca`; status: `opened`; opened-at: `2026-05-16`
 
 ## Связанные документы
 
