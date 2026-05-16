@@ -31,6 +31,8 @@ class GuardBitrix24OpenLineMutationAction
         Bitrix24Connection $connection,
         ?array $activeChatRows = null,
     ): void {
+        $this->assertRuntimeAllowsRouteMutation($route);
+
         if ($route->platform !== Channel::PLATFORM_TELEGRAM) {
             return;
         }
@@ -81,6 +83,56 @@ class GuardBitrix24OpenLineMutationAction
             ),
             Bitrix24MessageExport::FAILURE_OPEN_LINE_HISTORY_REQUIRES_BINDING,
         );
+    }
+
+    /**
+     * @throws Bitrix24OpenLineMutationGuardException
+     */
+    public function assertRuntimeAllowsRouteMutation(Bitrix24OpenLinesRouteData $route): void
+    {
+        if ((string) config('app.env') !== 'local') {
+            return;
+        }
+
+        if ((bool) config('bitrix24.openlines.allow_official_connectors_in_local', false)) {
+            return;
+        }
+
+        $officialConnectorCodes = $this->officialConnectorCodes();
+
+        if (! in_array($route->connectorCode, $officialConnectorCodes, true)) {
+            return;
+        }
+
+        throw new Bitrix24OpenLineMutationGuardException(
+            sprintf(
+                'Local Bitrix24 Open Lines mutation is blocked for official connector [%s] and line [%s]. Use a dev Bitrix24 profile/connector or explicitly set BITRIX24_OPENLINES_ALLOW_OFFICIAL_CONNECTORS_IN_LOCAL=true for a controlled cleanup.',
+                $route->connectorCode,
+                $route->lineId,
+            ),
+            Bitrix24MessageExport::FAILURE_LOCAL_OFFICIAL_OPEN_LINE_MUTATION_BLOCKED,
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function officialConnectorCodes(): array
+    {
+        $configured = config('bitrix24.openlines.official_connector_codes', []);
+
+        if (is_string($configured)) {
+            $configured = explode(',', $configured);
+        }
+
+        if (! is_array($configured)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn (mixed $connectorCode): string => trim((string) $connectorCode),
+            $configured,
+        ))));
     }
 
     private function canCreateControlledOpenLineForContact(Contact $rootContact): bool

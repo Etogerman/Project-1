@@ -16,6 +16,7 @@ class SendBitrix24OpenLinesBlockedDialogFeedbackAction
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ResolveContactDisplayNameAction $resolveContactDisplayNameAction,
         private readonly BuildBitrix24OpenLinesExternalUserIdAction $buildExternalUserIdAction,
+        private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
     ) {}
 
     public function handle(
@@ -33,6 +34,8 @@ class SendBitrix24OpenLinesBlockedDialogFeedbackAction
         }
 
         $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
+        $this->guardOpenLineMutationAction->assertRuntimeAllowsRouteMutation($route);
+
         $rootContact = $this->resolveRootContactAction->handle($dialog->contact()->firstOrFail());
         $identity = $dialog->currentContactIdentity;
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);

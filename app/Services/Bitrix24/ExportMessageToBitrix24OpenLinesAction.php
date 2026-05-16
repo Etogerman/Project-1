@@ -836,6 +836,17 @@ class ExportMessageToBitrix24OpenLinesAction
             return null;
         }
 
+        try {
+            $this->guardOpenLineMutationAction->assertRuntimeAllowsRouteMutation($route);
+        } catch (Bitrix24OpenLineMutationGuardException $exception) {
+            throw new Bitrix24LiveExportTransportException(
+                $exception->getMessage(),
+                failureCode: $exception->failureCode,
+                failureUncertain: $exception->failureUncertain,
+                previous: $exception,
+            );
+        }
+
         $identityDecision = $this->resolveIdentityDecisionAction->handle($message, $route, $connection);
 
         $payload = $this->buildBitrix24OpenLinesMessagePayloadAction->handle(
