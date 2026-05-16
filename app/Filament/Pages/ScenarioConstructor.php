@@ -47,7 +47,7 @@ class ScenarioConstructor extends Page
         'y' => 64,
     ];
 
-    protected static ?string $slug = 'scenario-constructor';
+    protected static ?string $slug = 'constructor';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedAdjustmentsHorizontal;
 
@@ -122,7 +122,7 @@ class ScenarioConstructor extends Page
 
     public static function shouldRegisterNavigation(): bool
     {
-        return false;
+        return static::canAccess();
     }
 
     public function getTitle(): string|Htmlable
