@@ -2,15 +2,20 @@
 
 namespace Tests\Feature;
 
+use App\Data\Bitrix24\Bitrix24OpenLinesOperatorMessageData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
+use App\Services\Bitrix24\AcknowledgeBitrix24OpenLinesDeliveryAction;
+use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24OpenLineMutationGuardException;
 use App\Services\Bitrix24\GuardBitrix24OpenLineMutationAction;
+use App\Services\Bitrix24\ResolveBitrix24OpenLinesRouteAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Mockery;
 use Tests\TestCase;
 
 class Bitrix24OpenLineMutationGuardTest extends TestCase
@@ -96,6 +101,55 @@ class Bitrix24OpenLineMutationGuardTest extends TestCase
         }
 
         $this->fail('Expected local official Open Lines mutation guard exception.');
+    }
+
+    public function test_local_runtime_blocks_official_delivery_ack_mutation_before_rest_call(): void
+    {
+        config()->set('app.env', 'local');
+
+        $dialog = new Dialog;
+        $route = $this->route('abrikosoff_max', '3');
+        $routeResolver = Mockery::mock(ResolveBitrix24OpenLinesRouteAction::class);
+        $routeResolver
+            ->shouldReceive('handle')
+            ->once()
+            ->with($dialog)
+            ->andReturn($route);
+
+        $apiClient = Mockery::mock(Bitrix24ApiClient::class);
+        $apiClient->shouldNotReceive('call');
+
+        $action = new AcknowledgeBitrix24OpenLinesDeliveryAction(
+            $apiClient,
+            $routeResolver,
+            $this->guard(),
+        );
+
+        try {
+            $action->handle(
+                $dialog,
+                new Bitrix24OpenLinesOperatorMessageData(
+                    connectorCode: 'abrikosoff_max',
+                    lineId: '3',
+                    chatId: '17',
+                    sourceBitrixChatId: null,
+                    bitrixMessageId: 'bitrix-message-1',
+                    text: 'Operator message',
+                    im: ['chat_id' => 17],
+                    rawPayload: [],
+                ),
+                'external-message-1',
+            );
+        } catch (Bitrix24OpenLineMutationGuardException $exception) {
+            $this->assertSame(
+                Bitrix24MessageExport::FAILURE_LOCAL_OFFICIAL_OPEN_LINE_MUTATION_BLOCKED,
+                $exception->failureCode,
+            );
+
+            return;
+        }
+
+        $this->fail('Expected local official Open Lines delivery acknowledgement guard exception.');
     }
 
     private function guard(): GuardBitrix24OpenLineMutationAction
