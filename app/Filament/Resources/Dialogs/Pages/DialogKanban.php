@@ -43,6 +43,8 @@ class DialogKanban extends Page
 
     public string $selectedInboxStatus = '';
 
+    public string $search = '';
+
     public bool $filtersPanelOpen = false;
 
     /**
@@ -69,6 +71,7 @@ class DialogKanban extends Page
             'selectedAssignedUserId' => ['as' => 'assignee', 'except' => ''],
             'selectedRouteStatus' => ['as' => 'route', 'except' => ''],
             'selectedInboxStatus' => ['as' => 'inbox', 'except' => ''],
+            'search' => ['except' => ''],
         ];
     }
 
@@ -136,6 +139,7 @@ class DialogKanban extends Page
             'selectedAssignedUserId',
             'selectedRouteStatus',
             'selectedInboxStatus',
+            'search',
         ], true)) {
             return;
         }
@@ -149,7 +153,15 @@ class DialogKanban extends Page
         $this->selectedAssignedUserId = '';
         $this->selectedRouteStatus = '';
         $this->selectedInboxStatus = '';
+        $this->search = '';
         $this->filtersPanelOpen = false;
+
+        $this->rememberCurrentNavigationUrl();
+    }
+
+    public function clearSearch(): void
+    {
+        $this->search = '';
 
         $this->rememberCurrentNavigationUrl();
     }
@@ -239,6 +251,10 @@ class DialogKanban extends Page
             $query->whereHas('contact', fn (Builder $query): Builder => $query->where('assigned_user_id', (int) $this->selectedAssignedUserId));
         }
 
+        if (trim($this->search) !== '') {
+            DialogResource::applyTableSearch($query, $this->search);
+        }
+
         /** @var Collection<int, Dialog> $dialogs */
         $dialogs = $query->get()
             ->filter(fn (Dialog $dialog): bool => $this->matchesRouteStatusFilter($dialog))
@@ -319,6 +335,7 @@ class DialogKanban extends Page
     {
         $baseUrl = DialogResource::getUrl('kanban');
         $query = array_filter([
+            'search' => trim($this->search),
             'channel' => $this->selectedChannelId,
             'assignee' => $this->selectedAssignedUserId,
             'route' => $this->selectedRouteStatus,
@@ -344,6 +361,7 @@ class DialogKanban extends Page
             $this->selectedAssignedUserId,
             $this->selectedRouteStatus,
             $this->selectedInboxStatus,
+            trim($this->search),
         ], fn (string $value): bool => $value !== ''));
     }
 

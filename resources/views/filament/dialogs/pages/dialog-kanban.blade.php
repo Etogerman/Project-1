@@ -4,6 +4,29 @@
             <section class="ac-surface ac-surface--hero ac-kanban-filters-panel">
                 <div class="ac-card-grid ac-card-grid--kanban-filters">
                     <div class="ac-meta">
+                        <label for="kanban-search" class="ac-meta__label">Поиск</label>
+                        <div class="ac-kanban-search-control">
+                            <input
+                                id="kanban-search"
+                                type="search"
+                                wire:model.live.debounce.350ms="search"
+                                class="ac-input"
+                                placeholder="Имя, @username, телефон или ID чата"
+                            >
+
+                            @if (trim($search) !== '')
+                                <button
+                                    type="button"
+                                    wire:click="clearSearch"
+                                    class="ac-button ac-button--secondary ac-button--compact ac-kanban-search-control__clear"
+                                >
+                                    Очистить
+                                </button>
+                            @endif
+                        </div>
+                    </div>
+
+                    <div class="ac-meta">
                         <label for="kanban-filter-channel" class="ac-meta__label">Канал</label>
                         <select id="kanban-filter-channel" wire:model.live="selectedChannelId" class="ac-select">
                             <option value="">Все каналы</option>
