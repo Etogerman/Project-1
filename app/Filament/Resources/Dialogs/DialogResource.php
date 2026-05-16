@@ -676,7 +676,7 @@ class DialogResource extends Resource
         return $query->whereHas('contact', fn (Builder $query): Builder => $query->where('assigned_user_id', $currentUserId));
     }
 
-    protected static function applyTableSearch(Builder $query, string $search): Builder
+    public static function applyTableSearch(Builder $query, string $search): Builder
     {
         $search = trim($search);
 

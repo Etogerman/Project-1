@@ -44,6 +44,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSee('Канбан')
             ->assertSee('Фильтры')
             ->assertSee('Таблица')
+            ->assertSeeInOrder(['Фильтры', 'Таблица'])
             ->assertDontSee('Требует проверки')
             ->assertSee($dialog->contact->display_name)
             ->assertSee('Открыть диалог');
@@ -98,13 +99,17 @@ class DialogKanbanLocalContourTest extends TestCase
             'assignee' => (string) $assignee->id,
             'route' => 'ready',
             'inbox' => DialogInboxStatusData::CODE_NO_NEW,
+            'search' => '@german_abrikosov',
         ])
             ->actingAs($admin)
             ->test(DialogKanban::class)
             ->assertSet('selectedChannelId', (string) $channel->id)
             ->assertSet('selectedAssignedUserId', (string) $assignee->id)
             ->assertSet('selectedRouteStatus', 'ready')
-            ->assertSet('selectedInboxStatus', DialogInboxStatusData::CODE_NO_NEW);
+            ->assertSet('selectedInboxStatus', DialogInboxStatusData::CODE_NO_NEW)
+            ->assertSet('search', '@german_abrikosov')
+            ->assertSet('filtersPanelOpen', true)
+            ->assertSeeInOrder(['Поиск', 'Канал', 'Ответственный', 'Маршрут', 'Статус диалога']);
     }
 
     public function test_kanban_card_view_link_contains_back_to_filtered_slice(): void
@@ -117,12 +122,14 @@ class DialogKanbanLocalContourTest extends TestCase
 
         $response = $this->actingAs($admin)->get(
             DialogResource::getUrl('kanban').'?'.http_build_query([
+                'search' => 'Срез',
                 'channel' => (string) $dialog->channel_id,
                 'route' => 'ready',
             ]),
         );
 
         $expectedBackTo = DialogResource::getUrl('kanban').'?'.http_build_query([
+            'search' => 'Срез',
             'channel' => (string) $dialog->channel_id,
             'route' => 'ready',
         ]);
@@ -208,6 +215,7 @@ class DialogKanbanLocalContourTest extends TestCase
             'assignee' => '7',
             'route' => 'ready',
             'inbox' => DialogInboxStatusData::CODE_REQUIRES_REPLY,
+            'search' => '@german_abrikosov',
         ])
             ->actingAs($admin)
             ->test(DialogKanban::class)
@@ -215,9 +223,42 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSet('selectedChannelId', '')
             ->assertSet('selectedAssignedUserId', '')
             ->assertSet('selectedRouteStatus', '')
-            ->assertSet('selectedInboxStatus', '');
+            ->assertSet('selectedInboxStatus', '')
+            ->assertSet('search', '');
 
         $this->assertSame(DialogResource::getUrl('kanban'), DialogResource::getNavigationUrl());
+    }
+
+    public function test_kanban_page_searches_dialog_cards_by_dialog_search_fields(): void
+    {
+        $admin = $this->createAdmin();
+        $targetDialog = $this->createKanbanDialog([
+            'contactName' => 'Мария Поиск',
+            'externalUsername' => 'german_abrikosov',
+            'externalChatId' => 'kanban-target-chat',
+            'confirmedPhoneRaw' => '+55 (11) 91234-5678',
+            'confirmedPhoneNormalized' => '+5511912345678',
+        ]);
+        $otherDialog = $this->createKanbanDialog([
+            'contactName' => 'Посторонний клиент',
+            'externalUsername' => 'other_user',
+            'externalChatId' => 'kanban-other-chat',
+        ]);
+
+        Livewire::withQueryParams([
+            'search' => '@german_abrikosov',
+        ])
+            ->actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSet('search', '@german_abrikosov')
+            ->assertSee($targetDialog->contact->display_name)
+            ->assertDontSee($otherDialog->contact->display_name)
+            ->set('search', '551191234')
+            ->assertSee($targetDialog->contact->display_name)
+            ->assertDontSee($otherDialog->contact->display_name)
+            ->set('search', 'kanban-target-chat')
+            ->assertSee($targetDialog->contact->display_name)
+            ->assertDontSee($otherDialog->contact->display_name);
     }
 
     public function test_kanban_filters_panel_can_be_toggled_from_header_action(): void
@@ -229,6 +270,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSet('filtersPanelOpen', false)
             ->call('toggleFiltersPanel')
             ->assertSet('filtersPanelOpen', true)
+            ->assertSee('Поиск')
             ->call('toggleFiltersPanel')
             ->assertSet('filtersPanelOpen', false);
     }
@@ -479,6 +521,10 @@ class DialogKanbanLocalContourTest extends TestCase
      *     stage?:string|null,
      *     withInboundUserMessage?:bool,
      *     lastMessageAt?:\Illuminate\Support\Carbon|null,
+     *     externalUsername?:string|null,
+     *     externalChatId?:string|null,
+     *     confirmedPhoneRaw?:string|null,
+     *     confirmedPhoneNormalized?:string|null,
      * }  $overrides
      */
     private function createKanbanDialog(array $overrides = []): Dialog
@@ -492,7 +538,7 @@ class DialogKanbanLocalContourTest extends TestCase
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
             'display_name' => $overrides['contactName'] ?? 'Контакт канбана',
-            'external_username' => 'kanban_user_'.$contact->id,
+            'external_username' => $overrides['externalUsername'] ?? 'kanban_user_'.$contact->id,
         ]);
         $lastMessageAt = $overrides['lastMessageAt'] ?? now()->subMinute();
 
@@ -500,9 +546,11 @@ class DialogKanbanLocalContourTest extends TestCase
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
             'current_contact_identity_id' => $identity->id,
-            'external_chat_id' => 'kanban-chat-'.$contact->id,
+            'external_chat_id' => $overrides['externalChatId'] ?? 'kanban-chat-'.$contact->id,
             'stage' => $overrides['stage'] ?? Dialog::STAGE_NEW_DIALOG,
             'last_message_at' => $lastMessageAt,
+            'confirmed_phone_raw' => $overrides['confirmedPhoneRaw'] ?? null,
+            'confirmed_phone_normalized' => $overrides['confirmedPhoneNormalized'] ?? null,
         ]);
 
         if (($overrides['withInboundUserMessage'] ?? false) === true) {
