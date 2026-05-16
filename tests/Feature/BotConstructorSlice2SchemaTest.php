@@ -222,6 +222,49 @@ class BotConstructorSlice2SchemaTest extends TestCase
         ]);
     }
 
+    public function test_arrow_run_source_block_run_and_arrow_pair_is_unique(): void
+    {
+        $dialog = Dialog::factory()->create();
+        $channel = $dialog->channel;
+        $execution = BotConstructorExecution::factory()->create([
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->create();
+        $targetBlock = BotConstructorBlock::factory()->create();
+        $arrow = BotConstructorArrow::factory()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $sourceBlockRun = BotConstructorExecutionBlockRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $sourceBlock->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+        ]);
+
+        BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $dialog->id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'source_execution_block_run_id' => $sourceBlockRun->id,
+        ]);
+
+        $this->expectException(QueryException::class);
+
+        BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $dialog->id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'source_execution_block_run_id' => $sourceBlockRun->id,
+        ]);
+    }
+
     public function test_soft_deleted_arrow_keeps_existing_runs(): void
     {
         $dialog = Dialog::factory()->create();
