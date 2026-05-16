@@ -1,4 +1,15 @@
 <x-filament-panels::page>
+    @php($scenarioBuilderV3Config = $this->scenarioBuilderV3Config())
+
+    @vite('resources/js/scenario-builder-v3/main.jsx')
+
+    <div
+        data-scenario-builder-v3
+        data-state-url="{{ $scenarioBuilderV3Config['stateUrl'] }}"
+        data-save-url="{{ $scenarioBuilderV3Config['saveUrl'] }}"
+        data-csrf-token="{{ $scenarioBuilderV3Config['csrfToken'] }}"
+    ></div>
+
     <form wire:submit.prevent="saveDraft" class="ac-scenario-builder-page">
         @if (! $this->hasDraftVersion())
             <section class="ac-surface ac-scenario-builder-empty-state">

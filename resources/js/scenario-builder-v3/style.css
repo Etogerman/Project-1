@@ -1,0 +1,201 @@
+.ac-v3-builder {
+    display: flex;
+    min-height: 520px;
+    flex-direction: column;
+    gap: 16px;
+    border: 1px solid rgb(203 213 225);
+    border-radius: 8px;
+    background: rgb(248 250 252);
+    padding: 16px;
+}
+
+.ac-v3-builder__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.ac-v3-builder__header span,
+.ac-v3-builder__panel span {
+    display: block;
+    color: rgb(100 116 139);
+    font-size: 12px;
+}
+
+.ac-v3-builder__header strong {
+    display: block;
+    color: rgb(15 23 42);
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.ac-v3-builder__header small {
+    display: block;
+    color: rgb(100 116 139);
+    font-size: 12px;
+}
+
+.ac-v3-builder__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.ac-v3-builder__button,
+.ac-v3-builder__block-editor button {
+    border: 1px solid rgb(148 163 184);
+    border-radius: 6px;
+    background: white;
+    color: rgb(15 23 42);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 12px;
+}
+
+.ac-v3-builder__button--primary {
+    border-color: rgb(37 99 235);
+    background: rgb(37 99 235);
+    color: white;
+}
+
+.ac-v3-builder__button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.ac-v3-builder__notice,
+.ac-v3-builder__state {
+    border-radius: 6px;
+    background: rgb(254 243 199);
+    color: rgb(120 53 15);
+    padding: 10px 12px;
+}
+
+.ac-v3-builder__state--error,
+.ac-v3-builder__notice[data-kind="error"],
+.ac-v3-builder__notice[data-kind="conflict"] {
+    background: rgb(254 226 226);
+    color: rgb(127 29 29);
+}
+
+.ac-v3-builder__workspace {
+    display: grid;
+    min-height: 420px;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 16px;
+}
+
+.ac-v3-builder__canvas {
+    position: relative;
+    min-height: 420px;
+    overflow: auto;
+    border: 1px solid rgb(226 232 240);
+    border-radius: 8px;
+    background:
+        linear-gradient(rgb(226 232 240 / 0.7) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(226 232 240 / 0.7) 1px, transparent 1px),
+        white;
+    background-size: 24px 24px;
+}
+
+.ac-v3-builder__empty {
+    color: rgb(100 116 139);
+    padding: 24px;
+}
+
+.ac-v3-builder__node {
+    position: absolute;
+    width: 240px;
+    min-height: 88px;
+    border: 1px solid rgb(59 130 246);
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 10px 24px rgb(15 23 42 / 0.12);
+    padding: 14px;
+}
+
+.ac-v3-builder__node strong {
+    display: block;
+    color: rgb(15 23 42);
+    font-size: 15px;
+}
+
+.ac-v3-builder__node span {
+    display: block;
+    margin-top: 8px;
+    color: rgb(71 85 105);
+    font-size: 12px;
+}
+
+.ac-v3-builder__panel {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.ac-v3-builder__metrics {
+    display: flex;
+    gap: 8px;
+}
+
+.ac-v3-builder__metrics span {
+    border: 1px solid rgb(226 232 240);
+    border-radius: 6px;
+    background: white;
+    padding: 8px 10px;
+}
+
+.ac-v3-builder__block-list {
+    display: flex;
+    max-height: 376px;
+    flex-direction: column;
+    gap: 10px;
+    overflow: auto;
+}
+
+.ac-v3-builder__block-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border: 1px solid rgb(226 232 240);
+    border-radius: 8px;
+    background: white;
+    padding: 12px;
+}
+
+.ac-v3-builder__block-editor label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ac-v3-builder__block-editor input,
+.ac-v3-builder__block-editor textarea {
+    width: 100%;
+    border: 1px solid rgb(203 213 225);
+    border-radius: 6px;
+    background: white;
+    color: rgb(15 23 42);
+    font-size: 14px;
+    padding: 8px 10px;
+}
+
+.ac-v3-builder__block-editor textarea {
+    min-height: 84px;
+    resize: vertical;
+}
+
+@media (max-width: 1024px) {
+    .ac-v3-builder__workspace {
+        grid-template-columns: 1fr;
+    }
+
+    .ac-v3-builder__header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

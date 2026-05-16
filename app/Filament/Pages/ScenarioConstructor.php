@@ -21,8 +21,8 @@ use Filament\Pages\Page;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -143,6 +143,23 @@ class ScenarioConstructor extends Page
     public function getRecord(): Scenario
     {
         return $this->getScenarioRecord();
+    }
+
+    /**
+     * @return array<string, string|int|null>
+     */
+    public function scenarioBuilderV3Config(): array
+    {
+        return [
+            'scenarioId' => $this->scenarioId,
+            'stateUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.state.show', ['scenario' => $this->scenarioId])
+                : null,
+            'saveUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.state.update', ['scenario' => $this->scenarioId])
+                : null,
+            'csrfToken' => csrf_token(),
+        ];
     }
 
     public function addStartBuilderBlock(): void
