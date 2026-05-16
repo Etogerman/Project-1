@@ -9,6 +9,7 @@ use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24SyncLog;
+use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
@@ -794,7 +795,8 @@ class ExportMessageToBitrix24OpenLinesAction
 
     private function shouldUseControlledConnectorMirrorManualReplyPath(Message $message, Bitrix24OpenLinesRouteData $route): bool
     {
-        return $message->message_kind === Message::KIND_OUTBOUND_MANUAL_REPLY;
+        return $message->message_kind === Message::KIND_OUTBOUND_MANUAL_REPLY
+            && $route->platform === Channel::PLATFORM_MAX;
     }
 
     private function shouldUseServiceActorManualReplyPath(Message $message, Bitrix24OpenLinesRouteData $route): bool
