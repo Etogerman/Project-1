@@ -84,6 +84,11 @@ class FilamentAdminAuthTest extends TestCase
             ->assertSee($version);
     }
 
+    public function test_global_search_is_disabled_in_admin_panel(): void
+    {
+        $this->assertNull(Filament::getPanel('admin')->getGlobalSearchProvider());
+    }
+
     public function test_authenticated_admin_activity_is_tracked_with_five_minute_throttle(): void
     {
         $user = User::factory()->create([
