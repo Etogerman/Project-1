@@ -287,7 +287,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         });
     }
 
-    public function test_manual_reply_uses_connector_mirror_for_telegram_verified_open_line_binding(): void
+    public function test_telegram_manual_reply_does_not_use_controlled_max_connector_mirror_path(): void
     {
         $this->makeActiveConnection();
         $userCode = 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:23|101154';
@@ -368,6 +368,17 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'resolved_crm_entity_type' => null,
             'resolved_crm_entity_id' => null,
             'bitrix_remote_message_id' => null,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_live_exported',
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'openlines_manual_reply_exported_connector_mirror',
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
         ]);
 
         Http::assertSent(function (Request $request): bool {
@@ -1151,7 +1162,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.operator.answer.json');
     }
 
-    public function test_telegram_manual_reply_rejects_returned_history_chat_when_expected_chat_differs(): void
+    public function test_telegram_manual_reply_can_resync_returned_history_chat_outside_controlled_max_path(): void
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(
@@ -1240,27 +1251,31 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             return Http::response(['error' => 'Unexpected request'], 500);
         });
 
-        try {
-            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
-            $this->fail('Expected Bitrix24LiveExportTransportException was not thrown.');
-        } catch (Bitrix24LiveExportTransportException $exception) {
-            $this->assertSame(Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN, $exception->failureCode);
-            $this->assertTrue($exception->failureUncertain);
-            $this->assertStringContainsString('unexpected chat id [23], expected [26]', $exception->getMessage());
-        }
+        app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
 
         $dialog->refresh();
 
-        $this->assertSame($storedUserCode, $dialog->bitrix24_open_line_user_code_override);
-        $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
+        $this->assertSame($returnedUserCode, $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $message->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
-            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
             'transport_method' => Bitrix24MessageExport::TRANSPORT_IMCONNECTOR_SEND_MESSAGES,
             'resolved_bitrix_chat_id' => '23',
-            'failure_code' => Bitrix24MessageExport::FAILURE_FAILED_UNCERTAIN,
-            'failure_uncertain' => true,
+            'failure_code' => null,
+            'failure_uncertain' => false,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'openlines_live_exported',
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'openlines_manual_reply_exported_connector_mirror',
+            'entity_type' => 'message',
+            'entity_id' => (string) $message->id,
         ]);
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json');
         Http::assertNotSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.message.add.json');
