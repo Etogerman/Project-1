@@ -60,6 +60,14 @@ return [
     'openlines' => [
         'telegram_connector_code' => env('BITRIX24_TELEGRAM_CONNECTOR_CODE'),
         'max_connector_code' => env('BITRIX24_MAX_CONNECTOR_CODE'),
+        'official_connector_codes' => array_values(array_unique(array_filter(array_map(
+            static fn (string $connectorCode): string => trim($connectorCode),
+            explode(',', (string) env('BITRIX24_OPENLINES_OFFICIAL_CONNECTOR_CODES', 'abrikosoff_telegram,abrikosoff_max')),
+        )))),
+        'allow_official_connectors_in_local' => filter_var(
+            env('BITRIX24_OPENLINES_ALLOW_OFFICIAL_CONNECTORS_IN_LOCAL', false),
+            FILTER_VALIDATE_BOOL,
+        ),
         'live_export_queue' => env('BITRIX24_OPENLINES_LIVE_EXPORT_QUEUE', 'default'),
         'runtime_application_token_hashes' => array_values(array_filter(array_map(
             static fn (string $hash): string => trim($hash),
