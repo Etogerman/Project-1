@@ -1506,8 +1506,8 @@ class FilamentDialogsResourceTest extends TestCase
             'contactFirstName' => 'Герман',
             'contactLastName' => 'Абрикосов',
             'externalUserId' => 'target-user-100',
-            'externalUsername' => 'german_target',
-            'displayName' => 'Telegram Клиент',
+            'externalUsername' => 'german_abrikosov',
+            'displayName' => 'Telegram Клиент ivan 1779183',
             'externalChatId' => 'target-chat-100',
         ]);
         $otherDialog = $this->createInboxDialog([
@@ -1522,26 +1522,63 @@ class FilamentDialogsResourceTest extends TestCase
 
         ContactPhoneNumber::factory()->create([
             'contact_id' => $targetDialog->contact_id,
-            'phone_raw' => '+7 926 352 71 11',
-            'phone_normalized' => '+79263527111',
+            'phone_raw' => '+420 773 177 918',
+            'phone_normalized' => '+420773177918',
             'is_primary' => true,
         ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $targetDialog->contact_id,
+            'channel_id' => $targetDialog->channel_id,
+            'platform' => $targetDialog->channel->platform,
+            'external_user_id' => 'old-target-user',
+            'external_username' => 'old_target_username',
+            'display_name' => 'Old Target Identity',
+        ]);
+
+        $targetDialog->forceFill([
+            'confirmed_phone_raw' => '+55 (11) 91234-5678',
+            'confirmed_phone_normalized' => '+5511912345678',
+        ])->save();
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->searchTable('Герман Абрикосов')
+            ->searchTable('  Герман Абрикосов  ')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->searchTable('german_target')
+            ->searchTable('Абрикосов Герман')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->searchTable('Telegram Клиент')
+            ->searchTable('german_abrikosov')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('@german_abrikosov')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('target-user-100')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('telegram клиент')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('ivan 177918')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
 
@@ -1553,13 +1590,40 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->searchTable('3527111')
+            ->searchTable('+420 773 177 918')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('177918')
+            ->assertCanSeeTableRecords([$targetDialog])
+            ->assertCanNotSeeTableRecords([$otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('912345678')
             ->assertCanSeeTableRecords([$targetDialog])
             ->assertCanNotSeeTableRecords([$otherDialog]);
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
             ->searchTable('Legacy target name')
+            ->assertCanNotSeeTableRecords([$targetDialog, $otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('old_target_username')
+            ->assertCanNotSeeTableRecords([$targetDialog, $otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('77317')
+            ->assertCanNotSeeTableRecords([$targetDialog, $otherDialog]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->searchTable('Герман 177918')
             ->assertCanNotSeeTableRecords([$targetDialog, $otherDialog]);
     }
 

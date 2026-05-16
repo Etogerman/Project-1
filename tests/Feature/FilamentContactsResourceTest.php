@@ -3006,36 +3006,120 @@ class FilamentContactsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $contact = Contact::factory()->create([
-            'name' => 'Контакт по телефону',
+            'name' => 'Legacy contact fallback',
+            'first_name' => 'Мария',
+            'last_name' => 'Иванова',
         ]);
         $otherContact = Contact::factory()->create([
             'name' => 'Другой контакт',
+            'first_name' => 'Алексей',
+            'last_name' => 'Петров',
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Search',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'contact-user-100',
+            'external_username' => 'maria_target',
+            'display_name' => 'Кириллический Ник',
+        ]);
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'secondary-user-100',
+            'external_username' => 'secondary_maria',
+            'display_name' => 'Secondary Maria Identity',
         ]);
 
         ContactPhoneNumber::factory()->create([
             'contact_id' => $contact->id,
-            'phone_raw' => '+7 926 352 71 11',
-            'phone_normalized' => '+79263527111',
+            'phone_raw' => '+420 773 177 918',
+            'phone_normalized' => '+420773177918',
             'is_primary' => true,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+1 (999) 177-9180',
+            'phone_normalized' => '+19991779180',
+            'is_primary' => false,
         ]);
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->searchTable('+7 (926) 352-71-11')
+            ->searchTable('Мария Иванова')
             ->assertCanSeeTableRecords([$contact])
             ->assertCanNotSeeTableRecords([$otherContact]);
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->searchTable('3527111')
+            ->searchTable('Иванова Мария')
             ->assertCanSeeTableRecords([$contact])
             ->assertCanNotSeeTableRecords([$otherContact]);
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
-            ->searchTable('Контакт по телефону')
+            ->searchTable('кириллический ник')
             ->assertCanSeeTableRecords([$contact])
             ->assertCanNotSeeTableRecords([$otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('maria_target')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('@maria_target')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('contact-user-100')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('+420 773 177 918')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('177918')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact])
+            ->assertCountTableRecords(1);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('Legacy contact fallback')
+            ->assertCanSeeTableRecords([$contact])
+            ->assertCanNotSeeTableRecords([$otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('77317')
+            ->assertCanNotSeeTableRecords([$contact, $otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('Мария 177918')
+            ->assertCanNotSeeTableRecords([$contact, $otherContact]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->searchTable('   ')
+            ->assertCanSeeTableRecords([$contact, $otherContact])
+            ->assertCountTableRecords(2);
     }
 
     public function test_contact_start_parameters_format_returns_null_without_start_tags(): void

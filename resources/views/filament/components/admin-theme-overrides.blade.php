@@ -2955,7 +2955,8 @@
     }
 
     .ac-card-grid--kanban-filters {
-        grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+        align-items: end;
+        grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
     }
 
     .ac-bitrix-table-shell {
@@ -3766,6 +3767,13 @@
         gap: 0.85rem;
     }
 
+    .ac-kanban-search-control {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.6rem;
+        align-items: center;
+    }
+
     .ac-kanban-board {
         display: flex;
         gap: 1rem;
@@ -3998,6 +4006,16 @@
         font-size: 0.82rem;
         line-height: 1.45;
         text-wrap: balance;
+    }
+
+    @media (max-width: 760px) {
+        .ac-kanban-search-control {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .ac-kanban-search-control__clear {
+            width: 100%;
+        }
     }
 
     .ac-meta {
