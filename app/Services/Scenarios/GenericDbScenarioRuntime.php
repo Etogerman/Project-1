@@ -27,13 +27,19 @@ use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
-class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
+class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedScenarioRuntime
 {
     private const IBIZA_SCENARIO_CODE = 'vip_ibiza';
 
     private const IBIZA_FIRST_NAME_STATE_KEY = 'run.first_name';
 
     private const PHONE_CAPTURE_BUTTON_TEXT = 'Поделиться номером телефона';
+
+    private const V3_MATCH_EXACT_CALLBACK = 'exact_callback';
+
+    private const V3_BUTTON_TYPE_TEXT = 'text';
+
+    private const V3_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
 
     private const PENDING_PROMPT_DELIVERY_STATE_KEY = 'run.pending_prompt_delivery';
 
@@ -42,6 +48,10 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
     private ?int $matchedBuilderStartMessageId = null;
 
     private ?string $matchedBuilderRuntimeBlockId = null;
+
+    private ?int $matchedV3StartMessageId = null;
+
+    private ?string $matchedV3RuntimeBlockId = null;
 
     public function __construct(
         private readonly Scenario $scenario,
@@ -63,10 +73,57 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         return (string) $this->scenario->code;
     }
 
+    public function shouldStartBeforeActiveRun(Message $message): bool
+    {
+        return $this->v3RuntimeOrNull() !== null && $this->shouldStart($message);
+    }
+
+    public function shouldCancelActiveRunOnStart(Message $message): bool
+    {
+        $runtime = $this->v3RuntimeOrNull();
+
+        if ($runtime === null) {
+            return false;
+        }
+
+        $blockId = $this->v3StartBlockIdForMessage($message, $runtime);
+        $block = $this->v3RuntimeBlock($runtime, $blockId);
+
+        return ! is_array($block) || ! $this->isV3NonStateBlock($block);
+    }
+
+    public function startBeforeActiveRunWithoutCancelling(Message $message, ScenarioRun $activeRun): bool
+    {
+        $runtime = $this->v3RuntimeOrNull();
+
+        if ($runtime === null) {
+            return false;
+        }
+
+        $blockId = $this->v3StartBlockIdForMessage($message, $runtime);
+        $block = $this->v3RuntimeBlock($runtime, $blockId);
+
+        if (! is_array($block) || ! $this->isV3NonStateBlock($block)) {
+            return false;
+        }
+
+        $this->advanceV3FromBlock(
+            $message,
+            $runtime,
+            $blockId,
+            $this->v3StatePayload($activeRun->state_payload),
+            preservePreviousStateForTerminalNonState: true,
+        );
+
+        return true;
+    }
+
     public function shouldStart(Message $message): bool
     {
         $this->matchedBuilderStartMessageId = null;
         $this->matchedBuilderRuntimeBlockId = null;
+        $this->matchedV3StartMessageId = null;
+        $this->matchedV3RuntimeBlockId = null;
 
         if (
             ! in_array($message->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
@@ -77,8 +134,18 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             return false;
         }
 
-        if ($message->channel?->platform === Channel::PLATFORM_TELEGRAM && is_array(data_get($message->raw_payload, 'callback_query'))) {
+        $v3Runtime = $this->v3RuntimeOrNull();
+
+        if (
+            $message->channel?->platform === Channel::PLATFORM_TELEGRAM
+            && $this->messageIsV3Callback($message)
+            && $v3Runtime === null
+        ) {
             return false;
+        }
+
+        if ($v3Runtime !== null) {
+            return $this->shouldStartV3($message, $v3Runtime);
         }
 
         $schema = $this->validatedSchemaOrNull();
@@ -256,6 +323,14 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
     public function start(ScenarioRun $run, Message $message): void
     {
+        $v3Runtime = $this->v3RuntimeOrNull();
+
+        if ($v3Runtime !== null) {
+            $this->startV3($run, $message, $v3Runtime);
+
+            return;
+        }
+
         $schema = $this->validatedSchema();
         $startBlockId = $this->startBlockIdForMessage($message, $schema);
 
@@ -305,6 +380,16 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             return false;
         }
 
+        $v3Runtime = $this->v3RuntimeOrNull();
+
+        if ($v3Runtime !== null) {
+            $statePayload = $this->v3StatePayload($run->state_payload);
+            $currentStep = $this->v3RuntimeBlockId($v3Runtime, $currentStep, $statePayload);
+            $block = $currentStep !== null ? $this->v3RuntimeBlock($v3Runtime, $currentStep) : null;
+
+            return is_array($block) && $this->v3TargetForContactShare($block) !== null;
+        }
+
         $schema = $this->validatedSchemaOrNull();
         $block = $schema['blocks'][$currentStep] ?? null;
 
@@ -318,6 +403,12 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
 
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
     {
+        $v3Runtime = $this->v3RuntimeOrNull();
+
+        if ($v3Runtime !== null) {
+            return $this->handleV3Inbound($run, $message, $v3Runtime);
+        }
+
         $schema = $this->validatedSchema();
         $statePayload = $this->normalizeStatePayload($run->state_payload);
         $currentStep = filled($run->current_step) ? trim((string) $run->current_step) : null;
@@ -791,12 +882,710 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         return null;
     }
 
+    /**
+     * @param  array<string, mixed>  $runtime
+     */
+    private function shouldStartV3(Message $message, array $runtime): bool
+    {
+        $blockId = $this->matchingV3EntrypointBlockId($message, $runtime);
+
+        if ($blockId === null) {
+            return false;
+        }
+
+        $this->matchedV3StartMessageId = (int) $message->id;
+        $this->matchedV3RuntimeBlockId = $blockId;
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     */
+    private function startV3(ScenarioRun $run, Message $message, array $runtime): void
+    {
+        $startBlockId = $this->v3StartBlockIdForMessage($message, $runtime);
+        $progress = $this->advanceV3FromBlock(
+            $message,
+            $runtime,
+            $startBlockId,
+            $this->v3StatePayload($run->state_payload),
+        );
+
+        $run->forceFill([
+            'status' => $progress['status'],
+            'current_step' => $progress['current_step'],
+            'state_payload' => $progress['state_payload'],
+            'exit_outcome' => $progress['exit_outcome'],
+            'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+        ])->save();
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     */
+    private function handleV3Inbound(ScenarioRun $run, Message $message, array $runtime): ScenarioInboundResult
+    {
+        $statePayload = $this->v3StatePayload($run->state_payload);
+        $rawCurrentBlockId = filled($run->current_step)
+            ? trim((string) $run->current_step)
+            : trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+        $currentBlockId = $this->v3RuntimeBlockId($runtime, $rawCurrentBlockId, $statePayload);
+
+        if ($currentBlockId === null) {
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_CANCELLED,
+                currentStep: null,
+                statePayload: $statePayload,
+                exitOutcome: 'invalid_current_step',
+            );
+        }
+
+        $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
+        $targetBlockId = $message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE
+            ? $this->v3TargetForContactShare(is_array($block) ? $block : [])
+            : $this->v3TargetForButtonText($message, is_array($block) ? $block : []);
+
+        if ($targetBlockId === null) {
+            return new ScenarioInboundResult(
+                consumed: true,
+                status: ScenarioRun::STATUS_ACTIVE,
+                currentStep: $currentBlockId,
+                statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block),
+                exitOutcome: null,
+            );
+        }
+
+        $progress = $this->advanceV3FromBlock($message, $runtime, $targetBlockId, $statePayload);
+
+        return new ScenarioInboundResult(
+            consumed: true,
+            status: $progress['status'],
+            currentStep: $progress['current_step'],
+            statePayload: $progress['state_payload'],
+            exitOutcome: $progress['exit_outcome'],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $statePayload
+     * @return array{
+     *     status: string,
+     *     current_step: ?string,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: ?string,
+     * }
+     */
+    private function advanceV3FromBlock(
+        Message $message,
+        array $runtime,
+        string $blockId,
+        array $statePayload,
+        ?int $remainingTransitions = null,
+        bool $preservePreviousStateForTerminalNonState = false,
+    ): array {
+        $remainingTransitions ??= count(is_array($runtime['blocks'] ?? null) ? $runtime['blocks'] : []) + 1;
+
+        if ($remainingTransitions < 1) {
+            throw new RuntimeException("Scenario [{$this->code()}] V3 exceeded safe transition limit.");
+        }
+
+        $resolvedBlockId = $this->v3RuntimeBlockId($runtime, $blockId, $statePayload);
+        $block = $resolvedBlockId !== null ? $this->v3RuntimeBlock($runtime, $resolvedBlockId) : null;
+
+        if (! is_array($block)) {
+            throw new RuntimeException("Scenario [{$this->code()}] V3 references missing block [{$blockId}].");
+        }
+
+        $blockId = $resolvedBlockId;
+        $isNonStateBlock = $this->isV3NonStateBlock($block);
+        $previousBlockId = $this->v3CurrentRuntimeBlockId($runtime, $statePayload);
+
+        if (! $isNonStateBlock) {
+            $statePayload = $this->markV3Running($statePayload, $blockId);
+        }
+
+        $messagePayload = is_array($block['message'] ?? null) ? $block['message'] : null;
+        $buttonRows = $this->v3ButtonRows($block);
+        $waitingButtonRows = $this->v3WaitingButtonRows($block);
+
+        if ($messagePayload !== null) {
+            $replyButtonRows = $buttonRows !== [] ? $buttonRows : null;
+
+            if (! $this->dispatchScenarioMessage(
+                $message,
+                (string) ($messagePayload['text'] ?? ''),
+                (string) ($messagePayload['text_format'] ?? Message::TEXT_FORMAT_PLAIN_TEXT),
+                replyButtonRows: $replyButtonRows,
+            )) {
+                $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
+
+                return $this->activeProgress(
+                    $activeBlockId,
+                    $this->markPendingPromptDelivery($statePayload),
+                );
+            }
+        }
+
+        if (! $isNonStateBlock && $waitingButtonRows !== []) {
+            return $this->activeProgress(
+                $blockId,
+                $this->markV3Waiting($statePayload, $blockId, $block),
+            );
+        }
+
+        $defaultTargetBlockId = filled($block['default_target_block_id'] ?? null)
+            ? (string) $block['default_target_block_id']
+            : null;
+
+        if ($defaultTargetBlockId !== null) {
+            return $this->advanceV3FromBlock(
+                $message,
+                $runtime,
+                $defaultTargetBlockId,
+                $statePayload,
+                $remainingTransitions - 1,
+                $preservePreviousStateForTerminalNonState,
+            );
+        }
+
+        if ($isNonStateBlock && $previousBlockId !== null) {
+            return $this->activeProgress($previousBlockId, $statePayload);
+        }
+
+        if (! $isNonStateBlock) {
+            return $this->activeProgress(
+                $blockId,
+                $this->markV3Waiting($statePayload, $blockId, $block),
+            );
+        }
+
+        data_set($statePayload, 'v3.status', 'completed');
+        data_set($statePayload, 'v3.current_block_id', null);
+        data_set($statePayload, 'v3.waiting_output_ids', []);
+
+        return [
+            'status' => ScenarioRun::STATUS_COMPLETED,
+            'current_step' => null,
+            'state_payload' => $statePayload,
+            'exit_outcome' => 'completed',
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     */
+    private function v3StartBlockIdForMessage(Message $message, array $runtime): string
+    {
+        if (
+            $this->matchedV3StartMessageId === (int) $message->id
+            && $this->matchedV3RuntimeBlockId !== null
+            && $this->v3RuntimeBlock($runtime, $this->matchedV3RuntimeBlockId) !== null
+        ) {
+            return $this->matchedV3RuntimeBlockId;
+        }
+
+        $blockId = $this->matchingV3EntrypointBlockId($message, $runtime);
+
+        if ($blockId !== null) {
+            return $blockId;
+        }
+
+        throw new RuntimeException("Scenario [{$this->code()}] V3 does not have a matching entrypoint.");
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     */
+    private function matchingV3EntrypointBlockId(Message $message, array $runtime): ?string
+    {
+        return collect($this->v3Entrypoints($runtime))
+            ->map(fn (array $entrypoint): ?string => $this->matchingV3EntrypointBlockIdFromEntrypoint($message, $runtime, $entrypoint))
+            ->filter()
+            ->first();
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function matchingV3EntrypointBlockIdFromEntrypoint(Message $message, array $runtime, array $entrypoint): ?string
+    {
+        $channelIds = collect($entrypoint['channel_ids'] ?? [])
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
+
+        if ($message->channel_id === null || ! in_array((int) $message->channel_id, $channelIds, true)) {
+            return null;
+        }
+
+        if (! $this->v3EntrypointAllowsContactPhone($message, $entrypoint)) {
+            return null;
+        }
+
+        $match = (string) ($entrypoint['match'] ?? 'strict');
+
+        foreach ($entrypoint['values'] ?? [] as $value) {
+            if (! $this->messageMatchesV3Value($message, $match, (string) $value)) {
+                continue;
+            }
+
+            $blockId = trim((string) ($entrypoint['block_id'] ?? ''));
+            $resolvedBlockId = $this->v3RuntimeBlockId($runtime, $blockId);
+
+            if ($resolvedBlockId !== null) {
+                return $resolvedBlockId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function v3EntrypointAllowsContactPhone(Message $message, array $entrypoint): bool
+    {
+        $condition = trim((string) ($entrypoint['contact_phone_condition'] ?? ''));
+
+        if ($condition === '') {
+            return true;
+        }
+
+        if (! in_array($condition, [
+            AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+        ], true)) {
+            return false;
+        }
+
+        $hasPhone = $message->contact?->phoneNumbers()->exists() ?? false;
+
+        return $condition === AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
+            ? $hasPhone
+            : ! $hasPhone;
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @return list<array<string, mixed>>
+     */
+    private function v3Entrypoints(array $runtime): array
+    {
+        $entrypoints = is_array($runtime['entrypoints'] ?? null) ? $runtime['entrypoints'] : [];
+
+        return collect($entrypoints)
+            ->filter(fn (mixed $entrypoint): bool => is_array($entrypoint))
+            ->sort(fn (array $left, array $right): int => $this->compareV3Entrypoints($left, $right))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $left
+     * @param  array<string, mixed>  $right
+     */
+    private function compareV3Entrypoints(array $left, array $right): int
+    {
+        return [
+            (int) ($right['priority'] ?? 10),
+            $this->v3EntrypointBlockOrder($right),
+            (string) ($right['block_id'] ?? ''),
+        ] <=> [
+            (int) ($left['priority'] ?? 10),
+            $this->v3EntrypointBlockOrder($left),
+            (string) ($left['block_id'] ?? ''),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function v3EntrypointBlockOrder(array $entrypoint): int
+    {
+        $blockId = $entrypoint['block_id'] ?? null;
+
+        return is_numeric($blockId) ? (int) $blockId : PHP_INT_MIN;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3TargetForButtonText(Message $message, array $block): ?string
+    {
+        $messageText = $this->normalizeV3ButtonText((string) $message->text);
+
+        if ($messageText === '') {
+            return null;
+        }
+
+        foreach ($this->v3WaitingButtonRows($block) as $row) {
+            foreach ($row as $button) {
+                if (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_TEXT) {
+                    continue;
+                }
+
+                if ($messageText === (string) ($button['normalized_text'] ?? '')) {
+                    return filled($button['target_block_id'] ?? null) ? (string) $button['target_block_id'] : null;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3TargetForContactShare(array $block): ?string
+    {
+        foreach ($this->v3WaitingButtonRows($block) as $row) {
+            foreach ($row as $button) {
+                if (
+                    ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_REQUEST_PHONE
+                    && filled($button['target_block_id'] ?? null)
+                ) {
+                    return (string) $button['target_block_id'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<list<array<string, mixed>>>
+     */
+    private function v3ButtonRows(array $block): array
+    {
+        return $this->normalizeV3ButtonRows(data_get($block, 'buttons.rows', []));
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<list<array<string, mixed>>>
+     */
+    private function v3WaitingButtonRows(array $block): array
+    {
+        return collect($this->v3ButtonRows($block))
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (array $button): bool => filled($button['target_block_id'] ?? null))
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function isV3NonStateBlock(array $block): bool
+    {
+        return ($block['kind'] ?? null) === 'non_state';
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3CurrentBlockId(array $statePayload): ?string
+    {
+        $blockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+
+        return $blockId === '' ? null : $blockId;
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     */
+    private function v3CurrentRuntimeBlockId(array $runtime, array $statePayload): ?string
+    {
+        $blockId = $this->v3CurrentBlockId($statePayload);
+
+        return $blockId !== null ? $this->v3RuntimeBlockId($runtime, $blockId, $statePayload) : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3RuntimeBlockId(array $runtime, string $blockId, array $statePayload = []): ?string
+    {
+        $blockId = trim($blockId);
+
+        if ($blockId === '') {
+            return null;
+        }
+
+        if ($this->v3RuntimeBlock($runtime, $blockId) !== null) {
+            return $blockId;
+        }
+
+        foreach ($this->v3RuntimeBlocks($runtime) as $runtimeBlockKey => $runtimeBlock) {
+            if (! is_array($runtimeBlock)) {
+                continue;
+            }
+
+            $runtimeId = trim((string) ($runtimeBlock['id'] ?? $runtimeBlock['card_id'] ?? $runtimeBlockKey));
+            $dbId = trim((string) ($runtimeBlock['db_id'] ?? ''));
+
+            if ($runtimeId === $blockId || $dbId === $blockId) {
+                return $runtimeId !== '' ? $runtimeId : (string) $runtimeBlockKey;
+            }
+        }
+
+        $previousCardId = $this->v3PreviousPublishedCardIdForDbBlockId($blockId, $statePayload);
+
+        if ($previousCardId !== null && $this->v3RuntimeBlock($runtime, $previousCardId) !== null) {
+            return $previousCardId;
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @return array<string|int, mixed>
+     */
+    private function v3RuntimeBlocks(array $runtime): array
+    {
+        return is_array($runtime['blocks'] ?? null) ? $runtime['blocks'] : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @return array<string, mixed>|null
+     */
+    private function v3RuntimeBlock(array $runtime, string $blockId): ?array
+    {
+        $blocks = $this->v3RuntimeBlocks($runtime);
+
+        if (array_key_exists($blockId, $blocks) && is_array($blocks[$blockId])) {
+            return $blocks[$blockId];
+        }
+
+        if (is_numeric($blockId) && array_key_exists((int) $blockId, $blocks) && is_array($blocks[(int) $blockId])) {
+            return $blocks[(int) $blockId];
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3PreviousPublishedCardIdForDbBlockId(string $blockId, array $statePayload): ?string
+    {
+        if (! is_numeric($blockId)) {
+            return null;
+        }
+
+        $publishedVersionId = (int) (
+            data_get($statePayload, 'v3.previous_published_version_id')
+            ?: data_get($statePayload, 'v3.published_version_id', 0)
+        );
+
+        if ($publishedVersionId <= 0 || $publishedVersionId === (int) $this->publishedVersion->id) {
+            return null;
+        }
+
+        $block = ScenarioBuilderBlock::query()
+            ->where('scenario_version_id', $publishedVersionId)
+            ->whereKey((int) $blockId)
+            ->first();
+
+        if (! $block instanceof ScenarioBuilderBlock) {
+            return null;
+        }
+
+        $cardId = trim((string) data_get($block->settings_payload, 'ui.card_id', ''));
+
+        return $cardId !== '' ? $cardId : null;
+    }
+
+    /**
+     * @return list<list<array<string, mixed>>>
+     */
+    private function normalizeV3ButtonRows(mixed $rows): array
+    {
+        if (! is_array($rows)) {
+            return [];
+        }
+
+        return collect($rows)
+            ->filter(fn (mixed $row): bool => is_array($row))
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (mixed $button): bool => is_array($button) && filled($button['text'] ?? null))
+                ->map(function (array $button): array {
+                    $text = trim((string) $button['text']);
+
+                    return [
+                        'id' => (string) ($button['id'] ?? ''),
+                        'type' => ($button['type'] ?? null) === self::V3_BUTTON_TYPE_REQUEST_PHONE
+                            ? self::V3_BUTTON_TYPE_REQUEST_PHONE
+                            : self::V3_BUTTON_TYPE_TEXT,
+                        'text' => $text,
+                        'normalized_text' => $this->normalizeV3ButtonText($text),
+                        'output_id' => (string) ($button['output_id'] ?? ($button['id'] ?? '')),
+                        'target_block_id' => filled($button['target_block_id'] ?? null)
+                            ? (string) $button['target_block_id']
+                            : null,
+                    ];
+                })
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>|mixed  $statePayload
+     * @return array<string, mixed>
+     */
+    private function v3StatePayload(mixed $statePayload): array
+    {
+        $statePayload = $this->normalizeStatePayload($statePayload);
+        $v3 = is_array($statePayload['v3'] ?? null) ? $statePayload['v3'] : [];
+        $previousPublishedVersionId = (int) ($v3['published_version_id'] ?? 0);
+
+        if ($previousPublishedVersionId > 0 && $previousPublishedVersionId !== (int) $this->publishedVersion->id) {
+            $v3['previous_published_version_id'] = $previousPublishedVersionId;
+        }
+
+        $v3['published_version_id'] = (int) $this->publishedVersion->id;
+        $v3['schema_version'] = BuildScenarioBuilderV3StateAction::SCHEMA_VERSION;
+        $statePayload['v3'] = $v3;
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function markV3Running(array $statePayload, string $blockId): array
+    {
+        data_set($statePayload, 'v3.status', 'running');
+        data_set($statePayload, 'v3.current_block_id', $blockId);
+        data_set($statePayload, 'v3.waiting_output_ids', []);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  array<string, mixed>  $block
+     * @return array<string, mixed>
+     */
+    private function markV3Waiting(array $statePayload, string $blockId, array $block): array
+    {
+        data_set($statePayload, 'v3.status', 'waiting_input');
+        data_set($statePayload, 'v3.current_block_id', $blockId);
+        data_set($statePayload, 'v3.waiting_output_ids', collect($this->v3WaitingButtonRows($block))
+            ->flatten(1)
+            ->pluck('output_id')
+            ->filter()
+            ->values()
+            ->all());
+
+        return $statePayload;
+    }
+
+    private function messageMatchesV3Value(Message $message, string $match, string $expectedValue): bool
+    {
+        $expectedValue = $this->normalizeV3ButtonText($expectedValue);
+        $messageText = $this->normalizeV3ButtonText((string) $message->text);
+        $messageParameter = $this->normalizeV3ButtonText((string) $message->message_parameter);
+
+        if (
+            $this->messageIsV3Callback($message)
+            && ! in_array($match, [self::V3_MATCH_EXACT_CALLBACK, AutoReplyRule::MATCH_SCOPE_ANY_INBOUND], true)
+        ) {
+            return false;
+        }
+
+        if ($match === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+            return true;
+        }
+
+        if ($expectedValue === '') {
+            return false;
+        }
+
+        return match ($match) {
+            'contains', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT => str_contains($messageText, $expectedValue)
+                || str_contains($messageParameter, $expectedValue),
+            'starts', 'starts_with' => str_starts_with($messageText, $expectedValue)
+                || str_starts_with($messageParameter, $expectedValue),
+            'regex' => $this->messageMatchesV3Regex($messageText, $messageParameter, $expectedValue),
+            AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER => $messageParameter === $expectedValue,
+            AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD => $messageText === $expectedValue,
+            AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER => $messageText === $expectedValue
+                || $messageParameter === $expectedValue,
+            self::V3_MATCH_EXACT_CALLBACK => $this->messageMatchesV3Callback($message, $expectedValue),
+            default => $messageText === $expectedValue || $messageParameter === $expectedValue,
+        };
+    }
+
+    private function messageMatchesV3Callback(Message $message, string $expectedValue): bool
+    {
+        $callbackValues = collect([
+            data_get($message->raw_payload, 'callback_query.data'),
+            $message->text,
+        ])
+            ->map(fn (mixed $value): string => $this->normalizeV3ButtonText((string) $value))
+            ->filter(fn (string $value): bool => $value !== '')
+            ->unique();
+
+        return $callbackValues->contains($expectedValue)
+            && $this->messageIsV3Callback($message);
+    }
+
+    private function messageIsV3Callback(Message $message): bool
+    {
+        return is_array(data_get($message->raw_payload, 'callback_query'));
+    }
+
+    private function messageMatchesV3Regex(string $messageText, string $messageParameter, string $pattern): bool
+    {
+        try {
+            return @preg_match('/'.$pattern.'/u', $messageText) === 1
+                || @preg_match('/'.$pattern.'/u', $messageParameter) === 1;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function normalizeV3ButtonText(string $text): string
+    {
+        return mb_strtolower(preg_replace('/\s+/u', ' ', trim($text)) ?? trim($text));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function v3RuntimeOrNull(): ?array
+    {
+        $runtime = data_get($this->publishedVersion->schema_payload, 'builder_v3_runtime');
+
+        if (! is_array($runtime) || (int) ($runtime['schema_version'] ?? 0) !== BuildScenarioBuilderV3StateAction::SCHEMA_VERSION) {
+            return null;
+        }
+
+        return $runtime;
+    }
+
     private function dispatchScenarioMessage(
         Message $message,
         string $text,
         string $textFormat,
         bool $requestPhone = false,
         bool $removeTelegramKeyboard = false,
+        ?array $replyButtonRows = null,
     ): bool
     {
         $channel = $message->channel;
@@ -810,8 +1599,8 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
         $sendResult = $this->sendBotDialogTextAction->handleMessage(
             $message,
             $content->transportText,
-            telegramReplyMarkup: $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard),
-            maxAttachments: $requestPhone ? $this->maxPhoneCaptureAttachments() : null,
+            telegramReplyMarkup: $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard, $replyButtonRows),
+            maxAttachments: $this->maxAttachments($requestPhone, $replyButtonRows),
             textFormat: $content->textFormat,
         );
 
@@ -1121,7 +1910,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
     /**
      * @return array<string, mixed>|null
      */
-    private function telegramReplyMarkup(bool $requestPhone, bool $removeTelegramKeyboard): ?array
+    private function telegramReplyMarkup(bool $requestPhone, bool $removeTelegramKeyboard, ?array $replyButtonRows = null): ?array
     {
         if ($requestPhone) {
             return $this->telegramPhoneCaptureReplyMarkup();
@@ -1131,6 +1920,31 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
             return [
                 'remove_keyboard' => true,
             ];
+        }
+
+        if ($replyButtonRows !== null && $replyButtonRows !== []) {
+            $keyboard = collect($replyButtonRows)
+                ->map(fn (array $row): array => collect($row)
+                    ->filter(fn (array $button): bool => filled($button['text'] ?? null))
+                    ->map(fn (array $button): array => array_filter([
+                        'text' => (string) $button['text'],
+                        'request_contact' => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_REQUEST_PHONE
+                            ? true
+                            : null,
+                    ], static fn (mixed $value): bool => $value !== null))
+                    ->values()
+                    ->all())
+                ->filter(fn (array $row): bool => $row !== [])
+                ->values()
+                ->all();
+
+            if ($keyboard !== []) {
+                return [
+                    'keyboard' => $keyboard,
+                    'resize_keyboard' => true,
+                    'one_time_keyboard' => false,
+                ];
+            }
         }
 
         return null;
@@ -1148,6 +1962,47 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime
                     'type' => 'request_contact',
                     'text' => self::PHONE_CAPTURE_BUTTON_TEXT,
                 ]]],
+            ],
+        ]];
+    }
+
+    /**
+     * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     * @return array<int, array<string, mixed>>|null
+     */
+    private function maxAttachments(bool $requestPhone, ?array $replyButtonRows): ?array
+    {
+        if ($requestPhone) {
+            return $this->maxPhoneCaptureAttachments();
+        }
+
+        if ($replyButtonRows === null || $replyButtonRows === []) {
+            return null;
+        }
+
+        $buttons = collect($replyButtonRows)
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (array $button): bool => filled($button['text'] ?? null))
+                ->map(fn (array $button): array => [
+                    'type' => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_REQUEST_PHONE
+                        ? 'request_contact'
+                        : 'message',
+                    'text' => (string) $button['text'],
+                ])
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+
+        if ($buttons === []) {
+            return null;
+        }
+
+        return [[
+            'type' => 'inline_keyboard',
+            'payload' => [
+                'buttons' => $buttons,
             ],
         ]];
     }

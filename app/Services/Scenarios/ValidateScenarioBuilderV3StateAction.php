@@ -2,6 +2,7 @@
 
 namespace App\Services\Scenarios;
 
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -21,6 +22,32 @@ class ValidateScenarioBuilderV3StateAction
     private const MAX_PAYLOAD_BYTES = 1048576;
 
     private const MODULE_TYPES = ['start_condition', 'message', 'buttons'];
+
+    private const BLOCK_KINDS = ['state', 'non_state'];
+
+    private const MATCH_EXACT_CALLBACK = 'exact_callback';
+
+    private const START_MATCH_OPERATORS = [
+        AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+        AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
+        AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+        AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+        AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+        self::MATCH_EXACT_CALLBACK,
+        'strict',
+        'contains',
+        'starts',
+        'starts_with',
+        'regex',
+    ];
+
+    private const CONTACT_PHONE_CONDITIONS = [
+        '',
+        AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+        AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+    ];
+
+    private const BUTTON_TYPES = ['text', 'request_phone'];
 
     /**
      * @param  array<string, mixed>  $input
@@ -109,8 +136,17 @@ class ValidateScenarioBuilderV3StateAction
 
         $modules = $this->normalizeModules($settingsPayload['modules'] ?? [], $blockIndex);
         $outputs = $this->normalizeOutputs($settingsPayload['outputs'] ?? [], $blockIndex);
+        $kind = $this->optionalStringValue(
+            $settingsPayload['kind'] ?? 'state',
+            "builder.blocks.$blockIndex.settings_payload.kind",
+            'state',
+        );
         $buttonCount = $this->buttonCount($modules);
         $messageText = $this->messageText($modules);
+
+        if (! in_array($kind, self::BLOCK_KINDS, true)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.kind", 'Unknown block kind.');
+        }
 
         if ($buttonCount > 0 && trim($messageText) === '') {
             $this->fail("builder.blocks.$blockIndex.settings_payload.modules", 'Buttons require non-empty message text.');
@@ -118,8 +154,8 @@ class ValidateScenarioBuilderV3StateAction
 
         return [
             'schema_version' => BuildScenarioBuilderV3StateAction::SCHEMA_VERSION,
-            'kind' => 'state',
-            'ui' => $this->normalizeBlockUi($settingsPayload['ui'] ?? []),
+            'kind' => $kind,
+            'ui' => $this->normalizeBlockUi($settingsPayload['ui'] ?? [], $blockIndex),
             'modules' => $modules,
             'outputs' => $outputs,
         ];
@@ -201,12 +237,19 @@ class ValidateScenarioBuilderV3StateAction
             }
         }
 
+        $match = $this->normalizeStartConditionMatch($payload['match'] ?? null, $blockIndex, $moduleIndex);
+
         return [
             'command' => (string) ($payload['command'] ?? ''),
             'values' => $this->stringList($payload['values'] ?? []),
-            'match' => (string) ($payload['match'] ?? 'strict'),
+            'match' => $match,
             'variable' => (string) ($payload['variable'] ?? ''),
             'exclude' => (string) ($payload['exclude'] ?? ''),
+            'contact_phone_condition' => $this->normalizeContactPhoneCondition(
+                $payload['contact_phone_condition'] ?? '',
+                $blockIndex,
+                $moduleIndex,
+            ),
             'priority' => (int) ($payload['priority'] ?? 10),
             'once' => (bool) ($payload['once'] ?? false),
             'channels' => [
@@ -214,6 +257,30 @@ class ValidateScenarioBuilderV3StateAction
                 'ids' => $channelIds,
             ],
         ];
+    }
+
+    private function normalizeStartConditionMatch(mixed $value, int $blockIndex, int $moduleIndex): string
+    {
+        $match = is_string($value) && trim($value) !== ''
+            ? trim($value)
+            : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
+
+        if (! in_array($match, self::START_MATCH_OPERATORS, true)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.match", 'Unknown start condition match.');
+        }
+
+        return $match;
+    }
+
+    private function normalizeContactPhoneCondition(mixed $value, int $blockIndex, int $moduleIndex): string
+    {
+        $condition = is_string($value) ? trim($value) : '';
+
+        if (! in_array($condition, self::CONTACT_PHONE_CONDITIONS, true)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.contact_phone_condition", 'Unknown phone condition.');
+        }
+
+        return $condition;
     }
 
     /**
@@ -280,6 +347,7 @@ class ValidateScenarioBuilderV3StateAction
                 $normalizedRow[] = [
                     'id' => $buttonId,
                     'text' => $buttonText,
+                    'type' => $this->normalizeButtonType($button['type'] ?? null, $blockIndex, $moduleIndex, $rowIndex, $buttonIndex),
                     'fn' => (string) ($button['fn'] ?? 'default'),
                     'url' => filled($button['url'] ?? null) ? (string) $button['url'] : null,
                     'color' => filled($button['color'] ?? null) ? (string) $button['color'] : null,
@@ -293,6 +361,17 @@ class ValidateScenarioBuilderV3StateAction
             'placement' => (string) ($payload['placement'] ?? 'auto'),
             'rows' => $normalizedRows,
         ];
+    }
+
+    private function normalizeButtonType(mixed $type, int $blockIndex, int $moduleIndex, int $rowIndex, int $buttonIndex): string
+    {
+        $type = trim((string) ($type ?: 'text'));
+
+        if (! in_array($type, self::BUTTON_TYPES, true)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.type", 'Unknown button type.');
+        }
+
+        return $type;
     }
 
     /**
@@ -326,6 +405,9 @@ class ValidateScenarioBuilderV3StateAction
                 'source' => (string) ($output['source'] ?? 'button'),
                 'module_id' => filled($output['module_id'] ?? null) ? (string) $output['module_id'] : null,
                 'button_id' => filled($output['button_id'] ?? null) ? (string) $output['button_id'] : null,
+                'button_type' => in_array(($output['button_type'] ?? null), self::BUTTON_TYPES, true)
+                    ? (string) $output['button_type']
+                    : 'text',
             ];
         }
 
@@ -472,6 +554,10 @@ class ValidateScenarioBuilderV3StateAction
 
                 $text = $this->normalizeButtonText($buttonsById[$buttonId]['text']);
 
+                if ($text === '') {
+                    continue;
+                }
+
                 if (isset($textTargets[$text]) && $textTargets[$text] !== $target) {
                     $this->fail("builder.blocks.$blockIndex.settings_payload.modules", 'Same button text cannot lead to different edges in one block.');
                 }
@@ -524,7 +610,7 @@ class ValidateScenarioBuilderV3StateAction
     /**
      * @return array<string, mixed>
      */
-    private function normalizeBlockUi(mixed $ui): array
+    private function normalizeBlockUi(mixed $ui, int $blockIndex): array
     {
         $ui = is_array($ui) ? $ui : [];
 
@@ -532,6 +618,7 @@ class ValidateScenarioBuilderV3StateAction
             'sheet_id' => (string) ($ui['sheet_id'] ?? 'main'),
             'width' => (int) ($ui['width'] ?? 320),
             'collapsed' => (bool) ($ui['collapsed'] ?? false),
+            'card_id' => $this->optionalStringValue($ui['card_id'] ?? '', "builder.blocks.$blockIndex.settings_payload.ui.card_id", ''),
         ];
     }
 

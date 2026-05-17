@@ -158,6 +158,9 @@ class ScenarioConstructor extends Page
             'saveUrl' => $this->scenarioId !== null
                 ? route('admin.scenario-constructor.v3.state.update', ['scenario' => $this->scenarioId])
                 : null,
+            'publishUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.publish', ['scenario' => $this->scenarioId])
+                : null,
             'csrfToken' => csrf_token(),
         ];
     }

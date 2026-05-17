@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { loadScenarioBuilderState, saveScenarioBuilderState } from './api.js';
+import { loadScenarioBuilderState, publishScenarioBuilderState, saveScenarioBuilderState } from './api.js';
 
 const MAIN_SHEET = {
     id: 'main',
@@ -17,12 +17,33 @@ const MODULE_PREVIEW_GAP = 7;
 const PORT_ROW_HEIGHT = 30;
 const PORT_ROW_GAP = 4;
 const PORT_DOT_CENTER_X = NODE_WIDTH - 6;
+const DEFAULT_OUTPUT = { id: null, label: 'Дальше', kind: 'default', caption: 'Авто' };
 const MODULE_ORDER = ['start_condition', 'message', 'buttons'];
 const MATCH_OPTIONS = [
-    ['strict', 'Точно'],
-    ['contains', 'Содержит'],
-    ['starts', 'Начинается'],
-    ['regex', 'Regex'],
+    ['exact_keyword', 'Точный текст'],
+    ['contains_text', 'Содержит текст'],
+    ['exact_parameter', 'Точный параметр'],
+    ['exact_text_or_parameter', 'Текст или параметр'],
+    ['exact_callback', 'Точный callback'],
+    ['any_inbound', 'Любое входящее'],
+];
+const PHONE_CONDITION_OPTIONS = [
+    ['', 'Неважно'],
+    ['has_phone', 'Телефон заполнен'],
+    ['missing_phone', 'Телефон не заполнен'],
+];
+const BUTTON_TYPE_TEXT = 'text';
+const BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
+const BUTTON_TYPE_OPTIONS = [
+    [BUTTON_TYPE_TEXT, 'Текстовая'],
+    [BUTTON_TYPE_REQUEST_PHONE, 'Запросить телефон'],
+];
+const REQUEST_PHONE_BUTTON_TEXT = 'Поделиться номером телефона';
+const BUTTON_COLOR_OPTIONS = [
+    [null, 'Без цвета', null],
+    ['blue', 'Синий', '#2ea3db'],
+    ['red', 'Красный', '#ef3d3d'],
+    ['green', 'Зелёный', '#43a047'],
 ];
 
 const MODULE_META = {
@@ -31,18 +52,42 @@ const MODULE_META = {
     buttons: { label: 'Кнопки', short: 'BTN', className: 'is-buttons' },
 };
 
-export default function App({ stateUrl, saveUrl, csrfToken }) {
+const FUTURE_MODULE_META = [
+    { type: 'attachment', label: 'Вложение' },
+    { type: 'ai', label: 'AI' },
+    { type: 'bot', label: 'Бот' },
+    { type: 'code', label: 'Код' },
+    { type: 'cloud', label: 'Интеграция' },
+    { type: 'analytics', label: 'Аналитика' },
+];
+
+const BLOCK_TYPE_META = {
+    state: {
+        label: 'Состояние',
+        hint: 'Клиент находится в этом блоке, следующий ответ проверяется из него.',
+    },
+    non_state: {
+        label: 'Не состояние',
+        hint: 'Бот отправит сообщение, но клиент останется в текущем состоянии.',
+    },
+};
+
+export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const canvasRef = useRef(null);
     const dragRef = useRef(null);
     const [state, setState] = useState(null);
     const [status, setStatus] = useState('loading');
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
+    const [validationIssue, setValidationIssue] = useState(null);
     const [mode, setMode] = useState('design');
     const [tool, setTool] = useState('select');
     const [isSaving, setIsSaving] = useState(false);
+    const [isPublishing, setIsPublishing] = useState(false);
     const [selectedBlockKey, setSelectedBlockKey] = useState(null);
     const [selectedEdgeKey, setSelectedEdgeKey] = useState(null);
+    const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
+    const [pendingButtonFocus, setPendingButtonFocus] = useState(null);
     const [pendingConnection, setPendingConnection] = useState(null);
     const [anchors, setAnchors] = useState({ ports: {} });
 
@@ -52,6 +97,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
         setStatus('loading');
         setError(null);
         setNotice(null);
+        setValidationIssue(null);
 
         loadScenarioBuilderState(stateUrl)
             .then((data) => {
@@ -86,8 +132,11 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
     const revision = builder?.revision ?? null;
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
-    const canSave = state?.permissions?.can_update === true && status === 'ready' && ! isSaving;
+    const canSave = state?.permissions?.can_update === true && status === 'ready' && ! isSaving && ! isPublishing;
+    const canPublish = state?.permissions?.can_publish === true && status === 'ready' && ! isSaving && ! isPublishing && Boolean(publishUrl);
     const canvasBounds = useMemo(() => graphBounds(blocks), [blocks]);
+    const hasPanelSelection = Boolean(selectedBlock || selectedEdge);
+    const isPanelOpen = hasPanelSelection && ! isPanelCollapsed;
 
     useLayoutEffect(() => {
         if (status !== 'ready' || ! canvasRef.current) {
@@ -154,7 +203,24 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
     function selectBlock(clientKey) {
         setSelectedBlockKey(clientKey);
         setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
         cancelConnection();
+    }
+
+    function closePanelSelection() {
+        setSelectedBlockKey(null);
+        setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
+    }
+
+    function collapsePanel() {
+        setIsPanelCollapsed(true);
+    }
+
+    function expandPanel() {
+        if (hasPanelSelection) {
+            setIsPanelCollapsed(false);
+        }
     }
 
     function addBlock(kind) {
@@ -204,6 +270,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
         updateEdges(edges.filter((edge) => edge.source?.client_key !== clientKey && edge.target?.client_key !== clientKey));
         setSelectedBlockKey((current) => (current === clientKey ? null : current));
         setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
         cancelConnection();
     }
 
@@ -225,6 +292,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
         };
         setSelectedBlockKey(clientKey);
         setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
         cancelConnection();
 
         window.addEventListener('pointermove', handleGlobalPointerMove);
@@ -244,6 +312,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
         };
         setSelectedBlockKey(null);
         setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
 
         window.addEventListener('pointermove', handleGlobalPointerMove);
         window.addEventListener('pointerup', stopGlobalDrag, { once: true });
@@ -330,6 +399,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
             sourceId: block.id,
             outputId: output.id,
             label: output.label,
+            kind: output.kind ?? (output.id === null ? 'default' : 'button'),
             from: outputAnchor(block, output.id),
         };
 
@@ -337,6 +407,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
         setPendingConnection(connection);
         setSelectedBlockKey(block.client_key);
         setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
         setNotice(null);
     }
 
@@ -386,6 +457,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
         updateEdges((currentEdges) => [...currentEdges.filter((item) => ! sameSource(item.source, source)), edge]);
         setSelectedEdgeKey(edge.client_key);
         setSelectedBlockKey(null);
+        setIsPanelCollapsed(false);
         cancelConnection();
     }
 
@@ -396,6 +468,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
     function removeEdge(edgeKey) {
         updateEdges(edges.filter((edge) => edge.client_key !== edgeKey));
         setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
     }
 
     function toggleModule(clientKey, type, enabled) {
@@ -445,17 +518,25 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
         }));
     }
 
-    function addButton(clientKey) {
+    function addButton(clientKey, rowIndex = null) {
+        const currentBlock = blocks.find((block) => block.client_key === clientKey);
+        const currentSettings = normalizeSettings(currentBlock?.settings_payload);
+        const currentButtons = findModule(currentSettings, 'buttons') ?? moduleTemplate('buttons', channels);
+        const preferredButtonId = nextButtonId(buttonRows(currentButtons));
+
         updateBlockSettings(clientKey, (settings) => {
             const buttons = findModule(settings, 'buttons') ?? moduleTemplate('buttons', channels);
             const rows = buttonRows(buttons);
-            const id = nextButtonId(rows);
-            const nextRows = rows.length > 0 ? rows : [[]];
+            const ids = new Set(rows.flat().map((button) => button.id));
+            const id = ids.has(preferredButtonId) ? nextButtonId(rows) : preferredButtonId;
+            const nextRows = rows.map((row) => [...row]);
+            const button = { id, text: '', type: BUTTON_TYPE_TEXT, fn: 'default', url: null, color: null };
 
-            nextRows[nextRows.length - 1] = [
-                ...nextRows[nextRows.length - 1],
-                { id, text: 'Новая кнопка', fn: 'default', url: null, color: null },
-            ];
+            if (Number.isInteger(rowIndex) && nextRows[rowIndex]) {
+                nextRows[rowIndex] = [...nextRows[rowIndex], button];
+            } else {
+                nextRows.push([button]);
+            }
 
             const modules = modulesFrom(settings).filter((module) => module.type !== 'buttons');
 
@@ -467,9 +548,20 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                 ]),
             });
         });
+
+        setPendingButtonFocus({ blockKey: clientKey, buttonId: preferredButtonId });
     }
 
     function updateButton(clientKey, buttonId, patch) {
+        const normalizedPatch = { ...patch };
+
+        if (
+            normalizedPatch.type === BUTTON_TYPE_REQUEST_PHONE
+            && ! String(normalizedPatch.text ?? currentButtonText(blocks, clientKey, buttonId)).trim()
+        ) {
+            normalizedPatch.text = REQUEST_PHONE_BUTTON_TEXT;
+        }
+
         updateBlockSettings(clientKey, (settings) => syncOutputs({
             ...settings,
             modules: sortModules(modulesFrom(settings).map((module) => {
@@ -482,14 +574,20 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                     payload: {
                         ...module.payload,
                         rows: buttonRows(module).map((row) => row.map((button) => (
-                            button.id === buttonId ? { ...button, ...patch } : button
+                            button.id === buttonId ? { ...button, ...normalizedPatch } : button
                         ))),
                     },
                 };
             })),
         }));
 
-        if (Object.prototype.hasOwnProperty.call(patch, 'text')) {
+        if (Object.prototype.hasOwnProperty.call(normalizedPatch, 'text')) {
+            if (String(normalizedPatch.text ?? '').trim() !== '') {
+                setValidationIssue((current) => (
+                    current?.blockKey === clientKey && current?.buttonId === buttonId ? null : current
+                ));
+            }
+
             updateEdges(edges.map((edge) => {
                 if (edge.source?.client_key !== clientKey || edge.source?.output_id !== buttonId) {
                     return edge;
@@ -499,10 +597,10 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                     ...edge,
                     condition_payload: {
                         ...edge.condition_payload,
-                        label: patch.text,
+                        label: normalizedPatch.text,
                         match: {
                             ...(edge.condition_payload?.match ?? {}),
-                            value: patch.text,
+                            value: normalizedPatch.text,
                         },
                     },
                 };
@@ -529,6 +627,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                 };
             })),
         }));
+
         updateEdges(edges.filter((edge) => edge.source?.client_key !== clientKey || edge.source?.output_id !== buttonId));
     }
 
@@ -544,42 +643,109 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
         });
     }
 
-    async function save() {
+    function savePayload() {
+        const blocksForSave = blocks.map((block) => ({
+            ...block,
+            settings_payload: syncOutputs(normalizeSettings(block.settings_payload)),
+        }));
+
+        return {
+            draft_version_id: state.scenario.draft_version_id,
+            base_revision: state.builder.revision,
+            builder: {
+                schema_version: 3,
+                active_sheet_id: state.builder.active_sheet_id || 'main',
+                sheets: state.builder.sheets?.length ? state.builder.sheets : [MAIN_SHEET],
+                blocks: blocksForSave,
+                edges,
+                visible_scope: state.builder.visible_scope || { block_ids: [], edge_ids: [] },
+            },
+        };
+    }
+
+    async function persistCurrentState(successNotice = 'Сохранено') {
         if (! state) {
-            return;
+            return null;
+        }
+
+        const emptyButtonIssue = firstEmptyButtonIssue(blocks);
+
+        if (emptyButtonIssue) {
+            setError(null);
+            setNotice(null);
+            setValidationIssue(emptyButtonIssue);
+
+            return null;
         }
 
         setIsSaving(true);
         setError(null);
         setNotice(null);
+        setValidationIssue(null);
 
         try {
             const selectedBefore = selectedBlockKey;
             const edgeBefore = selectedEdgeKey;
-            const blocksForSave = blocks.map((block) => ({
-                ...block,
-                settings_payload: syncOutputs(normalizeSettings(block.settings_payload)),
-            }));
-
-            const response = await saveScenarioBuilderState(saveUrl, csrfToken, {
-                draft_version_id: state.scenario.draft_version_id,
-                base_revision: state.builder.revision,
-                builder: {
-                    schema_version: 3,
-                    active_sheet_id: state.builder.active_sheet_id || 'main',
-                    sheets: state.builder.sheets?.length ? state.builder.sheets : [MAIN_SHEET],
-                    blocks: blocksForSave,
-                    edges,
-                    visible_scope: state.builder.visible_scope || { block_ids: [], edge_ids: [] },
-                },
-            });
+            const response = await saveScenarioBuilderState(saveUrl, csrfToken, savePayload());
 
             setState(response);
             setSelectedBlockKey(resolveReturnedKey(selectedBefore, response.id_map?.blocks, 'block'));
             setSelectedEdgeKey(resolveReturnedKey(edgeBefore, response.id_map?.edges, 'edge'));
             cancelConnection();
             setStatus('ready');
-            setNotice('Сохранено');
+            if (successNotice) {
+                setNotice(successNotice);
+            }
+
+            return response;
+        } catch (requestError) {
+            setError(errorText(requestError));
+
+            if (requestError.status === 409) {
+                setStatus('conflict');
+            }
+
+            throw requestError;
+        } finally {
+            setIsSaving(false);
+        }
+    }
+
+    async function save() {
+        try {
+            await persistCurrentState();
+        } catch {
+            // Error state is already rendered by persistCurrentState.
+        }
+    }
+
+    async function publish() {
+        if (! state || ! publishUrl) {
+            return;
+        }
+
+        setIsPublishing(true);
+        setError(null);
+        setNotice(null);
+
+        try {
+            const savedState = await persistCurrentState(null);
+
+            if (! savedState) {
+                return;
+            }
+
+            const response = await publishScenarioBuilderState(publishUrl, csrfToken, {
+                draft_version_id: savedState.scenario.draft_version_id,
+                base_revision: savedState.builder.revision,
+            });
+
+            setState(response);
+            setSelectedBlockKey(response.builder?.blocks?.[0]?.client_key ?? null);
+            setSelectedEdgeKey(null);
+            cancelConnection();
+            setStatus('ready');
+            setNotice(`Опубликовано v${response.published?.version_number ?? ''}`.trim());
         } catch (requestError) {
             setError(errorText(requestError));
 
@@ -587,7 +753,36 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                 setStatus('conflict');
             }
         } finally {
-            setIsSaving(false);
+            setIsPublishing(false);
+        }
+    }
+
+    function openValidationIssueBlock(issue) {
+        setSelectedBlockKey(issue.blockKey);
+        setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
+        setTool('select');
+        setPendingButtonFocus({ blockKey: issue.blockKey, buttonId: issue.buttonId });
+    }
+
+    function clearPendingButtonFocus() {
+        setPendingButtonFocus(null);
+    }
+
+    async function copyBlockId(block) {
+        const value = copyableBlockId(block);
+
+        if (! value) {
+            return;
+        }
+
+        try {
+            await copyTextToClipboard(value);
+            setError(null);
+            setNotice(`ID #${value} скопирован`);
+        } catch {
+            setNotice(null);
+            setError('Не удалось скопировать ID. Скопируйте номер вручную.');
         }
     }
 
@@ -632,8 +827,8 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                     <button type="button" className="ac-v3-builder__primary" disabled={! canSave} onClick={save}>
                         {isSaving ? 'Сохраняю...' : 'Сохранить'}
                     </button>
-                    <button type="button" className="ac-v3-builder__publish" disabled={! state?.permissions?.can_publish} onClick={() => setNotice('Публикация будет подключена следующим шагом.')}>
-                        Опубликовать
+                    <button type="button" className="ac-v3-builder__publish" disabled={! canPublish} onClick={publish}>
+                        {isPublishing ? 'Публикую...' : 'Опубликовать'}
                     </button>
                 </div>
             </header>
@@ -659,13 +854,22 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                 </Notice>
             ) : null}
 
-            {pendingConnection ? (
-                <Notice kind="connection" onClose={cancelConnection}>
-                    Теперь кликните по блоку, куда должна вести кнопка «{pendingConnection.label}».
+            {validationIssue ? (
+                <Notice kind="error" onClose={() => setValidationIssue(null)}>
+                    <span>Нельзя сохранить: в блоке «{validationIssue.blockTitle}» пустой текст кнопки.</span>
+                    <button type="button" className="ac-v3-builder__notice-action" onClick={() => openValidationIssueBlock(validationIssue)}>
+                        Открыть блок
+                    </button>
                 </Notice>
             ) : null}
 
-            <div className="ac-v3-builder__workbench">
+            {pendingConnection ? (
+                <Notice kind="connection" onClose={cancelConnection}>
+                    {connectionNotice(pendingConnection)}
+                </Notice>
+            ) : null}
+
+            <div className={`ac-v3-builder__workbench ${isPanelOpen ? 'is-panel-open' : ''}`}>
                 <ToolRail tool={tool} onTool={setTool} onAddBlock={addBlock} />
 
                 <main
@@ -684,7 +888,13 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                     >
                         <svg className="ac-v3-builder__edges" width={canvasBounds.width} height={canvasBounds.height}>
                             <defs>
-                                <marker id="ac-v3-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                <marker id="ac-v3-arrow-auto" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                                </marker>
+                                <marker id="ac-v3-arrow-button" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                                </marker>
+                                <marker id="ac-v3-arrow-selected" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                                     <path d="M 0 0 L 10 5 L 0 10 z" />
                                 </marker>
                             </defs>
@@ -698,6 +908,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                                     onSelect={() => {
                                         setSelectedEdgeKey(edge.client_key);
                                         setSelectedBlockKey(null);
+                                        setIsPanelCollapsed(false);
                                         setPendingConnection(null);
                                     }}
                                 />
@@ -719,6 +930,7 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                                 onSelect={() => completeConnection(block)}
                                 onDragStart={(event) => startBlockDrag(event, block.client_key)}
                                 onStartConnection={startConnection}
+                                onStartDefaultConnection={() => startPanelConnection(block, DEFAULT_OUTPUT)}
                             />
                         ))}
                     </div>
@@ -736,28 +948,50 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
                     </div>
                 </main>
 
-                <aside className="ac-v3-builder__panel">
-                    {selectedEdge ? (
-                        <EdgePanel edge={selectedEdge} blocks={blocks} onRemove={() => removeEdge(selectedEdge.client_key)} />
-                    ) : (
-                        <BlockPanel
-                            block={selectedBlock}
-                            channels={channels}
-                            blocks={blocks}
-                            edges={edges}
-                            onSelectBlock={selectBlock}
-                            onUpdateBlock={updateBlock}
-                            onUpdateModulePayload={updateModulePayload}
-                            onToggleModule={toggleModule}
-                            onRemoveBlock={removeBlock}
-                            onAddButton={addButton}
-                            onUpdateButton={updateButton}
-                            onRemoveButton={removeButton}
-                            onUpdateStartChannels={updateStartChannels}
-                            onStartPanelConnection={startPanelConnection}
-                        />
-                    )}
-                </aside>
+                {isPanelOpen ? (
+                    <aside className="ac-v3-builder__panel">
+                        {selectedEdge ? (
+                            <EdgePanel
+                                edge={selectedEdge}
+                                blocks={blocks}
+                                onCollapse={collapsePanel}
+                                onClose={closePanelSelection}
+                                onRemove={() => removeEdge(selectedEdge.client_key)}
+                            />
+                        ) : (
+                            <BlockPanel
+                                block={selectedBlock}
+                                channels={channels}
+                                blocks={blocks}
+                                onCollapse={collapsePanel}
+                                onClose={closePanelSelection}
+                                onSelectBlock={selectBlock}
+                                onUpdateBlock={updateBlock}
+                                onUpdateModulePayload={updateModulePayload}
+                                onToggleModule={toggleModule}
+                                onAddButton={addButton}
+                                onUpdateButton={updateButton}
+                                onRemoveButton={removeButton}
+                                onUpdateStartChannels={updateStartChannels}
+                                validationIssue={validationIssue}
+                                pendingButtonFocus={pendingButtonFocus}
+                                onButtonFocused={clearPendingButtonFocus}
+                                onCopyBlockId={copyBlockId}
+                            />
+                        )}
+                    </aside>
+                ) : null}
+
+                {hasPanelSelection && isPanelCollapsed ? (
+                    <button
+                        type="button"
+                        className="ac-v3-builder__panel-reopen"
+                        title="Развернуть панель"
+                        onClick={expandPanel}
+                    >
+                        ‹
+                    </button>
+                ) : null}
             </div>
         </section>
     );
@@ -766,10 +1000,35 @@ export default function App({ stateUrl, saveUrl, csrfToken }) {
 function Notice({ kind, children, onClose }) {
     return (
         <div className="ac-v3-builder__notice" data-kind={kind}>
-            <span>{children}</span>
+            <div className="ac-v3-builder__notice-body">{children}</div>
             <button type="button" onClick={onClose}>Закрыть</button>
         </div>
     );
+}
+
+function connectionNotice(connection) {
+    if (connection?.kind === 'default' || connection?.outputId === null) {
+        return 'Теперь кликните по блоку, куда должен вести автопереход «Дальше».';
+    }
+
+    return `Теперь кликните по блоку, куда должна вести кнопка «${connection.label}».`;
+}
+
+function firstEmptyButtonIssue(blocks) {
+    for (const block of blocks) {
+        const buttons = findModule(block.settings_payload, 'buttons');
+        const emptyButton = flatButtons(buttons).find((button) => ! String(button.text ?? '').trim());
+
+        if (emptyButton) {
+            return {
+                blockKey: block.client_key,
+                blockTitle: block.title || 'Блок',
+                buttonId: emptyButton.id,
+            };
+        }
+    }
+
+    return null;
 }
 
 function ToolRail({ tool, onTool, onAddBlock }) {
@@ -795,13 +1054,23 @@ function ToolRail({ tool, onTool, onAddBlock }) {
     );
 }
 
-function ScenarioNode({ block, selected, pendingTarget, connectedOutputIds, onSelect, onDragStart, onStartConnection }) {
+function ScenarioNode({
+    block,
+    selected,
+    pendingTarget,
+    connectedOutputIds,
+    onSelect,
+    onDragStart,
+    onStartConnection,
+    onStartDefaultConnection,
+}) {
     const outputs = blockOutputs(block);
     const start = findModule(block.settings_payload, 'start_condition');
     const message = findModule(block.settings_payload, 'message');
     const buttons = findModule(block.settings_payload, 'buttons');
     const position = blockPosition(block);
     const modules = modulesFrom(block.settings_payload);
+    const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
 
     return (
         <article
@@ -812,15 +1081,32 @@ function ScenarioNode({ block, selected, pendingTarget, connectedOutputIds, onSe
                 selected ? 'is-selected' : '',
                 pendingTarget ? 'is-targetable' : '',
                 start ? 'has-start' : '',
+                blockKind === 'non_state' ? 'is-non-state' : 'is-state',
             ].filter(Boolean).join(' ')}
             style={{ left: `${position.x}px`, top: `${position.y}px` }}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={onSelect}
         >
+            {selected ? (
+                <div className="ac-v3-builder__node-toolbar" onPointerDown={(event) => event.stopPropagation()}>
+                    <button
+                        type="button"
+                        title="Связать блок с другим блоком"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onStartDefaultConnection();
+                        }}
+                    >
+                        <LinkIcon />
+                        <span>Связать</span>
+                    </button>
+                </div>
+            ) : null}
+
             <header onPointerDown={onDragStart}>
-                <div className="ac-v3-builder__node-icon">{start ? <TriggerIcon /> : <MessageIcon />}</div>
+                <div className="ac-v3-builder__node-icon">{start ? <TriggerIcon /> : (blockKind === 'non_state' ? <BlockTypeIcon type="non_state" /> : <MessageIcon />)}</div>
                 <div>
-                    <span>{start ? 'Стартовый блок' : 'Состояние'}</span>
+                    <span>{nodeTypeLabel(Boolean(start), blockKind)}</span>
                     <strong>{block.title}</strong>
                 </div>
                 <button type="button" title="Действия" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
@@ -853,12 +1139,18 @@ function ScenarioNode({ block, selected, pendingTarget, connectedOutputIds, onSe
                     <button
                         key={output.id ?? 'default'}
                         type="button"
-                        className={connectedOutputIds.has(output.id ?? 'default') ? 'is-connected' : ''}
-                        title="Связать с блоком"
+                        className={[
+                            connectedOutputIds.has(output.id ?? 'default') ? 'is-connected' : '',
+                            output.kind === 'default' ? 'is-default-output' : 'is-button-output',
+                        ].filter(Boolean).join(' ')}
+                        title={output.kind === 'default' ? 'Связать автопереход с блоком' : 'Связать кнопку с блоком'}
                         onPointerDown={(event) => onStartConnection(event, block, output)}
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <span>{output.label}</span>
+                        <span>
+                            <strong>{output.label}</strong>
+                            {output.caption ? <em>{output.caption}</em> : null}
+                        </span>
                         <i data-port-key={portAnchorKey(block.client_key, output.id)} />
                     </button>
                 ))}
@@ -891,34 +1183,123 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
     const d = `M ${source.x} ${source.y} C ${source.x + curve} ${source.y}, ${target.x - curve} ${target.y}, ${target.x} ${target.y}`;
     const labelX = (source.x + target.x) / 2;
     const labelY = (source.y + target.y) / 2 - 8;
+    const isButton = isButtonEdge(edge);
+    const edgeClassName = [
+        selected ? 'is-selected' : '',
+        isButton ? 'is-button-edge' : 'is-auto-edge',
+    ].filter(Boolean).join(' ');
+    const markerId = selected ? 'ac-v3-arrow-selected' : (isButton ? 'ac-v3-arrow-button' : 'ac-v3-arrow-auto');
+    const label = edgeLabel(edge, isButton);
 
     return (
-        <g className={selected ? 'is-selected' : ''}>
+        <g className={edgeClassName}>
+            <title>{isButton ? 'Связь от кнопки' : 'Автоматическая связь'}: {label}</title>
             <path data-edge-action d={d} className="ac-v3-builder__edge-hit" onClick={onSelect} />
-            <path d={d} className="ac-v3-builder__edge" />
-            {edge.condition_payload?.label ? (
-                <text x={labelX} y={labelY} className="ac-v3-builder__edge-label">{edge.condition_payload.label}</text>
+            <path d={d} className="ac-v3-builder__edge" markerEnd={`url(#${markerId})`} />
+            {label ? (
+                <text x={labelX} y={labelY} className="ac-v3-builder__edge-label">{label}</text>
             ) : null}
         </g>
     );
+}
+
+function isButtonEdge(edge) {
+    return Boolean(edge?.source?.output_id ?? edge?.condition_payload?.from_output_id);
+}
+
+function isDefaultEdge(edge) {
+    return ! isButtonEdge(edge);
+}
+
+function defaultEdgeForBlock(block, edges) {
+    return edges.find((edge) => edge.source?.client_key === block.client_key && isDefaultEdge(edge)) ?? null;
+}
+
+function edgeLabel(edge, isButton = isButtonEdge(edge)) {
+    const label = String(edge?.condition_payload?.label ?? '').trim();
+
+    if (isButton) {
+        return label;
+    }
+
+    return label || 'Дальше';
+}
+
+function shortBlockId(block) {
+    const displayId = blockDisplayId(block);
+
+    if (displayId) {
+        return `#${displayId}`;
+    }
+
+    return `#${String(block?.client_key ?? 'draft').replace(/^tmp_block_/, '').slice(0, 8)}`;
+}
+
+function copyableBlockId(block) {
+    const displayId = blockDisplayId(block);
+
+    if (displayId) {
+        return displayId;
+    }
+
+    return String(block?.client_key ?? '').replace(/^tmp_block_/, '').slice(0, 8);
+}
+
+function blockDisplayId(block) {
+    return String(block?.display_id ?? block?.settings_payload?.ui?.card_id ?? '').trim();
+}
+
+async function copyTextToClipboard(text) {
+    if (window.navigator?.clipboard?.writeText) {
+        try {
+            await window.navigator.clipboard.writeText(text);
+            return;
+        } catch {
+            // Some browser shells expose clipboard API but reject writes by policy.
+        }
+    }
+
+    const element = document.createElement('textarea');
+
+    element.value = text;
+    element.setAttribute('readonly', '');
+    element.style.position = 'fixed';
+    element.style.top = '-1000px';
+    element.style.left = '-1000px';
+
+    document.body.appendChild(element);
+    element.select();
+
+    try {
+        if (! document.execCommand('copy')) {
+            throw new Error('Copy command was rejected.');
+        }
+    } finally {
+        document.body.removeChild(element);
+    }
 }
 
 function BlockPanel({
     block,
     channels,
     blocks,
-    edges,
+    onCollapse,
+    onClose,
     onSelectBlock,
     onUpdateBlock,
     onUpdateModulePayload,
     onToggleModule,
-    onRemoveBlock,
     onAddButton,
     onUpdateButton,
     onRemoveButton,
     onUpdateStartChannels,
-    onStartPanelConnection,
+    validationIssue,
+    pendingButtonFocus,
+    onButtonFocused,
+    onCopyBlockId,
 }) {
+    const [isTypeMenuOpen, setIsTypeMenuOpen] = useState(false);
+
     if (! block) {
         return (
             <div className="ac-v3-builder__panel-empty">
@@ -943,148 +1324,530 @@ function BlockPanel({
     const message = findModule(block.settings_payload, 'message');
     const buttons = findModule(block.settings_payload, 'buttons');
     const startChannels = start?.payload?.channels?.ids ?? [];
+    const activeModules = modulesFrom(block.settings_payload).length;
+    const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
+    const activeModuleTypes = new Set(modulesFrom(block.settings_payload).map((module) => module.type));
+
+    function updateBlockKind(kind) {
+        onUpdateBlock(block.client_key, (current) => {
+            const settings = normalizeSettings(current.settings_payload);
+
+            return {
+                settings_payload: {
+                    ...settings,
+                    kind,
+                },
+            };
+        });
+        setIsTypeMenuOpen(false);
+    }
 
     return (
         <div className="ac-v3-builder__inspector">
-            <div className="ac-v3-builder__panel-head">
-                <span>Свойства блока</span>
-                <strong>{block.title}</strong>
-            </div>
-
-            <section>
-                <label>
-                    Название
+            <div className={[
+                'ac-v3-builder__panel-head',
+                blockKind === 'non_state' ? 'is-kind-non-state' : 'is-kind-state',
+            ].filter(Boolean).join(' ')}
+            >
+                <div className="ac-v3-builder__panel-title-row">
+                    <div className="ac-v3-builder__panel-type-wrap">
+                        <button
+                            type="button"
+                            className={[
+                                'ac-v3-builder__panel-type-btn',
+                                blockKind === 'non_state' ? 'is-kind-non-state' : 'is-kind-state',
+                                isTypeMenuOpen ? 'is-open' : '',
+                            ].filter(Boolean).join(' ')}
+                            title="Сменить тип блока"
+                            onClick={() => setIsTypeMenuOpen((value) => ! value)}
+                        >
+                            <BlockTypeIcon type={blockKind} />
+                            <span>⌄</span>
+                        </button>
+                        {isTypeMenuOpen ? (
+                            <div className="ac-v3-builder__panel-type-menu">
+                                {Object.entries(BLOCK_TYPE_META).map(([kind, meta]) => (
+                                    <button
+                                        key={kind}
+                                        type="button"
+                                        className={[
+                                            kind === blockKind ? 'is-active' : '',
+                                            kind === 'non_state' ? 'is-kind-non-state' : 'is-kind-state',
+                                        ].filter(Boolean).join(' ')}
+                                        onClick={() => updateBlockKind(kind)}
+                                    >
+                                        <BlockTypeIcon type={kind} />
+                                        <span>
+                                            <strong>{meta.label}</strong>
+                                            <small>{meta.hint}</small>
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
                     <input
+                        className="ac-v3-builder__panel-title-input"
+                        aria-label="Название блока"
                         value={block.title}
                         onChange={(event) => onUpdateBlock(block.client_key, { title: event.target.value })}
                     />
-                </label>
+                    <button
+                        type="button"
+                        className="ac-v3-builder__panel-id"
+                        title="Скопировать ID блока"
+                        onClick={() => onCopyBlockId(block)}
+                    >
+                        <CopyIcon />
+                        {shortBlockId(block)}
+                    </button>
+                    <button type="button" className="ac-v3-builder__panel-icon-btn" title="Свернуть панель" onClick={onCollapse}>
+                        ›
+                    </button>
+                    <button type="button" className="ac-v3-builder__panel-icon-btn" title="Закрыть панель" onClick={onClose}>
+                        ×
+                    </button>
+                </div>
+            </div>
+
+            <section className="ac-v3-builder__module-picker">
+                <div className="ac-v3-builder__module-grid" aria-label="Модули блока">
+                    <ModuleSwitch
+                        type="start_condition"
+                        checked={Boolean(start)}
+                        onChange={(checked) => onToggleModule(block.client_key, 'start_condition', checked)}
+                    />
+                    <ModuleSwitch
+                        type="message"
+                        checked={Boolean(message)}
+                        disabled={Boolean(buttons)}
+                        onChange={(checked) => onToggleModule(block.client_key, 'message', checked)}
+                    />
+                    <ModuleSwitch
+                        type="buttons"
+                        checked={Boolean(buttons)}
+                        onChange={(checked) => onToggleModule(block.client_key, 'buttons', checked)}
+                    />
+                    {FUTURE_MODULE_META.map((module) => (
+                        <FutureModuleSlot key={module.type} type={module.type} label={module.label} />
+                    ))}
+                </div>
             </section>
 
-            <section>
-                <span>Модули</span>
-                <ModuleSwitch
-                    type="start_condition"
-                    checked={Boolean(start)}
-                    onChange={(checked) => onToggleModule(block.client_key, 'start_condition', checked)}
-                />
-                <ModuleSwitch
-                    type="message"
-                    checked={Boolean(message)}
-                    disabled={Boolean(buttons)}
-                    onChange={(checked) => onToggleModule(block.client_key, 'message', checked)}
-                />
-                <ModuleSwitch
-                    type="buttons"
-                    checked={Boolean(buttons)}
-                    onChange={(checked) => onToggleModule(block.client_key, 'buttons', checked)}
-                />
-            </section>
-
-            {start ? (
-                <section>
-                    <span>Старт</span>
-                    <label>
-                        Фраза или команда
-                        <input
-                            value={start.payload?.command ?? ''}
-                            placeholder="/start"
-                            onChange={(event) => onUpdateModulePayload(block.client_key, 'start_condition', { command: event.target.value })}
-                        />
-                    </label>
-                    <label>
-                        Совпадение
-                        <select
-                            value={start.payload?.match ?? 'strict'}
-                            onChange={(event) => onUpdateModulePayload(block.client_key, 'start_condition', { match: event.target.value })}
-                        >
-                            {MATCH_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                        </select>
-                    </label>
-                    <label>
-                        Приоритет
-                        <input
-                            type="number"
-                            value={start.payload?.priority ?? 10}
-                            onChange={(event) => onUpdateModulePayload(block.client_key, 'start_condition', { priority: Number(event.target.value) })}
-                        />
-                    </label>
-                    <div className="ac-v3-builder__channels">
-                        <div>
-                            <button
-                                type="button"
-                                onClick={() => onUpdateModulePayload(block.client_key, 'start_condition', {
-                                    channels: { mode: 'selected', ids: channels.map((channel) => channel.id) },
-                                })}
+            {activeModules > 0 ? (
+                <div className="ac-v3-builder__panel-section">
+                    <div className="ac-v3-builder__section-head">
+                        <span>Настройка модулей</span>
+                        <em>{activeModules} активн.</em>
+                    </div>
+                    <div className="ac-v3-builder__module-stack">
+                        {MODULE_ORDER.filter((type) => activeModuleTypes.has(type)).map((type) => (
+                            <ModuleConfigCard
+                                key={type}
+                                type={type}
+                                onRemove={type === 'message' && buttons ? null : () => onToggleModule(block.client_key, type, false)}
                             >
-                                Все
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => onUpdateModulePayload(block.client_key, 'start_condition', {
-                                    channels: { mode: 'selected', ids: [] },
-                                })}
-                            >
-                                Снять
-                            </button>
-                        </div>
-                        {channels.map((channel) => (
-                            <label key={channel.id} className="ac-v3-builder__check">
-                                <input
-                                    type="checkbox"
-                                    checked={startChannels.map(Number).includes(Number(channel.id))}
-                                    onChange={(event) => onUpdateStartChannels(block.client_key, channel.id, event.target.checked)}
-                                />
-                                <span>{channel.name}</span>
-                            </label>
+                                {type === 'start_condition' ? (
+                                    <StartConditionFields
+                                        start={start}
+                                        channels={channels}
+                                        startChannels={startChannels}
+                                        blockKey={block.client_key}
+                                        onUpdateModulePayload={onUpdateModulePayload}
+                                        onUpdateStartChannels={onUpdateStartChannels}
+                                    />
+                                ) : null}
+                                {type === 'message' ? (
+                                    <AutoGrowTextarea
+                                        value={message?.payload?.text ?? ''}
+                                        onChange={(event) => onUpdateModulePayload(block.client_key, 'message', { text: event.target.value })}
+                                    />
+                                ) : null}
+                                {type === 'buttons' ? (
+                                    <ButtonsFields
+                                        buttons={buttons}
+                                        blockKey={block.client_key}
+                                        onAddButton={onAddButton}
+                                        onUpdateButton={onUpdateButton}
+                                        onRemoveButton={onRemoveButton}
+                                        invalidButtonId={validationIssue?.blockKey === block.client_key ? validationIssue.buttonId : null}
+                                        focusButtonId={pendingButtonFocus?.blockKey === block.client_key ? pendingButtonFocus.buttonId : null}
+                                        onButtonFocused={onButtonFocused}
+                                    />
+                                ) : null}
+                            </ModuleConfigCard>
                         ))}
                     </div>
-                </section>
+                </div>
             ) : null}
+        </div>
+    );
+}
 
-            {message ? (
-                <section>
-                    <span>Сообщение</span>
-                    <textarea
-                        value={message.payload?.text ?? ''}
-                        onChange={(event) => onUpdateModulePayload(block.client_key, 'message', { text: event.target.value })}
-                    />
-                </section>
-            ) : null}
+function ButtonsFields({
+    buttons,
+    blockKey,
+    onAddButton,
+    onUpdateButton,
+    onRemoveButton,
+    invalidButtonId,
+    focusButtonId,
+    onButtonFocused,
+}) {
+    const [editingButtonId, setEditingButtonId] = useState(null);
+    const rows = buttonRows(buttons);
+    const flat = rows.flat();
+    const editingButton = flat.find((button) => button.id === editingButtonId) ?? null;
+    const totalButtons = rows.reduce((sum, row) => sum + row.length, 0);
 
-            {buttons ? (
-                <section>
-                    <span>Кнопки</span>
-                    <div className="ac-v3-builder__buttons-editor">
-                        {flatButtons(buttons).map((button) => {
-                            const connected = edges.some((edge) => edge.source?.client_key === block.client_key && edge.source?.output_id === button.id);
-                            const output = { id: button.id, label: button.text || button.id };
+    useEffect(() => {
+        if (! focusButtonId) {
+            return;
+        }
 
-                            return (
-                                <div key={button.id}>
-                                    <input
-                                        value={button.text}
-                                        onChange={(event) => onUpdateButton(block.client_key, button.id, { text: event.target.value })}
-                                    />
-                                    <span className={connected ? 'is-connected' : ''}>{connected ? 'связь' : 'без связи'}</span>
-                                    <button type="button" title="Связать кнопку с блоком" onClick={() => onStartPanelConnection(block, output)}>
-                                        Связь
+        setEditingButtonId(focusButtonId);
+        onButtonFocused?.();
+    }, [focusButtonId, onButtonFocused, rows]);
+
+    useEffect(() => {
+        if (editingButtonId && ! flat.some((button) => button.id === editingButtonId)) {
+            setEditingButtonId(null);
+        }
+    }, [editingButtonId, flat]);
+
+    return (
+        <div className="ac-v3-builder__buttons-module">
+            <div className="ac-v3-builder__buttons-meta">
+                {totalButtons > 0 ? (
+                    <span><b>{totalButtons}</b> / 100 · {rows.length} {pluralRows(rows.length)}</span>
+                ) : (
+                    <span>Пока нет ни одной кнопки</span>
+                )}
+            </div>
+
+            <div className="ac-v3-builder__buttons-editor">
+                {rows.map((row, rowIndex) => (
+                    <div key={row.map((button) => button.id).join('-') || rowIndex} className="ac-v3-builder__buttons-row">
+                        <div className="ac-v3-builder__buttons-row-items">
+                            {row.map((button) => (
+                                <div key={button.id} className="ac-v3-builder__button-input-wrap">
+                                    <button
+                                        type="button"
+                                        className={[
+                                            'ac-v3-builder__button-edit-trigger',
+                                            button.id === invalidButtonId ? 'is-invalid' : '',
+                                        ].filter(Boolean).join(' ')}
+                                        aria-invalid={button.id === invalidButtonId ? 'true' : undefined}
+                                        onClick={() => setEditingButtonId(button.id)}
+                                    >
+                                        <span>{button.text || 'Текст кнопки'}</span>
+                                        <small>{buttonTypeLabel(button.type)}</small>
                                     </button>
-                                    <button type="button" title="Удалить кнопку" onClick={() => onRemoveButton(block.client_key, button.id)}>×</button>
+                                    <button
+                                        type="button"
+                                        className="ac-v3-builder__button-delete"
+                                        title="Удалить кнопку"
+                                        onClick={() => onRemoveButton(blockKey, button.id)}
+                                    >
+                                        ×
+                                    </button>
                                 </div>
-                            );
-                        })}
+                            ))}
+                        </div>
+                        <button
+                            type="button"
+                            className="ac-v3-builder__button-row-add"
+                            title="Добавить кнопку в этот ряд"
+                            onClick={() => onAddButton(blockKey, rowIndex)}
+                        >
+                            +
+                        </button>
                     </div>
-                    <button type="button" onClick={() => onAddButton(block.client_key)}>Добавить кнопку</button>
-                </section>
-            ) : null}
+                ))}
+            </div>
 
-            <section>
-                <button type="button" className="ac-v3-builder__danger" onClick={() => onRemoveBlock(block.client_key)}>
-                    Удалить блок
-                </button>
+            <button type="button" className="ac-v3-builder__add-row-btn" onClick={() => onAddButton(blockKey)}>
+                Добавить кнопку
+            </button>
+
+            {editingButton ? (
+                <ButtonEditDialog
+                    button={editingButton}
+                    onClose={() => setEditingButtonId(null)}
+                    onSave={(patch) => {
+                        onUpdateButton(blockKey, editingButton.id, patch);
+                        setEditingButtonId(null);
+                    }}
+                />
+            ) : null}
+        </div>
+    );
+}
+
+function ButtonEditDialog({ button, onClose, onSave }) {
+    const inputRef = useRef(null);
+    const [text, setText] = useState(button.text ?? '');
+    const [type, setType] = useState(button.type === BUTTON_TYPE_REQUEST_PHONE ? BUTTON_TYPE_REQUEST_PHONE : BUTTON_TYPE_TEXT);
+    const [color, setColor] = useState(button.color ?? null);
+
+    useEffect(() => {
+        const input = inputRef.current;
+
+        if (input) {
+            input.focus();
+            input.select();
+        }
+
+        function handleKeyDown(event) {
+            if (event.key === 'Escape') {
+                onClose();
+            }
+        }
+
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
+    return (
+        <div className="ac-v3-builder__dialog-backdrop" role="presentation" onMouseDown={onClose}>
+            <section
+                className="ac-v3-builder__button-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="button-dialog-title"
+                onMouseDown={(event) => event.stopPropagation()}
+            >
+                <div className="ac-v3-builder__button-dialog-head">
+                    <h2 id="button-dialog-title">Редактировать кнопку</h2>
+                    <button type="button" title="Закрыть" onClick={onClose}>×</button>
+                </div>
+
+                <label className="ac-v3-builder__button-dialog-field">
+                    <span>Текст</span>
+                    <div className="ac-v3-builder__button-dialog-input-wrap">
+                        <input
+                            ref={inputRef}
+                            value={text}
+                            maxLength={100}
+                            placeholder="Текст кнопки"
+                            onChange={(event) => setText(event.target.value)}
+                        />
+                        <small>{text.length}</small>
+                    </div>
+                </label>
+
+                <label className="ac-v3-builder__button-dialog-field">
+                    <span>Функция</span>
+                    <select value={type} onChange={(event) => setType(event.target.value)}>
+                        {BUTTON_TYPE_OPTIONS.map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                        ))}
+                    </select>
+                </label>
+
+                <div className="ac-v3-builder__button-dialog-field">
+                    <span>Цвет кнопки</span>
+                    <div className="ac-v3-builder__button-color-grid" role="radiogroup" aria-label="Цвет кнопки">
+                        {BUTTON_COLOR_OPTIONS.map(([value, label, swatch]) => (
+                            <button
+                                key={value ?? 'none'}
+                                type="button"
+                                className={color === value ? 'is-active' : ''}
+                                aria-pressed={color === value ? 'true' : 'false'}
+                                onClick={() => setColor(value)}
+                            >
+                                {swatch ? <i style={{ backgroundColor: swatch }} /> : <b>⊘</b>}
+                                <span>{label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="ac-v3-builder__button-dialog-footer">
+                    <button
+                        type="button"
+                        className="ac-v3-builder__primary-btn"
+                        onClick={() => onSave({ text, type, color })}
+                    >
+                        Сохранить
+                    </button>
+                </div>
             </section>
         </div>
+    );
+}
+
+function buttonTypeLabel(type) {
+    return BUTTON_TYPE_OPTIONS.find(([value]) => value === type)?.[1] ?? 'Текстовая';
+}
+
+function pluralRows(count) {
+    if (count === 1) {
+        return 'ряд';
+    }
+
+    if (count >= 2 && count <= 4) {
+        return 'ряда';
+    }
+
+    return 'рядов';
+}
+
+function StartConditionFields({
+    start,
+    channels,
+    startChannels,
+    blockKey,
+    onUpdateModulePayload,
+    onUpdateStartChannels,
+}) {
+    const selectedMatch = startMatchForUi(start?.payload?.match);
+    const usesCommandValue = selectedMatch !== 'any_inbound';
+
+    return (
+        <>
+            <label>
+                Совпадение
+                <select
+                    value={selectedMatch}
+                    onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { match: event.target.value })}
+                >
+                    {MATCH_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+            </label>
+            {usesCommandValue ? (
+                <label>
+                    Фраза или команда
+                    <AutoGrowTextarea
+                        value={start?.payload?.command ?? ''}
+                        placeholder="/start"
+                        maxHeight={130}
+                        onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { command: event.target.value })}
+                    />
+                </label>
+            ) : null}
+            <label>
+                Условие по телефону
+                <select
+                    value={start?.payload?.contact_phone_condition ?? ''}
+                    onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { contact_phone_condition: event.target.value })}
+                >
+                    {PHONE_CONDITION_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+            </label>
+            <label>
+                Приоритет
+                <input
+                    type="number"
+                    value={start?.payload?.priority ?? 10}
+                    onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { priority: Number(event.target.value) })}
+                />
+            </label>
+            <div className="ac-v3-builder__channels">
+                <div>
+                    <button
+                        type="button"
+                        onClick={() => onUpdateModulePayload(blockKey, 'start_condition', {
+                            channels: { mode: 'selected', ids: channels.map((channel) => channel.id) },
+                        })}
+                    >
+                        Все
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onUpdateModulePayload(blockKey, 'start_condition', {
+                            channels: { mode: 'selected', ids: [] },
+                        })}
+                    >
+                        Снять
+                    </button>
+                </div>
+                {channels.map((channel) => (
+                    <label key={channel.id} className="ac-v3-builder__check">
+                        <input
+                            type="checkbox"
+                            checked={startChannels.map(Number).includes(Number(channel.id))}
+                            onChange={(event) => onUpdateStartChannels(blockKey, channel.id, event.target.checked)}
+                        />
+                        <span>{channel.name}</span>
+                    </label>
+                ))}
+            </div>
+        </>
+    );
+}
+
+function ModuleConfigCard({ type, children, onRemove }) {
+    const [collapsed, setCollapsed] = useState(false);
+    const meta = MODULE_META[type];
+
+    return (
+        <section className={`ac-v3-builder__module-card ${meta.className} ${collapsed ? 'is-collapsed' : ''}`}>
+            <div className="ac-v3-builder__module-card-head">
+                <span className="ac-v3-builder__module-card-icon">
+                    <ModuleIcon type={type} />
+                </span>
+                <span className="ac-v3-builder__module-card-title">{meta.label}</span>
+                <button
+                    type="button"
+                    className="ac-v3-builder__module-fold"
+                    title={collapsed ? 'Развернуть модуль' : 'Свернуть модуль'}
+                    onClick={() => setCollapsed((value) => ! value)}
+                >
+                    <ChevronIcon collapsed={collapsed} />
+                </button>
+                {onRemove ? (
+                    <button
+                        type="button"
+                        className="ac-v3-builder__module-remove"
+                        title="Удалить модуль"
+                        onClick={onRemove}
+                    >
+                        ×
+                    </button>
+                ) : null}
+            </div>
+            {! collapsed ? (
+                <div className="ac-v3-builder__module-card-body">
+                    {children}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
+function ChevronIcon({ collapsed }) {
+    return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ transform: collapsed ? 'rotate(-90deg)' : 'none' }}>
+            <path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function AutoGrowTextarea({ value, maxHeight = 180, className = '', ...props }) {
+    const ref = useRef(null);
+
+    useLayoutEffect(() => {
+        const element = ref.current;
+
+        if (! element) {
+            return;
+        }
+
+        element.style.height = 'auto';
+        element.style.height = `${Math.min(element.scrollHeight, maxHeight)}px`;
+        element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    }, [value, maxHeight]);
+
+    return (
+        <textarea
+            {...props}
+            ref={ref}
+            rows={1}
+            value={value}
+            className={['ac-v3-builder__textarea-auto', className].filter(Boolean).join(' ')}
+        />
     );
 }
 
@@ -1092,32 +1855,107 @@ function ModuleSwitch({ type, checked, disabled, onChange }) {
     const meta = MODULE_META[type];
 
     return (
-        <label className={`ac-v3-builder__module-switch ${meta.className} ${checked ? 'is-on' : ''}`}>
+        <label
+            className={`ac-v3-builder__module-switch ${meta.className} ${checked ? 'is-on' : ''} ${disabled ? 'is-disabled' : ''}`}
+            aria-label={meta.label}
+            data-tooltip={meta.label}
+        >
             <input
                 type="checkbox"
                 checked={checked}
                 disabled={disabled}
                 onChange={(event) => onChange(event.target.checked)}
             />
-            <b>{meta.short}</b>
+            <ModuleIcon type={type} />
             <span>{meta.label}</span>
         </label>
     );
 }
 
-function EdgePanel({ edge, blocks, onRemove }) {
+function FutureModuleSlot({ type, label }) {
+    return (
+        <button
+            type="button"
+            className="ac-v3-builder__module-switch is-placeholder"
+            aria-label={`${label} появится позже`}
+            data-tooltip={`${label} появится позже`}
+            disabled
+        >
+            <ModuleIcon type={type} />
+            <span>{label}</span>
+        </button>
+    );
+}
+
+function ModuleIcon({ type }) {
+    if (type === 'start_condition') {
+        return <TriggerIcon />;
+    }
+
+    if (type === 'message') {
+        return <MessageIcon />;
+    }
+
+    if (type === 'buttons') {
+        return <ButtonIcon />;
+    }
+
+    if (type === 'attachment') {
+        return <AttachmentIcon />;
+    }
+
+    if (type === 'ai') {
+        return <SparkleIcon />;
+    }
+
+    if (type === 'bot') {
+        return <BotIcon />;
+    }
+
+    if (type === 'code') {
+        return <CodeIcon />;
+    }
+
+    if (type === 'cloud') {
+        return <CloudIcon />;
+    }
+
+    return <AnalyticsIcon />;
+}
+
+function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
+    const isButton = isButtonEdge(edge);
 
     return (
         <div className="ac-v3-builder__inspector">
             <div className="ac-v3-builder__panel-head">
-                <span>Свойства связи</span>
-                <strong>{source?.title ?? 'Источник'} → {target?.title ?? 'Цель'}</strong>
+                <div className="ac-v3-builder__panel-title-row">
+                    <span className="ac-v3-builder__panel-type-icon">{isButton ? 'BTN' : 'AUTO'}</span>
+                    <div className="ac-v3-builder__panel-title-field">
+                        <span>Свойства связи</span>
+                        <strong className="ac-v3-builder__panel-title-static">
+                            {source?.title ?? 'Источник'} → {target?.title ?? 'Цель'}
+                        </strong>
+                    </div>
+                    <button type="button" className="ac-v3-builder__panel-icon-btn" title="Свернуть панель" onClick={onCollapse}>
+                        ›
+                    </button>
+                    <button type="button" className="ac-v3-builder__panel-icon-btn" title="Закрыть панель" onClick={onClose}>
+                        ×
+                    </button>
+                </div>
             </div>
-            <section>
+            <section className="ac-v3-builder__module-section">
+                <div className="ac-v3-builder__module-section-head">
+                    <b>EDGE</b>
+                    <span>Связь</span>
+                </div>
+                <span>Тип</span>
+                <p className="ac-v3-builder__readonly">{isButton ? 'От кнопки' : 'Автоматическая'}</p>
                 <span>Условие</span>
-                <p className="ac-v3-builder__readonly">{edge.condition_payload?.label || 'Дальше'}</p>
+                <p className="ac-v3-builder__readonly">{edgeLabel(edge, isButton)}</p>
                 <button type="button" className="ac-v3-builder__danger" onClick={onRemove}>Удалить связь</button>
             </section>
         </div>
@@ -1156,6 +1994,7 @@ function blockOutputs(block) {
         return outputs.map((output) => ({
             id: output.id,
             label: output.label || output.id,
+            kind: output.source || 'button',
         }));
     }
 
@@ -1163,13 +2002,14 @@ function blockOutputs(block) {
     const buttonOutputs = flatButtons(buttons).map((button) => ({
         id: button.id,
         label: button.text || button.id,
+        kind: 'button',
     }));
 
     if (buttonOutputs.length > 0) {
         return buttonOutputs;
     }
 
-    return [{ id: null, label: 'Дальше' }];
+    return [DEFAULT_OUTPUT];
 }
 
 function outputAnchor(block, outputId) {
@@ -1225,11 +2065,24 @@ function graphBounds(blocks) {
 function normalizeSettings(settingsPayload) {
     return {
         schema_version: 3,
-        kind: 'state',
-        ui: settingsPayload?.ui ?? { sheet_id: 'main', width: 320, collapsed: false },
+        kind: settingsPayload?.kind === 'non_state' ? 'non_state' : 'state',
+        ui: {
+            sheet_id: settingsPayload?.ui?.sheet_id ?? 'main',
+            width: settingsPayload?.ui?.width ?? 320,
+            collapsed: Boolean(settingsPayload?.ui?.collapsed ?? false),
+            card_id: settingsPayload?.ui?.card_id ?? '',
+        },
         modules: sortModules(modulesFrom(settingsPayload)),
         outputs: Array.isArray(settingsPayload?.outputs) ? settingsPayload.outputs : [],
     };
+}
+
+function nodeTypeLabel(hasStartCondition, blockKind) {
+    if (blockKind === 'non_state') {
+        return hasStartCondition ? 'Не состояние с условием' : 'Не состояние';
+    }
+
+    return hasStartCondition ? 'Стартовый блок' : 'Состояние';
 }
 
 function modulesFrom(settingsPayload) {
@@ -1249,9 +2102,10 @@ function moduleTemplate(type, channels) {
             payload: {
                 command: '/start',
                 values: [],
-                match: 'strict',
+                match: 'exact_keyword',
                 variable: '',
                 exclude: '',
+                contact_phone_condition: '',
                 priority: 10,
                 once: false,
                 channels: { mode: 'selected', ids: channels.map((channel) => channel.id) },
@@ -1266,7 +2120,7 @@ function moduleTemplate(type, channels) {
             enabled: true,
             payload: {
                 placement: 'auto',
-                rows: [[{ id: 'btn_catalog', text: 'Получить каталог', fn: 'default', url: null, color: null }]],
+                rows: [[{ id: 'btn_1', text: '', type: BUTTON_TYPE_TEXT, fn: 'default', url: null, color: null }]],
             },
         };
     }
@@ -1349,6 +2203,7 @@ function syncOutputs(settingsPayload) {
             source: 'button',
             module_id: buttons.id,
             button_id: button.id,
+            button_type: button.type === BUTTON_TYPE_REQUEST_PHONE ? BUTTON_TYPE_REQUEST_PHONE : BUTTON_TYPE_TEXT,
         }))
         : [];
 
@@ -1420,8 +2275,32 @@ function connectedOutputIds(block, edges) {
         .map((edge) => edge.source?.output_id ?? 'default'));
 }
 
+function currentButtonText(blocks, clientKey, buttonId) {
+    const block = blocks.find((item) => item.client_key === clientKey);
+    const buttons = findModule(block?.settings_payload, 'buttons');
+    const button = flatButtons(buttons).find((item) => item.id === buttonId);
+
+    return button?.text ?? '';
+}
+
 function moduleLabel(type) {
     return MODULE_META[type]?.label ?? type;
+}
+
+function startMatchForUi(match) {
+    if (match === 'strict') {
+        return 'exact_text_or_parameter';
+    }
+
+    if (match === 'contains') {
+        return 'contains_text';
+    }
+
+    if (MATCH_OPTIONS.some(([value]) => value === match)) {
+        return match;
+    }
+
+    return 'exact_keyword';
 }
 
 function truncate(text, limit) {
@@ -1446,6 +2325,32 @@ function snap(value) {
 
 function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
+}
+
+function BlockTypeIcon({ type }) {
+    if (type === 'non_state') {
+        return (
+            <svg className="ac-v3-builder__block-kind-icon is-non-state" width="23" height="23" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M5.4 4.8h11.2c1.4 0 2.5 1.1 2.5 2.5v6.1c0 1.4-1.1 2.5-2.5 2.5H10l-4.2 3.3v-3.3h-.4c-1.4 0-2.5-1.1-2.5-2.5V7.3c0-1.4 1.1-2.5 2.5-2.5Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                <path d="m8.4 8.7 4.2 4.2M12.6 8.7l-4.2 4.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+        );
+    }
+
+    return (
+        <svg className="ac-v3-builder__block-kind-icon is-state" width="23" height="23" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5.4 4.8h11.2c1.4 0 2.5 1.1 2.5 2.5v6.1c0 1.4-1.1 2.5-2.5 2.5H10l-4.2 3.3v-3.3h-.4c-1.4 0-2.5-1.1-2.5-2.5V7.3c0-1.4 1.1-2.5 2.5-2.5Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function CopyIcon() {
+    return (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="5.2" y="4.2" width="6.6" height="7.6" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M4 9.8H3.2C2.5 9.8 2 9.3 2 8.6V3.2C2 2.5 2.5 2 3.2 2h5.2c.7 0 1.2.5 1.2 1.2V4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+    );
 }
 
 function CursorIcon() {
@@ -1489,6 +2394,56 @@ function ButtonIcon() {
     );
 }
 
+function AttachmentIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path d="m5 8.4 4.7-4.7a2 2 0 1 1 2.8 2.8l-5.6 5.6a3 3 0 0 1-4.2-4.2l5.4-5.4" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function SparkleIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path d="M7.5 2.2 8.6 5.4l3.2 1.1-3.2 1.1-1.1 3.2-1.1-3.2-3.2-1.1 3.2-1.1 1.1-3.2Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+            <path d="M12.3 9.7 12.8 11l1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5.5-1.3Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function BotIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <rect x="3" y="5" width="10" height="7.5" rx="2" stroke="currentColor" strokeWidth="1.35" />
+            <path d="M8 5V2.8M5.8 8.4h.1M10.1 8.4h.1M6.2 12.5 5.5 14M9.8 12.5l.7 1.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+        </svg>
+    );
+}
+
+function CodeIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path d="m5.6 4.2-3 3.8 3 3.8M10.4 4.2l3 3.8-3 3.8M9 3.2 7 12.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function CloudIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path d="M5.1 12.4h6a2.7 2.7 0 0 0 .6-5.3 4 4 0 0 0-7.6-1.2A3.3 3.3 0 0 0 5.1 12.4Z" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function AnalyticsIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path d="M3.2 12.8V8.5M6.4 12.8V5.8M9.6 12.8V3.2M12.8 12.8V6.9" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
+        </svg>
+    );
+}
+
 function PlayIcon() {
     return (
         <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
@@ -1520,6 +2475,15 @@ function MoreIcon() {
             <circle cx="4" cy="8" r="1.2" />
             <circle cx="8" cy="8" r="1.2" />
             <circle cx="12" cy="8" r="1.2" />
+        </svg>
+    );
+}
+
+function LinkIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 8h9.2M8.7 4.5 12.2 8l-3.5 3.5" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M2.8 4.1h2.4M2.8 11.9h2.4" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
         </svg>
     );
 }

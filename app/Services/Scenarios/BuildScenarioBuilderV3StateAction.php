@@ -20,6 +20,8 @@ class BuildScenarioBuilderV3StateAction
 
     private const DEFAULT_SHEET_NAME = 'Главный';
 
+    private const BLOCK_KINDS = ['state', 'non_state'];
+
     /**
      * @param  array<string, mixed>  $idMap
      * @return array<string, mixed>
@@ -40,6 +42,8 @@ class BuildScenarioBuilderV3StateAction
                 'editable_version_number' => $draftVersion instanceof ScenarioVersion ? (int) $draftVersion->version_number : null,
                 'draft_version_id' => $draftVersion instanceof ScenarioVersion ? (int) $draftVersion->id : null,
                 'draft_version_number' => $draftVersion instanceof ScenarioVersion ? (int) $draftVersion->version_number : null,
+                'published_version_id' => $scenario->publishedVersion instanceof ScenarioVersion ? (int) $scenario->publishedVersion->id : null,
+                'published_version_number' => $scenario->publishedVersion instanceof ScenarioVersion ? (int) $scenario->publishedVersion->version_number : null,
             ],
             'builder' => $builder,
             'catalogs' => [
@@ -223,8 +227,12 @@ class BuildScenarioBuilderV3StateAction
      */
     private function blockToBuilderState(ScenarioBuilderBlock $block): array
     {
+        $settingsPayload = $this->settingsPayloadForBlock($block);
+        $displayId = $this->displayIdForBlock($block, $settingsPayload);
+
         return [
             'id' => (int) $block->id,
+            'display_id' => $displayId,
             'client_key' => 'block_'.$block->id,
             'type' => 'state',
             'title' => (string) $block->title,
@@ -232,7 +240,7 @@ class BuildScenarioBuilderV3StateAction
                 'x' => (int) $block->position_x,
                 'y' => (int) $block->position_y,
             ],
-            'settings_payload' => $this->settingsPayloadForBlock($block),
+            'settings_payload' => $settingsPayload,
         ];
     }
 
@@ -248,16 +256,29 @@ class BuildScenarioBuilderV3StateAction
         }
 
         $settingsPayload['schema_version'] = self::SCHEMA_VERSION;
-        $settingsPayload['kind'] = 'state';
+        $settingsPayload['kind'] = in_array($settingsPayload['kind'] ?? null, self::BLOCK_KINDS, true)
+            ? (string) $settingsPayload['kind']
+            : 'state';
         $settingsPayload['ui'] = is_array($settingsPayload['ui'] ?? null) ? $settingsPayload['ui'] : [
             'sheet_id' => self::DEFAULT_SHEET_ID,
             'width' => 320,
             'collapsed' => false,
         ];
+        $settingsPayload['ui']['card_id'] = $this->displayIdForBlock($block, $settingsPayload);
         $settingsPayload['modules'] = $this->modulesWithCanonicalStartCondition($block, $settingsPayload['modules'] ?? []);
         $settingsPayload['outputs'] = is_array($settingsPayload['outputs'] ?? null) ? array_values($settingsPayload['outputs']) : [];
 
         return $settingsPayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settingsPayload
+     */
+    private function displayIdForBlock(ScenarioBuilderBlock $block, array $settingsPayload): string
+    {
+        $cardId = trim((string) data_get($settingsPayload, 'ui.card_id', ''));
+
+        return $cardId !== '' ? $cardId : (string) $block->id;
     }
 
     /**
@@ -278,6 +299,7 @@ class BuildScenarioBuilderV3StateAction
                     'match' => (string) ($block->conditions->first()?->match_operator ?? 'strict'),
                     'variable' => '',
                     'exclude' => '',
+                    'contact_phone_condition' => '',
                     'priority' => 10,
                     'once' => false,
                     'channels' => [

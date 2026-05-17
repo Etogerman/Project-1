@@ -107,6 +107,8 @@ class ScenarioBuilderV3StateTest extends TestCase
         $blockId = $response->json('id_map.blocks.tmp_block_1');
 
         $this->assertIsInt($blockId);
+        $this->assertSame((string) $blockId, $response->json('builder.blocks.0.display_id'));
+        $this->assertSame((string) $blockId, $response->json('builder.blocks.0.settings_payload.ui.card_id'));
         $this->assertDatabaseHas('scenario_builder_blocks', [
             'id' => $blockId,
             'scenario_version_id' => $scenario->fresh()->draftVersion?->id,
@@ -115,6 +117,44 @@ class ScenarioBuilderV3StateTest extends TestCase
             'position_x' => 120,
             'position_y' => 160,
         ]);
+    }
+
+    public function test_put_state_preserves_v3_block_kind_in_settings_payload(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_save_kind',
+            'name' => 'V3 Save Kind',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $settings = $this->messageSettings('Технический переход');
+        $settings['kind'] = 'non_state';
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_block_kind',
+                'type' => 'state',
+                'title' => 'Переход',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $settings,
+            ],
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.0.settings_payload.kind', 'non_state');
+
+        $blockId = $response->json('id_map.blocks.tmp_block_kind');
+
+        $this->assertDatabaseHas('scenario_builder_blocks', [
+            'id' => $blockId,
+            'type' => 'state',
+        ]);
+        $this->assertSame(
+            'non_state',
+            ScenarioBuilderBlock::query()->findOrFail($blockId)->settings_payload['kind'] ?? null,
+        );
     }
 
     public function test_put_state_syncs_start_condition_channels_and_conditions(): void
@@ -158,6 +198,45 @@ class ScenarioBuilderV3StateTest extends TestCase
             'id' => $blockId,
             'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
         ]);
+    }
+
+    public function test_put_state_uses_visible_start_command_instead_of_hidden_values(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_start_command_canonical',
+            'name' => 'V3 Start Command Canonical',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $settings = $this->startSettings('123', [(int) $channel->id]);
+        $settings['modules'][0]['payload']['values'] = ['12', 'старт', '/start'];
+
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 80, 'y' => 96],
+                'settings_payload' => $settings,
+            ],
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertOk();
+
+        $blockId = $response->json('id_map.blocks.tmp_start');
+        $block = ScenarioBuilderBlock::query()->findOrFail($blockId);
+
+        $this->assertSame([], data_get($block->settings_payload, 'modules.0.payload.values'));
+        $this->assertSame(['123'], ScenarioBuilderCondition::query()
+            ->where('scenario_builder_block_id', $blockId)
+            ->orderBy('id')
+            ->pluck('value')
+            ->all());
+        $this->assertSame(['123'], $response->json('builder.blocks.0.settings_payload.modules.0.payload.values'));
     }
 
     public function test_put_state_rejects_stale_revision(): void
@@ -544,6 +623,230 @@ class ScenarioBuilderV3StateTest extends TestCase
         ]);
     }
 
+    public function test_publish_v3_graph_compiles_runtime_snapshot_and_creates_next_draft(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish',
+            'name' => 'V3 Publish',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $catalogSettings = $this->messageSettings('Вот каталог');
+        $catalogSettings['kind'] = 'non_state';
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings(
+                        '/start',
+                        [(int) $channel->id],
+                        'Выберите действие',
+                        'Получить каталог',
+                        'has_phone',
+                    ),
+                ],
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_catalog',
+                    'type' => 'state',
+                    'title' => 'Каталог',
+                    'position' => ['x' => 460, 'y' => 64],
+                    'settings_payload' => $catalogSettings,
+                ],
+            ], [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_edge_catalog',
+                    'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => 'btn_catalog'],
+                    'target' => ['block_id' => null, 'client_key' => 'tmp_catalog'],
+                    'condition_payload' => $this->edgePayload('btn_catalog', 'Получить каталог'),
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+
+        $publishedResponse = $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk()
+            ->assertJsonPath('published.version_number', 1)
+            ->assertJsonPath('scenario.draft_version_number', 2)
+            ->assertJsonPath('scenario.published_version_number', 1)
+            ->json();
+
+        $scenario->refresh()->load(['draftVersion', 'publishedVersion']);
+        $published = $scenario->publishedVersion;
+        $draft = $scenario->draftVersion;
+
+        $this->assertInstanceOf(ScenarioVersion::class, $published);
+        $this->assertInstanceOf(ScenarioVersion::class, $draft);
+        $this->assertSame($publishedResponse['published']['version_id'], $published->id);
+        $this->assertSame(3, $published->schema_payload['version'] ?? null);
+
+        $runtime = $published->schema_payload['builder_v3_runtime'] ?? [];
+        $startBlockId = (string) $savedState['id_map']['blocks']['tmp_start'];
+        $catalogBlockId = (string) $savedState['id_map']['blocks']['tmp_catalog'];
+
+        $this->assertSame(3, $runtime['schema_version'] ?? null);
+        $this->assertSame($startBlockId, $runtime['entrypoints'][0]['block_id'] ?? null);
+        $this->assertSame([$channel->id], $runtime['entrypoints'][0]['channel_ids'] ?? null);
+        $this->assertSame(['/start'], $runtime['entrypoints'][0]['values'] ?? null);
+        $this->assertSame('has_phone', $runtime['entrypoints'][0]['contact_phone_condition'] ?? null);
+        $this->assertSame('Выберите действие', data_get($runtime, "blocks.$startBlockId.message.text"));
+        $this->assertSame('state', data_get($runtime, "blocks.$startBlockId.kind"));
+        $this->assertSame('non_state', data_get($runtime, "blocks.$catalogBlockId.kind"));
+        $this->assertSame('text', data_get($runtime, "blocks.$startBlockId.buttons.rows.0.0.type"));
+        $this->assertSame(
+            $catalogBlockId,
+            data_get($runtime, "blocks.$startBlockId.buttons.rows.0.0.target_block_id"),
+        );
+
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+        $this->assertSame(2, $draft->builderBlocks()->count());
+        $this->assertSame(1, $draft->builderEdges()->count());
+
+        $publishedBlocks = $published->builderBlocks()->orderBy('id')->get();
+        $draftBlocks = $draft->builderBlocks()->orderBy('id')->get();
+        $publishedBlockIds = $publishedBlocks->pluck('id')->map(fn (mixed $id): int => (int) $id)->all();
+        $draftBlockIds = $draftBlocks->pluck('id')->map(fn (mixed $id): int => (int) $id)->all();
+        $publishedCardIds = $publishedBlocks
+            ->map(fn (ScenarioBuilderBlock $block): string => (string) data_get($block->settings_payload, 'ui.card_id'))
+            ->all();
+        $draftCardIds = $draftBlocks
+            ->map(fn (ScenarioBuilderBlock $block): string => (string) data_get($block->settings_payload, 'ui.card_id'))
+            ->all();
+
+        $this->assertNotSame($publishedBlockIds, $draftBlockIds);
+        $this->assertSame($publishedCardIds, $draftCardIds);
+        $this->assertSame($draftCardIds[0], $publishedResponse['builder']['blocks'][0]['display_id'] ?? null);
+    }
+
+    public function test_put_state_rejects_empty_button_text(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_save_empty_button',
+            'name' => 'V3 Save Empty Button',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings('/start', [(int) $channel->id], 'Выберите действие', ''),
+                ],
+            ]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.blocks.0.settings_payload.modules.2.payload.rows.0.0.text',
+            ]);
+    }
+
+    public function test_put_state_preserves_request_phone_button_type(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_save_request_phone_button',
+            'name' => 'V3 Save Request Phone Button',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings(
+                        '/start',
+                        [(int) $channel->id],
+                        'Поделитесь телефоном',
+                        'Поделиться номером телефона',
+                        '',
+                        'request_phone',
+                    ),
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+
+        $buttonsModule = collect($response['builder']['blocks'][0]['settings_payload']['modules'] ?? [])
+            ->firstWhere('type', 'buttons');
+
+        $this->assertSame('request_phone', data_get($buttonsModule, 'payload.rows.0.0.type'));
+        $this->assertSame('request_phone', data_get($response, 'builder.blocks.0.settings_payload.outputs.0.button_type'));
+    }
+
+    public function test_publish_v3_graph_rejects_stale_revision(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_stale',
+            'name' => 'V3 Publish Stale',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+        $draft = $scenario->fresh()->draftVersion()->firstOrFail();
+
+        $draft->forceFill([
+            'schema_payload' => [
+                'builder_v3' => [
+                    'revision' => 'v3:2099-01-01T00:00:00.000000Z',
+                    'visible_scope' => $savedState['builder']['visible_scope'],
+                ],
+            ],
+        ])->save();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertStatus(409);
+
+        $this->assertDatabaseMissing('scenario_versions', [
+            'scenario_id' => $scenario->id,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+        ]);
+        $this->assertDatabaseMissing('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+        ]);
+    }
+
     public function test_employee_without_scenarios_edit_cannot_access_state_api(): void
     {
         $employee = User::factory()->create([
@@ -578,6 +881,11 @@ class ScenarioBuilderV3StateTest extends TestCase
     private function stateUrl(Scenario $scenario): string
     {
         return route('admin.scenario-constructor.v3.state.show', ['scenario' => $scenario]);
+    }
+
+    private function publishUrl(Scenario $scenario): string
+    {
+        return route('admin.scenario-constructor.v3.publish', ['scenario' => $scenario]);
     }
 
     /**
@@ -650,6 +958,88 @@ class ScenarioBuilderV3StateTest extends TestCase
                 ],
             ],
             'outputs' => [],
+        ];
+    }
+
+    /**
+     * @param  list<int>  $channelIds
+     * @return array<string, mixed>
+     */
+    private function startMessageButtonsSettings(
+        string $command,
+        array $channelIds,
+        string $message,
+        string $buttonText,
+        string $contactPhoneCondition = '',
+        string $buttonType = 'text',
+    ): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_start',
+                    'type' => 'start_condition',
+                    'enabled' => true,
+                    'payload' => [
+                        'command' => $command,
+                        'match' => 'strict',
+                        'variable' => '',
+                        'exclude' => '',
+                        'contact_phone_condition' => $contactPhoneCondition,
+                        'priority' => 10,
+                        'once' => false,
+                        'channels' => ['mode' => 'selected', 'ids' => $channelIds],
+                    ],
+                ],
+                [
+                    'id' => 'mod_message',
+                    'type' => 'message',
+                    'enabled' => true,
+                    'payload' => ['text' => $message, 'text_format' => 'plain_text'],
+                ],
+                [
+                    'id' => 'mod_buttons',
+                    'type' => 'buttons',
+                    'enabled' => true,
+                    'payload' => [
+                        'placement' => 'auto',
+                        'rows' => [[
+                            ['id' => 'btn_catalog', 'text' => $buttonText, 'type' => $buttonType, 'fn' => 'default', 'url' => null, 'color' => null],
+                        ]],
+                    ],
+                ],
+            ],
+            'outputs' => [
+                [
+                    'id' => 'btn_catalog',
+                    'label' => $buttonText,
+                    'source' => 'button',
+                    'module_id' => 'mod_buttons',
+                    'button_id' => 'btn_catalog',
+                    'button_type' => $buttonType,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function edgePayload(?string $outputId, string $label): array
+    {
+        return [
+            'schema_version' => 3,
+            'from_output_id' => $outputId,
+            'label' => $label,
+            'match' => [
+                'type' => 'strict',
+                'variable' => 'last_user_message',
+                'value' => $label,
+                'ignore_strings' => [],
+            ],
         ];
     }
 }

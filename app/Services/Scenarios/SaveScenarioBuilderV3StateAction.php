@@ -2,6 +2,7 @@
 
 namespace App\Services\Scenarios;
 
+use App\Models\AutoReplyRule;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
@@ -128,7 +129,8 @@ class SaveScenarioBuilderV3StateAction
                 ]);
             }
 
-            $blockType = $this->dbTypeForBlock($model, $block['settings_payload']);
+            $settingsPayload = $this->settingsPayloadWithCanonicalStartCommand($block['settings_payload']);
+            $blockType = $this->dbTypeForBlock($model, $settingsPayload);
 
             $model->forceFill([
                 'scenario_version_id' => $version->id,
@@ -136,10 +138,16 @@ class SaveScenarioBuilderV3StateAction
                 'title' => $block['title'],
                 'position_x' => $block['position']['x'],
                 'position_y' => $block['position']['y'],
-                'settings_payload' => $block['settings_payload'],
+                'settings_payload' => $settingsPayload,
             ])->save();
 
-            $this->syncStartConditionTables($model, $block['settings_payload']);
+            $settingsPayload = $this->settingsPayloadWithStableCardId($model, $settingsPayload);
+
+            $model->forceFill([
+                'settings_payload' => $settingsPayload,
+            ])->save();
+
+            $this->syncStartConditionTables($model, $settingsPayload);
 
             $blockIdsByClientKey[$block['client_key']] = (int) $model->id;
 
@@ -263,6 +271,52 @@ class SaveScenarioBuilderV3StateAction
     /**
      * @param  array<string, mixed>  $settingsPayload
      */
+    private function settingsPayloadWithStableCardId(ScenarioBuilderBlock $block, array $settingsPayload): array
+    {
+        $cardId = trim((string) data_get($settingsPayload, 'ui.card_id', ''));
+
+        data_set($settingsPayload, 'ui.card_id', $cardId !== '' ? $cardId : (string) $block->id);
+
+        return $settingsPayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settingsPayload
+     * @return array<string, mixed>
+     */
+    private function settingsPayloadWithCanonicalStartCommand(array $settingsPayload): array
+    {
+        $modules = is_array($settingsPayload['modules'] ?? null) ? $settingsPayload['modules'] : [];
+
+        foreach ($modules as $index => $module) {
+            if (! is_array($module) || ($module['type'] ?? null) !== 'start_condition') {
+                continue;
+            }
+
+            $payload = is_array($module['payload'] ?? null) ? $module['payload'] : [];
+            $matchOperator = (string) ($payload['match'] ?? AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD);
+
+            if ($matchOperator === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+                $payload['command'] = '';
+            } else {
+                $payload['command'] = trim((string) ($payload['command'] ?? ''));
+            }
+
+            $payload['values'] = [];
+            $module['payload'] = $payload;
+            $modules[$index] = $module;
+
+            break;
+        }
+
+        $settingsPayload['modules'] = $modules;
+
+        return $settingsPayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settingsPayload
+     */
     private function syncStartConditionTables(ScenarioBuilderBlock $block, array $settingsPayload): void
     {
         $startModule = collect($settingsPayload['modules'] ?? [])->firstWhere('type', 'start_condition');
@@ -276,14 +330,17 @@ class SaveScenarioBuilderV3StateAction
 
         $payload = is_array($startModule['payload'] ?? null) ? $startModule['payload'] : [];
         $channelIds = $this->normalizeIdList(data_get($payload, 'channels.ids', []));
+        $matchOperator = (string) ($payload['match'] ?? 'strict');
         $conditionValues = collect([$payload['command'] ?? null])
-            ->merge(is_array($payload['values'] ?? null) ? $payload['values'] : [])
             ->map(fn (mixed $value): string => trim((string) $value))
             ->filter(fn (string $value): bool => $value !== '')
             ->unique()
             ->values()
             ->all();
-        $matchOperator = (string) ($payload['match'] ?? 'strict');
+
+        if ($matchOperator === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND && $conditionValues === []) {
+            $conditionValues = [''];
+        }
 
         $block->channels()->sync($channelIds);
         $block->conditions()->delete();

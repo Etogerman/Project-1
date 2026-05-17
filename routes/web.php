@@ -52,6 +52,9 @@ Route::middleware('auth')
 
         Route::put('/state', [ScenarioBuilderV3StateController::class, 'update'])
             ->name('state.update');
+
+        Route::post('/publish', [ScenarioBuilderV3StateController::class, 'publish'])
+            ->name('publish');
     });
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])
