@@ -10,6 +10,7 @@ use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioVersion;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
@@ -206,6 +207,7 @@ class SaveScenarioBuilderV3StateAction
             ->whereIn('id', collect($edges)->pluck('id')->filter()->all() ?: [0])
             ->get()
             ->keyBy('id');
+        $usedEdgeKeys = [];
 
         foreach ($edges as $edge) {
             $edgeId = $edge['id'];
@@ -239,12 +241,14 @@ class SaveScenarioBuilderV3StateAction
                 ]);
             }
 
+            $conditionPayload = $this->conditionPayloadWithStableEdgeKey($model, $edge['condition_payload'], $usedEdgeKeys);
+
             $model->forceFill([
                 'scenario_version_id' => $version->id,
                 'from_scenario_builder_block_id' => $fromBlockId,
                 'to_scenario_builder_block_id' => $toBlockId,
                 'to_runtime_block_id' => null,
-                'condition_payload' => $edge['condition_payload'],
+                'condition_payload' => $conditionPayload,
                 'sort_order' => 1,
             ])->save();
 
@@ -252,6 +256,59 @@ class SaveScenarioBuilderV3StateAction
                 $idMap['edges'][$edge['client_key']] = (int) $model->id;
             }
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $conditionPayload
+     * @param  array<string, true>  $usedEdgeKeys
+     * @return array<string, mixed>
+     */
+    private function conditionPayloadWithStableEdgeKey(ScenarioBuilderEdge $edge, array $conditionPayload, array &$usedEdgeKeys): array
+    {
+        $existingPayload = is_array($edge->condition_payload) ? $edge->condition_payload : [];
+        $edgeKey = $this->validEdgeKey($existingPayload['edge_key'] ?? null);
+
+        if ($edgeKey === null && $edge->exists) {
+            $edgeKey = $this->validEdgeKey($conditionPayload['edge_key'] ?? null);
+        }
+
+        $edgeKey ??= $this->newEdgeKey($usedEdgeKeys);
+
+        if (isset($usedEdgeKeys[$edgeKey])) {
+            throw ValidationException::withMessages([
+                'builder.edges' => 'Edge key must be unique.',
+            ]);
+        }
+
+        $usedEdgeKeys[$edgeKey] = true;
+        $conditionPayload['edge_key'] = $edgeKey;
+        $conditionPayload['edge_schema_version'] = BuildScenarioBuilderV3StateAction::SCHEMA_VERSION;
+        $conditionPayload['schema_version'] = BuildScenarioBuilderV3StateAction::SCHEMA_VERSION;
+
+        return $conditionPayload;
+    }
+
+    private function validEdgeKey(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value !== '' && preg_match('/^[A-Za-z0-9_-]{1,64}$/', $value) ? $value : null;
+    }
+
+    /**
+     * @param  array<string, true>  $usedEdgeKeys
+     */
+    private function newEdgeKey(array $usedEdgeKeys): string
+    {
+        do {
+            $edgeKey = 'edge_'.Str::lower(Str::random(12));
+        } while (isset($usedEdgeKeys[$edgeKey]));
+
+        return $edgeKey;
     }
 
     /**

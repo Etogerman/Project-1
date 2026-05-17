@@ -15,6 +15,8 @@ class CompileScenarioBuilderV3RuntimeAction
 {
     private const BUTTON_PLACEMENTS = ['auto', 'reply_keyboard', 'inline_message'];
 
+    private const EDGE_MODE_WAIT_REPLY = 'wait_reply';
+
     /**
      * @return array<string, mixed>
      */
@@ -86,13 +88,13 @@ class CompileScenarioBuilderV3RuntimeAction
         string $runtimeBlockId,
         Collection $outgoingEdges,
         array $runtimeBlockIdsByDbId,
-    ): array
-    {
+    ): array {
         $settings = $this->settingsPayload($block);
         $message = $this->module($settings, 'message');
         $buttons = $this->module($settings, 'buttons');
         $defaultEdge = $outgoingEdges->first(
-            fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === null,
+            fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === null
+                && $this->edgeMode($edge) !== self::EDGE_MODE_WAIT_REPLY,
         );
 
         $compiled = [
@@ -106,6 +108,7 @@ class CompileScenarioBuilderV3RuntimeAction
                 'text_format' => (string) data_get($message, 'payload.text_format', 'plain_text'),
             ] : null,
             'buttons' => null,
+            'wait_reply_edges' => $this->compileWaitReplyEdges($outgoingEdges, $runtimeBlockIdsByDbId),
             'default_target_block_id' => $defaultEdge instanceof ScenarioBuilderEdge
                 ? ($runtimeBlockIdsByDbId[(int) $defaultEdge->to_scenario_builder_block_id] ?? null)
                 : null,
@@ -121,12 +124,29 @@ class CompileScenarioBuilderV3RuntimeAction
         if (
             $compiled['message'] === null
             && $compiled['buttons'] === null
+            && $compiled['wait_reply_edges'] === []
             && $compiled['default_target_block_id'] === null
         ) {
             $this->fail('builder.blocks', "Блок {$block->title} не содержит действия и не ведёт дальше.");
         }
 
         return $compiled;
+    }
+
+    /**
+     * @param  Collection<int, ScenarioBuilderEdge>  $outgoingEdges
+     * @param  array<int, string>  $runtimeBlockIdsByDbId
+     * @return list<array<string, mixed>>
+     */
+    private function compileWaitReplyEdges(Collection $outgoingEdges, array $runtimeBlockIdsByDbId): array
+    {
+        return $outgoingEdges
+            ->filter(fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === null
+                && $this->edgeMode($edge) === self::EDGE_MODE_WAIT_REPLY)
+            ->map(fn (ScenarioBuilderEdge $edge): array => $this->compileEdge($edge, $runtimeBlockIdsByDbId))
+            ->sort(fn (array $left, array $right): int => $this->compareWaitReplyEdges($left, $right))
+            ->values()
+            ->all();
     }
 
     /**
@@ -285,8 +305,8 @@ class CompileScenarioBuilderV3RuntimeAction
     }
 
     /**
-     * @return array<string, mixed>
      * @param  array<int, string>  $runtimeBlockIdsByDbId
+     * @return array<string, mixed>
      */
     private function compileEdge(ScenarioBuilderEdge $edge, array $runtimeBlockIdsByDbId): array
     {
@@ -296,12 +316,56 @@ class CompileScenarioBuilderV3RuntimeAction
 
         return [
             'id' => (string) $edge->id,
+            'edge_key' => (string) ($conditionPayload['edge_key'] ?? ''),
+            'mode' => $this->edgeMode($edge),
+            'priority' => (int) ($conditionPayload['priority'] ?? 10),
+            'transition_limit' => max(0, (int) ($conditionPayload['transition_limit'] ?? 0)),
             'source_block_id' => $runtimeBlockIdsByDbId[$sourceDbId] ?? (string) $sourceDbId,
             'target_block_id' => $runtimeBlockIdsByDbId[$targetDbId] ?? (string) $targetDbId,
             'source_db_block_id' => $sourceDbId,
             'target_db_block_id' => $targetDbId,
             'from_output_id' => $this->edgeOutputId($edge),
             'label' => (string) ($conditionPayload['label'] ?? ''),
+            'match' => $this->compileEdgeMatch($conditionPayload),
+            'input_capture' => $this->compileEdgeInputCapture($conditionPayload),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $conditionPayload
+     * @return array{type: string, text: string, variants: list<string>}
+     */
+    private function compileEdgeMatch(array $conditionPayload): array
+    {
+        $match = is_array($conditionPayload['match'] ?? null) ? $conditionPayload['match'] : [];
+        $type = (string) ($match['type'] ?? 'any_inbound');
+        $text = (string) ($match['text'] ?? '');
+        $variants = $this->normalizedMatchVariants($text);
+
+        if (in_array($type, ['exact_text', 'contains_text'], true) && $variants === []) {
+            $this->fail('builder.edges', 'У стрелки с текстовым условием должен быть текст условия.');
+        }
+
+        return [
+            'type' => in_array($type, ['any_inbound', 'exact_text', 'contains_text'], true) ? $type : 'any_inbound',
+            'text' => $text,
+            'variants' => $variants,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $conditionPayload
+     * @return array{enabled: bool, field_scope: string, field_key: string, data_type: string}
+     */
+    private function compileEdgeInputCapture(array $conditionPayload): array
+    {
+        $capture = is_array($conditionPayload['input_capture'] ?? null) ? $conditionPayload['input_capture'] : [];
+
+        return [
+            'enabled' => (bool) ($capture['enabled'] ?? false),
+            'field_scope' => 'dialog',
+            'field_key' => (string) ($capture['field_key'] ?? ''),
+            'data_type' => (string) ($capture['data_type'] ?? 'any_text'),
         ];
     }
 
@@ -366,9 +430,44 @@ class CompileScenarioBuilderV3RuntimeAction
         return is_string($outputId) && trim($outputId) !== '' ? trim($outputId) : null;
     }
 
+    private function edgeMode(ScenarioBuilderEdge $edge): string
+    {
+        $mode = data_get($edge->condition_payload, 'mode');
+
+        return is_string($mode) && trim($mode) !== '' ? trim($mode) : 'automatic';
+    }
+
+    /**
+     * @param  array<string, mixed>  $left
+     * @param  array<string, mixed>  $right
+     */
+    private function compareWaitReplyEdges(array $left, array $right): int
+    {
+        return [
+            (int) ($right['priority'] ?? 10),
+            (int) ($right['id'] ?? 0),
+        ] <=> [
+            (int) ($left['priority'] ?? 10),
+            (int) ($left['id'] ?? 0),
+        ];
+    }
+
     private function normalizeButtonText(string $text): string
     {
         return mb_strtolower(preg_replace('/\s+/u', ' ', trim($text)) ?? trim($text));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function normalizedMatchVariants(string $text): array
+    {
+        return collect(preg_split('/\R/u', $text) ?: [])
+            ->map(fn (string $line): string => $this->normalizeButtonText($line))
+            ->filter(fn (string $line): bool => $line !== '')
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function fail(string $key, string $message): never

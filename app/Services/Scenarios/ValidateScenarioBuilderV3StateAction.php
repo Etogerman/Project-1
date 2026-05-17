@@ -51,6 +51,12 @@ class ValidateScenarioBuilderV3StateAction
 
     private const BUTTON_PLACEMENTS = ['auto', 'reply_keyboard', 'inline_message'];
 
+    private const EDGE_MODES = ['wait_reply', 'automatic', 'button'];
+
+    private const EDGE_MATCH_TYPES = ['any_inbound', 'exact_text', 'contains_text'];
+
+    private const EDGE_CAPTURE_DATA_TYPES = ['any_text', 'phone', 'email', 'number'];
+
     /**
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
@@ -446,6 +452,7 @@ class ValidateScenarioBuilderV3StateAction
             ->filter(fn (array $block): bool => $block['id'] !== null)
             ->keyBy(fn (array $block): int => (int) $block['id']);
         $clientKeys = [];
+        $edgeKeys = [];
         $sourceOutputs = [];
         $normalizedEdges = [];
 
@@ -474,9 +481,21 @@ class ValidateScenarioBuilderV3StateAction
                 $this->fail("builder.edges.$index.source.output_id", 'Source output does not exist.');
             }
 
-            $conditionPayload = $this->arrayValue($edge['condition_payload'] ?? [], "builder.edges.$index.condition_payload");
-            $conditionPayload['schema_version'] = BuildScenarioBuilderV3StateAction::SCHEMA_VERSION;
-            $conditionPayload['from_output_id'] = $sourceOutputId;
+            $conditionPayload = $this->normalizeConditionPayload(
+                $this->arrayValue($edge['condition_payload'] ?? [], "builder.edges.$index.condition_payload"),
+                $sourceOutputId,
+                $index,
+            );
+
+            $edgeKey = $conditionPayload['edge_key'];
+
+            if (is_string($edgeKey) && $edgeKey !== '') {
+                if (isset($edgeKeys[$edgeKey])) {
+                    $this->fail("builder.edges.$index.condition_payload.edge_key", 'Edge key must be unique.');
+                }
+
+                $edgeKeys[$edgeKey] = true;
+            }
 
             $normalizedEdges[] = [
                 'id' => $this->nullableIntegerValue($edge['id'] ?? null, "builder.edges.$index.id"),
@@ -490,6 +509,113 @@ class ValidateScenarioBuilderV3StateAction
         $this->guardDuplicateButtonTextEdges($blocks, $normalizedEdges);
 
         return $normalizedEdges;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function normalizeConditionPayload(array $payload, ?string $sourceOutputId, int $edgeIndex): array
+    {
+        $edgeKey = $this->normalizeEdgeKey($payload['edge_key'] ?? null, $edgeIndex);
+        $mode = $this->normalizeEdgeMode($payload['mode'] ?? null, $sourceOutputId);
+        $priority = (int) ($payload['priority'] ?? 10);
+        $transitionLimit = max(0, (int) ($payload['transition_limit'] ?? 0));
+
+        return [
+            'schema_version' => BuildScenarioBuilderV3StateAction::SCHEMA_VERSION,
+            'edge_schema_version' => BuildScenarioBuilderV3StateAction::SCHEMA_VERSION,
+            'edge_key' => $edgeKey,
+            'from_output_id' => $sourceOutputId,
+            'label' => (string) ($payload['label'] ?? ''),
+            'mode' => $mode,
+            'priority' => $priority,
+            'transition_limit' => $transitionLimit,
+            'match' => $this->normalizeEdgeMatch($payload['match'] ?? [], $edgeIndex),
+            'input_capture' => $this->normalizeEdgeInputCapture($payload['input_capture'] ?? [], $edgeIndex),
+            'delay' => is_array($payload['delay'] ?? null) ? $payload['delay'] : [],
+            'flags' => is_array($payload['flags'] ?? null) ? $payload['flags'] : [],
+            'ui' => is_array($payload['ui'] ?? null) ? $payload['ui'] : [],
+        ];
+    }
+
+    private function normalizeEdgeKey(mixed $value, int $edgeIndex): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $edgeKey = trim((string) $value);
+
+        if (strlen($edgeKey) > 64 || ! preg_match('/^[A-Za-z0-9_-]+$/', $edgeKey)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.edge_key", 'Invalid edge key.');
+        }
+
+        return $edgeKey;
+    }
+
+    private function normalizeEdgeMode(mixed $mode, ?string $sourceOutputId): string
+    {
+        $mode = trim((string) $mode);
+
+        if ($mode === '') {
+            return $sourceOutputId !== null ? 'button' : 'automatic';
+        }
+
+        return in_array($mode, self::EDGE_MODES, true) ? $mode : 'wait_reply';
+    }
+
+    /**
+     * @return array{type: string, text: string}
+     */
+    private function normalizeEdgeMatch(mixed $match, int $edgeIndex): array
+    {
+        $match = is_array($match) ? $match : [];
+        $type = trim((string) ($match['type'] ?? 'any_inbound'));
+
+        if (! in_array($type, self::EDGE_MATCH_TYPES, true)) {
+            $type = match ($type) {
+                'strict', AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD => 'exact_text',
+                'contains', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT => 'contains_text',
+                default => 'any_inbound',
+            };
+        }
+
+        $text = (string) ($match['text'] ?? $match['value'] ?? '');
+
+        if (mb_strlen($text) > self::MAX_MESSAGE_LENGTH) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.match.text", 'Edge match text is too long.');
+        }
+
+        return [
+            'type' => $type,
+            'text' => $text,
+        ];
+    }
+
+    /**
+     * @return array{enabled: bool, field_scope: string, field_key: string, data_type: string}
+     */
+    private function normalizeEdgeInputCapture(mixed $capture, int $edgeIndex): array
+    {
+        $capture = is_array($capture) ? $capture : [];
+        $enabled = (bool) ($capture['enabled'] ?? false);
+        $fieldKey = trim((string) ($capture['field_key'] ?? ''));
+        $dataType = trim((string) ($capture['data_type'] ?? 'any_text'));
+
+        if (! in_array($dataType, self::EDGE_CAPTURE_DATA_TYPES, true)) {
+            $dataType = 'any_text';
+        }
+
+        if ($enabled && ! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_key", 'Invalid dialog field key.');
+        }
+
+        return [
+            'enabled' => $enabled,
+            'field_scope' => 'dialog',
+            'field_key' => $fieldKey,
+            'data_type' => $dataType,
+        ];
     }
 
     /**

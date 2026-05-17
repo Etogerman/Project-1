@@ -2,13 +2,13 @@
 
 namespace App\Services\Scenarios;
 
-use App\Data\Messages\PreparedMessageContentData;
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
@@ -16,18 +16,22 @@ use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
-use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
+use App\Services\Contacts\NormalizePhoneNumberAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Messages\PrepareMessageContentAction;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Throwable;
 
-class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedScenarioRuntime
+class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedScenarioRuntime
 {
     private const IBIZA_SCENARIO_CODE = 'vip_ibiza';
 
@@ -52,6 +56,12 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
     private const PENDING_PROMPT_DELIVERY_STATE_KEY = 'run.pending_prompt_delivery';
 
     private const PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY = 'run.pending_prompt_remove_telegram_keyboard';
+
+    private const V3_DIALOG_FIELDS_MAX_BYTES = 65536;
+
+    private const V3_DIALOG_USER_FIELDS_MAX = 50;
+
+    private const V3_DIALOG_FIELD_VALUE_MAX_LENGTH = 2000;
 
     private ?int $matchedBuilderStartMessageId = null;
 
@@ -208,7 +218,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         return null;
     }
 
-    private function runtimeEligibleBuilderStartBlocks(): \Illuminate\Support\Collection
+    private function runtimeEligibleBuilderStartBlocks(): Collection
     {
         return $this->publishedVersion
             ->builderBlocks()
@@ -503,8 +513,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         array $statePayload,
         ?int $remainingTransitions = null,
         bool $removeTelegramKeyboard = false,
-    ): array
-    {
+    ): array {
         $nextBlockId = $blockId;
         $remainingTransitions ??= count($schema['blocks']) + 1;
 
@@ -642,8 +651,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         array $statePayload,
         int $remainingTransitions,
         bool $removeTelegramKeyboard = false,
-    ): array
-    {
+    ): array {
         if (! $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
@@ -693,8 +701,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         array $statePayload,
         int $remainingTransitions,
         bool $removeTelegramKeyboard = false,
-    ): array
-    {
+    ): array {
         $defaultBlockId = null;
 
         foreach ($block['branches'] as $branch) {
@@ -744,8 +751,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         array $block,
         array $statePayload,
         bool $removeTelegramKeyboard = false,
-    ): array
-    {
+    ): array {
         if (! $this->dispatchScenarioMessage(
             $message,
             (string) $block['text'],
@@ -918,6 +924,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
                 return trim((string) $displayName);
             }
         }
+
         return null;
     }
 
@@ -966,18 +973,40 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
     private function handleV3Inbound(ScenarioRun $run, Message $message, array $runtime): ScenarioInboundResult
     {
         $statePayload = $this->v3StatePayload($run->state_payload);
-        $rawCurrentBlockId = filled($run->current_step)
-            ? trim((string) $run->current_step)
-            : trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+        $rawRunCurrentBlockId = filled($run->current_step) ? trim((string) $run->current_step) : null;
+        $rawStateCurrentBlockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+        $rawCurrentBlockId = $rawRunCurrentBlockId ?: $rawStateCurrentBlockId;
         $currentBlockId = $this->v3RuntimeBlockId($runtime, $rawCurrentBlockId, $statePayload);
+
+        if (
+            $rawRunCurrentBlockId !== null
+            && $rawStateCurrentBlockId !== ''
+            && $this->v3RuntimeBlockId($runtime, $rawRunCurrentBlockId, $statePayload) !== $this->v3RuntimeBlockId($runtime, $rawStateCurrentBlockId, $statePayload)
+        ) {
+            Log::warning('scenario.v3_current_block_mismatch', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run->id,
+                'dialog_id' => $message->dialog_id,
+                'current_step' => $run->current_step,
+                'state_current_block_id' => $rawStateCurrentBlockId,
+            ]);
+
+            return new ScenarioInboundResult(
+                consumed: false,
+                status: $run->status,
+                currentStep: $run->current_step,
+                statePayload: $statePayload,
+                exitOutcome: $run->exit_outcome,
+            );
+        }
 
         if ($currentBlockId === null) {
             return new ScenarioInboundResult(
-                consumed: true,
-                status: ScenarioRun::STATUS_CANCELLED,
-                currentStep: null,
+                consumed: false,
+                status: $run->status,
+                currentStep: $run->current_step,
                 statePayload: $statePayload,
-                exitOutcome: 'invalid_current_step',
+                exitOutcome: $run->exit_outcome,
             );
         }
 
@@ -985,6 +1014,36 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         $targetBlockId = $message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE
             ? $this->v3TargetForContactShare(is_array($block) ? $block : [], $message->channel)
             : $this->v3TargetForButtonText($message, is_array($block) ? $block : []);
+
+        if ($targetBlockId === null) {
+            $waitReplyEdge = $this->v3WaitReplyEdgeForMessage($message, $block, $message->dialog);
+
+            if ($waitReplyEdge !== null) {
+                $capturedValue = $this->v3CapturedValueForEdge($message, $waitReplyEdge);
+
+                if ($capturedValue['valid'] !== true) {
+                    return new ScenarioInboundResult(
+                        consumed: true,
+                        status: ScenarioRun::STATUS_ACTIVE,
+                        currentStep: $currentBlockId,
+                        statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
+                        exitOutcome: null,
+                    );
+                }
+
+                if (! $this->applyV3WaitReplySideEffects($message, $waitReplyEdge, $capturedValue['value'])) {
+                    return new ScenarioInboundResult(
+                        consumed: true,
+                        status: ScenarioRun::STATUS_ACTIVE,
+                        currentStep: $currentBlockId,
+                        statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
+                        exitOutcome: null,
+                    );
+                }
+
+                $targetBlockId = filled($waitReplyEdge['target_block_id'] ?? null) ? (string) $waitReplyEdge['target_block_id'] : null;
+            }
+        }
 
         if ($targetBlockId === null) {
             return new ScenarioInboundResult(
@@ -1005,6 +1064,228 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
             statePayload: $progress['state_payload'],
             exitOutcome: $progress['exit_outcome'],
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return array<string, mixed>|null
+     */
+    private function v3WaitReplyEdgeForMessage(Message $message, array $block, ?Dialog $dialog): ?array
+    {
+        return collect($this->v3WaitReplyEdges($block))
+            ->filter(fn (array $edge): bool => $this->messageMatchesV3WaitReplyEdge($message, $edge))
+            ->sort(fn (array $left, array $right): int => $this->compareV3WaitReplyEdges($left, $right))
+            ->first(fn (array $edge): bool => ! $this->v3TransitionLimitReached($dialog, $edge));
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<array<string, mixed>>
+     */
+    private function v3WaitReplyEdges(array $block): array
+    {
+        $edges = is_array($block['wait_reply_edges'] ?? null) ? $block['wait_reply_edges'] : [];
+
+        return collect($edges)
+            ->filter(fn (mixed $edge): bool => is_array($edge)
+                && ($edge['mode'] ?? null) === 'wait_reply'
+                && filled($edge['target_block_id'] ?? null))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function messageMatchesV3WaitReplyEdge(Message $message, array $edge): bool
+    {
+        $match = is_array($edge['match'] ?? null) ? $edge['match'] : [];
+        $type = (string) ($match['type'] ?? 'any_inbound');
+
+        if ($type === 'any_inbound') {
+            return true;
+        }
+
+        $messageText = $this->normalizeV3ButtonText((string) $message->text);
+        $variants = collect($match['variants'] ?? [])
+            ->map(fn (mixed $variant): string => $this->normalizeV3ButtonText((string) $variant))
+            ->filter(fn (string $variant): bool => $variant !== '')
+            ->values();
+
+        if ($messageText === '' || $variants->isEmpty()) {
+            return false;
+        }
+
+        return $type === 'contains_text'
+            ? $variants->contains(fn (string $variant): bool => str_contains($messageText, $variant))
+            : $variants->contains($messageText);
+    }
+
+    /**
+     * @param  array<string, mixed>  $left
+     * @param  array<string, mixed>  $right
+     */
+    private function compareV3WaitReplyEdges(array $left, array $right): int
+    {
+        return [
+            (int) ($right['priority'] ?? 10),
+            (int) ($right['id'] ?? 0),
+        ] <=> [
+            (int) ($left['priority'] ?? 10),
+            (int) ($left['id'] ?? 0),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3TransitionLimitReached(?Dialog $dialog, array $edge): bool
+    {
+        $limit = max(0, (int) ($edge['transition_limit'] ?? 0));
+
+        if ($limit === 0 || ! $dialog instanceof Dialog) {
+            return false;
+        }
+
+        return $this->v3TransitionCount($dialog->fields_payload ?? [], $edge) >= $limit;
+    }
+
+    /**
+     * @param  array<string, mixed>  $fieldsPayload
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3TransitionCount(array $fieldsPayload, array $edge): int
+    {
+        return (int) data_get($fieldsPayload, '_v3.transition_counts.'.$this->v3TransitionCountKey($edge), 0);
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3TransitionCountKey(array $edge): string
+    {
+        return 'published_'.$this->publishedVersion->id.':'.(string) ($edge['edge_key'] ?? $edge['id'] ?? '');
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     * @return array{valid: bool, value: string|null}
+     */
+    private function v3CapturedValueForEdge(Message $message, array $edge): array
+    {
+        $capture = is_array($edge['input_capture'] ?? null) ? $edge['input_capture'] : [];
+
+        if ((bool) ($capture['enabled'] ?? false) !== true) {
+            return ['valid' => true, 'value' => null];
+        }
+
+        $value = trim((string) $message->text);
+        $dataType = (string) ($capture['data_type'] ?? 'any_text');
+
+        if ($value === '') {
+            return ['valid' => false, 'value' => null];
+        }
+
+        if ($dataType === 'email') {
+            $email = mb_strtolower($value);
+
+            return filter_var($email, FILTER_VALIDATE_EMAIL) !== false
+                ? ['valid' => true, 'value' => $email]
+                : ['valid' => false, 'value' => null];
+        }
+
+        if ($dataType === 'number') {
+            $normalized = str_replace(',', '.', $value);
+
+            return is_numeric($normalized)
+                ? ['valid' => true, 'value' => (string) $normalized]
+                : ['valid' => false, 'value' => null];
+        }
+
+        if ($dataType === 'phone') {
+            $phone = app(NormalizePhoneNumberAction::class)->handle($value);
+            $digits = preg_replace('/\D/u', '', $phone) ?? '';
+
+            return strlen($digits) >= 7
+                ? ['valid' => true, 'value' => $phone]
+                : ['valid' => false, 'value' => null];
+        }
+
+        return ['valid' => true, 'value' => $value];
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function applyV3WaitReplySideEffects(Message $message, array $edge, ?string $capturedValue): bool
+    {
+        if ($message->dialog_id === null) {
+            return false;
+        }
+
+        return DB::transaction(function () use ($message, $edge, $capturedValue): bool {
+            $dialog = Dialog::query()
+                ->whereKey($message->dialog_id)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $dialog instanceof Dialog) {
+                return false;
+            }
+
+            $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+            $limit = max(0, (int) ($edge['transition_limit'] ?? 0));
+            $counterKey = $this->v3TransitionCountKey($edge);
+            $currentCount = (int) data_get($fieldsPayload, '_v3.transition_counts.'.$counterKey, 0);
+
+            if ($limit > 0 && $currentCount >= $limit) {
+                return false;
+            }
+
+            $capture = is_array($edge['input_capture'] ?? null) ? $edge['input_capture'] : [];
+
+            if ((bool) ($capture['enabled'] ?? false) === true) {
+                $fieldKey = trim((string) ($capture['field_key'] ?? ''));
+
+                if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+                    return false;
+                }
+
+                if ($capturedValue === null || mb_strlen($capturedValue) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+                    return false;
+                }
+
+                $userFieldCount = collect($fieldsPayload)
+                    ->keys()
+                    ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
+                    ->unique()
+                    ->count();
+
+                if (! array_key_exists($fieldKey, $fieldsPayload) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
+                    return false;
+                }
+
+                $fieldsPayload[$fieldKey] = $capturedValue;
+            }
+
+            data_set($fieldsPayload, '_v3.transition_counts.'.$counterKey, $currentCount + 1);
+
+            $encoded = json_encode($fieldsPayload);
+
+            if ($encoded === false || strlen($encoded) > self::V3_DIALOG_FIELDS_MAX_BYTES) {
+                Log::warning('scenario.v3_dialog_fields_payload_limit_exceeded', [
+                    'scenario_code' => $this->code(),
+                    'dialog_id' => $message->dialog_id,
+                    'edge_key' => $edge['edge_key'] ?? null,
+                ]);
+
+                return false;
+            }
+
+            $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
+
+            return true;
+        });
     }
 
     /**
@@ -1763,8 +2044,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         bool $removeTelegramKeyboard = false,
         ?array $replyButtonRows = null,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
-    ): bool
-    {
+    ): bool {
         $channel = $message->channel;
 
         if (! $channel instanceof Channel) {
@@ -1811,7 +2091,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
     {
         try {
             return $this->validatedSchema();
-        } catch (\Illuminate\Validation\ValidationException) {
+        } catch (ValidationException) {
             return null;
         }
     }
@@ -2092,8 +2372,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         bool $removeTelegramKeyboard,
         ?array $replyButtonRows = null,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
-    ): ?array
-    {
+    ): ?array {
         if ($requestPhone) {
             return $this->telegramPhoneCaptureReplyMarkup();
         }
@@ -2175,8 +2454,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         bool $requestPhone,
         ?array $replyButtonRows,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
-    ): ?array
-    {
+    ): ?array {
         if ($requestPhone) {
             return $this->maxPhoneCaptureAttachments();
         }

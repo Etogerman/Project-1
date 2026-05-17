@@ -157,6 +157,58 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_put_state_assigns_stable_backend_edge_key(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_edge_key',
+            'name' => 'V3 Edge Key',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Напишите код'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Принято'),
+            ],
+        ];
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+            'condition_payload' => $this->edgePayload(null, 'Код'),
+        ]];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->json();
+
+        $edgeKey = data_get($saved, 'builder.edges.0.condition_payload.edge_key');
+
+        $this->assertIsString($edgeKey);
+        $this->assertMatchesRegularExpression('/^edge_[a-z0-9]{12}$/', $edgeKey);
+
+        $savedAgain = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($saved, $saved['builder']['blocks'], $saved['builder']['edges']))
+            ->assertOk()
+            ->json();
+
+        $this->assertSame($edgeKey, data_get($savedAgain, 'builder.edges.0.condition_payload.edge_key'));
+    }
+
     public function test_put_state_syncs_start_condition_channels_and_conditions(): void
     {
         $admin = $this->adminUser();
@@ -972,8 +1024,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         string $buttonText,
         string $contactPhoneCondition = '',
         string $buttonType = 'text',
-    ): array
-    {
+    ): array {
         return [
             'schema_version' => 3,
             'kind' => 'state',
@@ -1030,15 +1081,26 @@ class ScenarioBuilderV3StateTest extends TestCase
      */
     private function edgePayload(?string $outputId, string $label): array
     {
+        $isButton = $outputId !== null;
+
         return [
             'schema_version' => 3,
+            'edge_schema_version' => 3,
+            'edge_key' => null,
             'from_output_id' => $outputId,
             'label' => $label,
+            'mode' => $isButton ? 'button' : 'wait_reply',
+            'priority' => 10,
+            'transition_limit' => 0,
             'match' => [
-                'type' => 'strict',
-                'variable' => 'last_user_message',
-                'value' => $label,
-                'ignore_strings' => [],
+                'type' => $isButton ? 'exact_text' : 'any_inbound',
+                'text' => $isButton ? $label : '',
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
             ],
         ];
     }

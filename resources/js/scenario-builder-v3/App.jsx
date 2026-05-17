@@ -30,6 +30,17 @@ const MATCH_OPTIONS = [
     ['exact_callback', 'Точный callback'],
     ['any_inbound', 'Любое входящее'],
 ];
+const EDGE_MATCH_OPTIONS = [
+    ['any_inbound', 'Любое входящее'],
+    ['exact_text', 'Точный текст'],
+    ['contains_text', 'Содержит текст'],
+];
+const EDGE_DATA_TYPE_OPTIONS = [
+    ['any_text', 'Любой текст'],
+    ['phone', 'Телефон'],
+    ['email', 'Email'],
+    ['number', 'Число'],
+];
 const PHONE_CONDITION_OPTIONS = [
     ['', 'Неважно'],
     ['has_phone', 'Телефон заполнен'],
@@ -480,6 +491,24 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         updateEdges(edges.filter((edge) => edge.client_key !== edgeKey));
         setSelectedEdgeKey(null);
         setIsPanelCollapsed(false);
+    }
+
+    function updateEdgeConditionPayload(edgeKey, nextPayload) {
+        updateEdges((currentEdges) => currentEdges.map((edge) => {
+            if (edge.client_key !== edgeKey) {
+                return edge;
+            }
+
+            return {
+                ...edge,
+                condition_payload: typeof nextPayload === 'function'
+                    ? nextPayload(edge.condition_payload ?? {})
+                    : {
+                        ...(edge.condition_payload ?? {}),
+                        ...nextPayload,
+                    },
+            };
+        }));
     }
 
     function toggleModule(clientKey, type, enabled) {
@@ -988,6 +1017,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                 onCollapse={collapsePanel}
                                 onClose={closePanelSelection}
                                 onRemove={() => removeEdge(selectedEdge.client_key)}
+                                onUpdateConditionPayload={(nextPayload) => updateEdgeConditionPayload(selectedEdge.client_key, nextPayload)}
                             />
                         ) : (
                             <BlockPanel
@@ -2131,10 +2161,42 @@ function ModuleIcon({ type }) {
     return <AnalyticsIcon />;
 }
 
-function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove }) {
+function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isButton = isButtonEdge(edge);
+    const payload = edge.condition_payload ?? {};
+    const match = payload.match ?? {};
+    const capture = payload.input_capture ?? {};
+    const matchType = match.type ?? 'any_inbound';
+    const captureEnabled = capture.enabled === true;
+
+    function updatePayload(patch) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            ...patch,
+        }));
+    }
+
+    function updateMatch(patch) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            match: {
+                ...(current.match ?? {}),
+                ...patch,
+            },
+        }));
+    }
+
+    function updateCapture(patch) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            input_capture: {
+                ...(current.input_capture ?? {}),
+                ...patch,
+            },
+        }));
+    }
 
     return (
         <div className="ac-v3-builder__inspector">
@@ -2161,9 +2223,83 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove }) {
                     <span>Связь</span>
                 </div>
                 <span>Тип</span>
-                <p className="ac-v3-builder__readonly">{isButton ? 'От кнопки' : 'Автоматическая'}</p>
-                <span>Условие</span>
-                <p className="ac-v3-builder__readonly">{edgeLabel(edge, isButton)}</p>
+                <p className="ac-v3-builder__readonly">{isButton ? 'От кнопки' : 'Ждёт ответ клиента'}</p>
+                {isButton ? (
+                    <>
+                        <span>Условие</span>
+                        <p className="ac-v3-builder__readonly">{edgeLabel(edge, isButton)}</p>
+                    </>
+                ) : (
+                    <>
+                        <label>
+                            <span>Совпадение</span>
+                            <select value={matchType} onChange={(event) => updateMatch({ type: event.target.value })}>
+                                {EDGE_MATCH_OPTIONS.map(([value, label]) => (
+                                    <option key={value} value={value}>{label}</option>
+                                ))}
+                            </select>
+                        </label>
+                        {matchType !== 'any_inbound' ? (
+                            <label>
+                                <span>Текст условия</span>
+                                <textarea
+                                    className="ac-v3-builder__textarea-auto"
+                                    rows={1}
+                                    value={match.text ?? ''}
+                                    onChange={(event) => updateMatch({ text: event.target.value })}
+                                />
+                            </label>
+                        ) : null}
+                        <label>
+                            <span>Приоритет</span>
+                            <input
+                                type="number"
+                                value={payload.priority ?? 10}
+                                onChange={(event) => updatePayload({ priority: Number(event.target.value) })}
+                            />
+                        </label>
+                        <label>
+                            <span>Лимит переходов</span>
+                            <input
+                                type="number"
+                                min="0"
+                                value={payload.transition_limit ?? 0}
+                                onChange={(event) => updatePayload({ transition_limit: Math.max(0, Number(event.target.value)) })}
+                            />
+                        </label>
+                        <label className="ac-v3-builder__check">
+                            <input
+                                type="checkbox"
+                                checked={captureEnabled}
+                                onChange={(event) => updateCapture({ enabled: event.target.checked })}
+                            />
+                            <span>Пользователь вводит данные</span>
+                        </label>
+                        {captureEnabled ? (
+                            <>
+                                <label>
+                                    <span>Поле диалога</span>
+                                    <input
+                                        value={capture.field_key ?? ''}
+                                        placeholder="client_phone"
+                                        onChange={(event) => updateCapture({ field_key: event.target.value })}
+                                    />
+                                </label>
+                                <label>
+                                    <span>Тип данных</span>
+                                    <select
+                                        value={capture.data_type ?? 'any_text'}
+                                        onChange={(event) => updateCapture({ data_type: event.target.value })}
+                                    >
+                                        {EDGE_DATA_TYPE_OPTIONS.map(([value, label]) => (
+                                            <option key={value} value={value}>{label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </>
+                        ) : null}
+                    </>
+                )}
                 <button type="button" className="ac-v3-builder__danger" onClick={onRemove}>Удалить связь</button>
             </section>
         </div>
@@ -2507,15 +2643,26 @@ function nextButtonId(rows) {
 }
 
 function edgePayload(outputId, label) {
+    const isButton = outputId !== null;
+
     return {
         schema_version: 3,
+        edge_schema_version: 3,
+        edge_key: null,
         from_output_id: outputId,
         label,
+        mode: isButton ? 'button' : 'wait_reply',
+        priority: 10,
+        transition_limit: 0,
         match: {
-            type: 'strict',
-            variable: 'last_user_message',
-            value: outputId ? label : '',
-            ignore_strings: [],
+            type: isButton ? 'exact_text' : 'any_inbound',
+            text: isButton ? label : '',
+        },
+        input_capture: {
+            enabled: false,
+            field_scope: 'dialog',
+            field_key: '',
+            data_type: 'any_text',
         },
         delay: {
             value: 0,

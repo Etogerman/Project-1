@@ -29,13 +29,13 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
-use Tests\TestCase;
 use Tests\Feature\Concerns\BuildsIbizaMvpSchema;
+use Tests\TestCase;
 
 class GenericDbScenarioRuntimeTest extends TestCase
 {
-    use RefreshDatabase;
     use BuildsIbizaMvpSchema;
+    use RefreshDatabase;
 
     public function test_database_backed_scenario_starts_by_parameter_and_advances_to_first_question(): void
     {
@@ -218,6 +218,211 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Вот каталог');
+    }
+
+    public function test_v3_wait_reply_exact_multiline_saves_dialog_field_and_counter(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9201]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9202]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_exact', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_code',
+                targetBlockId: 'accepted',
+                matchType: 'exact_text',
+                variants: ['1', '2', '3'],
+                inputCapture: [
+                    'enabled' => true,
+                    'field_key' => 'client_code',
+                    'data_type' => 'any_text',
+                ],
+            ),
+        ], [
+            'accepted' => 'Код принят',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, '12');
+
+        $run->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('start', $run->current_step);
+        $this->assertNull(data_get($dialog->fields_payload, 'client_code'));
+        $this->assertCount(1, Http::recorded());
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, '2');
+
+        $run->refresh();
+        $dialog->refresh();
+
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_code';
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('accepted', $run->current_step);
+        $this->assertSame('2', data_get($dialog->fields_payload, 'client_code'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Код принят');
+    }
+
+    public function test_v3_wait_reply_skips_exhausted_transition_limit_and_uses_next_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9301]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9302]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_limit', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge('20', 'edge_high', 'high', priority: 20, transitionLimit: 1),
+            $this->v3WaitReplyEdge('10', 'edge_low', 'low', priority: 10),
+        ], [
+            'high' => 'Высокий приоритет',
+            'low' => 'Низкий приоритет',
+        ]));
+        $exhaustedKey = 'published_'.$scenario->publishedVersion->id.':edge_high';
+
+        $dialog->forceFill([
+            'fields_payload' => [
+                '_v3' => [
+                    'transition_counts' => [
+                        $exhaustedKey => 1,
+                    ],
+                ],
+            ],
+        ])->save();
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+        $dialog->refresh();
+
+        $lowKey = 'published_'.$scenario->publishedVersion->id.':edge_low';
+
+        $this->assertSame('low', $run->current_step);
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$exhaustedKey));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$lowKey));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Низкий приоритет');
+    }
+
+    public function test_v3_wait_reply_invalid_capture_keeps_current_block_and_stays_silent(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9401]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_invalid_capture', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_email',
+                targetBlockId: 'accepted',
+                inputCapture: [
+                    'enabled' => true,
+                    'field_key' => 'client_email',
+                    'data_type' => 'email',
+                ],
+            ),
+        ], [
+            'accepted' => 'Email принят',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'не email');
+
+        $run->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('start', $run->current_step);
+        $this->assertSame('waiting_input', data_get($run->state_payload, 'v3.status'));
+        $this->assertNull(data_get($dialog->fields_payload, 'client_email'));
+        $this->assertSame([], data_get($dialog->fields_payload, '_v3.transition_counts', []));
+        $this->assertCount(1, Http::recorded());
     }
 
     public function test_v3_start_chooses_one_matching_entrypoint_by_highest_priority_then_latest_block_id(): void
@@ -3404,8 +3609,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         array $contactOverrides = [],
         array $identityOverrides = [],
         array $dialogOverrides = [],
-    ): array
-    {
+    ): array {
         $contact = Contact::factory()->create(array_merge([
             'is_auto_reply_enabled' => true,
         ], $contactOverrides));
@@ -3510,6 +3714,114 @@ class GenericDbScenarioRuntimeTest extends TestCase
                     'label' => 'Получить каталог',
                 ]],
             ],
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $waitReplyEdges
+     * @param  array<string, string>  $targetMessages
+     * @return array<string, mixed>
+     */
+    private function v3WaitReplyRuntimeSchema(int $channelId, array $waitReplyEdges, array $targetMessages): array
+    {
+        $targetBlocks = [];
+
+        foreach ($targetMessages as $blockId => $messageText) {
+            $targetBlocks[$blockId] = [
+                'id' => $blockId,
+                'db_id' => crc32($blockId),
+                'kind' => 'state',
+                'title' => $blockId,
+                'message' => [
+                    'text' => $messageText,
+                    'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                ],
+                'buttons' => null,
+                'wait_reply_edges' => [],
+                'default_target_block_id' => null,
+            ];
+        }
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => array_merge([
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Напишите ответ',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => $waitReplyEdges,
+                        'default_target_block_id' => null,
+                    ],
+                ], $targetBlocks),
+                'edges' => collect($waitReplyEdges)
+                    ->map(fn (array $edge): array => [
+                        'id' => $edge['id'],
+                        'edge_key' => $edge['edge_key'],
+                        'mode' => 'wait_reply',
+                        'source_block_id' => 'start',
+                        'target_block_id' => $edge['target_block_id'],
+                        'from_output_id' => null,
+                        'label' => $edge['label'] ?? '',
+                    ])
+                    ->values()
+                    ->all(),
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<string>  $variants
+     * @param  array<string, mixed>  $inputCapture
+     * @return array<string, mixed>
+     */
+    private function v3WaitReplyEdge(
+        string $id,
+        string $edgeKey,
+        string $targetBlockId,
+        string $matchType = 'any_inbound',
+        array $variants = [],
+        int $priority = 10,
+        int $transitionLimit = 0,
+        array $inputCapture = [],
+    ): array {
+        return [
+            'id' => $id,
+            'edge_key' => $edgeKey,
+            'mode' => 'wait_reply',
+            'priority' => $priority,
+            'transition_limit' => $transitionLimit,
+            'source_block_id' => 'start',
+            'target_block_id' => $targetBlockId,
+            'from_output_id' => null,
+            'label' => '',
+            'match' => [
+                'type' => $matchType,
+                'text' => implode("\n", $variants),
+                'variants' => $variants,
+            ],
+            'input_capture' => array_merge([
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ], $inputCapture),
         ];
     }
 
