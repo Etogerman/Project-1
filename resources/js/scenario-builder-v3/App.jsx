@@ -783,6 +783,9 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             return;
         }
 
+        const blockBeforePublish = selectedBlockKey;
+        const edgeBeforePublish = selectedEdgeKey;
+
         setIsPublishing(true);
         setError(null);
         setNotice(null);
@@ -798,10 +801,11 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 draft_version_id: savedState.scenario.draft_version_id,
                 base_revision: savedState.builder.revision,
             });
+            const selection = resolvePublishedSelection(savedState, response, blockBeforePublish, edgeBeforePublish);
 
             setState(response);
-            setSelectedBlockKey(response.builder?.blocks?.[0]?.client_key ?? null);
-            setSelectedEdgeKey(null);
+            setSelectedBlockKey(selection.blockKey);
+            setSelectedEdgeKey(selection.edgeKey);
             cancelConnection();
             setStatus('ready');
             setNotice(`Опубликовано v${response.published?.version_number ?? ''}`.trim());
@@ -865,8 +869,6 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         <section className="ac-v3-builder">
             <header className="ac-v3-builder__topbar">
                 <div className="ac-v3-builder__crumb">
-                    <span>Конструктор</span>
-                    <i>/</i>
                     <strong>{state?.scenario?.name ?? 'Сценарий'}</strong>
                     {revision ? <em>{revision}</em> : null}
                 </div>
@@ -2744,6 +2746,71 @@ function resolveReturnedKey(previousKey, idMap, prefix) {
     const id = idMap?.[previousKey];
 
     return id ? `${prefix}_${id}` : previousKey;
+}
+
+function resolvePublishedSelection(savedState, publishedState, blockKey, edgeKey) {
+    const savedBlocks = savedState?.builder?.blocks ?? [];
+    const savedEdges = savedState?.builder?.edges ?? [];
+    const publishedBlocks = publishedState?.builder?.blocks ?? [];
+    const publishedEdges = publishedState?.builder?.edges ?? [];
+    const savedEdgeKey = resolveReturnedKey(edgeKey, savedState?.id_map?.edges, 'edge');
+    const savedBlockKey = resolveReturnedKey(blockKey, savedState?.id_map?.blocks, 'block');
+    const savedEdge = savedEdges.find((edge) => edge.client_key === savedEdgeKey);
+
+    if (savedEdge) {
+        const edge = findMatchingPublishedEdge(savedEdge, savedBlocks, publishedEdges, publishedBlocks);
+
+        if (edge) {
+            return { blockKey: null, edgeKey: edge.client_key };
+        }
+    }
+
+    const savedBlock = savedBlocks.find((block) => block.client_key === savedBlockKey);
+
+    if (savedBlock) {
+        const cardId = stableBlockCardId(savedBlock);
+        const block = publishedBlocks.find((item) => stableBlockCardId(item) === cardId);
+
+        if (block) {
+            return { blockKey: block.client_key, edgeKey: null };
+        }
+    }
+
+    return {
+        blockKey: publishedBlocks[0]?.client_key ?? null,
+        edgeKey: null,
+    };
+}
+
+function findMatchingPublishedEdge(savedEdge, savedBlocks, publishedEdges, publishedBlocks) {
+    const edgeKey = savedEdge?.condition_payload?.edge_key;
+
+    if (edgeKey) {
+        const edge = publishedEdges.find((item) => item.condition_payload?.edge_key === edgeKey);
+
+        if (edge) {
+            return edge;
+        }
+    }
+
+    const sourceCardId = stableBlockCardId(savedBlocks.find((block) => block.client_key === savedEdge.source?.client_key));
+    const targetCardId = stableBlockCardId(savedBlocks.find((block) => block.client_key === savedEdge.target?.client_key));
+
+    if (! sourceCardId || ! targetCardId) {
+        return null;
+    }
+
+    return publishedEdges.find((edge) => (
+        edge.source?.output_id === savedEdge.source?.output_id
+        && stableBlockCardId(publishedBlocks.find((block) => block.client_key === edge.source?.client_key)) === sourceCardId
+        && stableBlockCardId(publishedBlocks.find((block) => block.client_key === edge.target?.client_key)) === targetCardId
+    )) ?? null;
+}
+
+function stableBlockCardId(block) {
+    return block?.settings_payload?.ui?.card_id
+        ?? block?.display_id
+        ?? null;
 }
 
 function snap(value) {

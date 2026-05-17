@@ -1757,9 +1757,32 @@
     grid-template-columns: 16px minmax(0, 1fr);
 }
 
-.ac-v3-builder__check input {
+.ac-v3-builder__check input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
     width: 15px;
     height: 15px;
+    margin: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--surface);
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 11px 11px;
+    box-shadow: 0 1px 1px rgba(20, 20, 20, 0.04);
+    cursor: pointer;
+    padding: 0;
+}
+
+.ac-v3-builder__check input[type="checkbox"]:checked {
+    border-color: color-mix(in oklch, var(--accent) 84%, #1d4ed8);
+    background-color: color-mix(in oklch, var(--accent) 88%, #1d4ed8);
+    background-image: url("data:image/svg+xml,%3Csvg width='11' height='11' viewBox='0 0 11 11' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M2.25 5.55L4.45 7.65L8.85 3.15' stroke='white' stroke-width='1.65' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.ac-v3-builder__check input[type="checkbox"]:focus-visible {
+    outline: 2px solid color-mix(in oklch, var(--accent) 45%, transparent);
+    outline-offset: 2px;
 }
 
 .ac-v3-builder__check span {
