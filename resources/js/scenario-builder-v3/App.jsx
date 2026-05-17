@@ -41,6 +41,14 @@ const BUTTON_TYPE_OPTIONS = [
     [BUTTON_TYPE_TEXT, 'Текстовая'],
     [BUTTON_TYPE_REQUEST_PHONE, 'Запросить телефон'],
 ];
+const BUTTON_PLACEMENT_AUTO = 'auto';
+const BUTTON_PLACEMENT_REPLY = 'reply_keyboard';
+const BUTTON_PLACEMENT_INLINE = 'inline_message';
+const BUTTON_PLACEMENT_OPTIONS = [
+    [BUTTON_PLACEMENT_AUTO, 'Авто'],
+    [BUTTON_PLACEMENT_REPLY, 'Клавиатура'],
+    [BUTTON_PLACEMENT_INLINE, 'В сообщении'],
+];
 const REQUEST_PHONE_BUTTON_TEXT = 'Поделиться номером телефона';
 const BUTTON_COLOR_OPTIONS = [
     [null, 'Без цвета', null],
@@ -611,6 +619,25 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }
     }
 
+    function reorderButtons(clientKey, nextRows) {
+        updateBlockSettings(clientKey, (settings) => syncOutputs({
+            ...settings,
+            modules: sortModules(modulesFrom(settings).map((module) => {
+                if (module.type !== 'buttons') {
+                    return module;
+                }
+
+                return {
+                    ...module,
+                    payload: {
+                        ...module.payload,
+                        rows: normalizeButtonRows(nextRows),
+                    },
+                };
+            })),
+        }));
+    }
+
     function removeButton(clientKey, buttonId) {
         updateBlockSettings(clientKey, (settings) => syncOutputs({
             ...settings,
@@ -975,6 +1002,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                 onToggleModule={toggleModule}
                                 onAddButton={addButton}
                                 onUpdateButton={updateButton}
+                                onReorderButtons={reorderButtons}
                                 onRemoveButton={removeButton}
                                 onUpdateStartChannels={updateStartChannels}
                                 validationIssue={validationIssue}
@@ -1295,6 +1323,7 @@ function BlockPanel({
     onToggleModule,
     onAddButton,
     onUpdateButton,
+    onReorderButtons,
     onRemoveButton,
     onUpdateStartChannels,
     validationIssue,
@@ -1472,7 +1501,9 @@ function BlockPanel({
                                         buttons={buttons}
                                         blockKey={block.client_key}
                                         onAddButton={onAddButton}
+                                        onUpdatePlacement={(placement) => onUpdateModulePayload(block.client_key, 'buttons', { placement })}
                                         onUpdateButton={onUpdateButton}
+                                        onReorderButtons={onReorderButtons}
                                         onRemoveButton={onRemoveButton}
                                         invalidButtonId={validationIssue?.blockKey === block.client_key ? validationIssue.buttonId : null}
                                         focusButtonId={pendingButtonFocus?.blockKey === block.client_key ? pendingButtonFocus.buttonId : null}
@@ -1492,17 +1523,22 @@ function ButtonsFields({
     buttons,
     blockKey,
     onAddButton,
+    onUpdatePlacement,
     onUpdateButton,
+    onReorderButtons,
     onRemoveButton,
     invalidButtonId,
     focusButtonId,
     onButtonFocused,
 }) {
     const [editingButtonId, setEditingButtonId] = useState(null);
+    const [dragState, setDragState] = useState(null);
+    const [dropTarget, setDropTarget] = useState(null);
     const rows = buttonRows(buttons);
     const flat = rows.flat();
     const editingButton = flat.find((button) => button.id === editingButtonId) ?? null;
     const totalButtons = rows.reduce((sum, row) => sum + row.length, 0);
+    const placement = buttonPlacement(buttons);
 
     useEffect(() => {
         if (! focusButtonId) {
@@ -1519,8 +1555,102 @@ function ButtonsFields({
         }
     }, [editingButtonId, flat]);
 
+    function beginDrag(event, rowIndex, buttonIndex, buttonId) {
+        setDragState({ rowIndex, buttonIndex, buttonId });
+        setDropTarget({ rowIndex, buttonIndex });
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', buttonId);
+    }
+
+    function clearDrag() {
+        setDragState(null);
+        setDropTarget(null);
+    }
+
+    function markDropTarget(event, rowIndex, buttonIndex) {
+        if (! dragState) {
+            return;
+        }
+
+        const rect = event.currentTarget.getBoundingClientRect();
+        const insertIndex = buttonIndex + (event.clientX > rect.left + rect.width / 2 ? 1 : 0);
+
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setDropTarget({ rowIndex, buttonIndex: insertIndex });
+    }
+
+    function markRowEnd(event, rowIndex) {
+        if (! dragState) {
+            return;
+        }
+
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setDropTarget({ rowIndex, buttonIndex: rows[rowIndex]?.length ?? 0 });
+    }
+
+    function markNewRow(event) {
+        if (! dragState) {
+            return;
+        }
+
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setDropTarget({ mode: 'new-row', rowIndex: rows.length, buttonIndex: 0 });
+    }
+
+    function dropButton(event, rowIndex, buttonIndex) {
+        if (! dragState) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        const insertIndex = buttonIndex + (event.clientX > rect.left + rect.width / 2 ? 1 : 0);
+
+        onReorderButtons(blockKey, moveButtonRows(rows, dragState, { rowIndex, buttonIndex: insertIndex }));
+        clearDrag();
+    }
+
+    function dropRowEnd(event, rowIndex) {
+        if (! dragState) {
+            return;
+        }
+
+        event.preventDefault();
+        onReorderButtons(blockKey, moveButtonRows(rows, dragState, { rowIndex, buttonIndex: rows[rowIndex]?.length ?? 0 }));
+        clearDrag();
+    }
+
+    function dropNewRow(event) {
+        if (! dragState) {
+            return;
+        }
+
+        event.preventDefault();
+        onReorderButtons(blockKey, moveButtonRows(rows, dragState, { rowIndex: rows.length, buttonIndex: 0 }));
+        clearDrag();
+    }
+
     return (
         <div className="ac-v3-builder__buttons-module">
+            <div className="ac-v3-builder__buttons-placement" role="group" aria-label="Размещение кнопок">
+                {BUTTON_PLACEMENT_OPTIONS.map(([value, label]) => (
+                    <button
+                        key={value}
+                        type="button"
+                        className={placement === value ? 'is-active' : ''}
+                        title={buttonPlacementHint(value)}
+                        aria-pressed={placement === value ? 'true' : 'false'}
+                        onClick={() => onUpdatePlacement(value)}
+                    >
+                        {label}
+                    </button>
+                ))}
+            </div>
+
             <div className="ac-v3-builder__buttons-meta">
                 {totalButtons > 0 ? (
                     <span><b>{totalButtons}</b> / 100 · {rows.length} {pluralRows(rows.length)}</span>
@@ -1532,9 +1662,32 @@ function ButtonsFields({
             <div className="ac-v3-builder__buttons-editor">
                 {rows.map((row, rowIndex) => (
                     <div key={row.map((button) => button.id).join('-') || rowIndex} className="ac-v3-builder__buttons-row">
-                        <div className="ac-v3-builder__buttons-row-items">
-                            {row.map((button) => (
-                                <div key={button.id} className="ac-v3-builder__button-input-wrap">
+                        <div
+                            className={[
+                                'ac-v3-builder__buttons-row-items',
+                                dropTarget?.rowIndex === rowIndex && dropTarget.buttonIndex === row.length ? 'is-drop-end' : '',
+                            ].filter(Boolean).join(' ')}
+                            onDragOver={(event) => markRowEnd(event, rowIndex)}
+                            onDrop={(event) => dropRowEnd(event, rowIndex)}
+                        >
+                            {row.map((button, buttonIndex) => (
+                                <div
+                                    key={button.id}
+                                    className={[
+                                        'ac-v3-builder__button-input-wrap',
+                                        dragState?.buttonId === button.id ? 'is-dragging' : '',
+                                        dropTarget?.rowIndex === rowIndex && dropTarget.buttonIndex === buttonIndex ? 'is-drop-before' : '',
+                                        dropTarget?.rowIndex === rowIndex && dropTarget.buttonIndex === buttonIndex + 1 ? 'is-drop-after' : '',
+                                    ].filter(Boolean).join(' ')}
+                                    draggable
+                                    onDragStart={(event) => beginDrag(event, rowIndex, buttonIndex, button.id)}
+                                    onDragOver={(event) => {
+                                        event.stopPropagation();
+                                        markDropTarget(event, rowIndex, buttonIndex);
+                                    }}
+                                    onDrop={(event) => dropButton(event, rowIndex, buttonIndex)}
+                                    onDragEnd={clearDrag}
+                                >
                                     <button
                                         type="button"
                                         className={[
@@ -1568,9 +1721,31 @@ function ButtonsFields({
                         </button>
                     </div>
                 ))}
+
+                {dragState ? (
+                    <div
+                        className={[
+                            'ac-v3-builder__buttons-new-row-drop',
+                            dropTarget?.mode === 'new-row' ? 'is-active' : '',
+                        ].filter(Boolean).join(' ')}
+                        onDragOver={markNewRow}
+                        onDrop={dropNewRow}
+                    >
+                        Новый ряд
+                    </div>
+                ) : null}
             </div>
 
-            <button type="button" className="ac-v3-builder__add-row-btn" onClick={() => onAddButton(blockKey)}>
+            <button
+                type="button"
+                className={[
+                    'ac-v3-builder__add-row-btn',
+                    dropTarget?.mode === 'new-row' ? 'is-drop-target' : '',
+                ].filter(Boolean).join(' ')}
+                onDragOver={markNewRow}
+                onDrop={dropNewRow}
+                onClick={() => onAddButton(blockKey)}
+            >
                 Добавить кнопку
             </button>
 
@@ -1695,6 +1870,24 @@ function ButtonEditDialog({ button, onClose, onSave }) {
 
 function buttonTypeLabel(type) {
     return BUTTON_TYPE_OPTIONS.find(([value]) => value === type)?.[1] ?? 'Текстовая';
+}
+
+function buttonPlacement(buttonsModule) {
+    const placement = buttonsModule?.payload?.placement;
+
+    return BUTTON_PLACEMENT_OPTIONS.some(([value]) => value === placement) ? placement : BUTTON_PLACEMENT_AUTO;
+}
+
+function buttonPlacementHint(placement) {
+    if (placement === BUTTON_PLACEMENT_REPLY) {
+        return 'Telegram покажет клавиатуру; MAX может скрыть кнопки.';
+    }
+
+    if (placement === BUTTON_PLACEMENT_INLINE) {
+        return 'MAX покажет кнопки в сообщении; Telegram не покажет запрос телефона.';
+    }
+
+    return 'Telegram выберет клавиатуру, MAX — кнопки в сообщении.';
 }
 
 function pluralRows(count) {
@@ -2221,6 +2414,60 @@ function buttonRows(buttonsModule) {
     return Array.isArray(buttonsModule?.payload?.rows)
         ? buttonsModule.payload.rows.map((row) => (Array.isArray(row) ? row : [])).filter((row) => row.length > 0)
         : [];
+}
+
+function normalizeButtonRows(rows) {
+    return Array.isArray(rows)
+        ? rows
+            .map((row) => (Array.isArray(row) ? row.filter(Boolean) : []))
+            .filter((row) => row.length > 0)
+        : [];
+}
+
+function moveButtonRows(rows, from, to) {
+    const nextRows = normalizeButtonRows(rows).map((row) => [...row]);
+    const sourceRow = nextRows[from.rowIndex];
+
+    if (! sourceRow || ! sourceRow[from.buttonIndex]) {
+        return nextRows;
+    }
+
+    let targetRowIndex = to.rowIndex;
+    let targetButtonIndex = to.buttonIndex;
+
+    if (from.rowIndex === targetRowIndex) {
+        const [button] = sourceRow.splice(from.buttonIndex, 1);
+
+        if (from.buttonIndex < targetButtonIndex) {
+            targetButtonIndex -= 1;
+        }
+
+        sourceRow.splice(Math.max(0, Math.min(targetButtonIndex, sourceRow.length)), 0, button);
+
+        return normalizeButtonRows(nextRows);
+    }
+
+    const [button] = sourceRow.splice(from.buttonIndex, 1);
+
+    if (sourceRow.length === 0) {
+        nextRows.splice(from.rowIndex, 1);
+
+        if (from.rowIndex < targetRowIndex) {
+            targetRowIndex -= 1;
+        }
+    }
+
+    const targetRow = nextRows[targetRowIndex];
+
+    if (! targetRow) {
+        nextRows.push([button]);
+
+        return normalizeButtonRows(nextRows);
+    }
+
+    targetRow.splice(Math.max(0, Math.min(targetButtonIndex, targetRow.length)), 0, button);
+
+    return normalizeButtonRows(nextRows);
 }
 
 function flatButtons(buttonsModule) {

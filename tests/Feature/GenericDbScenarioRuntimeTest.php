@@ -597,6 +597,214 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Спасибо, телефон получен');
     }
 
+    public function test_v3_inline_message_buttons_render_telegram_inline_and_manual_text_advances(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9501]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9502]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_inline_text_button',
+            $this->v3CatalogRuntimeSchema($channel->id, placement: 'inline_message'),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(['btn_catalog'], data_get($run->state_payload, 'v3.waiting_output_ids'));
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Получить каталог'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.callback_data') === 'v3b:btn_catalog'
+            && data_get($request->data(), 'reply_markup.keyboard') === null);
+
+        $buttonText = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Получить каталог',
+        ]);
+
+        (new ProcessScenarioInboundJob($buttonText->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('catalog', $run->current_step);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Вот каталог');
+    }
+
+    public function test_v3_inline_message_request_phone_is_hidden_for_telegram_but_contact_share_advances(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9511]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9512]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_inline_hidden_phone',
+            $this->v3RequestPhoneButtonRuntimeSchema($channel->id, placement: 'inline_message'),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('ask_phone', $run->current_step);
+        $this->assertSame([], data_get($run->state_payload, 'v3.waiting_output_ids'));
+        $this->assertTrue(app(ScenarioRegistry::class)->makeRuntime($scenario->code)->supportsContactShareContinuation($run));
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Поделитесь телефоном'
+            && data_get($request->data(), 'reply_markup') === null);
+
+        $phoneShare = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => null,
+        ]);
+
+        (new ProcessScenarioInboundJob($phoneShare->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('thanks', $run->current_step);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Спасибо, телефон получен');
+    }
+
+    public function test_v3_reply_keyboard_buttons_are_hidden_for_max_but_manual_text_advances(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::sequence()
+                ->push(['message' => ['mid' => 'max-out-1']])
+                ->push(['message' => ['mid' => 'max-out-2']]),
+        ]);
+
+        $channel = $this->createMaxChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext(
+            $channel,
+            identityOverrides: ['external_user_id' => 'max-user-500'],
+            dialogOverrides: ['external_chat_id' => 'max-chat-700'],
+        );
+        $scenario = $this->createPublishedScenario(
+            'v3_max_hidden_reply_keyboard',
+            $this->v3CatalogRuntimeSchema($channel->id, placement: 'reply_keyboard'),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('start', $run->current_step);
+        $this->assertSame(['btn_catalog'], data_get($run->state_payload, 'v3.waiting_output_ids'));
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages')
+            && $request['text'] === 'Выберите действие'
+            && ! array_key_exists('attachments', $request->data()));
+
+        $buttonText = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Получить каталог',
+        ]);
+
+        (new ProcessScenarioInboundJob($buttonText->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('catalog', $run->current_step);
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages')
+            && $request['text'] === 'Вот каталог');
+    }
+
     public function test_v3_request_phone_button_to_non_state_keeps_current_state_after_contact_share(): void
     {
         Http::fake([
@@ -3177,6 +3385,17 @@ class GenericDbScenarioRuntimeTest extends TestCase
         ]);
     }
 
+    private function createMaxChannel(): Channel
+    {
+        return Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+            'bot_token_present' => true,
+        ]);
+    }
+
     /**
      * @return array{0: Contact, 1: ContactIdentity, 2: Dialog}
      */
@@ -3233,7 +3452,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
     /**
      * @return array<string, mixed>
      */
-    private function v3CatalogRuntimeSchema(int $channelId): array
+    private function v3CatalogRuntimeSchema(int $channelId, string $placement = 'auto'): array
     {
         return [
             'version' => 3,
@@ -3258,7 +3477,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
                             'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
                         ],
                         'buttons' => [
-                            'placement' => 'auto',
+                            'placement' => $placement,
                             'rows' => [[
                                 [
                                     'id' => 'btn_catalog',
@@ -3297,7 +3516,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
     /**
      * @return array<string, mixed>
      */
-    private function v3RequestPhoneButtonRuntimeSchema(int $channelId): array
+    private function v3RequestPhoneButtonRuntimeSchema(int $channelId, string $placement = 'auto'): array
     {
         return [
             'version' => 3,
@@ -3323,7 +3542,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
                             'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
                         ],
                         'buttons' => [
-                            'placement' => 'auto',
+                            'placement' => $placement,
                             'rows' => [[
                                 [
                                     'id' => 'btn_phone',

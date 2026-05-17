@@ -41,6 +41,14 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
 
     private const V3_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
 
+    private const V3_BUTTON_PLACEMENT_AUTO = 'auto';
+
+    private const V3_BUTTON_PLACEMENT_REPLY_KEYBOARD = 'reply_keyboard';
+
+    private const V3_BUTTON_PLACEMENT_INLINE_MESSAGE = 'inline_message';
+
+    private const V3_TELEGRAM_BUTTON_CALLBACK_PREFIX = 'v3b:';
+
     private const PENDING_PROMPT_DELIVERY_STATE_KEY = 'run.pending_prompt_delivery';
 
     private const PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY = 'run.pending_prompt_remove_telegram_keyboard';
@@ -386,8 +394,9 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
             $statePayload = $this->v3StatePayload($run->state_payload);
             $currentStep = $this->v3RuntimeBlockId($v3Runtime, $currentStep, $statePayload);
             $block = $currentStep !== null ? $this->v3RuntimeBlock($v3Runtime, $currentStep) : null;
+            $channel = $run->dialog?->channel;
 
-            return is_array($block) && $this->v3TargetForContactShare($block) !== null;
+            return is_array($block) && $this->v3TargetForContactShare($block, $channel) !== null;
         }
 
         $schema = $this->validatedSchemaOrNull();
@@ -398,7 +407,37 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
 
     public function supportsTelegramCallbackContinuation(ScenarioRun $run, string $callbackData): bool
     {
-        return false;
+        if (! str_starts_with($callbackData, self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX)) {
+            return false;
+        }
+
+        $currentStep = filled($run->current_step) ? trim((string) $run->current_step) : null;
+
+        if ($currentStep === null) {
+            return false;
+        }
+
+        $v3Runtime = $this->v3RuntimeOrNull();
+
+        if ($v3Runtime === null) {
+            return false;
+        }
+
+        $statePayload = $this->v3StatePayload($run->state_payload);
+        $currentStep = $this->v3RuntimeBlockId($v3Runtime, $currentStep, $statePayload);
+        $block = $currentStep !== null ? $this->v3RuntimeBlock($v3Runtime, $currentStep) : null;
+
+        if (! is_array($block)) {
+            return false;
+        }
+
+        $channel = $run->dialog?->channel;
+
+        if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_TELEGRAM) {
+            return false;
+        }
+
+        return $this->v3TargetForButtonCallback($callbackData, $block, $channel) !== null;
     }
 
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
@@ -944,7 +983,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
 
         $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
         $targetBlockId = $message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE
-            ? $this->v3TargetForContactShare(is_array($block) ? $block : [])
+            ? $this->v3TargetForContactShare(is_array($block) ? $block : [], $message->channel)
             : $this->v3TargetForButtonText($message, is_array($block) ? $block : []);
 
         if ($targetBlockId === null) {
@@ -952,7 +991,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
                 consumed: true,
                 status: ScenarioRun::STATUS_ACTIVE,
                 currentStep: $currentBlockId,
-                statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block),
+                statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
                 exitOutcome: null,
             );
         }
@@ -1008,17 +1047,19 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         }
 
         $messagePayload = is_array($block['message'] ?? null) ? $block['message'] : null;
-        $buttonRows = $this->v3ButtonRows($block);
-        $waitingButtonRows = $this->v3WaitingButtonRows($block);
+        $visibleButtonRows = $this->v3VisibleButtonRows($block, $message->channel);
+        $waitingButtonRows = $this->v3WaitingButtonRows($block, $message->channel);
+        $buttonPlacement = $this->v3ButtonPlacement($block);
 
         if ($messagePayload !== null) {
-            $replyButtonRows = $buttonRows !== [] ? $buttonRows : null;
+            $replyButtonRows = $visibleButtonRows !== [] ? $visibleButtonRows : null;
 
             if (! $this->dispatchScenarioMessage(
                 $message,
                 (string) ($messagePayload['text'] ?? ''),
                 (string) ($messagePayload['text_format'] ?? Message::TEXT_FORMAT_PLAIN_TEXT),
                 replyButtonRows: $replyButtonRows,
+                buttonPlacement: $buttonPlacement,
             )) {
                 $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
 
@@ -1032,7 +1073,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         if (! $isNonStateBlock && $waitingButtonRows !== []) {
             return $this->activeProgress(
                 $blockId,
-                $this->markV3Waiting($statePayload, $blockId, $block),
+                $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
             );
         }
 
@@ -1058,7 +1099,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         if (! $isNonStateBlock) {
             return $this->activeProgress(
                 $blockId,
-                $this->markV3Waiting($statePayload, $blockId, $block),
+                $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
             );
         }
 
@@ -1221,12 +1262,14 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
             return null;
         }
 
-        foreach ($this->v3WaitingButtonRows($block) as $row) {
-            foreach ($row as $button) {
-                if (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_TEXT) {
-                    continue;
-                }
+        $callbackTarget = $this->v3TargetForButtonCallback((string) $message->text, $block, $message->channel);
 
+        if ($callbackTarget !== null) {
+            return $callbackTarget;
+        }
+
+        foreach ($this->v3TextInputButtonRows($block) as $row) {
+            foreach ($row as $button) {
                 if ($messageText === (string) ($button['normalized_text'] ?? '')) {
                     return filled($button['target_block_id'] ?? null) ? (string) $button['target_block_id'] : null;
                 }
@@ -1239,14 +1282,51 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
     /**
      * @param  array<string, mixed>  $block
      */
-    private function v3TargetForContactShare(array $block): ?string
+    private function v3TargetForButtonCallback(string $callbackData, array $block, ?Channel $channel): ?string
     {
-        foreach ($this->v3WaitingButtonRows($block) as $row) {
+        $outputId = $this->v3ButtonOutputIdFromCallback($callbackData);
+
+        if ($outputId === null) {
+            return null;
+        }
+
+        foreach ($this->v3VisibleButtonRows($block, $channel) as $row) {
             foreach ($row as $button) {
+                if (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_TEXT) {
+                    continue;
+                }
+
                 if (
-                    ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_REQUEST_PHONE
-                    && filled($button['target_block_id'] ?? null)
+                    filled($button['target_block_id'] ?? null)
+                    && (string) ($button['output_id'] ?? '') === $outputId
                 ) {
+                    return filled($button['target_block_id'] ?? null) ? (string) $button['target_block_id'] : null;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function v3ButtonOutputIdFromCallback(string $callbackData): ?string
+    {
+        if (! str_starts_with($callbackData, self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX)) {
+            return null;
+        }
+
+        $outputId = trim(substr($callbackData, strlen(self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX)));
+
+        return $outputId !== '' ? $outputId : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3TargetForContactShare(array $block, ?Channel $channel = null): ?string
+    {
+        foreach ($this->v3RequestPhoneButtonRows($block) as $row) {
+            foreach ($row as $button) {
+                if (filled($button['target_block_id'] ?? null)) {
                     return (string) $button['target_block_id'];
                 }
             }
@@ -1268,16 +1348,112 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
      * @param  array<string, mixed>  $block
      * @return list<list<array<string, mixed>>>
      */
-    private function v3WaitingButtonRows(array $block): array
+    private function v3VisibleButtonRows(array $block, ?Channel $channel): array
     {
+        $placement = $this->v3ButtonPlacement($block);
+
         return collect($this->v3ButtonRows($block))
             ->map(fn (array $row): array => collect($row)
-                ->filter(fn (array $button): bool => filled($button['target_block_id'] ?? null))
+                ->filter(fn (array $button): bool => $this->v3ButtonVisibleForChannel($button, $placement, $channel))
                 ->values()
                 ->all())
             ->filter(fn (array $row): bool => $row !== [])
             ->values()
             ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<list<array<string, mixed>>>
+     */
+    private function v3WaitingButtonRows(array $block, ?Channel $channel = null): array
+    {
+        $placement = $this->v3ButtonPlacement($block);
+
+        return collect($this->v3ButtonRows($block))
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (array $button): bool => filled($button['target_block_id'] ?? null)
+                    && (
+                        ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_TEXT
+                        || (
+                            ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_REQUEST_PHONE
+                            && $this->v3ButtonVisibleForChannel($button, $placement, $channel)
+                        )
+                    ))
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<list<array<string, mixed>>>
+     */
+    private function v3TextInputButtonRows(array $block): array
+    {
+        return collect($this->v3ButtonRows($block))
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (array $button): bool => filled($button['target_block_id'] ?? null)
+                    && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_TEXT)
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<list<array<string, mixed>>>
+     */
+    private function v3RequestPhoneButtonRows(array $block): array
+    {
+        return collect($this->v3ButtonRows($block))
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (array $button): bool => filled($button['target_block_id'] ?? null)
+                    && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_REQUEST_PHONE)
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3ButtonPlacement(array $block): string
+    {
+        $placement = (string) data_get($block, 'buttons.placement', self::V3_BUTTON_PLACEMENT_AUTO);
+
+        return in_array($placement, [
+            self::V3_BUTTON_PLACEMENT_AUTO,
+            self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD,
+            self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE,
+        ], true) ? $placement : self::V3_BUTTON_PLACEMENT_AUTO;
+    }
+
+    /**
+     * @param  array<string, mixed>  $button
+     */
+    private function v3ButtonVisibleForChannel(array $button, string $placement, ?Channel $channel): bool
+    {
+        if (! $channel instanceof Channel) {
+            return true;
+        }
+
+        if ($channel->platform === Channel::PLATFORM_MAX) {
+            return $placement !== self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD;
+        }
+
+        if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
+            return $placement !== self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE
+                || ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_REQUEST_PHONE;
+        }
+
+        return false;
     }
 
     /**
@@ -1481,11 +1657,11 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
      * @param  array<string, mixed>  $block
      * @return array<string, mixed>
      */
-    private function markV3Waiting(array $statePayload, string $blockId, array $block): array
+    private function markV3Waiting(array $statePayload, string $blockId, array $block, ?Channel $channel = null): array
     {
         data_set($statePayload, 'v3.status', 'waiting_input');
         data_set($statePayload, 'v3.current_block_id', $blockId);
-        data_set($statePayload, 'v3.waiting_output_ids', collect($this->v3WaitingButtonRows($block))
+        data_set($statePayload, 'v3.waiting_output_ids', collect($this->v3WaitingButtonRows($block, $channel))
             ->flatten(1)
             ->pluck('output_id')
             ->filter()
@@ -1586,6 +1762,7 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         bool $requestPhone = false,
         bool $removeTelegramKeyboard = false,
         ?array $replyButtonRows = null,
+        string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
     ): bool
     {
         $channel = $message->channel;
@@ -1599,8 +1776,8 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         $sendResult = $this->sendBotDialogTextAction->handleMessage(
             $message,
             $content->transportText,
-            telegramReplyMarkup: $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard, $replyButtonRows),
-            maxAttachments: $this->maxAttachments($requestPhone, $replyButtonRows),
+            telegramReplyMarkup: $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard, $replyButtonRows, $buttonPlacement),
+            maxAttachments: $this->maxAttachments($requestPhone, $replyButtonRows, $buttonPlacement),
             textFormat: $content->textFormat,
         );
 
@@ -1910,7 +2087,12 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
     /**
      * @return array<string, mixed>|null
      */
-    private function telegramReplyMarkup(bool $requestPhone, bool $removeTelegramKeyboard, ?array $replyButtonRows = null): ?array
+    private function telegramReplyMarkup(
+        bool $requestPhone,
+        bool $removeTelegramKeyboard,
+        ?array $replyButtonRows = null,
+        string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
+    ): ?array
     {
         if ($requestPhone) {
             return $this->telegramPhoneCaptureReplyMarkup();
@@ -1923,6 +2105,25 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
         }
 
         if ($replyButtonRows !== null && $replyButtonRows !== []) {
+            if ($buttonPlacement === self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE) {
+                $inlineKeyboard = collect($replyButtonRows)
+                    ->map(fn (array $row): array => collect($row)
+                        ->filter(fn (array $button): bool => filled($button['text'] ?? null)
+                            && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_TEXT
+                            && filled($button['output_id'] ?? null))
+                        ->map(fn (array $button): array => [
+                            'text' => (string) $button['text'],
+                            'callback_data' => self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX.(string) $button['output_id'],
+                        ])
+                        ->values()
+                        ->all())
+                    ->filter(fn (array $row): bool => $row !== [])
+                    ->values()
+                    ->all();
+
+                return $inlineKeyboard !== [] ? ['inline_keyboard' => $inlineKeyboard] : null;
+            }
+
             $keyboard = collect($replyButtonRows)
                 ->map(fn (array $row): array => collect($row)
                     ->filter(fn (array $button): bool => filled($button['text'] ?? null))
@@ -1970,10 +2171,18 @@ class GenericDbScenarioRuntime implements ResolvedScenarioRuntime, PrioritizedSc
      * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
      * @return array<int, array<string, mixed>>|null
      */
-    private function maxAttachments(bool $requestPhone, ?array $replyButtonRows): ?array
+    private function maxAttachments(
+        bool $requestPhone,
+        ?array $replyButtonRows,
+        string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
+    ): ?array
     {
         if ($requestPhone) {
             return $this->maxPhoneCaptureAttachments();
+        }
+
+        if ($buttonPlacement === self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD) {
+            return null;
         }
 
         if ($replyButtonRows === null || $replyButtonRows === []) {

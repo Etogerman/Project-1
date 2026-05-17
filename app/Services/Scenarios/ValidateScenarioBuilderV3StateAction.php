@@ -49,6 +49,8 @@ class ValidateScenarioBuilderV3StateAction
 
     private const BUTTON_TYPES = ['text', 'request_phone'];
 
+    private const BUTTON_PLACEMENTS = ['auto', 'reply_keyboard', 'inline_message'];
+
     /**
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
@@ -358,9 +360,20 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         return [
-            'placement' => (string) ($payload['placement'] ?? 'auto'),
+            'placement' => $this->normalizeButtonPlacement($payload['placement'] ?? null, $blockIndex, $moduleIndex),
             'rows' => $normalizedRows,
         ];
+    }
+
+    private function normalizeButtonPlacement(mixed $placement, int $blockIndex, int $moduleIndex): string
+    {
+        $placement = trim((string) ($placement ?: 'auto'));
+
+        if (! in_array($placement, self::BUTTON_PLACEMENTS, true)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.placement", 'Unknown button placement.');
+        }
+
+        return $placement;
     }
 
     private function normalizeButtonType(mixed $type, int $blockIndex, int $moduleIndex, int $rowIndex, int $buttonIndex): string

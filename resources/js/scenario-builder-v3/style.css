@@ -1786,6 +1786,45 @@
     gap: 8px;
 }
 
+.ac-v3-builder__buttons-placement {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 3px;
+    align-items: center;
+    min-height: 34px;
+    padding: 3px;
+    width: 100%;
+    border-radius: 9px;
+    background: #f4f3f1;
+}
+
+.ac-v3-builder__buttons-placement button {
+    min-width: 0;
+    height: 28px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 650;
+    overflow: hidden;
+    padding: 0 8px;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ac-v3-builder__buttons-placement button:hover {
+    color: var(--text-1);
+}
+
+.ac-v3-builder__buttons-placement button.is-active {
+    background: #fff;
+    box-shadow: 0 1px 4px rgb(15 23 42 / 12%);
+    color: var(--text-1);
+}
+
 .ac-v3-builder__buttons-meta {
     display: flex;
     align-items: center;
@@ -1819,12 +1858,63 @@
     gap: 5px;
 }
 
+.ac-v3-builder__buttons-row-items.is-drop-end {
+    padding-right: 8px;
+    box-shadow: inset -2px 0 0 var(--accent);
+}
+
+.ac-v3-builder__buttons-new-row-drop {
+    display: grid;
+    min-height: 34px;
+    place-items: center;
+    border: 1px dashed var(--accent);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--accent) 8%, white);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.ac-v3-builder__buttons-new-row-drop.is-active,
+.ac-v3-builder__add-row-btn.is-drop-target {
+    background: color-mix(in srgb, var(--accent) 14%, white);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+
 .ac-v3-builder__button-input-wrap {
     position: relative;
     display: grid;
     flex: 1 1 0;
     gap: 4px;
     min-width: 0;
+}
+
+.ac-v3-builder__button-input-wrap[draggable="true"] {
+    cursor: grab;
+}
+
+.ac-v3-builder__button-input-wrap.is-dragging {
+    opacity: 0.42;
+}
+
+.ac-v3-builder__button-input-wrap.is-drop-before::before,
+.ac-v3-builder__button-input-wrap.is-drop-after::after {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    z-index: 3;
+    width: 2px;
+    border-radius: 999px;
+    background: var(--accent);
+    content: "";
+}
+
+.ac-v3-builder__button-input-wrap.is-drop-before::before {
+    left: -4px;
+}
+
+.ac-v3-builder__button-input-wrap.is-drop-after::after {
+    right: -4px;
 }
 
 .ac-v3-builder__button-input-wrap input {
@@ -1850,6 +1940,14 @@
     gap: 6px;
     padding: 6px 32px 6px 10px !important;
     text-align: center;
+}
+
+.ac-v3-builder__button-input-wrap[draggable="true"] .ac-v3-builder__button-edit-trigger {
+    cursor: grab;
+}
+
+.ac-v3-builder__button-input-wrap.is-dragging .ac-v3-builder__button-edit-trigger {
+    cursor: grabbing;
 }
 
 .ac-v3-builder__button-edit-trigger:hover {

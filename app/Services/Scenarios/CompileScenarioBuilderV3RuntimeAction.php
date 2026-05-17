@@ -13,6 +13,8 @@ use Illuminate\Validation\ValidationException;
 
 class CompileScenarioBuilderV3RuntimeAction
 {
+    private const BUTTON_PLACEMENTS = ['auto', 'reply_keyboard', 'inline_message'];
+
     /**
      * @return array<string, mixed>
      */
@@ -111,7 +113,7 @@ class CompileScenarioBuilderV3RuntimeAction
 
         if ($buttons !== null) {
             $compiled['buttons'] = [
-                'placement' => (string) data_get($buttons, 'payload.placement', 'auto'),
+                'placement' => $this->buttonPlacement($buttons),
                 'rows' => $this->compileButtonRows($buttons, $outgoingEdges, $runtimeBlockIdsByDbId),
             ];
         }
@@ -179,6 +181,16 @@ class CompileScenarioBuilderV3RuntimeAction
     private function buttonType(array $button): string
     {
         return ($button['type'] ?? null) === 'request_phone' ? 'request_phone' : 'text';
+    }
+
+    /**
+     * @param  array<string, mixed>  $buttons
+     */
+    private function buttonPlacement(array $buttons): string
+    {
+        $placement = (string) data_get($buttons, 'payload.placement', 'auto');
+
+        return in_array($placement, self::BUTTON_PLACEMENTS, true) ? $placement : 'auto';
     }
 
     /**

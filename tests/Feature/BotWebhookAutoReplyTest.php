@@ -2509,6 +2509,122 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertSame('warmup:positive', $storedMessage->text);
     }
 
+    public function test_telegram_v3_inline_button_callback_queues_inbound_job_for_active_run(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '300',
+        ]);
+        $scenario = $this->createPublishedScenario('v3_inline_callback', [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'entrypoints' => [],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Выберите действие',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => [
+                            'placement' => 'inline_message',
+                            'rows' => [[[
+                                'id' => 'btn_catalog',
+                                'text' => 'Получить каталог',
+                                'type' => 'text',
+                                'normalized_text' => 'получить каталог',
+                                'output_id' => 'btn_catalog',
+                                'target_block_id' => 'catalog',
+                            ]]],
+                        ],
+                        'default_target_block_id' => null,
+                    ],
+                    'catalog' => [
+                        'id' => 'catalog',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Каталог',
+                        'message' => [
+                            'text' => 'Вот каталог',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'default_target_block_id' => null,
+                    ],
+                ],
+            ],
+        ]);
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'start',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'current_block_id' => 'start',
+                    'status' => 'waiting_input',
+                    'waiting_output_ids' => ['btn_catalog'],
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $payload = $this->telegramCallbackPayload(
+            callbackId: 'callback-v3-1',
+            callbackData: 'v3b:btn_catalog',
+            messageId: 96,
+        );
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertSame('v3b:btn_catalog', $storedMessage->text);
+        Queue::assertPushed(ProcessScenarioInboundJob::class, function (ProcessScenarioInboundJob $job) use ($storedMessage, $run): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->scenarioRunId === $run->id;
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/answerCallbackQuery'
+            && $request['callback_query_id'] === 'callback-v3-1');
+    }
+
     public function test_max_contact_share_webhook_saves_phone_and_queues_confirmation_follow_up(): void
     {
         Queue::fake();
