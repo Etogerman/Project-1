@@ -1270,12 +1270,22 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
     ].filter(Boolean).join(' ');
     const markerId = selected ? 'ac-v3-arrow-selected' : (isButton ? 'ac-v3-arrow-button' : 'ac-v3-arrow-auto');
     const label = edgeLabel(edge, isButton);
+    const title = isButton ? 'Связь от кнопки' : 'Связь от блока';
 
     return (
         <g className={edgeClassName}>
-            <title>{isButton ? 'Связь от кнопки' : 'Автоматическая связь'}: {label}</title>
+            <title>{title}: {label}</title>
             <path data-edge-action d={d} className="ac-v3-builder__edge-hit" onClick={onSelect} />
+            {selected ? <path d={d} className="ac-v3-builder__edge-selection" /> : null}
             <path d={d} className="ac-v3-builder__edge" markerEnd={`url(#${markerId})`} />
+            {! isButton ? (
+                <circle
+                    cx={source.x}
+                    cy={source.y}
+                    r={selected ? 5 : 4}
+                    className="ac-v3-builder__edge-source-dot"
+                />
+            ) : null}
             {label ? (
                 <text x={labelX} y={labelY} className="ac-v3-builder__edge-label">{label}</text>
             ) : null}
@@ -1285,15 +1295,18 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
 
 function edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors) {
     const outputId = edge.source?.output_id ?? null;
+
+    if (outputId === null) {
+        return nearestBlockSideAnchor(sourceBlock, blockCenter(targetBlock));
+    }
+
     const portAnchor = anchors.ports[portAnchorKey(sourceBlock.client_key, outputId)];
 
     if (portAnchor) {
         return { ...portAnchor, side: 'right' };
     }
 
-    return outputId === null
-        ? nearestBlockSideAnchor(sourceBlock, blockCenter(targetBlock))
-        : outputAnchor(sourceBlock, outputId);
+    return outputAnchor(sourceBlock, outputId);
 }
 
 function edgeTargetAnchor(targetBlock, source) {
@@ -2248,6 +2261,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isButton = isButtonEdge(edge);
     const payload = edge.condition_payload ?? {};
+    const edgeMode = isButton ? 'button' : (payload.mode === 'automatic' ? 'automatic' : 'wait_reply');
     const match = payload.match ?? {};
     const capture = payload.input_capture ?? {};
     const matchType = match.type ?? 'any_inbound';
@@ -2284,7 +2298,9 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
         <div className="ac-v3-builder__inspector">
             <div className="ac-v3-builder__panel-head">
                 <div className="ac-v3-builder__panel-title-row">
-                    <span className="ac-v3-builder__panel-type-icon">{isButton ? 'BTN' : 'AUTO'}</span>
+                    <span className="ac-v3-builder__panel-type-icon" title="Связь">
+                        <LinkIcon />
+                    </span>
                     <div className="ac-v3-builder__panel-title-field">
                         <span>Свойства связи</span>
                         <strong className="ac-v3-builder__panel-title-static">
@@ -2309,17 +2325,32 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                 </div>
             </div>
             <section className="ac-v3-builder__module-section">
-                <div className="ac-v3-builder__module-section-head">
-                    <b>EDGE</b>
-                    <span>Связь</span>
-                </div>
-                <span>Тип</span>
-                <p className="ac-v3-builder__readonly">{isButton ? 'От кнопки' : 'Ждёт ответ клиента'}</p>
+                <span>Режим</span>
+                {isButton ? (
+                    <p className="ac-v3-builder__readonly">Переход по кнопке</p>
+                ) : (
+                    <div className="ac-v3-builder__edge-mode" role="group" aria-label="Режим связи">
+                        <button
+                            type="button"
+                            className={edgeMode === 'wait_reply' ? 'is-active' : ''}
+                            onClick={() => updatePayload({ mode: 'wait_reply' })}
+                        >
+                            Ждёт ответ
+                        </button>
+                        <button
+                            type="button"
+                            className={edgeMode === 'automatic' ? 'is-active' : ''}
+                            onClick={() => updatePayload({ mode: 'automatic' })}
+                        >
+                            Автоматически
+                        </button>
+                    </div>
+                )}
                 {isButton ? (
                     <>
-                        <span>Условие</span>
+                        <span>Кнопка</span>
                         <p className="ac-v3-builder__readonly">{edgeLabel(edge, isButton)}</p>
-                        <label>
+                        <label className="ac-v3-builder__field-row">
                             <span>Приоритет</span>
                             <input
                                 type="number"
@@ -2328,7 +2359,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                             />
                         </label>
                     </>
-                ) : (
+                ) : edgeMode === 'wait_reply' ? (
                     <>
                         <label>
                             <span>Совпадение</span>
@@ -2349,7 +2380,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                 />
                             </label>
                         ) : null}
-                        <label>
+                        <label className="ac-v3-builder__field-row">
                             <span>Приоритет</span>
                             <input
                                 type="number"
@@ -2357,7 +2388,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                 onChange={(event) => updatePayload({ priority: Number(event.target.value) })}
                             />
                         </label>
-                        <label>
+                        <label className="ac-v3-builder__field-row">
                             <span>Лимит переходов</span>
                             <input
                                 type="number"
@@ -2398,7 +2429,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                             </>
                         ) : null}
                     </>
-                )}
+                ) : null}
                 <button type="button" className="ac-v3-builder__danger" onClick={onRemove}>Удалить связь</button>
             </section>
         </div>

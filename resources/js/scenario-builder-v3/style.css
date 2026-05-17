@@ -416,9 +416,9 @@
 }
 
 .ac-v3-builder__edges g.is-auto-edge .ac-v3-builder__edge {
-    stroke: color-mix(in oklch, var(--line) 72%, var(--text-3));
-    stroke-dasharray: 8 7;
-    stroke-width: 2;
+    stroke: color-mix(in oklch, var(--line) 62%, var(--text-2));
+    stroke-dasharray: 7 7;
+    stroke-width: 2.2;
 }
 
 .ac-v3-builder__edge-hit {
@@ -429,9 +429,31 @@
     stroke-width: 18;
 }
 
+.ac-v3-builder__edge-selection {
+    fill: none;
+    pointer-events: none;
+    stroke: color-mix(in oklch, var(--accent) 26%, transparent);
+    stroke-linecap: round;
+    stroke-width: 10;
+}
+
 .ac-v3-builder__edges g.is-selected .ac-v3-builder__edge {
     stroke: var(--accent);
-    stroke-width: 3;
+    stroke-dasharray: none;
+    stroke-width: 3.8;
+}
+
+.ac-v3-builder__edge-source-dot {
+    fill: var(--surface);
+    pointer-events: none;
+    stroke: color-mix(in oklch, var(--line) 72%, var(--text-2));
+    stroke-width: 2.2;
+}
+
+.ac-v3-builder__edges g.is-selected .ac-v3-builder__edge-source-dot {
+    fill: var(--accent);
+    stroke: var(--surface);
+    stroke-width: 2;
 }
 
 .ac-v3-builder__edges #ac-v3-arrow-auto path {
@@ -1043,6 +1065,11 @@
     font-size: 10px;
     font-weight: 800;
     letter-spacing: 0.04em;
+}
+
+.ac-v3-builder__panel-type-icon svg {
+    width: 16px;
+    height: 16px;
 }
 
 .ac-v3-builder__block-kind-icon {
@@ -1786,6 +1813,57 @@
 }
 
 .ac-v3-builder__check span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ac-v3-builder__edge-mode {
+    display: grid;
+    width: 100%;
+    min-height: 34px;
+    align-items: center;
+    gap: 3px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-radius: 9px;
+    background: #f4f3f1;
+    padding: 3px;
+}
+
+.ac-v3-builder__edge-mode button {
+    min-width: 0;
+    height: 28px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 650;
+    overflow: hidden;
+    padding: 0 8px;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ac-v3-builder__edge-mode button:hover {
+    color: var(--text-1);
+}
+
+.ac-v3-builder__edge-mode button.is-active {
+    background: #ffffff;
+    box-shadow: 0 1px 4px rgb(15 23 42 / 12%);
+    color: var(--text-1);
+}
+
+.ac-v3-builder__field-row {
+    align-items: center;
+    grid-template-columns: minmax(0, 1fr) 92px;
+    gap: 10px !important;
+}
+
+.ac-v3-builder__field-row > span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
