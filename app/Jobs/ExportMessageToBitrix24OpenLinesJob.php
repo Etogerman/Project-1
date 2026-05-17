@@ -16,7 +16,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
 {
     use Queueable;
 
-    public const QUEUE_NAME = 'default';
+    public const QUEUE_NAME = 'bitrix-live';
 
     public int $timeout = 60;
 
@@ -29,6 +29,7 @@ class ExportMessageToBitrix24OpenLinesJob implements ShouldQueue
         ?string $retryAfterSyncReason = null,
     ) {
         $this->retryAfterSyncReason = $retryAfterSyncReason;
+        $this->onQueue(self::queueName());
     }
 
     public function handle(

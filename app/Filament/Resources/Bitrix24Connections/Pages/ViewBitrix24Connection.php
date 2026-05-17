@@ -207,6 +207,7 @@ class ViewBitrix24Connection extends ViewRecord
         $trackedQueues = collect([
             'default',
             config('bots.auto_reply_queue', 'default'),
+            config('bots.scenario_queue', config('bots.auto_reply_queue', 'default')),
             config('bitrix24.openlines.live_export_queue', 'default'),
         ])
             ->map(fn (mixed $queue): string => trim((string) $queue))

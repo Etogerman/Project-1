@@ -7,6 +7,7 @@ use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
+use App\Jobs\ProcessDeferredParameterAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
@@ -34,6 +35,20 @@ use Tests\TestCase;
 class BotWebhookAutoReplyTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_user_facing_bot_jobs_use_bot_replies_queue(): void
+    {
+        config()->set('bots.auto_reply_queue', 'bot-replies');
+        config()->set('bots.scenario_queue', 'bot-replies');
+
+        $this->assertSame('bot-replies', (new ProcessAutoReplyJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessPhoneCaptureFollowUpJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessDeferredParameterAutoReplyJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessDataCollectionQuestionJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessDataCollectionResponseJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessScenarioStartJob(1, 1, '__scenario_constructor_workspace'))->queue);
+        $this->assertSame('bot-replies', (new ProcessScenarioInboundJob(1, 1))->queue);
+    }
 
     public function test_telegram_webhook_endpoint_accepts_valid_event_and_queues_auto_reply(): void
     {

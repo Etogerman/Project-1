@@ -20,6 +20,8 @@ use Throwable;
 
 class ProcessScenarioStartJob implements ShouldQueue
 {
+    public const DEFAULT_QUEUE = 'bot-replies';
+
     use Dispatchable;
     use InteractsWithQueue;
     use Queueable;
@@ -31,7 +33,16 @@ class ProcessScenarioStartJob implements ShouldQueue
         public int $inboundMessageId,
         public ?int $dialogId,
         public string $scenarioCode,
-    ) {}
+    ) {
+        $this->onQueue(self::queueName());
+    }
+
+    public static function queueName(): string
+    {
+        $queue = trim((string) config('bots.scenario_queue', self::DEFAULT_QUEUE));
+
+        return $queue !== '' ? $queue : self::DEFAULT_QUEUE;
+    }
 
     /**
      * @return list<int>

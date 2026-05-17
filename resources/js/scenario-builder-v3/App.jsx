@@ -17,6 +17,9 @@ const MODULE_PREVIEW_GAP = 7;
 const PORT_ROW_HEIGHT = 30;
 const PORT_ROW_GAP = 4;
 const PORT_DOT_CENTER_X = NODE_WIDTH - 6;
+const CANVAS_MIN_WIDTH = 1800;
+const CANVAS_MIN_HEIGHT = 1100;
+const CANVAS_EXPAND_PADDING = 720;
 const DEFAULT_OUTPUT = { id: null, label: 'Дальше', kind: 'default', caption: 'Авто' };
 const MODULE_ORDER = ['start_condition', 'message', 'buttons'];
 const MATCH_OPTIONS = [
@@ -227,8 +230,8 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         const index = blocks.length + 1;
         const clientKey = `tmp_block_${Date.now().toString(36)}_${index}`;
         const position = {
-            x: Math.max(64, Math.round((-view.tx + 140) / view.zoom) + index * 34),
-            y: Math.max(64, Math.round((-view.ty + 116) / view.zoom) + index * 26),
+            x: snap(Math.round((-view.tx + 140) / view.zoom) + index * 34),
+            y: snap(Math.round((-view.ty + 116) / view.zoom) + index * 26),
         };
         const block = {
             id: null,
@@ -331,8 +334,8 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
 
             updateBlock(drag.clientKey, {
                 position: {
-                    x: snap(Math.max(0, drag.origin.x + dx)),
-                    y: snap(Math.max(0, drag.origin.y + dy)),
+                    x: snap(drag.origin.x + dx),
+                    y: snap(drag.origin.y + dy),
                 },
             });
 
@@ -387,8 +390,8 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }
 
         updateView({
-            tx: Math.max(48, 132 - canvasBounds.minX),
-            ty: Math.max(48, 100 - canvasBounds.minY),
+            tx: 132 - canvasBounds.minX,
+            ty: 100 - canvasBounds.minY,
             zoom: 1,
         });
     }
@@ -877,6 +880,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                     className="ac-v3-builder__canvas"
                     onPointerDown={startCanvasPan}
                     onWheel={handleWheel}
+                    style={canvasGridStyle(view)}
                 >
                     <div
                         className="ac-v3-builder__world"
@@ -1593,10 +1597,18 @@ function ButtonEditDialog({ button, onClose, onSave }) {
     useEffect(() => {
         const input = inputRef.current;
 
-        if (input) {
+        function focusAndSelectInput() {
+            if (! inputRef.current) {
+                return;
+            }
+
+            const input = inputRef.current;
             input.focus();
             input.select();
         }
+
+        focusAndSelectInput();
+        const focusTimer = window.setTimeout(focusAndSelectInput, 0);
 
         function handleKeyDown(event) {
             if (event.key === 'Escape') {
@@ -1606,7 +1618,10 @@ function ButtonEditDialog({ button, onClose, onSave }) {
 
         document.addEventListener('keydown', handleKeyDown);
 
-        return () => document.removeEventListener('keydown', handleKeyDown);
+        return () => {
+            window.clearTimeout(focusTimer);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
     }, [onClose]);
 
     return (
@@ -2046,19 +2061,37 @@ function portsTopOffset(block) {
 
 function graphBounds(blocks) {
     if (blocks.length === 0) {
-        return { minX: 0, minY: 0, width: 1800, height: 1100 };
+        return { minX: 0, minY: 0, width: CANVAS_MIN_WIDTH, height: CANVAS_MIN_HEIGHT };
     }
 
     const xs = blocks.map((block) => blockPosition(block).x);
     const ys = blocks.map((block) => blockPosition(block).y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const worldMinX = Math.min(0, minX - CANVAS_EXPAND_PADDING);
+    const worldMinY = Math.min(0, minY - CANVAS_EXPAND_PADDING);
     const maxX = Math.max(...xs) + NODE_WIDTH + 420;
     const maxY = Math.max(...ys) + 520;
 
     return {
-        minX: Math.min(...xs),
-        minY: Math.min(...ys),
-        width: Math.max(1800, maxX),
-        height: Math.max(1100, maxY),
+        minX,
+        minY,
+        width: Math.max(CANVAS_MIN_WIDTH, maxX - worldMinX),
+        height: Math.max(CANVAS_MIN_HEIGHT, maxY - worldMinY),
+    };
+}
+
+function canvasGridStyle(view) {
+    const majorGrid = 96 * view.zoom;
+    const minorGrid = 16 * view.zoom;
+    const majorX = view.tx % majorGrid;
+    const majorY = view.ty % majorGrid;
+    const minorX = view.tx % minorGrid;
+    const minorY = view.ty % minorGrid;
+
+    return {
+        backgroundPosition: `${majorX}px ${majorY}px, ${minorX}px ${minorY}px`,
+        backgroundSize: `${majorGrid}px ${majorGrid}px, ${minorGrid}px ${minorGrid}px`,
     };
 }
 
