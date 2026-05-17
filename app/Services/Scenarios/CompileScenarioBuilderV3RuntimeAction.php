@@ -178,15 +178,18 @@ class CompileScenarioBuilderV3RuntimeAction
                         $this->fail('builder.buttons', 'У кнопки со связью должен быть текст перед публикацией.');
                     }
 
+                    $compiledEdge = $edge instanceof ScenarioBuilderEdge
+                        ? $this->compileEdge($edge, $runtimeBlockIdsByDbId)
+                        : null;
+
                     return [
                         'id' => $buttonId,
                         'text' => $text,
                         'type' => $this->buttonType($button),
                         'normalized_text' => $this->normalizeButtonText($text),
                         'output_id' => $buttonId,
-                        'target_block_id' => $edge instanceof ScenarioBuilderEdge
-                            ? ($runtimeBlockIdsByDbId[(int) $edge->to_scenario_builder_block_id] ?? null)
-                            : null,
+                        'target_block_id' => $compiledEdge['target_block_id'] ?? null,
+                        'edge' => $compiledEdge,
                     ];
                 })
                 ->values()

@@ -65,6 +65,36 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('<label for="conversation-reply-textarea" class="ac-field-label">', false);
     }
 
+    public function test_dialog_view_renders_user_dialog_fields_without_service_payload(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $dialog->forceFill([
+            'fields_payload' => [
+                'client_city' => 'Москва',
+                'test1' => '1',
+                '_v3' => [
+                    'transition_counts' => [
+                        'published_1:edge_test' => 1,
+                    ],
+                ],
+            ],
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('Поля диалога')
+            ->assertSee('client_city')
+            ->assertSee('Москва')
+            ->assertSee('test1')
+            ->assertSee('1')
+            ->assertDontSee('_v3')
+            ->assertDontSee('transition_counts');
+    }
+
     public function test_active_admin_can_open_dialogs_inbox_page(): void
     {
         $admin = User::factory()->create([

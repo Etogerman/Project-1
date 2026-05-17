@@ -313,6 +313,7 @@ class ViewDialog extends ViewRecord
             'dialogHeader' => $this->getDialogHeaderViewData(),
             'peerSyncState' => $this->getPeerSyncStateViewData(),
             'contactSummary' => $this->getContactSummaryViewData(),
+            'dialogFields' => $this->getDialogFieldsViewData(),
             'kanbanBackUrl' => $this->resolveKanbanBackUrl(),
             'contactUrl' => $this->getContactViewUrl(),
             'dialogInboxStatus' => $this->getDialogInboxStatusViewData(),
@@ -571,6 +572,59 @@ class ViewDialog extends ViewRecord
             'phones_label' => $this->formatContactPhonesLabel($contact),
             'assigned_user_label' => $this->formatAssignedUserLabel($contact),
         ];
+    }
+
+    /**
+     * @return array{
+     *     is_visible: bool,
+     *     fields: list<array{key: string, value: string}>
+     * }
+     */
+    protected function getDialogFieldsViewData(): array
+    {
+        $fieldsPayload = $this->getRecord()->fields_payload;
+
+        if (! is_array($fieldsPayload)) {
+            return [
+                'is_visible' => false,
+                'fields' => [],
+            ];
+        }
+
+        $fields = collect($fieldsPayload)
+            ->filter(fn (mixed $value, mixed $key): bool => is_string($key)
+                && ! str_starts_with($key, '_'))
+            ->map(fn (mixed $value, string $key): array => [
+                'key' => $key,
+                'value' => $this->formatDialogFieldValue($value),
+            ])
+            ->sortBy('key', SORT_NATURAL)
+            ->values()
+            ->all();
+
+        return [
+            'is_visible' => $fields !== [],
+            'fields' => $fields,
+        ];
+    }
+
+    protected function formatDialogFieldValue(mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '—';
+        }
+
+        if (is_bool($value)) {
+            return $value ? 'Да' : 'Нет';
+        }
+
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+
+        $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return $encoded !== false ? $encoded : '—';
     }
 
     protected function appendOutboundMessageToConversation(Message $message): void

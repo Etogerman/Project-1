@@ -849,6 +849,23 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }
     }
 
+    async function copyEdgeId(edge) {
+        const value = copyableEdgeId(edge);
+
+        if (! value) {
+            return;
+        }
+
+        try {
+            await copyTextToClipboard(value);
+            setError(null);
+            setNotice(`ID связи #${value} скопирован`);
+        } catch {
+            setNotice(null);
+            setError('Не удалось скопировать ID связи. Скопируйте номер вручную.');
+        }
+    }
+
     if (status === 'loading') {
         return (
             <section className="ac-v3-builder" data-status="loading">
@@ -1020,6 +1037,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                 onClose={closePanelSelection}
                                 onRemove={() => removeEdge(selectedEdge.client_key)}
                                 onUpdateConditionPayload={(nextPayload) => updateEdgeConditionPayload(selectedEdge.client_key, nextPayload)}
+                                onCopyEdgeId={copyEdgeId}
                             />
                         ) : (
                             <BlockPanel
@@ -1240,11 +1258,9 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
         return null;
     }
 
-    const source = anchors.ports[portAnchorKey(sourceBlock.client_key, edge.source?.output_id ?? null)]
-        ?? outputAnchor(sourceBlock, edge.source?.output_id ?? null);
-    const target = inputAnchor(targetBlock);
-    const curve = Math.max(72, Math.abs(target.x - source.x) * 0.42);
-    const d = `M ${source.x} ${source.y} C ${source.x + curve} ${source.y}, ${target.x - curve} ${target.y}, ${target.x} ${target.y}`;
+    const source = edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors);
+    const target = edgeTargetAnchor(targetBlock, source);
+    const d = edgeCurvePath(source, target);
     const labelX = (source.x + target.x) / 2;
     const labelY = (source.y + target.y) / 2 - 8;
     const isButton = isButtonEdge(edge);
@@ -1265,6 +1281,56 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
             ) : null}
         </g>
     );
+}
+
+function edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors) {
+    const outputId = edge.source?.output_id ?? null;
+    const portAnchor = anchors.ports[portAnchorKey(sourceBlock.client_key, outputId)];
+
+    if (portAnchor) {
+        return { ...portAnchor, side: 'right' };
+    }
+
+    return outputId === null
+        ? nearestBlockSideAnchor(sourceBlock, blockCenter(targetBlock))
+        : outputAnchor(sourceBlock, outputId);
+}
+
+function edgeTargetAnchor(targetBlock, source) {
+    return nearestBlockSideAnchor(targetBlock, source);
+}
+
+function edgeCurvePath(source, target) {
+    const sourceVector = sideVector(source.side);
+    const targetVector = sideVector(target.side);
+    const distance = Math.hypot(target.x - source.x, target.y - source.y);
+    const curve = clamp(distance * 0.38, 56, 190);
+    const c1 = {
+        x: source.x + (sourceVector.x * curve),
+        y: source.y + (sourceVector.y * curve),
+    };
+    const c2 = {
+        x: target.x + (targetVector.x * curve),
+        y: target.y + (targetVector.y * curve),
+    };
+
+    return `M ${source.x} ${source.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${target.x} ${target.y}`;
+}
+
+function sideVector(side) {
+    if (side === 'left') {
+        return { x: -1, y: 0 };
+    }
+
+    if (side === 'top') {
+        return { x: 0, y: -1 };
+    }
+
+    if (side === 'bottom') {
+        return { x: 0, y: 1 };
+    }
+
+    return { x: 1, y: 0 };
 }
 
 function isButtonEdge(edge) {
@@ -1307,6 +1373,20 @@ function copyableBlockId(block) {
     }
 
     return String(block?.client_key ?? '').replace(/^tmp_block_/, '').slice(0, 8);
+}
+
+function shortEdgeId(edge) {
+    const displayId = copyableEdgeId(edge);
+
+    return displayId ? `#${displayId}` : '#draft';
+}
+
+function copyableEdgeId(edge) {
+    if (edge?.id) {
+        return String(edge.id);
+    }
+
+    return String(edge?.client_key ?? '').replace(/^tmp_edge_/, '').replace(/^edge_/, '').slice(0, 8);
 }
 
 function blockDisplayId(block) {
@@ -2163,7 +2243,7 @@ function ModuleIcon({ type }) {
     return <AnalyticsIcon />;
 }
 
-function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload }) {
+function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isButton = isButtonEdge(edge);
@@ -2211,6 +2291,15 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                             {source?.title ?? 'Источник'} → {target?.title ?? 'Цель'}
                         </strong>
                     </div>
+                    <button
+                        type="button"
+                        className="ac-v3-builder__panel-id"
+                        title="Скопировать ID связи"
+                        onClick={() => onCopyEdgeId(edge)}
+                    >
+                        <CopyIcon />
+                        {shortEdgeId(edge)}
+                    </button>
                     <button type="button" className="ac-v3-builder__panel-icon-btn" title="Свернуть панель" onClick={onCollapse}>
                         ›
                     </button>
@@ -2230,6 +2319,14 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                     <>
                         <span>Условие</span>
                         <p className="ac-v3-builder__readonly">{edgeLabel(edge, isButton)}</p>
+                        <label>
+                            <span>Приоритет</span>
+                            <input
+                                type="number"
+                                value={payload.priority ?? 10}
+                                onChange={(event) => updatePayload({ priority: Number(event.target.value) })}
+                            />
+                        </label>
                     </>
                 ) : (
                     <>
@@ -2366,6 +2463,54 @@ function outputAnchor(block, outputId) {
     return {
         x: position.x + PORT_DOT_CENTER_X,
         y: position.y + portsTopOffset(block) + (index * (PORT_ROW_HEIGHT + PORT_ROW_GAP)) + (PORT_ROW_HEIGHT / 2),
+        side: 'right',
+    };
+}
+
+function nearestBlockSideAnchor(block, targetPoint) {
+    const center = blockCenter(block);
+    const dx = targetPoint.x - center.x;
+    const dy = targetPoint.y - center.y;
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+        return blockSideAnchor(block, dx >= 0 ? 'right' : 'left');
+    }
+
+    return blockSideAnchor(block, dy >= 0 ? 'bottom' : 'top');
+}
+
+function blockSideAnchor(block, side) {
+    const position = blockPosition(block);
+    const height = blockHeight(block);
+
+    if (side === 'left') {
+        return {
+            x: position.x - 2,
+            y: position.y + (height / 2),
+            side,
+        };
+    }
+
+    if (side === 'top') {
+        return {
+            x: position.x + (NODE_WIDTH / 2),
+            y: position.y - 2,
+            side,
+        };
+    }
+
+    if (side === 'bottom') {
+        return {
+            x: position.x + (NODE_WIDTH / 2),
+            y: position.y + height + 2,
+            side,
+        };
+    }
+
+    return {
+        x: position.x + NODE_WIDTH - 2,
+        y: position.y + (height / 2),
+        side: 'right',
     };
 }
 
@@ -2375,7 +2520,26 @@ function inputAnchor(block) {
     return {
         x: position.x - 2,
         y: position.y + NODE_HEADER_HEIGHT + 34,
+        side: 'left',
     };
+}
+
+function blockCenter(block) {
+    const position = blockPosition(block);
+
+    return {
+        x: position.x + (NODE_WIDTH / 2),
+        y: position.y + (blockHeight(block) / 2),
+    };
+}
+
+function blockHeight(block) {
+    const outputs = blockOutputs(block);
+    const portsHeight = (outputs.length * PORT_ROW_HEIGHT)
+        + (Math.max(0, outputs.length - 1) * PORT_ROW_GAP)
+        + 12;
+
+    return Math.max(186, portsTopOffset(block) + portsHeight);
 }
 
 function portsTopOffset(block) {

@@ -220,6 +220,56 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Вот каталог');
     }
 
+    public function test_v3_wait_reply_priority_can_beat_matching_button_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9101]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9102]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_button_wait_reply_priority',
+            $this->v3ButtonAndWaitReplyRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Получить каталог');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('manual', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Сработала обычная стрелка с большим приоритетом');
+    }
+
     public function test_v3_wait_reply_exact_multiline_saves_dialog_field_and_counter(): void
     {
         Http::fake([
@@ -3713,6 +3763,108 @@ class GenericDbScenarioRuntimeTest extends TestCase
                     'from_output_id' => 'btn_catalog',
                     'label' => 'Получить каталог',
                 ]],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3ButtonAndWaitReplyRuntimeSchema(int $channelId): array
+    {
+        $buttonEdge = [
+            'id' => '10',
+            'edge_key' => 'edge_button_catalog',
+            'mode' => 'button',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'start',
+            'target_block_id' => 'catalog',
+            'from_output_id' => 'btn_catalog',
+            'label' => 'Получить каталог',
+            'match' => [
+                'type' => 'exact_text',
+                'text' => 'Получить каталог',
+                'variants' => ['Получить каталог'],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
+
+        $waitReplyEdge = $this->v3WaitReplyEdge('20', 'edge_manual', 'manual', priority: 20);
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Выберите действие',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => [
+                            'placement' => 'auto',
+                            'rows' => [[
+                                [
+                                    'id' => 'btn_catalog',
+                                    'text' => 'Получить каталог',
+                                    'type' => 'text',
+                                    'normalized_text' => 'получить каталог',
+                                    'output_id' => 'btn_catalog',
+                                    'target_block_id' => 'catalog',
+                                    'edge' => $buttonEdge,
+                                ],
+                            ]],
+                        ],
+                        'wait_reply_edges' => [$waitReplyEdge],
+                        'default_target_block_id' => null,
+                    ],
+                    'catalog' => [
+                        'id' => 'catalog',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Каталог',
+                        'message' => [
+                            'text' => 'Сработала кнопка',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'manual' => [
+                        'id' => 'manual',
+                        'db_id' => 3,
+                        'kind' => 'state',
+                        'title' => 'Обычная стрелка',
+                        'message' => [
+                            'text' => 'Сработала обычная стрелка с большим приоритетом',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$buttonEdge, $waitReplyEdge],
             ],
         ];
     }

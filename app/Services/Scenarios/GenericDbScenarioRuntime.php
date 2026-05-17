@@ -1011,38 +1011,33 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
-        $targetBlockId = $message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE
-            ? $this->v3TargetForContactShare(is_array($block) ? $block : [], $message->channel)
-            : $this->v3TargetForButtonText($message, is_array($block) ? $block : []);
+        $transitionEdge = $this->v3TransitionEdgeForMessage($message, is_array($block) ? $block : [], $message->dialog);
+        $targetBlockId = null;
 
-        if ($targetBlockId === null) {
-            $waitReplyEdge = $this->v3WaitReplyEdgeForMessage($message, $block, $message->dialog);
+        if ($transitionEdge !== null) {
+            $capturedValue = $this->v3CapturedValueForEdge($message, $transitionEdge);
 
-            if ($waitReplyEdge !== null) {
-                $capturedValue = $this->v3CapturedValueForEdge($message, $waitReplyEdge);
-
-                if ($capturedValue['valid'] !== true) {
-                    return new ScenarioInboundResult(
-                        consumed: true,
-                        status: ScenarioRun::STATUS_ACTIVE,
-                        currentStep: $currentBlockId,
-                        statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
-                        exitOutcome: null,
-                    );
-                }
-
-                if (! $this->applyV3WaitReplySideEffects($message, $waitReplyEdge, $capturedValue['value'])) {
-                    return new ScenarioInboundResult(
-                        consumed: true,
-                        status: ScenarioRun::STATUS_ACTIVE,
-                        currentStep: $currentBlockId,
-                        statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
-                        exitOutcome: null,
-                    );
-                }
-
-                $targetBlockId = filled($waitReplyEdge['target_block_id'] ?? null) ? (string) $waitReplyEdge['target_block_id'] : null;
+            if ($capturedValue['valid'] !== true) {
+                return new ScenarioInboundResult(
+                    consumed: true,
+                    status: ScenarioRun::STATUS_ACTIVE,
+                    currentStep: $currentBlockId,
+                    statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
+                    exitOutcome: null,
+                );
             }
+
+            if (! $this->applyV3WaitReplySideEffects($message, $transitionEdge, $capturedValue['value'])) {
+                return new ScenarioInboundResult(
+                    consumed: true,
+                    status: ScenarioRun::STATUS_ACTIVE,
+                    currentStep: $currentBlockId,
+                    statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
+                    exitOutcome: null,
+                );
+            }
+
+            $targetBlockId = filled($transitionEdge['target_block_id'] ?? null) ? (string) $transitionEdge['target_block_id'] : null;
         }
 
         if ($targetBlockId === null) {
@@ -1070,12 +1065,40 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      * @param  array<string, mixed>  $block
      * @return array<string, mixed>|null
      */
-    private function v3WaitReplyEdgeForMessage(Message $message, array $block, ?Dialog $dialog): ?array
+    private function v3TransitionEdgeForMessage(Message $message, array $block, ?Dialog $dialog): ?array
     {
-        return collect($this->v3WaitReplyEdges($block))
-            ->filter(fn (array $edge): bool => $this->messageMatchesV3WaitReplyEdge($message, $edge))
-            ->sort(fn (array $left, array $right): int => $this->compareV3WaitReplyEdges($left, $right))
+        return collect($this->v3TransitionEdgesForMessage($message, $block))
+            ->sort(fn (array $left, array $right): int => $this->compareV3TransitionEdges($left, $right))
             ->first(fn (array $edge): bool => ! $this->v3TransitionLimitReached($dialog, $edge));
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<array<string, mixed>>
+     */
+    private function v3TransitionEdgesForMessage(Message $message, array $block): array
+    {
+        $edges = [];
+
+        if ($message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
+            $edges = array_merge($edges, $this->v3RequestPhoneButtonEdges($block));
+        } else {
+            $edges = array_merge(
+                $edges,
+                $this->v3ButtonCallbackEdges((string) $message->text, $block, $message->channel),
+                $this->v3ButtonTextEdges($message, $block),
+            );
+        }
+
+        return collect($edges)
+            ->merge($this->v3WaitReplyEdges($block))
+            ->filter(fn (array $edge): bool => filled($edge['target_block_id'] ?? null)
+                && (
+                    ($edge['mode'] ?? null) !== 'wait_reply'
+                    || $this->messageMatchesV3WaitReplyEdge($message, $edge)
+                ))
+            ->values()
+            ->all();
     }
 
     /**
@@ -1125,7 +1148,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      * @param  array<string, mixed>  $left
      * @param  array<string, mixed>  $right
      */
-    private function compareV3WaitReplyEdges(array $left, array $right): int
+    private function compareV3TransitionEdges(array $left, array $right): int
     {
         return [
             (int) ($right['priority'] ?? 10),
@@ -1534,30 +1557,33 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     /**
      * @param  array<string, mixed>  $block
+     * @return list<array<string, mixed>>
      */
-    private function v3TargetForButtonText(Message $message, array $block): ?string
+    private function v3ButtonTextEdges(Message $message, array $block): array
     {
         $messageText = $this->normalizeV3ButtonText((string) $message->text);
 
         if ($messageText === '') {
-            return null;
+            return [];
         }
 
-        $callbackTarget = $this->v3TargetForButtonCallback((string) $message->text, $block, $message->channel);
-
-        if ($callbackTarget !== null) {
-            return $callbackTarget;
-        }
+        $edges = [];
 
         foreach ($this->v3TextInputButtonRows($block) as $row) {
             foreach ($row as $button) {
-                if ($messageText === (string) ($button['normalized_text'] ?? '')) {
-                    return filled($button['target_block_id'] ?? null) ? (string) $button['target_block_id'] : null;
+                if ($messageText !== (string) ($button['normalized_text'] ?? '')) {
+                    continue;
+                }
+
+                $edge = $this->v3ButtonTransitionEdge($button);
+
+                if ($edge !== null) {
+                    $edges[] = $edge;
                 }
             }
         }
 
-        return null;
+        return $edges;
     }
 
     /**
@@ -1589,6 +1615,41 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return null;
     }
 
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<array<string, mixed>>
+     */
+    private function v3ButtonCallbackEdges(string $callbackData, array $block, ?Channel $channel): array
+    {
+        $outputId = $this->v3ButtonOutputIdFromCallback($callbackData);
+
+        if ($outputId === null) {
+            return [];
+        }
+
+        $edges = [];
+
+        foreach ($this->v3VisibleButtonRows($block, $channel) as $row) {
+            foreach ($row as $button) {
+                if (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_TEXT) {
+                    continue;
+                }
+
+                if ((string) ($button['output_id'] ?? '') !== $outputId) {
+                    continue;
+                }
+
+                $edge = $this->v3ButtonTransitionEdge($button);
+
+                if ($edge !== null) {
+                    $edges[] = $edge;
+                }
+            }
+        }
+
+        return $edges;
+    }
+
     private function v3ButtonOutputIdFromCallback(string $callbackData): ?string
     {
         if (! str_starts_with($callbackData, self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX)) {
@@ -1614,6 +1675,81 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<array<string, mixed>>
+     */
+    private function v3RequestPhoneButtonEdges(array $block): array
+    {
+        $edges = [];
+
+        foreach ($this->v3RequestPhoneButtonRows($block) as $row) {
+            foreach ($row as $button) {
+                $edge = $this->v3ButtonTransitionEdge($button);
+
+                if ($edge !== null) {
+                    $edges[] = $edge;
+                }
+            }
+        }
+
+        return $edges;
+    }
+
+    /**
+     * @param  array<string, mixed>  $button
+     * @return array<string, mixed>|null
+     */
+    private function v3ButtonTransitionEdge(array $button): ?array
+    {
+        if (! filled($button['target_block_id'] ?? null)) {
+            return null;
+        }
+
+        $edge = is_array($button['edge'] ?? null) ? $button['edge'] : [];
+        $outputId = (string) ($button['output_id'] ?? $button['id'] ?? '');
+
+        $transitionEdge = array_merge([
+            'id' => (string) ($button['edge_id'] ?? $outputId),
+            'edge_key' => (string) ($button['edge_key'] ?? $outputId),
+            'mode' => 'button',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'target_block_id' => (string) $button['target_block_id'],
+            'from_output_id' => $outputId,
+            'label' => (string) ($button['text'] ?? ''),
+            'match' => [
+                'type' => 'exact_text',
+                'text' => (string) ($button['text'] ?? ''),
+                'variants' => [(string) ($button['text'] ?? '')],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ], $edge, [
+            'mode' => 'button',
+            'target_block_id' => filled($edge['target_block_id'] ?? null)
+                ? (string) $edge['target_block_id']
+                : (string) $button['target_block_id'],
+            'from_output_id' => filled($edge['from_output_id'] ?? null)
+                ? (string) $edge['from_output_id']
+                : $outputId,
+        ]);
+
+        if (! filled($transitionEdge['id'] ?? null)) {
+            $transitionEdge['id'] = $outputId;
+        }
+
+        if (! filled($transitionEdge['edge_key'] ?? null)) {
+            $transitionEdge['edge_key'] = (string) ($transitionEdge['id'] ?? $outputId);
+        }
+
+        return $transitionEdge;
     }
 
     /**
