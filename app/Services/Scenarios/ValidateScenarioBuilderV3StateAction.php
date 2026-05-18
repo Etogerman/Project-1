@@ -68,6 +68,8 @@ class ValidateScenarioBuilderV3StateAction
 
     private const EDGE_CAPTURE_FIELD_SCOPES = ['dialog', 'contact'];
 
+    private const EDGE_FIELD_CONDITION_OPERATORS = ['filled', 'empty', 'equals', 'not_equals'];
+
     private const EDGE_CONTACT_CAPTURE_DATA_TYPES = [
         'phone' => 'phone',
         'first_name' => 'any_text',
@@ -579,6 +581,7 @@ class ValidateScenarioBuilderV3StateAction
             'priority' => $priority,
             'transition_limit' => $transitionLimit,
             'contact_phone_condition' => $this->normalizeEdgeContactPhoneCondition($payload['contact_phone_condition'] ?? '', $edgeIndex),
+            'field_condition' => $this->normalizeEdgeFieldCondition($payload['field_condition'] ?? [], $edgeIndex),
             'match' => $this->normalizeEdgeMatch($payload['match'] ?? [], $edgeIndex),
             'input_capture' => $this->normalizeEdgeInputCapture($payload['input_capture'] ?? [], $edgeIndex),
             'delay' => $this->normalizeEdgeDelay($payload['delay'] ?? [], $mode, $edgeIndex),
@@ -719,6 +722,62 @@ class ValidateScenarioBuilderV3StateAction
         return [
             'type' => $type,
             'text' => $text,
+        ];
+    }
+
+    /**
+     * @return array{enabled: bool, field_scope: string, field_key: string, operator: string, value: string}
+     */
+    private function normalizeEdgeFieldCondition(mixed $condition, int $edgeIndex): array
+    {
+        $condition = is_array($condition) ? $condition : [];
+        $enabled = (bool) ($condition['enabled'] ?? false);
+
+        if (! $enabled) {
+            return [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'operator' => 'filled',
+                'value' => '',
+            ];
+        }
+
+        $fieldScope = trim((string) ($condition['field_scope'] ?? 'dialog'));
+        $fieldKey = trim((string) ($condition['field_key'] ?? ''));
+        $operator = trim((string) ($condition['operator'] ?? 'filled'));
+        $value = (string) ($condition['value'] ?? '');
+
+        if (! in_array($fieldScope, self::EDGE_CAPTURE_FIELD_SCOPES, true)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.field_scope", 'Unknown field condition scope.');
+        }
+
+        if (! in_array($operator, self::EDGE_FIELD_CONDITION_OPERATORS, true)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.operator", 'Unknown field condition operator.');
+        }
+
+        if ($fieldScope === 'dialog' && ! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.field_key", 'Invalid dialog field key.');
+        }
+
+        if ($fieldScope === 'contact' && ! array_key_exists($fieldKey, self::EDGE_CONTACT_CAPTURE_DATA_TYPES)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.field_key", 'Unknown contact field key.');
+        }
+
+        if (mb_strlen($value) > self::MAX_MESSAGE_LENGTH) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.value", 'Field condition value is too long.');
+        }
+
+        if (in_array($operator, ['filled', 'empty'], true)) {
+            $value = '';
+        }
+
+        return [
+            'enabled' => true,
+            'field_scope' => $fieldScope,
+            'field_key' => $fieldKey,
+            'operator' => $operator,
+            'value' => $value,
         ];
     }
 

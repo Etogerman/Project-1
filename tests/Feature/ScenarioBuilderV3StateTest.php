@@ -332,6 +332,13 @@ class ScenarioBuilderV3StateTest extends TestCase
         $textOrParameterPayload['match'] = ['type' => 'exact_text_or_parameter', 'text' => 'mixed_1'];
         $callbackPayload = $this->edgePayload(null, 'Callback');
         $callbackPayload['match'] = ['type' => 'exact_callback', 'text' => 'callback_1'];
+        $callbackPayload['field_condition'] = [
+            'enabled' => true,
+            'field_scope' => 'dialog',
+            'field_key' => 'lead_status',
+            'operator' => 'equals',
+            'value' => 'hot',
+        ];
         $edges = [
             [
                 'id' => null,
@@ -363,6 +370,8 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.edges.0.condition_payload.contact_phone_condition', 'has_phone')
             ->assertJsonPath('builder.edges.1.condition_payload.match.type', 'exact_text_or_parameter')
             ->assertJsonPath('builder.edges.2.condition_payload.match.type', 'exact_callback')
+            ->assertJsonPath('builder.edges.2.condition_payload.field_condition.field_key', 'lead_status')
+            ->assertJsonPath('builder.edges.2.condition_payload.field_condition.operator', 'equals')
             ->json();
 
         $this->actingAs($admin)
@@ -383,6 +392,8 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
         $this->assertSame(['payload_1', 'payload_2'], data_get($edgesByMatchType->get('exact_parameter'), 'match.variants'));
         $this->assertSame('has_phone', data_get($edgesByMatchType->get('exact_parameter'), 'contact_phone_condition'));
+        $this->assertSame('lead_status', data_get($edgesByMatchType->get('exact_callback'), 'field_condition.field_key'));
+        $this->assertSame('hot', data_get($edgesByMatchType->get('exact_callback'), 'field_condition.value'));
     }
 
     public function test_put_state_normalizes_disabled_edge_input_capture_without_requiring_fields(): void
@@ -1962,6 +1973,13 @@ class ScenarioBuilderV3StateTest extends TestCase
             'priority' => 10,
             'transition_limit' => 0,
             'contact_phone_condition' => '',
+            'field_condition' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'operator' => 'filled',
+                'value' => '',
+            ],
             'match' => [
                 'type' => $isButton ? 'exact_text' : 'any_inbound',
                 'text' => $isButton ? $label : '',

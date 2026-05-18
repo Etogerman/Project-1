@@ -49,6 +49,12 @@ const EDGE_CAPTURE_SCOPE_OPTIONS = [
     ['dialog', 'Диалог'],
     ['contact', 'Контакт'],
 ];
+const EDGE_FIELD_CONDITION_OPERATOR_OPTIONS = [
+    ['filled', 'Заполнено'],
+    ['empty', 'Не заполнено'],
+    ['equals', 'Равно'],
+    ['not_equals', 'Не равно'],
+];
 const EDGE_CONTACT_FIELD_OPTIONS = [
     ['phone', 'Телефон', 'phone'],
     ['first_name', 'Имя', 'any_text'],
@@ -2689,10 +2695,17 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const edgeMode = isButton ? 'button' : (payload.mode === 'automatic' ? 'automatic' : 'wait_reply');
     const match = payload.match ?? {};
     const capture = payload.input_capture ?? {};
+    const fieldCondition = payload.field_condition ?? {};
     const matchType = match.type ?? 'any_inbound';
     const captureEnabled = capture.enabled === true;
     const captureScope = capture.field_scope === 'contact' ? 'contact' : 'dialog';
     const selectedContactField = contactCaptureField(capture.field_key);
+    const fieldConditionEnabled = fieldCondition.enabled === true;
+    const fieldConditionScope = fieldCondition.field_scope === 'contact' ? 'contact' : 'dialog';
+    const selectedFieldConditionContactField = contactCaptureField(fieldCondition.field_key);
+    const fieldConditionOperator = EDGE_FIELD_CONDITION_OPERATOR_OPTIONS.some(([value]) => value === fieldCondition.operator)
+        ? fieldCondition.operator
+        : 'filled';
     const delay = normalizedEdgeDelay(payload.delay);
     const scheduledTransitions = edgeScheduledTransitions(edge);
 
@@ -2718,6 +2731,21 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
             ...current,
             input_capture: {
                 ...(current.input_capture ?? {}),
+                ...patch,
+            },
+        }));
+    }
+
+    function updateFieldCondition(patch) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            field_condition: {
+                enabled: false,
+                field_scope: 'dialog',
+                field_key: '',
+                operator: 'filled',
+                value: '',
+                ...(current.field_condition ?? {}),
                 ...patch,
             },
         }));
@@ -2805,6 +2833,83 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         ))}
                     </select>
                 </label>
+                <label className="ac-v3-builder__check">
+                    <input
+                        type="checkbox"
+                        checked={fieldConditionEnabled}
+                        onChange={(event) => updateFieldCondition({ enabled: event.target.checked })}
+                    />
+                    <span>Условие по полю</span>
+                </label>
+                {fieldConditionEnabled ? (
+                    <>
+                        <span>Где проверять</span>
+                        <div className="ac-v3-builder__edge-mode" role="group" aria-label="Где проверять поле">
+                            {EDGE_CAPTURE_SCOPE_OPTIONS.map(([value, label]) => (
+                                <button
+                                    type="button"
+                                    key={value}
+                                    className={fieldConditionScope === value ? 'is-active' : ''}
+                                    onClick={() => {
+                                        if (value === 'contact') {
+                                            const [fieldKey] = selectedFieldConditionContactField;
+
+                                            updateFieldCondition({ field_scope: 'contact', field_key: fieldKey });
+
+                                            return;
+                                        }
+
+                                        updateFieldCondition({ field_scope: 'dialog', field_key: '' });
+                                    }}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                        {fieldConditionScope === 'contact' ? (
+                            <label>
+                                <span>Поле контакта</span>
+                                <select
+                                    value={selectedFieldConditionContactField[0]}
+                                    onChange={(event) => updateFieldCondition({ field_scope: 'contact', field_key: event.target.value })}
+                                >
+                                    {EDGE_CONTACT_FIELD_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        ) : (
+                            <label>
+                                <span>Поле диалога</span>
+                                <input
+                                    value={fieldCondition.field_key ?? ''}
+                                    placeholder="lead_status"
+                                    onChange={(event) => updateFieldCondition({ field_scope: 'dialog', field_key: event.target.value })}
+                                />
+                            </label>
+                        )}
+                        <label>
+                            <span>Проверка</span>
+                            <select
+                                value={fieldConditionOperator}
+                                onChange={(event) => updateFieldCondition({ operator: event.target.value })}
+                            >
+                                {EDGE_FIELD_CONDITION_OPERATOR_OPTIONS.map(([value, label]) => (
+                                    <option key={value} value={value}>{label}</option>
+                                ))}
+                            </select>
+                        </label>
+                        {['equals', 'not_equals'].includes(fieldConditionOperator) ? (
+                            <label>
+                                <span>Значение</span>
+                                <input
+                                    value={fieldCondition.value ?? ''}
+                                    onChange={(event) => updateFieldCondition({ value: event.target.value })}
+                                />
+                            </label>
+                        ) : null}
+                    </>
+                ) : null}
                 {isButton ? (
                     <>
                         <span>Кнопка</span>
@@ -3624,6 +3729,13 @@ function edgePayload(outputId, label) {
         priority: 10,
         transition_limit: 0,
         contact_phone_condition: '',
+        field_condition: {
+            enabled: false,
+            field_scope: 'dialog',
+            field_key: '',
+            operator: 'filled',
+            value: '',
+        },
         match: {
             type: isButton ? 'exact_text' : 'any_inbound',
             text: isButton ? label : '',

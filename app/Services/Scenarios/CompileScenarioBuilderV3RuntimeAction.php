@@ -352,6 +352,7 @@ class CompileScenarioBuilderV3RuntimeAction
             'contact_phone_condition' => $this->normalizeContactPhoneCondition(
                 $conditionPayload['contact_phone_condition'] ?? '',
             ),
+            'field_condition' => $this->compileEdgeFieldCondition($conditionPayload),
             'match' => $this->compileEdgeMatch($conditionPayload),
             'delay' => $delay,
             'input_capture' => $mode === self::EDGE_MODE_WAIT_REPLY
@@ -391,6 +392,25 @@ class CompileScenarioBuilderV3RuntimeAction
             'type' => $type,
             'text' => $text,
             'variants' => $variants,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $conditionPayload
+     * @return array{enabled: bool, field_scope: string, field_key: string, operator: string, value: string}
+     */
+    private function compileEdgeFieldCondition(array $conditionPayload): array
+    {
+        $condition = is_array($conditionPayload['field_condition'] ?? null)
+            ? $conditionPayload['field_condition']
+            : [];
+
+        return [
+            'enabled' => (bool) ($condition['enabled'] ?? false),
+            'field_scope' => (string) ($condition['field_scope'] ?? 'dialog'),
+            'field_key' => (string) ($condition['field_key'] ?? ''),
+            'operator' => (string) ($condition['operator'] ?? 'filled'),
+            'value' => (string) ($condition['value'] ?? ''),
         ];
     }
 

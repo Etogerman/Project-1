@@ -1284,6 +1284,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ->merge($this->v3WaitReplyEdges($block))
             ->filter(fn (array $edge): bool => filled($edge['target_block_id'] ?? null)
                 && $this->v3EdgeAllowsContactPhone($message, $edge)
+                && $this->v3EdgeAllowsFieldCondition($message, $edge)
                 && (
                     ($edge['mode'] ?? null) !== 'wait_reply'
                     || $this->messageMatchesV3WaitReplyEdge($message, $edge)
@@ -1372,6 +1373,89 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return $condition === AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
             ? $hasPhone
             : ! $hasPhone;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3EdgeAllowsFieldCondition(Message $message, array $edge): bool
+    {
+        $condition = is_array($edge['field_condition'] ?? null) ? $edge['field_condition'] : [];
+
+        if ((bool) ($condition['enabled'] ?? false) !== true) {
+            return true;
+        }
+
+        $fieldScope = (string) ($condition['field_scope'] ?? 'dialog');
+        $fieldKey = trim((string) ($condition['field_key'] ?? ''));
+        $operator = (string) ($condition['operator'] ?? 'filled');
+        $expectedValue = (string) ($condition['value'] ?? '');
+        $actualValue = $this->v3FieldConditionValue($message, $fieldScope, $fieldKey);
+
+        return match ($operator) {
+            'empty' => ! $this->v3FieldConditionFilled($actualValue),
+            'equals' => $this->v3FieldConditionEquals($actualValue, $expectedValue),
+            'not_equals' => ! $this->v3FieldConditionEquals($actualValue, $expectedValue),
+            default => $this->v3FieldConditionFilled($actualValue),
+        };
+    }
+
+    private function v3FieldConditionValue(Message $message, string $fieldScope, string $fieldKey): mixed
+    {
+        if ($fieldScope === 'dialog') {
+            $dialog = $message->dialog instanceof Dialog
+                ? $message->dialog
+                : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
+            $fieldsPayload = is_array($dialog?->fields_payload) ? $dialog->fields_payload : [];
+
+            return $fieldsPayload[$fieldKey] ?? null;
+        }
+
+        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CONTACT_CAPTURE_FIELDS, true)) {
+            return null;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+
+        if ($fieldKey === 'phone') {
+            return $contact->phoneNumbers()
+                ->get(['phone_normalized', 'phone_raw'])
+                ->flatMap(fn (ContactPhoneNumber $phone): array => [
+                    $phone->phone_normalized,
+                    $phone->phone_raw,
+                ])
+                ->filter(fn (mixed $value): bool => trim((string) $value) !== '')
+                ->values()
+                ->all();
+        }
+
+        return $contact->{$fieldKey} ?? null;
+    }
+
+    private function v3FieldConditionFilled(mixed $value): bool
+    {
+        if (is_array($value)) {
+            return collect($value)
+                ->contains(fn (mixed $item): bool => $this->v3FieldConditionFilled($item));
+        }
+
+        return trim((string) $value) !== '';
+    }
+
+    private function v3FieldConditionEquals(mixed $actualValue, string $expectedValue): bool
+    {
+        $expected = $this->normalizeV3ButtonText($expectedValue);
+
+        if ($expected === '') {
+            return ! $this->v3FieldConditionFilled($actualValue);
+        }
+
+        if (is_array($actualValue)) {
+            return collect($actualValue)
+                ->contains(fn (mixed $item): bool => $this->v3FieldConditionEquals($item, $expectedValue));
+        }
+
+        return $this->normalizeV3ButtonText((string) $actualValue) === $expected;
     }
 
     /**
@@ -1867,7 +1951,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $sourceBlockId = filled($block['id'] ?? null) ? (string) $block['id'] : null;
 
         foreach ($this->v3AutomaticEdges($block) as $edge) {
-            if (! $this->v3EdgeAllowsContactPhone($message, $edge)) {
+            if (
+                ! $this->v3EdgeAllowsContactPhone($message, $edge)
+                || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+            ) {
                 continue;
             }
 
