@@ -39,6 +39,20 @@
     isolation: isolate;
 }
 
+body:has([data-scenario-builder-v3]) .fi-main.fi-width-full {
+    padding-inline: 0;
+}
+
+body:has([data-scenario-builder-v3]) .fi-page-header-main-ctn {
+    padding-block: 0;
+}
+
+body:has([data-scenario-builder-v3]) .ac-v3-builder {
+    height: calc(100dvh - 64px);
+    border-inline: 0;
+    border-radius: 0;
+}
+
 .ac-v3-builder *,
 .ac-v3-builder *::before,
 .ac-v3-builder *::after {
