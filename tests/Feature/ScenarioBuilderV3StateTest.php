@@ -457,7 +457,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             ]);
     }
 
-    public function test_publish_rejects_relative_automatic_delay_until_runtime_queue_is_available(): void
+    public function test_publish_includes_relative_automatic_delay_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
         $channel = Channel::factory()->create(['is_active' => true]);
@@ -501,15 +501,23 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertOk()
             ->json();
 
-        $this->actingAs($admin)
+        $publishedState = $this->actingAs($admin)
             ->postJson($this->publishUrl($scenario), [
                 'draft_version_id' => $savedState['scenario']['draft_version_id'],
                 'base_revision' => $savedState['builder']['revision'],
             ])
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors([
-                'builder.edges',
-            ]);
+            ->assertOk()
+            ->json();
+
+        $scenario->refresh()->load('publishedVersion');
+        $startBlockId = (string) $savedState['id_map']['blocks']['tmp_start'];
+        $runtimeDelay = data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$startBlockId.automatic_edges.0.delay");
+
+        $this->assertSame(1, $publishedState['published']['version_number']);
+        $this->assertSame('relative', $runtimeDelay['type'] ?? null);
+        $this->assertSame(5, $runtimeDelay['value'] ?? null);
+        $this->assertSame('min', $runtimeDelay['unit'] ?? null);
+        $this->assertTrue($runtimeDelay['cancel_if_left_source_block'] ?? false);
     }
 
     public function test_put_state_syncs_start_condition_channels_and_conditions(): void

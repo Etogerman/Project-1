@@ -4,6 +4,7 @@ namespace App\Services\Scenarios;
 
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
+use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -16,6 +17,7 @@ use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioRun;
+use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Bots\SendBotDialogTextAction;
@@ -131,10 +133,43 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $runtime,
             $blockId,
             $this->v3StatePayload($activeRun->state_payload),
+            run: $activeRun,
             preservePreviousStateForTerminalNonState: true,
         );
 
         return true;
+    }
+
+    public function handleScheduledV3Transition(int|ScenarioV3ScheduledTransition $transition): void
+    {
+        $transition = $transition instanceof ScenarioV3ScheduledTransition
+            ? $transition
+            : ScenarioV3ScheduledTransition::query()->find((int) $transition);
+
+        if (! $transition instanceof ScenarioV3ScheduledTransition) {
+            return;
+        }
+
+        $transition = $this->claimScheduledV3Transition($transition);
+
+        if (! $transition instanceof ScenarioV3ScheduledTransition) {
+            return;
+        }
+
+        try {
+            $this->processClaimedV3ScheduledTransition($transition);
+        } catch (Throwable $throwable) {
+            report($throwable);
+            $transition->refresh();
+
+            if ($transition->status === ScenarioV3ScheduledTransition::STATUS_PROCESSING) {
+                $this->finishV3ScheduledTransition(
+                    $transition,
+                    ScenarioV3ScheduledTransition::STATUS_FAILED,
+                    $throwable->getMessage(),
+                );
+            }
+        }
     }
 
     public function shouldStart(Message $message): bool
@@ -973,6 +1008,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $runtime,
             $startBlockId,
             $this->v3StatePayload($run->state_payload),
+            run: $run,
         );
 
         $run->forceFill([
@@ -1168,7 +1204,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 );
             }
 
-            $progress = $this->advanceV3FromBlock($message, $runtime, $targetBlockId, $statePayload);
+            $progress = $this->advanceV3FromBlock($message, $runtime, $targetBlockId, $statePayload, run: $lockedRun);
 
             $lockedRun->forceFill([
                 'status' => $progress['status'],
@@ -1469,6 +1505,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         string $blockId,
         array $statePayload,
         ?int $remainingTransitions = null,
+        ?ScenarioRun $run = null,
         bool $preservePreviousStateForTerminalNonState = false,
     ): array {
         $remainingTransitions ??= count(is_array($runtime['blocks'] ?? null) ? $runtime['blocks'] : []) + 1;
@@ -1522,6 +1559,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $block,
             $statePayload,
             $remainingTransitions,
+            $run,
         );
 
         if ($automaticProgress !== null) {
@@ -1575,13 +1613,21 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         array $block,
         array $statePayload,
         int $remainingTransitions,
+        ?ScenarioRun $run,
     ): ?array {
         $progress = null;
+        $sourceBlockId = filled($block['id'] ?? null) ? (string) $block['id'] : null;
 
         foreach ($this->v3AutomaticEdges($block) as $edge) {
             $targetBlockId = filled($edge['target_block_id'] ?? null) ? (string) $edge['target_block_id'] : null;
 
             if ($targetBlockId === null) {
+                continue;
+            }
+
+            if ($run instanceof ScenarioRun && $sourceBlockId !== null && $this->v3AutomaticEdgeDelaySeconds($edge) > 0) {
+                $this->scheduleV3DelayedAutomaticTransition($message, $run, $edge, $sourceBlockId);
+
                 continue;
             }
 
@@ -1602,12 +1648,285 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $targetBlockId,
                 $statePayload,
                 $remainingTransitions - 1,
+                $run,
             );
             $statePayload = $progress['state_payload'];
             $remainingTransitions -= 1;
         }
 
         return $progress;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function scheduleV3DelayedAutomaticTransition(
+        Message $message,
+        ScenarioRun $run,
+        array $edge,
+        string $sourceBlockId,
+    ): void {
+        if ($message->dialog_id === null) {
+            return;
+        }
+
+        $delaySeconds = $this->v3AutomaticEdgeDelaySeconds($edge);
+
+        if ($delaySeconds < 1) {
+            return;
+        }
+
+        $targetBlockId = filled($edge['target_block_id'] ?? null) ? (string) $edge['target_block_id'] : null;
+
+        if ($targetBlockId === null) {
+            return;
+        }
+
+        $scheduledFor = now()->addSeconds($delaySeconds);
+        $transition = ScenarioV3ScheduledTransition::query()->create([
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $message->dialog_id,
+            'inbound_message_id' => $message->id,
+            'scenario_code' => $this->code(),
+            'published_version_id' => $this->publishedVersion->id,
+            'edge_key' => (string) ($edge['edge_key'] ?? $edge['id'] ?? ''),
+            'edge_id' => filled($edge['id'] ?? null) ? (string) $edge['id'] : null,
+            'source_block_id' => $sourceBlockId,
+            'target_block_id' => $targetBlockId,
+            'delay_payload' => $this->v3EdgeDelay($edge),
+            'scheduled_for' => $scheduledFor,
+            'status' => ScenarioV3ScheduledTransition::STATUS_SCHEDULED,
+        ]);
+
+        ProcessScenarioV3ScheduledTransitionJob::dispatch($transition->id, $run->id)
+            ->delay($scheduledFor)
+            ->afterCommit();
+    }
+
+    private function claimScheduledV3Transition(ScenarioV3ScheduledTransition $transition): ?ScenarioV3ScheduledTransition
+    {
+        return DB::transaction(function () use ($transition): ?ScenarioV3ScheduledTransition {
+            $lockedTransition = ScenarioV3ScheduledTransition::query()
+                ->whereKey($transition->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ! $lockedTransition instanceof ScenarioV3ScheduledTransition
+                || $lockedTransition->status !== ScenarioV3ScheduledTransition::STATUS_SCHEDULED
+            ) {
+                return null;
+            }
+
+            if ($lockedTransition->scheduled_for !== null && $lockedTransition->scheduled_for->isFuture()) {
+                return null;
+            }
+
+            $lockedTransition->forceFill([
+                'status' => ScenarioV3ScheduledTransition::STATUS_PROCESSING,
+                'processing_started_at' => now(),
+            ])->save();
+
+            return $lockedTransition;
+        });
+    }
+
+    private function processClaimedV3ScheduledTransition(ScenarioV3ScheduledTransition $transition): void
+    {
+        DB::transaction(function () use ($transition): void {
+            $lockedTransition = ScenarioV3ScheduledTransition::query()
+                ->whereKey($transition->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ! $lockedTransition instanceof ScenarioV3ScheduledTransition
+                || $lockedTransition->status !== ScenarioV3ScheduledTransition::STATUS_PROCESSING
+            ) {
+                return;
+            }
+
+            if ((int) $lockedTransition->published_version_id !== (int) $this->publishedVersion->id) {
+                $this->finishV3ScheduledTransition(
+                    $lockedTransition,
+                    ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                    'Версия сценария изменилась.',
+                );
+
+                return;
+            }
+
+            $dialog = Dialog::query()
+                ->whereKey($lockedTransition->dialog_id)
+                ->lockForUpdate()
+                ->first();
+            $run = ScenarioRun::query()
+                ->whereKey($lockedTransition->scenario_run_id)
+                ->lockForUpdate()
+                ->first();
+            $message = Message::query()
+                ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+                ->find($lockedTransition->inbound_message_id);
+
+            if (
+                ! $dialog instanceof Dialog
+                || ! $run instanceof ScenarioRun
+                || ! $run->isActive()
+                || ! $message instanceof Message
+                || (int) $run->dialog_id !== (int) $lockedTransition->dialog_id
+            ) {
+                $this->finishV3ScheduledTransition(
+                    $lockedTransition,
+                    ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                    'Активный run, диалог или исходное сообщение не найдены.',
+                );
+
+                return;
+            }
+
+            $runtime = $this->v3RuntimeOrNull();
+
+            if ($runtime === null) {
+                $this->finishV3ScheduledTransition(
+                    $lockedTransition,
+                    ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                    'Runtime V3 недоступен.',
+                );
+
+                return;
+            }
+
+            $statePayload = $this->v3StatePayload($run->state_payload);
+
+            if ($this->v3ScheduledTransitionRequiresSourceBlock($lockedTransition)) {
+                $currentBlockId = $this->v3CurrentRuntimeBlockId($runtime, $statePayload);
+
+                if ($currentBlockId !== $lockedTransition->source_block_id) {
+                    $this->finishV3ScheduledTransition(
+                        $lockedTransition,
+                        ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                        'Диалог ушёл из исходного блока.',
+                    );
+
+                    return;
+                }
+            }
+
+            $edge = $this->v3ScheduledAutomaticEdge($runtime, $lockedTransition);
+
+            if ($edge === null) {
+                $this->finishV3ScheduledTransition(
+                    $lockedTransition,
+                    ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                    'Стрелка больше не найдена в опубликованном runtime.',
+                );
+
+                return;
+            }
+
+            if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)) {
+                $this->finishV3ScheduledTransition(
+                    $lockedTransition,
+                    ScenarioV3ScheduledTransition::STATUS_LIMIT_REACHED,
+                    'Лимит переходов исчерпан или данные диалога не сохранены.',
+                );
+
+                return;
+            }
+
+            $progress = $this->advanceV3FromBlock(
+                $message,
+                $runtime,
+                $lockedTransition->target_block_id,
+                $statePayload,
+                run: $run,
+            );
+
+            $run->forceFill([
+                'status' => $progress['status'],
+                'current_step' => $progress['current_step'],
+                'state_payload' => $progress['state_payload'],
+                'exit_outcome' => $progress['exit_outcome'],
+                'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+            ])->save();
+
+            $this->finishV3ScheduledTransition($lockedTransition, ScenarioV3ScheduledTransition::STATUS_PASSED);
+        });
+    }
+
+    private function finishV3ScheduledTransition(
+        ScenarioV3ScheduledTransition $transition,
+        string $status,
+        ?string $errorMessage = null,
+    ): void {
+        $transition->forceFill([
+            'status' => $status,
+            'finished_at' => now(),
+            'error_message' => $errorMessage,
+        ])->save();
+    }
+
+    private function v3ScheduledTransitionRequiresSourceBlock(ScenarioV3ScheduledTransition $transition): bool
+    {
+        $delay = is_array($transition->delay_payload) ? $transition->delay_payload : [];
+
+        return (bool) ($delay['cancel_if_left_source_block'] ?? true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @return array<string, mixed>|null
+     */
+    private function v3ScheduledAutomaticEdge(array $runtime, ScenarioV3ScheduledTransition $transition): ?array
+    {
+        $sourceBlock = $this->v3RuntimeBlock($runtime, $transition->source_block_id);
+
+        if (! is_array($sourceBlock)) {
+            return null;
+        }
+
+        return collect($this->v3AutomaticEdges($sourceBlock))
+            ->first(function (array $edge) use ($transition): bool {
+                $edgeKey = (string) ($edge['edge_key'] ?? '');
+                $edgeId = (string) ($edge['id'] ?? '');
+
+                return $edgeKey === $transition->edge_key
+                    && ($transition->edge_id === null || $edgeId === $transition->edge_id)
+                    && (string) ($edge['target_block_id'] ?? '') === $transition->target_block_id;
+            });
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3AutomaticEdgeDelaySeconds(array $edge): int
+    {
+        $delay = $this->v3EdgeDelay($edge);
+        $value = max(0, (int) ($delay['value'] ?? 0));
+
+        if ($value < 1) {
+            return 0;
+        }
+
+        return ($delay['unit'] ?? 'sec') === 'min' ? $value * 60 : $value;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     * @return array{type: string, value: int, unit: string, cancel_if_left_source_block: bool}
+     */
+    private function v3EdgeDelay(array $edge): array
+    {
+        $delay = is_array($edge['delay'] ?? null) ? $edge['delay'] : [];
+        $value = max(0, (int) ($delay['value'] ?? 0));
+        $unit = $value > 0 && ($delay['unit'] ?? 'sec') === 'min' ? 'min' : 'sec';
+
+        return [
+            'type' => $value > 0 ? 'relative' : 'immediate',
+            'value' => $value,
+            'unit' => $unit,
+            'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
+        ];
     }
 
     /**

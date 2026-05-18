@@ -334,10 +334,6 @@ class CompileScenarioBuilderV3RuntimeAction
         $mode = $this->edgeMode($edge);
         $delay = $this->compileEdgeDelay($conditionPayload);
 
-        if ($mode === self::EDGE_MODE_AUTOMATIC && $delay['type'] === 'relative') {
-            $this->fail('builder.edges', 'Отложенные automatic-стрелки можно сохранить, публикация будет доступна после подключения runtime-очереди.');
-        }
-
         return [
             'id' => (string) $edge->id,
             'edge_key' => (string) ($conditionPayload['edge_key'] ?? ''),
