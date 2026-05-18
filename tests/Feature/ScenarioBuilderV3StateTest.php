@@ -327,6 +327,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         ];
         $parameterPayload = $this->edgePayload(null, 'Параметр');
         $parameterPayload['match'] = ['type' => 'exact_parameter', 'text' => "payload_1\npayload_2"];
+        $parameterPayload['contact_phone_condition'] = 'has_phone';
         $textOrParameterPayload = $this->edgePayload(null, 'Текст или параметр');
         $textOrParameterPayload['match'] = ['type' => 'exact_text_or_parameter', 'text' => 'mixed_1'];
         $callbackPayload = $this->edgePayload(null, 'Callback');
@@ -359,6 +360,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
             ->assertOk()
             ->assertJsonPath('builder.edges.0.condition_payload.match.type', 'exact_parameter')
+            ->assertJsonPath('builder.edges.0.condition_payload.contact_phone_condition', 'has_phone')
             ->assertJsonPath('builder.edges.1.condition_payload.match.type', 'exact_text_or_parameter')
             ->assertJsonPath('builder.edges.2.condition_payload.match.type', 'exact_callback')
             ->json();
@@ -380,6 +382,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             collect($waitReplyEdges)->pluck('match.type')->sort()->values()->all(),
         );
         $this->assertSame(['payload_1', 'payload_2'], data_get($edgesByMatchType->get('exact_parameter'), 'match.variants'));
+        $this->assertSame('has_phone', data_get($edgesByMatchType->get('exact_parameter'), 'contact_phone_condition'));
     }
 
     public function test_put_state_normalizes_disabled_edge_input_capture_without_requiring_fields(): void
@@ -1958,6 +1961,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             'mode' => $isButton ? 'button' : 'wait_reply',
             'priority' => 10,
             'transition_limit' => 0,
+            'contact_phone_condition' => '',
             'match' => [
                 'type' => $isButton ? 'exact_text' : 'any_inbound',
                 'text' => $isButton ? $label : '',

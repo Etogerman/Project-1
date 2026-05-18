@@ -2794,6 +2794,17 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         </button>
                     </div>
                 )}
+                <label className="ac-v3-builder__field-row">
+                    <span>Условие по телефону</span>
+                    <select
+                        value={payload.contact_phone_condition ?? ''}
+                        onChange={(event) => updatePayload({ contact_phone_condition: event.target.value })}
+                    >
+                        {PHONE_CONDITION_OPTIONS.map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                        ))}
+                    </select>
+                </label>
                 {isButton ? (
                     <>
                         <span>Кнопка</span>
@@ -3612,6 +3623,7 @@ function edgePayload(outputId, label) {
         mode: isButton ? 'button' : 'wait_reply',
         priority: 10,
         transition_limit: 0,
+        contact_phone_condition: '',
         match: {
             type: isButton ? 'exact_text' : 'any_inbound',
             text: isButton ? label : '',

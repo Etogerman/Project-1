@@ -1283,6 +1283,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return collect($edges)
             ->merge($this->v3WaitReplyEdges($block))
             ->filter(fn (array $edge): bool => filled($edge['target_block_id'] ?? null)
+                && $this->v3EdgeAllowsContactPhone($message, $edge)
                 && (
                     ($edge['mode'] ?? null) !== 'wait_reply'
                     || $this->messageMatchesV3WaitReplyEdge($message, $edge)
@@ -1346,6 +1347,31 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ),
             default => $messageText !== '' && $variants->contains($messageText),
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3EdgeAllowsContactPhone(Message $message, array $edge): bool
+    {
+        $condition = trim((string) ($edge['contact_phone_condition'] ?? ''));
+
+        if ($condition === '') {
+            return true;
+        }
+
+        if (! in_array($condition, [
+            AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+        ], true)) {
+            return false;
+        }
+
+        $hasPhone = $message->contact?->phoneNumbers()->exists() ?? false;
+
+        return $condition === AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
+            ? $hasPhone
+            : ! $hasPhone;
     }
 
     /**
@@ -1841,6 +1867,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $sourceBlockId = filled($block['id'] ?? null) ? (string) $block['id'] : null;
 
         foreach ($this->v3AutomaticEdges($block) as $edge) {
+            if (! $this->v3EdgeAllowsContactPhone($message, $edge)) {
+                continue;
+            }
+
             $targetBlockId = filled($edge['target_block_id'] ?? null) ? (string) $edge['target_block_id'] : null;
 
             if ($targetBlockId === null) {

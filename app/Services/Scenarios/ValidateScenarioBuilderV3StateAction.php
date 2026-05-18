@@ -321,6 +321,17 @@ class ValidateScenarioBuilderV3StateAction
         return $condition;
     }
 
+    private function normalizeEdgeContactPhoneCondition(mixed $value, int $edgeIndex): string
+    {
+        $condition = is_string($value) ? trim($value) : '';
+
+        if (! in_array($condition, self::CONTACT_PHONE_CONDITIONS, true)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.contact_phone_condition", 'Unknown phone condition.');
+        }
+
+        return $condition;
+    }
+
     /**
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
@@ -567,6 +578,7 @@ class ValidateScenarioBuilderV3StateAction
             'mode' => $mode,
             'priority' => $priority,
             'transition_limit' => $transitionLimit,
+            'contact_phone_condition' => $this->normalizeEdgeContactPhoneCondition($payload['contact_phone_condition'] ?? '', $edgeIndex),
             'match' => $this->normalizeEdgeMatch($payload['match'] ?? [], $edgeIndex),
             'input_capture' => $this->normalizeEdgeInputCapture($payload['input_capture'] ?? [], $edgeIndex),
             'delay' => $this->normalizeEdgeDelay($payload['delay'] ?? [], $mode, $edgeIndex),

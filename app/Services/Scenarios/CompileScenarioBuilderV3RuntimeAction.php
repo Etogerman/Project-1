@@ -349,6 +349,9 @@ class CompileScenarioBuilderV3RuntimeAction
             'target_db_block_id' => $targetDbId,
             'from_output_id' => $this->edgeOutputId($edge),
             'label' => (string) ($conditionPayload['label'] ?? ''),
+            'contact_phone_condition' => $this->normalizeContactPhoneCondition(
+                $conditionPayload['contact_phone_condition'] ?? '',
+            ),
             'match' => $this->compileEdgeMatch($conditionPayload),
             'delay' => $delay,
             'input_capture' => $mode === self::EDGE_MODE_WAIT_REPLY
