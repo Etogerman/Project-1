@@ -387,7 +387,7 @@ class CompileScenarioBuilderV3RuntimeAction
 
         return [
             'enabled' => (bool) ($capture['enabled'] ?? false),
-            'field_scope' => 'dialog',
+            'field_scope' => (string) ($capture['field_scope'] ?? 'dialog'),
             'field_key' => (string) ($capture['field_key'] ?? ''),
             'data_type' => (string) ($capture['data_type'] ?? 'any_text'),
         ];

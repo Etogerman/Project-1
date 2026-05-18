@@ -217,6 +217,71 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame($edgeDisplayId, data_get($savedAgain, 'builder.edges.0.condition_payload.ui.edge_id'));
     }
 
+    public function test_put_state_allows_multiple_wait_reply_edges_from_one_block(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_multiple_wait_edges',
+            'name' => 'V3 Multiple Wait Edges',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Выберите вариант'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target_a',
+                'type' => 'state',
+                'title' => 'Цель A',
+                'position' => ['x' => 480, 'y' => 120],
+                'settings_payload' => $this->messageSettings('Первый вариант'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target_b',
+                'type' => 'state',
+                'title' => 'Цель B',
+                'position' => ['x' => 480, 'y' => 260],
+                'settings_payload' => $this->messageSettings('Второй вариант'),
+            ],
+        ];
+        $firstPayload = $this->edgePayload(null, 'Первый');
+        $firstPayload['match'] = ['type' => 'exact_text', 'text' => '1'];
+        $secondPayload = $this->edgePayload(null, 'Второй');
+        $secondPayload['match'] = ['type' => 'exact_text', 'text' => '2'];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_edge_a',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target_a'],
+                'condition_payload' => $firstPayload,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_edge_b',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target_b'],
+                'condition_payload' => $secondPayload,
+            ],
+        ];
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk();
+
+        $this->assertCount(2, $response->json('builder.edges'));
+        $this->assertSame('wait_reply', $response->json('builder.edges.0.condition_payload.mode'));
+        $this->assertSame('wait_reply', $response->json('builder.edges.1.condition_payload.mode'));
+        $this->assertDatabaseCount('scenario_builder_edges', 2);
+    }
+
     public function test_put_state_normalizes_disabled_edge_input_capture_without_requiring_fields(): void
     {
         $admin = $this->adminUser();
@@ -327,7 +392,72 @@ class ScenarioBuilderV3StateTest extends TestCase
             ]]))
             ->assertUnprocessable()
             ->assertJsonValidationErrors([
-                'builder.edges.0.condition_payload.input_capture.field_scope',
+                'builder.edges.0.condition_payload.input_capture.field_key',
+            ]);
+    }
+
+    public function test_put_state_accepts_contact_edge_input_capture(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_contact_capture',
+            'name' => 'V3 Contact Capture',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Напишите телефон'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Принято'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Телефон');
+        $conditionPayload['input_capture'] = [
+            'enabled' => true,
+            'field_scope' => 'contact',
+            'field_key' => 'phone',
+            'data_type' => 'phone',
+        ];
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk();
+
+        $this->assertSame(true, $response->json('builder.edges.0.condition_payload.input_capture.enabled'));
+        $this->assertSame('contact', $response->json('builder.edges.0.condition_payload.input_capture.field_scope'));
+        $this->assertSame('phone', $response->json('builder.edges.0.condition_payload.input_capture.field_key'));
+        $this->assertSame('phone', $response->json('builder.edges.0.condition_payload.input_capture.data_type'));
+
+        $conditionPayload['input_capture']['data_type'] = 'any_text';
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.edges.0.condition_payload.input_capture.data_type',
             ]);
     }
 

@@ -42,6 +42,20 @@ const EDGE_DATA_TYPE_OPTIONS = [
     ['email', 'Email'],
     ['number', 'Число'],
 ];
+const EDGE_CAPTURE_SCOPE_OPTIONS = [
+    ['dialog', 'Диалог'],
+    ['contact', 'Контакт'],
+];
+const EDGE_CONTACT_FIELD_OPTIONS = [
+    ['phone', 'Телефон', 'phone'],
+    ['first_name', 'Имя', 'any_text'],
+    ['last_name', 'Фамилия', 'any_text'],
+    ['country', 'Страна', 'any_text'],
+    ['city', 'Город', 'any_text'],
+    ['gender', 'Пол', 'any_text'],
+    ['age_years', 'Возраст', 'number'],
+    ['age_range', 'Возрастной диапазон', 'any_text'],
+];
 const EDGE_DELAY_UNIT_OPTIONS = [
     ['sec', 'секунды'],
     ['min', 'минуты'],
@@ -576,7 +590,10 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             condition_payload: edgePayload(connection.outputId, connection.label),
         };
 
-        updateEdges((currentEdges) => [...currentEdges.filter((item) => ! sameSource(item.source, source)), edge]);
+        updateEdges((currentEdges) => [
+            ...currentEdges.filter((item) => connection.outputId === null || ! sameSource(item.source, source)),
+            edge,
+        ]);
         setSelectedEdgeKey(edge.client_key);
         setSelectedBlockKey(null);
         setIsPanelCollapsed(false);
@@ -2637,6 +2654,14 @@ function ModuleIcon({ type }) {
     return <AnalyticsIcon />;
 }
 
+function edgeDataTypeLabel(value) {
+    return EDGE_DATA_TYPE_OPTIONS.find(([optionValue]) => optionValue === value)?.[1] ?? value;
+}
+
+function contactCaptureField(fieldKey) {
+    return EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === fieldKey) ?? EDGE_CONTACT_FIELD_OPTIONS[0];
+}
+
 function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
@@ -2647,6 +2672,8 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const capture = payload.input_capture ?? {};
     const matchType = match.type ?? 'any_inbound';
     const captureEnabled = capture.enabled === true;
+    const captureScope = capture.field_scope === 'contact' ? 'contact' : 'dialog';
+    const selectedContactField = contactCaptureField(capture.field_key);
     const delay = normalizedEdgeDelay(payload.delay);
     const scheduledTransitions = edgeScheduledTransitions(edge);
 
@@ -2809,25 +2836,74 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         </label>
                         {captureEnabled ? (
                             <>
-                                <label>
-                                    <span>Поле диалога</span>
-                                    <input
-                                        value={capture.field_key ?? ''}
-                                        placeholder="client_phone"
-                                        onChange={(event) => updateCapture({ field_key: event.target.value })}
-                                    />
-                                </label>
-                                <label>
-                                    <span>Тип данных</span>
-                                    <select
-                                        value={capture.data_type ?? 'any_text'}
-                                        onChange={(event) => updateCapture({ data_type: event.target.value })}
-                                    >
-                                        {EDGE_DATA_TYPE_OPTIONS.map(([value, label]) => (
-                                            <option key={value} value={value}>{label}</option>
-                                        ))}
-                                    </select>
-                                </label>
+                                <span>Сохранить в</span>
+                                <div className="ac-v3-builder__edge-mode" role="group" aria-label="Куда сохранить данные">
+                                    {EDGE_CAPTURE_SCOPE_OPTIONS.map(([value, label]) => (
+                                        <button
+                                            type="button"
+                                            key={value}
+                                            className={captureScope === value ? 'is-active' : ''}
+                                            onClick={() => {
+                                                if (value === 'contact') {
+                                                    const [fieldKey, , dataType] = selectedContactField;
+
+                                                    updateCapture({ field_scope: 'contact', field_key: fieldKey, data_type: dataType });
+
+                                                    return;
+                                                }
+
+                                                updateCapture({ field_scope: 'dialog', field_key: '', data_type: 'any_text' });
+                                            }}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                {captureScope === 'contact' ? (
+                                    <>
+                                        <label>
+                                            <span>Поле контакта</span>
+                                            <select
+                                                value={selectedContactField[0]}
+                                                onChange={(event) => {
+                                                    const [fieldKey, , dataType] = contactCaptureField(event.target.value);
+
+                                                    updateCapture({ field_scope: 'contact', field_key: fieldKey, data_type: dataType });
+                                                }}
+                                            >
+                                                {EDGE_CONTACT_FIELD_OPTIONS.map(([value, label]) => (
+                                                    <option key={value} value={value}>{label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        <label>
+                                            <span>Тип данных</span>
+                                            <input readOnly value={edgeDataTypeLabel(selectedContactField[2])} />
+                                        </label>
+                                    </>
+                                ) : (
+                                    <>
+                                        <label>
+                                            <span>Поле диалога</span>
+                                            <input
+                                                value={capture.field_key ?? ''}
+                                                placeholder="client_phone"
+                                                onChange={(event) => updateCapture({ field_scope: 'dialog', field_key: event.target.value })}
+                                            />
+                                        </label>
+                                        <label>
+                                            <span>Тип данных</span>
+                                            <select
+                                                value={capture.data_type ?? 'any_text'}
+                                                onChange={(event) => updateCapture({ field_scope: 'dialog', data_type: event.target.value })}
+                                            >
+                                                {EDGE_DATA_TYPE_OPTIONS.map(([value, label]) => (
+                                                    <option key={value} value={value}>{label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                    </>
+                                )}
                             </>
                         ) : null}
                     </>

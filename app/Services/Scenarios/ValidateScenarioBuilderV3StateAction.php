@@ -59,6 +59,19 @@ class ValidateScenarioBuilderV3StateAction
 
     private const EDGE_CAPTURE_DATA_TYPES = ['any_text', 'phone', 'email', 'number'];
 
+    private const EDGE_CAPTURE_FIELD_SCOPES = ['dialog', 'contact'];
+
+    private const EDGE_CONTACT_CAPTURE_DATA_TYPES = [
+        'phone' => 'phone',
+        'first_name' => 'any_text',
+        'last_name' => 'any_text',
+        'country' => 'any_text',
+        'city' => 'any_text',
+        'gender' => 'any_text',
+        'age_years' => 'number',
+        'age_range' => 'any_text',
+    ];
+
     private const MAX_TRANSITION_LIMIT = 100000;
 
     private const EDGE_DELAY_UNITS = ['sec', 'min'];
@@ -479,13 +492,16 @@ class ValidateScenarioBuilderV3StateAction
             $source = $this->normalizeEndpoint($edge['source'] ?? null, "builder.edges.$index.source", $blockKeys, $blockIds);
             $target = $this->normalizeEndpoint($edge['target'] ?? null, "builder.edges.$index.target", $blockKeys, $blockIds);
             $sourceOutputId = $this->nullableStringValue(data_get($edge, 'source.output_id'), "builder.edges.$index.source.output_id");
-            $sourceKey = $source['client_key'].'|'.($sourceOutputId ?? '__default__');
 
-            if (isset($sourceOutputs[$sourceKey])) {
-                $this->fail("builder.edges.$index.source.output_id", 'Only one edge is allowed from one source output.');
+            if ($sourceOutputId !== null) {
+                $sourceKey = $source['client_key'].'|'.$sourceOutputId;
+
+                if (isset($sourceOutputs[$sourceKey])) {
+                    $this->fail("builder.edges.$index.source.output_id", 'Only one edge is allowed from one source output.');
+                }
+
+                $sourceOutputs[$sourceKey] = true;
             }
-
-            $sourceOutputs[$sourceKey] = true;
 
             if ($sourceOutputId !== null && ! $this->blockHasOutput($source['client_key'], $sourceOutputId, $blockKeys)) {
                 $this->fail("builder.edges.$index.source.output_id", 'Source output does not exist.');
@@ -707,16 +723,35 @@ class ValidateScenarioBuilderV3StateAction
         $fieldKey = trim((string) ($capture['field_key'] ?? ''));
         $dataType = trim((string) ($capture['data_type'] ?? 'any_text'));
 
-        if ($fieldScope !== 'dialog') {
-            $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_scope", 'Only dialog field scope is supported.');
-        }
-
-        if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
-            $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_key", 'Invalid dialog field key.');
+        if (! in_array($fieldScope, self::EDGE_CAPTURE_FIELD_SCOPES, true)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_scope", 'Unknown capture field scope.');
         }
 
         if (! in_array($dataType, self::EDGE_CAPTURE_DATA_TYPES, true)) {
             $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.data_type", 'Unknown capture data type.');
+        }
+
+        if ($fieldScope === 'dialog') {
+            if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+                $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_key", 'Invalid dialog field key.');
+            }
+
+            return [
+                'enabled' => true,
+                'field_scope' => $fieldScope,
+                'field_key' => $fieldKey,
+                'data_type' => $dataType,
+            ];
+        }
+
+        $expectedDataType = self::EDGE_CONTACT_CAPTURE_DATA_TYPES[$fieldKey] ?? null;
+
+        if ($expectedDataType === null) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_key", 'Unknown contact field key.');
+        }
+
+        if ($dataType !== $expectedDataType) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.data_type", 'Capture data type does not match contact field.');
         }
 
         return [

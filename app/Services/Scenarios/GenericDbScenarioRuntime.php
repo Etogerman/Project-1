@@ -22,10 +22,12 @@ use App\Models\ScenarioVersion;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
+use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\NormalizePhoneNumberAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
+use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Messages\PrepareMessageContentAction;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
@@ -67,6 +69,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_DIALOG_FIELD_VALUE_MAX_LENGTH = 2000;
 
+    private const V3_CONTACT_CAPTURE_FIELDS = [
+        'phone',
+        'first_name',
+        'last_name',
+        'country',
+        'city',
+        'gender',
+        'age_years',
+        'age_range',
+    ];
+
     private ?int $matchedBuilderStartMessageId = null;
 
     private ?string $matchedBuilderRuntimeBlockId = null;
@@ -86,8 +99,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
         private readonly ExtractFirstNameAction $extractFirstNameAction,
         private readonly ApplyContactFirstNameAction $applyContactFirstNameAction,
+        private readonly AddContactPhoneAction $addContactPhoneAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        private readonly SyncDialogConfirmedPhoneAction $syncDialogConfirmedPhoneAction,
     ) {}
 
     public function code(): string
@@ -1065,9 +1080,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
-        $transitionEdge = $this->v3TransitionEdgeForMessage($message, is_array($block) ? $block : [], $message->dialog);
+        $transition = $this->v3TransitionForMessage($message, is_array($block) ? $block : [], $message->dialog);
 
-        if ($transitionEdge !== null) {
+        if ($transition !== null) {
             return $this->handleV3TransitionInbound($run, $message, $runtime);
         }
 
@@ -1159,9 +1174,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
 
             $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
-            $transitionEdge = $this->v3TransitionEdgeForMessage($message, is_array($block) ? $block : [], $dialog);
+            $transition = $this->v3TransitionForMessage($message, is_array($block) ? $block : [], $dialog);
 
-            if ($transitionEdge === null) {
+            if ($transition === null) {
                 return new ScenarioInboundResult(
                     consumed: true,
                     status: ScenarioRun::STATUS_ACTIVE,
@@ -1171,19 +1186,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 );
             }
 
-            $capturedValue = $this->v3CapturedValueForEdge($message, $transitionEdge);
+            $transitionEdge = $transition['edge'];
+            $capturedValue = $transition['captured_value'];
 
-            if ($capturedValue['valid'] !== true) {
-                return new ScenarioInboundResult(
-                    consumed: true,
-                    status: ScenarioRun::STATUS_ACTIVE,
-                    currentStep: $currentBlockId,
-                    statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
-                    exitOutcome: null,
-                );
-            }
-
-            if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue['value'])) {
+            if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue)) {
                 return new ScenarioInboundResult(
                     consumed: true,
                     status: ScenarioRun::STATUS_ACTIVE,
@@ -1228,13 +1234,32 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     /**
      * @param  array<string, mixed>  $block
-     * @return array<string, mixed>|null
+     * @return array{edge: array<string, mixed>, captured_value: array{valid: bool, value: string|null, phone_raw?: string|null, phone_normalized?: string|null}}|null
      */
-    private function v3TransitionEdgeForMessage(Message $message, array $block, ?Dialog $dialog): ?array
+    private function v3TransitionForMessage(Message $message, array $block, ?Dialog $dialog): ?array
     {
-        return collect($this->v3TransitionEdgesForMessage($message, $block))
+        $edges = collect($this->v3TransitionEdgesForMessage($message, $block))
             ->sort(fn (array $left, array $right): int => $this->compareV3TransitionEdges($left, $right))
-            ->first(fn (array $edge): bool => ! $this->v3TransitionLimitReached($dialog, $edge));
+            ->values();
+
+        foreach ($edges as $edge) {
+            if ($this->v3TransitionLimitReached($dialog, $edge)) {
+                continue;
+            }
+
+            $capturedValue = $this->v3CapturedValueForEdge($message, $edge);
+
+            if ($capturedValue['valid'] !== true) {
+                continue;
+            }
+
+            return [
+                'edge' => $edge,
+                'captured_value' => $capturedValue,
+            ];
+        }
+
+        return null;
     }
 
     /**
@@ -1357,7 +1382,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     /**
      * @param  array<string, mixed>  $edge
-     * @return array{valid: bool, value: string|null}
+     * @return array{valid: bool, value: string|null, phone_raw?: string|null, phone_normalized?: string|null}
      */
     private function v3CapturedValueForEdge(Message $message, array $edge): array
     {
@@ -1368,8 +1393,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $dataType = (string) ($capture['data_type'] ?? 'any_text');
-        $sharedPhone = $this->v3SharedPhoneValue($message);
-        $value = trim((string) ($sharedPhone ?? $message->text));
+        $sharedPhone = $this->v3SharedPhoneData($message);
+        $value = trim((string) (($sharedPhone['normalized'] ?? null) ?? $message->text));
+        $rawValue = trim((string) (($sharedPhone['raw'] ?? null) ?? $message->text));
 
         if ($value === '') {
             return ['valid' => false, 'value' => null];
@@ -1392,11 +1418,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         if ($dataType === 'phone') {
-            $phone = app(NormalizePhoneNumberAction::class)->handle($value);
+            $phone = app(NormalizePhoneNumberAction::class)->handle($rawValue);
             $digits = preg_replace('/\D/u', '', $phone) ?? '';
 
             return strlen($digits) >= 7
-                ? ['valid' => true, 'value' => $phone]
+                ? [
+                    'valid' => true,
+                    'value' => $phone,
+                    'phone_raw' => $rawValue,
+                    'phone_normalized' => $phone,
+                ]
                 : ['valid' => false, 'value' => null];
         }
 
@@ -1404,6 +1435,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     }
 
     private function v3SharedPhoneValue(Message $message): ?string
+    {
+        $phone = $this->v3SharedPhoneData($message);
+
+        return $phone['normalized'] ?? null;
+    }
+
+    /**
+     * @return array{raw: string, normalized: string}|null
+     */
+    private function v3SharedPhoneData(Message $message): ?array
     {
         if (
             $message->message_kind !== Message::KIND_INBOUND_CONTACT_SHARE
@@ -1426,15 +1467,24 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return null;
         }
 
-        return filled($phoneNumber->phone_normalized)
-            ? (string) $phoneNumber->phone_normalized
-            : (string) $phoneNumber->phone_raw;
+        $raw = trim((string) ($phoneNumber->phone_raw ?: $phoneNumber->phone_normalized));
+        $normalized = trim((string) ($phoneNumber->phone_normalized ?: app(NormalizePhoneNumberAction::class)->handle($raw)));
+
+        if ($raw === '' && $normalized === '') {
+            return null;
+        }
+
+        return [
+            'raw' => $raw !== '' ? $raw : $normalized,
+            'normalized' => $normalized !== '' ? $normalized : $raw,
+        ];
     }
 
     /**
      * @param  array<string, mixed>  $edge
+     * @param  array{valid?: bool, value?: string|null, phone_raw?: string|null, phone_normalized?: string|null}|null  $capturedValue
      */
-    private function applyV3TransitionSideEffectsToDialog(Dialog $dialog, Message $message, array $edge, ?string $capturedValue): bool
+    private function applyV3TransitionSideEffectsToDialog(Dialog $dialog, Message $message, array $edge, ?array $capturedValue): bool
     {
         $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
         $limit = max(0, (int) ($edge['transition_limit'] ?? 0));
@@ -1448,27 +1498,31 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $capture = is_array($edge['input_capture'] ?? null) ? $edge['input_capture'] : [];
 
         if (($edge['mode'] ?? null) === 'wait_reply' && (bool) ($capture['enabled'] ?? false) === true) {
+            $captureValue = is_array($capturedValue) ? ($capturedValue['value'] ?? null) : null;
+            $fieldScope = (string) ($capture['field_scope'] ?? 'dialog');
             $fieldKey = trim((string) ($capture['field_key'] ?? ''));
 
-            if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+            if ($fieldScope === 'contact') {
+                if (! $this->applyV3TransitionCaptureToContact($message, $capture, $capturedValue ?? [])) {
+                    return false;
+                }
+            } elseif (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
                 return false;
-            }
-
-            if ($capturedValue === null || mb_strlen($capturedValue) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+            } elseif ($captureValue === null || mb_strlen($captureValue) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
                 return false;
+            } else {
+                $userFieldCount = collect($fieldsPayload)
+                    ->keys()
+                    ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
+                    ->unique()
+                    ->count();
+
+                if (! array_key_exists($fieldKey, $fieldsPayload) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
+                    return false;
+                }
+
+                $fieldsPayload[$fieldKey] = $captureValue;
             }
-
-            $userFieldCount = collect($fieldsPayload)
-                ->keys()
-                ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
-                ->unique()
-                ->count();
-
-            if (! array_key_exists($fieldKey, $fieldsPayload) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
-                return false;
-            }
-
-            $fieldsPayload[$fieldKey] = $capturedValue;
         }
 
         data_set($fieldsPayload, '_v3.transition_counts.'.$counterKey, $currentCount + 1);
@@ -1486,6 +1540,159 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $capture
+     * @param  array{valid?: bool, value?: string|null, phone_raw?: string|null, phone_normalized?: string|null}  $capturedValue
+     */
+    private function applyV3TransitionCaptureToContact(Message $message, array $capture, array $capturedValue): bool
+    {
+        if (! $message->contact instanceof Contact) {
+            return false;
+        }
+
+        $fieldKey = trim((string) ($capture['field_key'] ?? ''));
+        $value = trim((string) ($capturedValue['value'] ?? ''));
+
+        if (! in_array($fieldKey, self::V3_CONTACT_CAPTURE_FIELDS, true) || $value === '') {
+            return false;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+        $lockedContact = Contact::query()
+            ->whereKey($contact->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $lockedContact instanceof Contact) {
+            return false;
+        }
+
+        return match ($fieldKey) {
+            'phone' => $this->applyV3ContactPhoneCapture($message, $lockedContact, $capturedValue),
+            'first_name' => $this->applyV3ContactFirstNameCapture($lockedContact, $value),
+            'last_name', 'country', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
+            'gender' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions()),
+            'age_range' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::ageRangeOptions()),
+            'age_years' => $this->applyV3ContactAgeYearsCapture($lockedContact, $value),
+            default => false,
+        };
+    }
+
+    /**
+     * @param  array{valid?: bool, value?: string|null, phone_raw?: string|null, phone_normalized?: string|null}  $capturedValue
+     */
+    private function applyV3ContactPhoneCapture(Message $message, Contact $contact, array $capturedValue): bool
+    {
+        $phoneNormalized = trim((string) ($capturedValue['phone_normalized'] ?? $capturedValue['value'] ?? ''));
+        $phoneRaw = trim((string) ($capturedValue['phone_raw'] ?? $phoneNormalized));
+
+        if ($phoneRaw === '' || $phoneNormalized === '') {
+            return false;
+        }
+
+        try {
+            $this->addContactPhoneAction->handle($contact, $phoneRaw, ContactPhoneNumber::SOURCE_V3_CAPTURE);
+            $this->syncDialogConfirmedPhoneAction->handle($message, $phoneRaw, $phoneNormalized);
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_contact_phone_capture_failed', [
+                'scenario_code' => $this->code(),
+                'contact_id' => $contact->id,
+                'message_id' => $message->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private function applyV3ContactFirstNameCapture(Contact $contact, string $value): bool
+    {
+        $result = $this->applyContactFirstNameAction->handle(
+            $contact,
+            $value,
+            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+        );
+
+        if ($result->changed) {
+            $this->queueBitrix24ContactSyncAction->handle($contact);
+        }
+
+        return true;
+    }
+
+    private function applyV3ContactStringCapture(Contact $contact, string $fieldKey, string $value): bool
+    {
+        if (mb_strlen($value) > 255) {
+            return false;
+        }
+
+        return $this->updateV3ContactAttribute($contact, $fieldKey, $value);
+    }
+
+    /**
+     * @param  array<string, string>  $options
+     */
+    private function applyV3ContactEnumCapture(Contact $contact, string $fieldKey, string $value, array $options): bool
+    {
+        $normalizedValue = $this->normalizeV3ContactEnumValue($value, $options);
+
+        if ($normalizedValue === null) {
+            return false;
+        }
+
+        return $this->updateV3ContactAttribute($contact, $fieldKey, $normalizedValue);
+    }
+
+    /**
+     * @param  array<string, string>  $options
+     */
+    private function normalizeV3ContactEnumValue(string $value, array $options): ?string
+    {
+        $normalizedValue = $this->normalizeV3ButtonText($value);
+
+        foreach ($options as $key => $label) {
+            if ($normalizedValue === $this->normalizeV3ButtonText((string) $key)) {
+                return (string) $key;
+            }
+
+            if ($normalizedValue === $this->normalizeV3ButtonText((string) $label)) {
+                return (string) $key;
+            }
+        }
+
+        return null;
+    }
+
+    private function applyV3ContactAgeYearsCapture(Contact $contact, string $value): bool
+    {
+        if (preg_match('/^\d{1,3}$/', $value) !== 1) {
+            return false;
+        }
+
+        $age = (int) $value;
+
+        if ($age < 1 || $age > 120) {
+            return false;
+        }
+
+        return $this->updateV3ContactAttribute($contact, 'age_years', $age);
+    }
+
+    private function updateV3ContactAttribute(Contact $contact, string $fieldKey, mixed $value): bool
+    {
+        if ($contact->getAttribute($fieldKey) === $value) {
+            return true;
+        }
+
+        $contact->forceFill([$fieldKey => $value])->save();
+        $this->queueBitrix24ContactSyncAction->handle($contact);
 
         return true;
     }
