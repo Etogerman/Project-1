@@ -1146,7 +1146,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 );
             }
 
-            if (! $this->applyV3WaitReplySideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue['value'])) {
+            if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue['value'])) {
                 return new ScenarioInboundResult(
                     consumed: true,
                     status: ScenarioRun::STATUS_ACTIVE,
@@ -1397,7 +1397,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     /**
      * @param  array<string, mixed>  $edge
      */
-    private function applyV3WaitReplySideEffectsToDialog(Dialog $dialog, Message $message, array $edge, ?string $capturedValue): bool
+    private function applyV3TransitionSideEffectsToDialog(Dialog $dialog, Message $message, array $edge, ?string $capturedValue): bool
     {
         $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
         $limit = max(0, (int) ($edge['transition_limit'] ?? 0));
@@ -1410,7 +1410,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         $capture = is_array($edge['input_capture'] ?? null) ? $edge['input_capture'] : [];
 
-        if ((bool) ($capture['enabled'] ?? false) === true) {
+        if (($edge['mode'] ?? null) === 'wait_reply' && (bool) ($capture['enabled'] ?? false) === true) {
             $fieldKey = trim((string) ($capture['field_key'] ?? ''));
 
             if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
@@ -1516,25 +1516,22 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
         }
 
+        $automaticProgress = $this->advanceV3AutomaticEdges(
+            $message,
+            $runtime,
+            $block,
+            $statePayload,
+            $remainingTransitions,
+        );
+
+        if ($automaticProgress !== null) {
+            return $automaticProgress;
+        }
+
         if (! $isNonStateBlock && $waitingButtonRows !== []) {
             return $this->activeProgress(
                 $blockId,
                 $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
-            );
-        }
-
-        $defaultTargetBlockId = filled($block['default_target_block_id'] ?? null)
-            ? (string) $block['default_target_block_id']
-            : null;
-
-        if ($defaultTargetBlockId !== null) {
-            return $this->advanceV3FromBlock(
-                $message,
-                $runtime,
-                $defaultTargetBlockId,
-                $statePayload,
-                $remainingTransitions - 1,
-                $preservePreviousStateForTerminalNonState,
             );
         }
 
@@ -1559,6 +1556,85 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'state_payload' => $statePayload,
             'exit_outcome' => 'completed',
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{
+     *     status: string,
+     *     current_step: ?string,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: ?string,
+     * }|null
+     */
+    private function advanceV3AutomaticEdges(
+        Message $message,
+        array $runtime,
+        array $block,
+        array $statePayload,
+        int $remainingTransitions,
+    ): ?array {
+        $progress = null;
+
+        foreach ($this->v3AutomaticEdges($block) as $edge) {
+            $targetBlockId = filled($edge['target_block_id'] ?? null) ? (string) $edge['target_block_id'] : null;
+
+            if ($targetBlockId === null) {
+                continue;
+            }
+
+            $dialog = $message->dialog_id !== null
+                ? Dialog::query()->find($message->dialog_id)
+                : null;
+
+            if (
+                $dialog instanceof Dialog
+                && ! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)
+            ) {
+                continue;
+            }
+
+            $progress = $this->advanceV3FromBlock(
+                $message,
+                $runtime,
+                $targetBlockId,
+                $statePayload,
+                $remainingTransitions - 1,
+            );
+            $statePayload = $progress['state_payload'];
+            $remainingTransitions -= 1;
+        }
+
+        return $progress;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<array<string, mixed>>
+     */
+    private function v3AutomaticEdges(array $block): array
+    {
+        $edges = is_array($block['automatic_edges'] ?? null) ? $block['automatic_edges'] : [];
+
+        if ($edges === [] && filled($block['default_target_block_id'] ?? null)) {
+            $edges[] = [
+                'id' => 'default',
+                'edge_key' => 'default',
+                'mode' => 'automatic',
+                'priority' => 10,
+                'transition_limit' => 0,
+                'target_block_id' => (string) $block['default_target_block_id'],
+            ];
+        }
+
+        return collect($edges)
+            ->filter(fn (mixed $edge): bool => is_array($edge)
+                && ($edge['mode'] ?? null) === 'automatic'
+                && filled($edge['target_block_id'] ?? null))
+            ->values()
+            ->all();
     }
 
     /**

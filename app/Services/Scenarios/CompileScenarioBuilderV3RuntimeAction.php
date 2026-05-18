@@ -17,6 +17,8 @@ class CompileScenarioBuilderV3RuntimeAction
 
     private const EDGE_MODE_WAIT_REPLY = 'wait_reply';
 
+    private const EDGE_MODE_AUTOMATIC = 'automatic';
+
     /**
      * @return array<string, mixed>
      */
@@ -92,10 +94,7 @@ class CompileScenarioBuilderV3RuntimeAction
         $settings = $this->settingsPayload($block);
         $message = $this->module($settings, 'message');
         $buttons = $this->module($settings, 'buttons');
-        $defaultEdge = $outgoingEdges->first(
-            fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === null
-                && $this->edgeMode($edge) !== self::EDGE_MODE_WAIT_REPLY,
-        );
+        $automaticEdges = $this->compileAutomaticEdges($outgoingEdges, $runtimeBlockIdsByDbId);
 
         $compiled = [
             'id' => $runtimeBlockId,
@@ -109,9 +108,8 @@ class CompileScenarioBuilderV3RuntimeAction
             ] : null,
             'buttons' => null,
             'wait_reply_edges' => $this->compileWaitReplyEdges($outgoingEdges, $runtimeBlockIdsByDbId),
-            'default_target_block_id' => $defaultEdge instanceof ScenarioBuilderEdge
-                ? ($runtimeBlockIdsByDbId[(int) $defaultEdge->to_scenario_builder_block_id] ?? null)
-                : null,
+            'automatic_edges' => $automaticEdges,
+            'default_target_block_id' => $automaticEdges[0]['target_block_id'] ?? null,
         ];
 
         if ($buttons !== null) {
@@ -125,6 +123,7 @@ class CompileScenarioBuilderV3RuntimeAction
             $compiled['message'] === null
             && $compiled['buttons'] === null
             && $compiled['wait_reply_edges'] === []
+            && $compiled['automatic_edges'] === []
             && $compiled['default_target_block_id'] === null
         ) {
             $this->fail('builder.blocks', "Блок {$block->title} не содержит действия и не ведёт дальше.");
@@ -144,7 +143,23 @@ class CompileScenarioBuilderV3RuntimeAction
             ->filter(fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === null
                 && $this->edgeMode($edge) === self::EDGE_MODE_WAIT_REPLY)
             ->map(fn (ScenarioBuilderEdge $edge): array => $this->compileEdge($edge, $runtimeBlockIdsByDbId))
-            ->sort(fn (array $left, array $right): int => $this->compareWaitReplyEdges($left, $right))
+            ->sort(fn (array $left, array $right): int => $this->comparePriorityEdges($left, $right))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  Collection<int, ScenarioBuilderEdge>  $outgoingEdges
+     * @param  array<int, string>  $runtimeBlockIdsByDbId
+     * @return list<array<string, mixed>>
+     */
+    private function compileAutomaticEdges(Collection $outgoingEdges, array $runtimeBlockIdsByDbId): array
+    {
+        return $outgoingEdges
+            ->filter(fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === null
+                && $this->edgeMode($edge) === self::EDGE_MODE_AUTOMATIC)
+            ->map(fn (ScenarioBuilderEdge $edge): array => $this->compileEdge($edge, $runtimeBlockIdsByDbId))
+            ->sort(fn (array $left, array $right): int => $this->comparePriorityEdges($left, $right))
             ->values()
             ->all();
     }
@@ -316,11 +331,12 @@ class CompileScenarioBuilderV3RuntimeAction
         $conditionPayload = is_array($edge->condition_payload) ? $edge->condition_payload : [];
         $sourceDbId = (int) $edge->from_scenario_builder_block_id;
         $targetDbId = (int) $edge->to_scenario_builder_block_id;
+        $mode = $this->edgeMode($edge);
 
         return [
             'id' => (string) $edge->id,
             'edge_key' => (string) ($conditionPayload['edge_key'] ?? ''),
-            'mode' => $this->edgeMode($edge),
+            'mode' => $mode,
             'priority' => (int) ($conditionPayload['priority'] ?? 10),
             'transition_limit' => max(0, (int) ($conditionPayload['transition_limit'] ?? 0)),
             'source_block_id' => $runtimeBlockIdsByDbId[$sourceDbId] ?? (string) $sourceDbId,
@@ -330,7 +346,9 @@ class CompileScenarioBuilderV3RuntimeAction
             'from_output_id' => $this->edgeOutputId($edge),
             'label' => (string) ($conditionPayload['label'] ?? ''),
             'match' => $this->compileEdgeMatch($conditionPayload),
-            'input_capture' => $this->compileEdgeInputCapture($conditionPayload),
+            'input_capture' => $mode === self::EDGE_MODE_WAIT_REPLY
+                ? $this->compileEdgeInputCapture($conditionPayload)
+                : $this->disabledEdgeInputCapture(),
         ];
     }
 
@@ -369,6 +387,19 @@ class CompileScenarioBuilderV3RuntimeAction
             'field_scope' => 'dialog',
             'field_key' => (string) ($capture['field_key'] ?? ''),
             'data_type' => (string) ($capture['data_type'] ?? 'any_text'),
+        ];
+    }
+
+    /**
+     * @return array{enabled: bool, field_scope: string, field_key: string, data_type: string}
+     */
+    private function disabledEdgeInputCapture(): array
+    {
+        return [
+            'enabled' => false,
+            'field_scope' => 'dialog',
+            'field_key' => '',
+            'data_type' => 'any_text',
         ];
     }
 
@@ -444,7 +475,7 @@ class CompileScenarioBuilderV3RuntimeAction
      * @param  array<string, mixed>  $left
      * @param  array<string, mixed>  $right
      */
-    private function compareWaitReplyEdges(array $left, array $right): int
+    private function comparePriorityEdges(array $left, array $right): int
     {
         return [
             (int) ($right['priority'] ?? 10),

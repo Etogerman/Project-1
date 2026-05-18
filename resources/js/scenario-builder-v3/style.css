@@ -12,6 +12,9 @@
     --success: oklch(0.62 0.14 145);
     --message: oklch(0.62 0.13 240);
     --buttons: oklch(0.62 0.14 290);
+    --edge-button: oklch(0.57 0.18 255);
+    --edge-wait: #2c2f36;
+    --edge-auto: oklch(0.55 0.18 292);
     --danger: oklch(0.62 0.18 25);
     --warning: oklch(0.72 0.14 75);
     --grid: rgba(0, 0, 0, 0.06);
@@ -411,14 +414,20 @@
 }
 
 .ac-v3-builder__edges g.is-button-edge .ac-v3-builder__edge {
-    stroke: var(--buttons);
+    stroke: var(--edge-button);
     stroke-width: 2.6;
 }
 
-.ac-v3-builder__edges g.is-auto-edge .ac-v3-builder__edge {
-    stroke: color-mix(in oklch, var(--line) 62%, var(--text-2));
+.ac-v3-builder__edges g.is-wait-edge .ac-v3-builder__edge {
+    stroke: var(--edge-wait);
     stroke-dasharray: 7 7;
     stroke-width: 2.2;
+}
+
+.ac-v3-builder__edges g.is-auto-edge .ac-v3-builder__edge {
+    stroke: var(--edge-auto);
+    stroke-dasharray: 10 5 2 5;
+    stroke-width: 2.4;
 }
 
 .ac-v3-builder__edge-hit {
@@ -438,9 +447,7 @@
 }
 
 .ac-v3-builder__edges g.is-selected .ac-v3-builder__edge {
-    stroke: var(--accent);
-    stroke-dasharray: none;
-    stroke-width: 3.8;
+    stroke-width: 3.4;
 }
 
 .ac-v3-builder__edge-source-dot {
@@ -456,12 +463,16 @@
     stroke-width: 2;
 }
 
-.ac-v3-builder__edges #ac-v3-arrow-auto path {
-    fill: var(--line);
+.ac-v3-builder__edges #ac-v3-arrow-wait path {
+    fill: var(--edge-wait);
 }
 
 .ac-v3-builder__edges #ac-v3-arrow-button path {
-    fill: var(--buttons);
+    fill: var(--edge-button);
+}
+
+.ac-v3-builder__edges #ac-v3-arrow-auto path {
+    fill: var(--edge-auto);
 }
 
 .ac-v3-builder__edges #ac-v3-arrow-selected path {
@@ -480,11 +491,15 @@
 }
 
 .ac-v3-builder__edges g.is-button-edge .ac-v3-builder__edge-label {
-    fill: color-mix(in oklch, var(--buttons) 78%, var(--text));
+    fill: color-mix(in oklch, var(--edge-button) 78%, var(--text));
+}
+
+.ac-v3-builder__edges g.is-wait-edge .ac-v3-builder__edge-label {
+    fill: color-mix(in oklch, var(--edge-wait) 72%, var(--text-2));
 }
 
 .ac-v3-builder__edges g.is-auto-edge .ac-v3-builder__edge-label {
-    fill: var(--text-3);
+    fill: color-mix(in oklch, var(--edge-auto) 76%, var(--text));
 }
 
 .ac-v3-builder__node {

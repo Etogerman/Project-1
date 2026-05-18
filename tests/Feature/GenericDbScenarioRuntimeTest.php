@@ -698,6 +698,134 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $job->inboundMessageId === $phoneShare->id);
     }
 
+    public function test_v3_automatic_edge_zero_seconds_runs_after_block_message(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9431]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9432]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $runtimeSchema = $this->v3AutomaticRuntimeSchema($channel->id);
+        $staleCapture = [
+            'enabled' => true,
+            'field_scope' => 'dialog',
+            'field_key' => 'stale_capture',
+            'data_type' => 'any_text',
+        ];
+        data_set($runtimeSchema, 'builder_v3_runtime.blocks.start.automatic_edges.0.input_capture', $staleCapture);
+        data_set($runtimeSchema, 'builder_v3_runtime.edges.0.input_capture', $staleCapture);
+        $scenario = $this->createPublishedScenario('v3_automatic_zero', $runtimeSchema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $dialog->refresh();
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_auto_next';
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('next', $run->current_step);
+        $this->assertSame('next', data_get($run->state_payload, 'v3.current_block_id'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+        $this->assertNull(data_get($dialog->fields_payload, 'stale_capture'));
+
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Стартовый блок', 'Автоматический переход'], $sentTexts);
+    }
+
+    public function test_v3_automatic_edge_transition_limit_skips_exhausted_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9441]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9442]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9443]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_automatic_zero_limit',
+            $this->v3AutomaticRuntimeSchema($channel->id, transitionLimit: 1),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $firstStartMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($firstStartMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $secondStartMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($secondStartMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->active()->firstOrFail();
+        $dialog->refresh();
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_auto_next';
+
+        $this->assertSame('start', $run->current_step);
+        $this->assertSame('start', data_get($run->state_payload, 'v3.current_block_id'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Стартовый блок', 'Автоматический переход', 'Стартовый блок'], $sentTexts);
+    }
+
     public function test_v3_start_chooses_one_matching_entrypoint_by_highest_priority_then_latest_block_id(): void
     {
         Http::fake([
@@ -4157,6 +4285,82 @@ class GenericDbScenarioRuntimeTest extends TestCase
                     ])
                     ->values()
                     ->all(),
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3AutomaticRuntimeSchema(int $channelId, int $transitionLimit = 0): array
+    {
+        $automaticEdge = [
+            'id' => '30',
+            'edge_key' => 'edge_auto_next',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => $transitionLimit,
+            'source_block_id' => 'start',
+            'target_block_id' => 'next',
+            'from_output_id' => null,
+            'label' => 'Дальше',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Стартовый блок',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [$automaticEdge],
+                        'default_target_block_id' => 'next',
+                    ],
+                    'next' => [
+                        'id' => 'next',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Следующий',
+                        'message' => [
+                            'text' => 'Автоматический переход',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$automaticEdge],
             ],
         ];
     }

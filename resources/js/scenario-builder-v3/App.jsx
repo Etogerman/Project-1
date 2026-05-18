@@ -17,6 +17,7 @@ const MODULE_PREVIEW_GAP = 7;
 const PORT_ROW_HEIGHT = 30;
 const PORT_ROW_GAP = 4;
 const PORT_DOT_CENTER_X = NODE_WIDTH - 6;
+const EDGE_TARGET_CLEARANCE = 4;
 const CANVAS_MIN_WIDTH = 1800;
 const CANVAS_MIN_HEIGHT = 1100;
 const CANVAS_EXPAND_PADDING = 720;
@@ -167,6 +168,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
 
         const canvasRect = canvasRef.current.getBoundingClientRect();
         const ports = {};
+        const nodes = {};
 
         canvasRef.current.querySelectorAll('[data-port-key]').forEach((element) => {
             const rect = element.getBoundingClientRect();
@@ -177,7 +179,18 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             };
         });
 
-        const next = { ports };
+        canvasRef.current.querySelectorAll('[data-node-key]').forEach((element) => {
+            const rect = element.getBoundingClientRect();
+
+            nodes[element.dataset.nodeKey] = {
+                x: (rect.left - canvasRect.left - view.tx) / view.zoom,
+                y: (rect.top - canvasRect.top - view.ty) / view.zoom,
+                width: rect.width / view.zoom,
+                height: rect.height / view.zoom,
+            };
+        });
+
+        const next = { ports, nodes };
 
         setAnchors((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
     }, [status, blocks, edges, view.tx, view.ty, view.zoom]);
@@ -967,10 +980,13 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                     >
                         <svg className="ac-v3-builder__edges" width={canvasBounds.width} height={canvasBounds.height}>
                             <defs>
-                                <marker id="ac-v3-arrow-auto" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                <marker id="ac-v3-arrow-wait" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                                     <path d="M 0 0 L 10 5 L 0 10 z" />
                                 </marker>
                                 <marker id="ac-v3-arrow-button" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                                </marker>
+                                <marker id="ac-v3-arrow-auto" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                                     <path d="M 0 0 L 10 5 L 0 10 z" />
                                 </marker>
                                 <marker id="ac-v3-arrow-selected" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -1259,18 +1275,19 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
     }
 
     const source = edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors);
-    const target = edgeTargetAnchor(targetBlock, source);
+    const target = edgeTargetAnchor(targetBlock, source, anchors);
     const d = edgeCurvePath(source, target);
     const labelX = (source.x + target.x) / 2;
     const labelY = (source.y + target.y) / 2 - 8;
     const isButton = isButtonEdge(edge);
+    const visualKind = edgeVisualKind(edge);
     const edgeClassName = [
         selected ? 'is-selected' : '',
-        isButton ? 'is-button-edge' : 'is-auto-edge',
+        `is-${visualKind}-edge`,
     ].filter(Boolean).join(' ');
-    const markerId = selected ? 'ac-v3-arrow-selected' : (isButton ? 'ac-v3-arrow-button' : 'ac-v3-arrow-auto');
+    const markerId = selected ? 'ac-v3-arrow-selected' : `ac-v3-arrow-${visualKind}`;
     const label = edgeLabel(edge, isButton);
-    const title = isButton ? 'Связь от кнопки' : 'Связь от блока';
+    const title = edgeVisualTitle(visualKind);
 
     return (
         <g className={edgeClassName}>
@@ -1297,7 +1314,7 @@ function edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors) {
     const outputId = edge.source?.output_id ?? null;
 
     if (outputId === null) {
-        return nearestBlockSideAnchor(sourceBlock, blockCenter(targetBlock));
+        return nearestBlockSideAnchor(sourceBlock, blockCenter(targetBlock, anchors), anchors);
     }
 
     const portAnchor = anchors.ports[portAnchorKey(sourceBlock.client_key, outputId)];
@@ -1309,8 +1326,8 @@ function edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors) {
     return outputAnchor(sourceBlock, outputId);
 }
 
-function edgeTargetAnchor(targetBlock, source) {
-    return nearestBlockSideAnchor(targetBlock, source);
+function edgeTargetAnchor(targetBlock, source, anchors) {
+    return shiftAnchorOutside(nearestBlockSideAnchor(targetBlock, source, anchors), EDGE_TARGET_CLEARANCE);
 }
 
 function edgeCurvePath(source, target) {
@@ -1346,12 +1363,42 @@ function sideVector(side) {
     return { x: 1, y: 0 };
 }
 
+function shiftAnchorOutside(anchor, distance) {
+    const vector = sideVector(anchor.side);
+
+    return {
+        ...anchor,
+        x: anchor.x + (vector.x * distance),
+        y: anchor.y + (vector.y * distance),
+    };
+}
+
 function isButtonEdge(edge) {
     return Boolean(edge?.source?.output_id ?? edge?.condition_payload?.from_output_id);
 }
 
 function isDefaultEdge(edge) {
     return ! isButtonEdge(edge);
+}
+
+function edgeVisualKind(edge) {
+    if (isButtonEdge(edge)) {
+        return 'button';
+    }
+
+    return edge?.condition_payload?.mode === 'automatic' ? 'auto' : 'wait';
+}
+
+function edgeVisualTitle(kind) {
+    if (kind === 'button') {
+        return 'Связь от кнопки';
+    }
+
+    if (kind === 'auto') {
+        return 'Автоматическая связь';
+    }
+
+    return 'Связь ждёт ответ клиента';
 }
 
 function defaultEdgeForBlock(block, edges) {
@@ -2346,7 +2393,15 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         <button
                             type="button"
                             className={edgeMode === 'automatic' ? 'is-active' : ''}
-                            onClick={() => updatePayload({ mode: 'automatic' })}
+                            onClick={() => updatePayload({
+                                mode: 'automatic',
+                                input_capture: {
+                                    enabled: false,
+                                    field_scope: 'dialog',
+                                    field_key: '',
+                                    data_type: 'any_text',
+                                },
+                            })}
                         >
                             Автоматически
                         </button>
@@ -2435,6 +2490,22 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                             </>
                         ) : null}
                     </>
+                ) : edgeMode === 'automatic' ? (
+                    <>
+                        <label className="ac-v3-builder__field-row">
+                            <span>Задержка</span>
+                            <p className="ac-v3-builder__readonly">0 секунд</p>
+                        </label>
+                        <label className="ac-v3-builder__field-row">
+                            <span>Лимит переходов</span>
+                            <input
+                                type="number"
+                                min="0"
+                                value={payload.transition_limit ?? 0}
+                                onChange={(event) => updatePayload({ transition_limit: Math.max(0, Number(event.target.value)) })}
+                            />
+                        </label>
+                    </>
                 ) : null}
                 <button type="button" className="ac-v3-builder__danger" onClick={onRemove}>Удалить связь</button>
             </section>
@@ -2504,49 +2575,48 @@ function outputAnchor(block, outputId) {
     };
 }
 
-function nearestBlockSideAnchor(block, targetPoint) {
-    const center = blockCenter(block);
+function nearestBlockSideAnchor(block, targetPoint, anchors = {}) {
+    const center = blockCenter(block, anchors);
     const dx = targetPoint.x - center.x;
     const dy = targetPoint.y - center.y;
 
     if (Math.abs(dx) >= Math.abs(dy)) {
-        return blockSideAnchor(block, dx >= 0 ? 'right' : 'left');
+        return blockSideAnchor(block, dx >= 0 ? 'right' : 'left', anchors);
     }
 
-    return blockSideAnchor(block, dy >= 0 ? 'bottom' : 'top');
+    return blockSideAnchor(block, dy >= 0 ? 'bottom' : 'top', anchors);
 }
 
-function blockSideAnchor(block, side) {
-    const position = blockPosition(block);
-    const height = blockHeight(block);
+function blockSideAnchor(block, side, anchors = {}) {
+    const rect = blockRect(block, anchors);
 
     if (side === 'left') {
         return {
-            x: position.x - 2,
-            y: position.y + (height / 2),
+            x: rect.x - 2,
+            y: rect.y + (rect.height / 2),
             side,
         };
     }
 
     if (side === 'top') {
         return {
-            x: position.x + (NODE_WIDTH / 2),
-            y: position.y - 2,
+            x: rect.x + (rect.width / 2),
+            y: rect.y - 2,
             side,
         };
     }
 
     if (side === 'bottom') {
         return {
-            x: position.x + (NODE_WIDTH / 2),
-            y: position.y + height + 2,
+            x: rect.x + (rect.width / 2),
+            y: rect.y + rect.height + 2,
             side,
         };
     }
 
     return {
-        x: position.x + NODE_WIDTH - 2,
-        y: position.y + (height / 2),
+        x: rect.x + rect.width + 2,
+        y: rect.y + (rect.height / 2),
         side: 'right',
     };
 }
@@ -2561,12 +2631,29 @@ function inputAnchor(block) {
     };
 }
 
-function blockCenter(block) {
+function blockCenter(block, anchors = {}) {
+    const rect = blockRect(block, anchors);
+
+    return {
+        x: rect.x + (rect.width / 2),
+        y: rect.y + (rect.height / 2),
+    };
+}
+
+function blockRect(block, anchors = {}) {
+    const measured = anchors.nodes?.[block?.client_key];
+
+    if (measured) {
+        return measured;
+    }
+
     const position = blockPosition(block);
 
     return {
-        x: position.x + (NODE_WIDTH / 2),
-        y: position.y + (blockHeight(block) / 2),
+        x: position.x,
+        y: position.y,
+        width: NODE_WIDTH,
+        height: blockHeight(block),
     };
 }
 
