@@ -187,6 +187,7 @@ class CompileScenarioBuilderV3RuntimeAction
                 ->filter(fn (mixed $button): bool => is_array($button))
                 ->map(function (array $button) use ($outgoingEdges, $runtimeBlockIdsByDbId): array {
                     $buttonId = (string) ($button['id'] ?? '');
+                    $buttonType = $this->buttonType($button);
                     $edge = $outgoingEdges->first(
                         fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === $buttonId,
                     );
@@ -196,6 +197,10 @@ class CompileScenarioBuilderV3RuntimeAction
                         $this->fail('builder.buttons', 'У кнопки со связью должен быть текст перед публикацией.');
                     }
 
+                    if ($buttonType === 'link' && $edge instanceof ScenarioBuilderEdge) {
+                        $this->fail('builder.buttons', 'Кнопка-ссылка не может быть источником перехода.');
+                    }
+
                     $compiledEdge = $edge instanceof ScenarioBuilderEdge
                         ? $this->compileEdge($edge, $runtimeBlockIdsByDbId)
                         : null;
@@ -203,7 +208,8 @@ class CompileScenarioBuilderV3RuntimeAction
                     return [
                         'id' => $buttonId,
                         'text' => $text,
-                        'type' => $this->buttonType($button),
+                        'type' => $buttonType,
+                        'url' => $buttonType === 'link' ? (string) ($button['url'] ?? '') : null,
                         'normalized_text' => $this->normalizeButtonText($text),
                         'output_id' => $buttonId,
                         'target_block_id' => $compiledEdge['target_block_id'] ?? null,
@@ -221,7 +227,11 @@ class CompileScenarioBuilderV3RuntimeAction
      */
     private function buttonType(array $button): string
     {
-        return ($button['type'] ?? null) === 'request_phone' ? 'request_phone' : 'text';
+        return match ($button['type'] ?? null) {
+            'request_phone' => 'request_phone',
+            'link' => 'link',
+            default => 'text',
+        };
     }
 
     /**

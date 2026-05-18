@@ -1732,6 +1732,81 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame('request_phone', data_get($response, 'builder.blocks.0.settings_payload.outputs.0.button_type'));
     }
 
+    public function test_put_state_preserves_link_button_type_and_url(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_save_link_button',
+            'name' => 'V3 Save Link Button',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings(
+                        '/start',
+                        [(int) $channel->id],
+                        'Откройте ссылку',
+                        'Открыть сайт',
+                        '',
+                        'link',
+                        'https://example.com/form',
+                    ),
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+
+        $buttonsModule = collect($response['builder']['blocks'][0]['settings_payload']['modules'] ?? [])
+            ->firstWhere('type', 'buttons');
+
+        $this->assertSame('link', data_get($buttonsModule, 'payload.rows.0.0.type'));
+        $this->assertSame('https://example.com/form', data_get($buttonsModule, 'payload.rows.0.0.url'));
+        $this->assertSame([], data_get($response, 'builder.blocks.0.settings_payload.outputs'));
+    }
+
+    public function test_put_state_rejects_link_button_without_valid_url(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_save_invalid_link_button',
+            'name' => 'V3 Save Invalid Link Button',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings(
+                        '/start',
+                        [(int) $channel->id],
+                        'Откройте ссылку',
+                        'Открыть сайт',
+                        '',
+                        'link',
+                        'not-a-url',
+                    ),
+                ],
+            ]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.blocks.0.settings_payload.modules.2.payload.rows.0.0.url',
+            ]);
+    }
+
     public function test_publish_v3_graph_rejects_stale_revision(): void
     {
         $admin = $this->adminUser();
@@ -1907,6 +1982,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         string $buttonText,
         string $contactPhoneCondition = '',
         string $buttonType = 'text',
+        ?string $buttonUrl = null,
     ): array {
         return [
             'schema_version' => 3,
@@ -1941,12 +2017,12 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'payload' => [
                         'placement' => 'auto',
                         'rows' => [[
-                            ['id' => 'btn_catalog', 'text' => $buttonText, 'type' => $buttonType, 'fn' => 'default', 'url' => null, 'color' => null],
+                            ['id' => 'btn_catalog', 'text' => $buttonText, 'type' => $buttonType, 'fn' => 'default', 'url' => $buttonUrl, 'color' => null],
                         ]],
                     ],
                 ],
             ],
-            'outputs' => [
+            'outputs' => $buttonType === 'link' ? [] : [
                 [
                     'id' => 'btn_catalog',
                     'label' => $buttonText,

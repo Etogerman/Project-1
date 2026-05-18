@@ -49,7 +49,7 @@ class ValidateScenarioBuilderV3StateAction
         AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
     ];
 
-    private const BUTTON_TYPES = ['text', 'request_phone'];
+    private const BUTTON_TYPES = ['text', 'request_phone', 'link'];
 
     private const BUTTON_PLACEMENTS = ['auto', 'reply_keyboard', 'inline_message'];
 
@@ -395,12 +395,14 @@ class ValidateScenarioBuilderV3StateAction
                     $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows", 'Too many buttons in block.');
                 }
 
+                $buttonType = $this->normalizeButtonType($button['type'] ?? null, $blockIndex, $moduleIndex, $rowIndex, $buttonIndex);
+
                 $normalizedRow[] = [
                     'id' => $buttonId,
                     'text' => $buttonText,
-                    'type' => $this->normalizeButtonType($button['type'] ?? null, $blockIndex, $moduleIndex, $rowIndex, $buttonIndex),
+                    'type' => $buttonType,
                     'fn' => (string) ($button['fn'] ?? 'default'),
-                    'url' => filled($button['url'] ?? null) ? (string) $button['url'] : null,
+                    'url' => $this->normalizeButtonUrl($button['url'] ?? null, $buttonType, $blockIndex, $moduleIndex, $rowIndex, $buttonIndex),
                     'color' => filled($button['color'] ?? null) ? (string) $button['color'] : null,
                 ];
             }
@@ -434,6 +436,37 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         return $type;
+    }
+
+    private function normalizeButtonUrl(
+        mixed $url,
+        string $type,
+        int $blockIndex,
+        int $moduleIndex,
+        int $rowIndex,
+        int $buttonIndex,
+    ): ?string {
+        if ($type !== 'link') {
+            return null;
+        }
+
+        $url = trim((string) $url);
+
+        if ($url === '') {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'Link button URL is required.');
+        }
+
+        if (mb_strlen($url) > 2000 || filter_var($url, FILTER_VALIDATE_URL) === false) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'Invalid link button URL.');
+        }
+
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+
+        if (! in_array($scheme, ['http', 'https'], true)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'Link button URL must use http or https.');
+        }
+
+        return $url;
     }
 
     /**
@@ -525,6 +558,10 @@ class ValidateScenarioBuilderV3StateAction
 
             if ($sourceOutputId !== null && ! $this->blockHasOutput($source['client_key'], $sourceOutputId, $blockKeys)) {
                 $this->fail("builder.edges.$index.source.output_id", 'Source output does not exist.');
+            }
+
+            if ($sourceOutputId !== null && $this->blockOutputButtonType($source['client_key'], $sourceOutputId, $blockKeys) === 'link') {
+                $this->fail("builder.edges.$index.source.output_id", 'Link button cannot be used as transition source.');
             }
 
             $conditionPayload = $this->normalizeConditionPayload(
@@ -886,6 +923,22 @@ class ValidateScenarioBuilderV3StateAction
     }
 
     /**
+     * @param  Collection<string, array<string, mixed>>  $blockKeys
+     */
+    private function blockOutputButtonType(string $clientKey, string $outputId, $blockKeys): ?string
+    {
+        $block = $blockKeys->get($clientKey);
+        $outputs = data_get($block, 'settings_payload.outputs', []);
+
+        $output = collect(is_array($outputs) ? $outputs : [])
+            ->first(fn (array $output): bool => ($output['id'] ?? null) === $outputId);
+
+        return is_array($output) && is_string($output['button_type'] ?? null)
+            ? (string) $output['button_type']
+            : null;
+    }
+
+    /**
      * @param  list<array<string, mixed>>  $blocks
      * @param  list<array<string, mixed>>  $edges
      */
@@ -911,6 +964,10 @@ class ValidateScenarioBuilderV3StateAction
                 $target = $edgeTargetsByOutput->get($block['client_key'].'|'.$output['id']);
 
                 if ($target === null) {
+                    continue;
+                }
+
+                if (($buttonsById[$buttonId]['type'] ?? null) === 'link') {
                     continue;
                 }
 

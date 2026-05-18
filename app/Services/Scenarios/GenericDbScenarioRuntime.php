@@ -51,6 +51,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
 
+    private const V3_BUTTON_TYPE_LINK = 'link';
+
     private const V3_BUTTON_PLACEMENT_AUTO = 'auto';
 
     private const V3_BUTTON_PLACEMENT_REPLY_KEYBOARD = 'reply_keyboard';
@@ -2822,13 +2824,19 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return true;
         }
 
+        $type = (string) ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT);
+
         if ($channel->platform === Channel::PLATFORM_MAX) {
             return $placement !== self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD;
         }
 
         if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
+            if ($type === self::V3_BUTTON_TYPE_LINK) {
+                return $placement !== self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD;
+            }
+
             return $placement !== self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE
-                || ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_REQUEST_PHONE;
+                || $type !== self::V3_BUTTON_TYPE_REQUEST_PHONE;
         }
 
         return false;
@@ -2975,13 +2983,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ->filter(fn (mixed $button): bool => is_array($button) && filled($button['text'] ?? null))
                 ->map(function (array $button): array {
                     $text = trim((string) $button['text']);
+                    $type = match ($button['type'] ?? null) {
+                        self::V3_BUTTON_TYPE_REQUEST_PHONE => self::V3_BUTTON_TYPE_REQUEST_PHONE,
+                        self::V3_BUTTON_TYPE_LINK => self::V3_BUTTON_TYPE_LINK,
+                        default => self::V3_BUTTON_TYPE_TEXT,
+                    };
 
                     return [
                         'id' => (string) ($button['id'] ?? ''),
-                        'type' => ($button['type'] ?? null) === self::V3_BUTTON_TYPE_REQUEST_PHONE
-                            ? self::V3_BUTTON_TYPE_REQUEST_PHONE
-                            : self::V3_BUTTON_TYPE_TEXT,
+                        'type' => $type,
                         'text' => $text,
+                        'url' => $type === self::V3_BUTTON_TYPE_LINK ? trim((string) ($button['url'] ?? '')) : null,
                         'normalized_text' => $this->normalizeV3ButtonText($text),
                         'output_id' => (string) ($button['output_id'] ?? ($button['id'] ?? '')),
                         'target_block_id' => filled($button['target_block_id'] ?? null)
@@ -3481,16 +3493,32 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         if ($replyButtonRows !== null && $replyButtonRows !== []) {
-            if ($buttonPlacement === self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE) {
+            $hasLinkButton = collect($replyButtonRows)
+                ->flatten(1)
+                ->contains(fn (mixed $button): bool => is_array($button)
+                    && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
+                    && filled($button['url'] ?? null));
+
+            if (
+                $buttonPlacement === self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE
+                || ($buttonPlacement === self::V3_BUTTON_PLACEMENT_AUTO && $hasLinkButton)
+            ) {
                 $inlineKeyboard = collect($replyButtonRows)
                     ->map(fn (array $row): array => collect($row)
                         ->filter(fn (array $button): bool => filled($button['text'] ?? null)
-                            && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_TEXT
-                            && filled($button['output_id'] ?? null))
-                        ->map(fn (array $button): array => [
-                            'text' => (string) $button['text'],
-                            'callback_data' => self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX.(string) $button['output_id'],
-                        ])
+                            && (
+                                (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK && filled($button['url'] ?? null))
+                                || (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_TEXT && filled($button['output_id'] ?? null))
+                            ))
+                        ->map(fn (array $button): array => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
+                            ? [
+                                'text' => (string) $button['text'],
+                                'url' => (string) $button['url'],
+                            ]
+                            : [
+                                'text' => (string) $button['text'],
+                                'callback_data' => self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX.(string) $button['output_id'],
+                            ])
                         ->values()
                         ->all())
                     ->filter(fn (array $row): bool => $row !== [])
@@ -3502,7 +3530,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
             $keyboard = collect($replyButtonRows)
                 ->map(fn (array $row): array => collect($row)
-                    ->filter(fn (array $button): bool => filled($button['text'] ?? null))
+                    ->filter(fn (array $button): bool => filled($button['text'] ?? null)
+                        && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_LINK)
                     ->map(fn (array $button): array => array_filter([
                         'text' => (string) $button['text'],
                         'request_contact' => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_REQUEST_PHONE
@@ -3567,12 +3596,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $buttons = collect($replyButtonRows)
             ->map(fn (array $row): array => collect($row)
                 ->filter(fn (array $button): bool => filled($button['text'] ?? null))
-                ->map(fn (array $button): array => [
-                    'type' => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_REQUEST_PHONE
-                        ? 'request_contact'
-                        : 'message',
+                ->map(fn (array $button): array => array_filter([
+                    'type' => match ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) {
+                        self::V3_BUTTON_TYPE_REQUEST_PHONE => 'request_contact',
+                        self::V3_BUTTON_TYPE_LINK => 'link',
+                        default => 'message',
+                    },
                     'text' => (string) $button['text'],
-                ])
+                    'url' => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
+                        ? (string) ($button['url'] ?? '')
+                        : null,
+                ], static fn (mixed $value): bool => $value !== null && $value !== ''))
                 ->values()
                 ->all())
             ->filter(fn (array $row): bool => $row !== [])

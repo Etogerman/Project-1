@@ -2142,6 +2142,97 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Вот каталог');
     }
 
+    public function test_v3_link_button_renders_telegram_inline_url(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9521],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_telegram_link_button',
+            $this->v3LinkButtonRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Открыть сайт'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.url') === 'https://example.com/form'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.callback_data') === null
+            && data_get($request->data(), 'reply_markup.keyboard') === null);
+    }
+
+    public function test_v3_link_button_renders_max_link_attachment(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/*' => Http::response([
+                'message' => ['message_id' => 'max-v3-link-1'],
+            ]),
+        ]);
+
+        $channel = $this->createMaxChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext(
+            $channel,
+            identityOverrides: ['external_user_id' => 'max-user-500'],
+            dialogOverrides: ['external_chat_id' => 'max-chat-700'],
+        );
+        $scenario = $this->createPublishedScenario(
+            'v3_max_link_button',
+            $this->v3LinkButtonRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages')
+            && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'link'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'Открыть сайт'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.url') === 'https://example.com/form');
+    }
+
     public function test_v3_inline_message_request_phone_is_hidden_for_telegram_but_contact_share_advances(): void
     {
         Http::fake([
@@ -4986,6 +5077,55 @@ class GenericDbScenarioRuntimeTest extends TestCase
                     'from_output_id' => 'btn_catalog',
                     'label' => 'Получить каталог',
                 ]],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3LinkButtonRuntimeSchema(int $channelId, string $placement = 'auto'): array
+    {
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Откройте ссылку',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => [
+                            'placement' => $placement,
+                            'rows' => [[
+                                [
+                                    'id' => 'btn_link',
+                                    'type' => 'link',
+                                    'text' => 'Открыть сайт',
+                                    'url' => 'https://example.com/form',
+                                    'normalized_text' => 'открыть сайт',
+                                    'output_id' => 'btn_link',
+                                    'target_block_id' => null,
+                                ],
+                            ]],
+                        ],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [],
             ],
         ];
     }

@@ -94,9 +94,11 @@ const PHONE_CONDITION_OPTIONS = [
 ];
 const BUTTON_TYPE_TEXT = 'text';
 const BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
+const BUTTON_TYPE_LINK = 'link';
 const BUTTON_TYPE_OPTIONS = [
     [BUTTON_TYPE_TEXT, 'Текстовая'],
     [BUTTON_TYPE_REQUEST_PHONE, 'Запросить телефон'],
+    [BUTTON_TYPE_LINK, 'Ссылка'],
 ];
 const BUTTON_PLACEMENT_AUTO = 'auto';
 const BUTTON_PLACEMENT_REPLY = 'reply_keyboard';
@@ -793,6 +795,12 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             })),
         }));
 
+        let nextEdges = edges;
+
+        if (normalizedPatch.type === BUTTON_TYPE_LINK) {
+            nextEdges = nextEdges.filter((edge) => edge.source?.client_key !== clientKey || edge.source?.output_id !== buttonId);
+        }
+
         if (Object.prototype.hasOwnProperty.call(normalizedPatch, 'text')) {
             if (String(normalizedPatch.text ?? '').trim() !== '') {
                 setValidationIssue((current) => (
@@ -800,7 +808,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 ));
             }
 
-            updateEdges(edges.map((edge) => {
+            nextEdges = nextEdges.map((edge) => {
                 if (edge.source?.client_key !== clientKey || edge.source?.output_id !== buttonId) {
                     return edge;
                 }
@@ -816,7 +824,11 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                         },
                     },
                 };
-            }));
+            });
+        }
+
+        if (nextEdges !== edges) {
+            updateEdges(nextEdges);
         }
     }
 
@@ -2392,7 +2404,8 @@ function ButtonsFields({
 function ButtonEditDialog({ button, onClose, onSave }) {
     const inputRef = useRef(null);
     const [text, setText] = useState(button.text ?? '');
-    const [type, setType] = useState(button.type === BUTTON_TYPE_REQUEST_PHONE ? BUTTON_TYPE_REQUEST_PHONE : BUTTON_TYPE_TEXT);
+    const [type, setType] = useState(BUTTON_TYPE_OPTIONS.some(([value]) => value === button.type) ? button.type : BUTTON_TYPE_TEXT);
+    const [url, setUrl] = useState(button.url ?? '');
     const [color, setColor] = useState(button.color ?? null);
 
     useEffect(() => {
@@ -2462,6 +2475,20 @@ function ButtonEditDialog({ button, onClose, onSave }) {
                     </select>
                 </label>
 
+                {type === BUTTON_TYPE_LINK ? (
+                    <label className="ac-v3-builder__button-dialog-field">
+                        <span>Ссылка</span>
+                        <div className="ac-v3-builder__button-dialog-input-wrap">
+                            <input
+                                value={url}
+                                maxLength={2000}
+                                placeholder="https://example.com"
+                                onChange={(event) => setUrl(event.target.value)}
+                            />
+                        </div>
+                    </label>
+                ) : null}
+
                 <div className="ac-v3-builder__button-dialog-field">
                     <span>Цвет кнопки</span>
                     <div className="ac-v3-builder__button-color-grid" role="radiogroup" aria-label="Цвет кнопки">
@@ -2484,7 +2511,7 @@ function ButtonEditDialog({ button, onClose, onSave }) {
                     <button
                         type="button"
                         className="ac-v3-builder__primary-btn"
-                        onClick={() => onSave({ text, type, color })}
+                        onClick={() => onSave({ text, type, url: type === BUTTON_TYPE_LINK ? url : null, color })}
                     >
                         Сохранить
                     </button>
@@ -3744,14 +3771,16 @@ function flatButtons(buttonsModule) {
 function syncOutputs(settingsPayload) {
     const buttons = findModule(settingsPayload, 'buttons');
     const outputs = buttons
-        ? flatButtons(buttons).map((button) => ({
-            id: button.id,
-            label: button.text,
-            source: 'button',
-            module_id: buttons.id,
-            button_id: button.id,
-            button_type: button.type === BUTTON_TYPE_REQUEST_PHONE ? BUTTON_TYPE_REQUEST_PHONE : BUTTON_TYPE_TEXT,
-        }))
+        ? flatButtons(buttons)
+            .filter((button) => button.type !== BUTTON_TYPE_LINK)
+            .map((button) => ({
+                id: button.id,
+                label: button.text,
+                source: 'button',
+                module_id: buttons.id,
+                button_id: button.id,
+                button_type: button.type === BUTTON_TYPE_REQUEST_PHONE ? BUTTON_TYPE_REQUEST_PHONE : BUTTON_TYPE_TEXT,
+            }))
         : [];
 
     return {
