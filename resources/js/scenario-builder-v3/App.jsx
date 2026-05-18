@@ -154,6 +154,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const blocks = builder?.blocks ?? [];
     const edges = builder?.edges ?? [];
     const channels = state?.catalogs?.channels ?? [];
+    const scheduledTransitions = builder?.diagnostics?.scheduled_transitions ?? [];
     const activeSheet = activeSheetFrom(builder);
     const view = activeSheet.view ?? MAIN_SHEET.view;
     const revision = builder?.revision ?? null;
@@ -163,7 +164,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const canPublish = state?.permissions?.can_publish === true && status === 'ready' && ! isSaving && ! isPublishing && Boolean(publishUrl);
     const canvasBounds = useMemo(() => graphBounds(blocks), [blocks]);
     const hasPanelSelection = Boolean(selectedBlock || selectedEdge);
-    const isPanelOpen = hasPanelSelection && ! isPanelCollapsed;
+    const isPanelOpen = mode === 'design' && hasPanelSelection && ! isPanelCollapsed;
 
     useLayoutEffect(() => {
         if (status !== 'ready' || ! canvasRef.current) {
@@ -993,85 +994,89 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             <div className={`ac-v3-builder__workbench ${isPanelOpen ? 'is-panel-open' : ''}`}>
                 <ToolRail tool={tool} onTool={setTool} onAddBlock={addBlock} />
 
-                <main
-                    ref={canvasRef}
-                    className="ac-v3-builder__canvas"
-                    onPointerDown={startCanvasPan}
-                    onWheel={handleWheel}
-                    style={canvasGridStyle(view)}
-                >
-                    <div
-                        className="ac-v3-builder__world"
-                        style={{
-                            width: `${canvasBounds.width}px`,
-                            height: `${canvasBounds.height}px`,
-                            transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.zoom})`,
-                        }}
+                {mode === 'logs' ? (
+                    <ScenarioLogs transitions={scheduledTransitions} onRefresh={refreshBuilderState} />
+                ) : (
+                    <main
+                        ref={canvasRef}
+                        className="ac-v3-builder__canvas"
+                        onPointerDown={startCanvasPan}
+                        onWheel={handleWheel}
+                        style={canvasGridStyle(view)}
                     >
-                        <svg className="ac-v3-builder__edges" width={canvasBounds.width} height={canvasBounds.height}>
-                            <defs>
-                                <marker id="ac-v3-arrow-wait" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                    <path d="M 0 0 L 10 5 L 0 10 z" />
-                                </marker>
-                                <marker id="ac-v3-arrow-button" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                    <path d="M 0 0 L 10 5 L 0 10 z" />
-                                </marker>
-                                <marker id="ac-v3-arrow-auto" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                    <path d="M 0 0 L 10 5 L 0 10 z" />
-                                </marker>
-                                <marker id="ac-v3-arrow-selected" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                                    <path d="M 0 0 L 10 5 L 0 10 z" />
-                                </marker>
-                            </defs>
-                            {edges.map((edge) => (
-                                <EdgePath
-                                    key={edge.client_key}
-                                    edge={edge}
-                                    blocks={blocks}
-                                    anchors={anchors}
-                                    selected={edge.client_key === selectedEdgeKey}
-                                    onSelect={() => {
-                                        setSelectedEdgeKey(edge.client_key);
-                                        setSelectedBlockKey(null);
-                                        setIsPanelCollapsed(false);
-                                        setPendingConnection(null);
-                                    }}
+                        <div
+                            className="ac-v3-builder__world"
+                            style={{
+                                width: `${canvasBounds.width}px`,
+                                height: `${canvasBounds.height}px`,
+                                transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.zoom})`,
+                            }}
+                        >
+                            <svg className="ac-v3-builder__edges" width={canvasBounds.width} height={canvasBounds.height}>
+                                <defs>
+                                    <marker id="ac-v3-arrow-wait" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M 0 0 L 10 5 L 0 10 z" />
+                                    </marker>
+                                    <marker id="ac-v3-arrow-button" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M 0 0 L 10 5 L 0 10 z" />
+                                    </marker>
+                                    <marker id="ac-v3-arrow-auto" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M 0 0 L 10 5 L 0 10 z" />
+                                    </marker>
+                                    <marker id="ac-v3-arrow-selected" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M 0 0 L 10 5 L 0 10 z" />
+                                    </marker>
+                                </defs>
+                                {edges.map((edge) => (
+                                    <EdgePath
+                                        key={edge.client_key}
+                                        edge={edge}
+                                        blocks={blocks}
+                                        anchors={anchors}
+                                        selected={edge.client_key === selectedEdgeKey}
+                                        onSelect={() => {
+                                            setSelectedEdgeKey(edge.client_key);
+                                            setSelectedBlockKey(null);
+                                            setIsPanelCollapsed(false);
+                                            setPendingConnection(null);
+                                        }}
+                                    />
+                                ))}
+                            </svg>
+
+                            {blocks.length === 0 ? (
+                                <div className="ac-v3-builder__empty">
+                                    <strong>Пустой лист</strong>
+                                    <span>Создайте первый блок через панель слева.</span>
+                                </div>
+                            ) : blocks.map((block) => (
+                                <ScenarioNode
+                                    key={block.client_key}
+                                    block={block}
+                                    selected={block.client_key === selectedBlockKey}
+                                    pendingTarget={pendingConnection !== null && block.client_key !== pendingConnection.sourceKey}
+                                    connectedOutputIds={connectedOutputIds(block, edges)}
+                                    onSelect={() => completeConnection(block)}
+                                    onDragStart={(event) => startBlockDrag(event, block.client_key)}
+                                    onStartConnection={startConnection}
+                                    onStartDefaultConnection={() => startPanelConnection(block, DEFAULT_OUTPUT)}
                                 />
                             ))}
-                        </svg>
+                        </div>
 
-                        {blocks.length === 0 ? (
-                            <div className="ac-v3-builder__empty">
-                                <strong>Пустой лист</strong>
-                                <span>Создайте первый блок через панель слева.</span>
-                            </div>
-                        ) : blocks.map((block) => (
-                            <ScenarioNode
-                                key={block.client_key}
-                                block={block}
-                                selected={block.client_key === selectedBlockKey}
-                                pendingTarget={pendingConnection !== null && block.client_key !== pendingConnection.sourceKey}
-                                connectedOutputIds={connectedOutputIds(block, edges)}
-                                onSelect={() => completeConnection(block)}
-                                onDragStart={(event) => startBlockDrag(event, block.client_key)}
-                                onStartConnection={startConnection}
-                                onStartDefaultConnection={() => startPanelConnection(block, DEFAULT_OUTPUT)}
-                            />
-                        ))}
-                    </div>
+                        <div className="ac-v3-builder__canvas-meta">
+                            <span>{blocks.length} блоков</span>
+                            <span>{edges.length} связей</span>
+                        </div>
 
-                    <div className="ac-v3-builder__canvas-meta">
-                        <span>{blocks.length} блоков</span>
-                        <span>{edges.length} связей</span>
-                    </div>
-
-                    <div className="ac-v3-builder__zoom">
-                        <button type="button" title="Приблизить" onClick={() => setZoom(view.zoom * 1.15)}>+</button>
-                        <span>{Math.round(view.zoom * 100)}%</span>
-                        <button type="button" title="Отдалить" onClick={() => setZoom(view.zoom / 1.15)}>−</button>
-                        <button type="button" title="По размеру" onClick={fitCanvas}>⊡</button>
-                    </div>
-                </main>
+                        <div className="ac-v3-builder__zoom">
+                            <button type="button" title="Приблизить" onClick={() => setZoom(view.zoom * 1.15)}>+</button>
+                            <span>{Math.round(view.zoom * 100)}%</span>
+                            <button type="button" title="Отдалить" onClick={() => setZoom(view.zoom / 1.15)}>−</button>
+                            <button type="button" title="По размеру" onClick={fitCanvas}>⊡</button>
+                        </div>
+                    </main>
+                )}
 
                 {isPanelOpen ? (
                     <aside className="ac-v3-builder__panel">
@@ -1111,7 +1116,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                     </aside>
                 ) : null}
 
-                {hasPanelSelection && isPanelCollapsed ? (
+                {mode === 'design' && hasPanelSelection && isPanelCollapsed ? (
                     <button
                         type="button"
                         className="ac-v3-builder__panel-reopen"
@@ -1132,6 +1137,52 @@ function Notice({ kind, children, onClose }) {
             <div className="ac-v3-builder__notice-body">{children}</div>
             <button type="button" onClick={onClose}>Закрыть</button>
         </div>
+    );
+}
+
+function ScenarioLogs({ transitions, onRefresh }) {
+    const items = Array.isArray(transitions) ? transitions : [];
+
+    return (
+        <main className="ac-v3-builder__logs">
+            <div className="ac-v3-builder__logs-head">
+                <div>
+                    <span>Логи сценария</span>
+                    <strong>Отложенные переходы</strong>
+                </div>
+                <button type="button" onClick={onRefresh}>Обновить</button>
+            </div>
+
+            {items.length > 0 ? (
+                <div className="ac-v3-builder__logs-list">
+                    {items.map((transition) => (
+                        <article key={transition.id} className={`ac-v3-builder__log-row is-${transition.status ?? 'unknown'}`}>
+                            <div className="ac-v3-builder__log-main">
+                                <strong>{transition.status_label ?? edgeTransitionStatusLabel(transition.status)}</strong>
+                                <span>Переход #{transition.id} · диалог #{transition.dialog_id} · run #{transition.scenario_run_id}</span>
+                            </div>
+                            <div className="ac-v3-builder__log-route">
+                                <span>Блок #{transition.source_block_id}</span>
+                                <b>→</b>
+                                <span>Блок #{transition.target_block_id}</span>
+                            </div>
+                            <div className="ac-v3-builder__log-time">
+                                <span>План: {formatDateTime(transition.scheduled_for)}</span>
+                                <span>Финиш: {formatDateTime(transition.finished_at)}</span>
+                            </div>
+                            {transition.error_message ? (
+                                <p>{transition.error_message}</p>
+                            ) : null}
+                        </article>
+                    ))}
+                </div>
+            ) : (
+                <div className="ac-v3-builder__logs-empty">
+                    <strong>Пока нет delayed-переходов</strong>
+                    <span>Когда automatic-стрелка с задержкой сработает в опубликованном сценарии, запись появится здесь.</span>
+                </div>
+            )}
+        </main>
     );
 }
 

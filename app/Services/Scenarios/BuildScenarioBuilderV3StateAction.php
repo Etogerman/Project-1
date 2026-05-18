@@ -169,6 +169,9 @@ class BuildScenarioBuilderV3StateAction
             'blocks' => $blocks,
             'edges' => $edges,
             'visible_scope' => $visibleScope,
+            'diagnostics' => [
+                'scheduled_transitions' => $this->scheduledTransitionDiagnostics($version),
+            ],
         ];
     }
 
@@ -188,6 +191,9 @@ class BuildScenarioBuilderV3StateAction
             'visible_scope' => [
                 'block_ids' => [],
                 'edge_ids' => [],
+            ],
+            'diagnostics' => [
+                'scheduled_transitions' => [],
             ],
         ];
     }
@@ -431,15 +437,14 @@ class BuildScenarioBuilderV3StateAction
             return array_map(fn (array $edge): array => $this->edgeWithEmptyDiagnostics($edge), $edges);
         }
 
-        $scenario = $version->scenario()->with('publishedVersion')->first();
-        $publishedVersionId = $scenario?->publishedVersion?->id;
+        [$scenarioCode, $publishedVersionId] = $this->publishedScenarioContext($version);
 
-        if ($scenario === null || $publishedVersionId === null) {
+        if ($scenarioCode === null || $publishedVersionId === null) {
             return array_map(fn (array $edge): array => $this->edgeWithEmptyDiagnostics($edge), $edges);
         }
 
         $transitionsByEdgeKey = ScenarioV3ScheduledTransition::query()
-            ->where('scenario_code', $scenario->code)
+            ->where('scenario_code', $scenarioCode)
             ->where('published_version_id', $publishedVersionId)
             ->whereIn('edge_key', $edgeKeys->all())
             ->orderByDesc('id')
@@ -462,6 +467,41 @@ class BuildScenarioBuilderV3StateAction
 
             return $edge;
         }, $edges);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function scheduledTransitionDiagnostics(ScenarioVersion $version): array
+    {
+        [$scenarioCode, $publishedVersionId] = $this->publishedScenarioContext($version);
+
+        if ($scenarioCode === null || $publishedVersionId === null) {
+            return [];
+        }
+
+        return ScenarioV3ScheduledTransition::query()
+            ->where('scenario_code', $scenarioCode)
+            ->where('published_version_id', $publishedVersionId)
+            ->orderByDesc('id')
+            ->limit(30)
+            ->get()
+            ->map(fn (ScenarioV3ScheduledTransition $transition): array => $this->scheduledTransitionToBuilderState($transition))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array{0: string|null, 1: int|null}
+     */
+    private function publishedScenarioContext(ScenarioVersion $version): array
+    {
+        $scenario = $version->scenario()->with('publishedVersion')->first();
+
+        return [
+            $scenario?->code,
+            $scenario?->publishedVersion?->id,
+        ];
     }
 
     /**
