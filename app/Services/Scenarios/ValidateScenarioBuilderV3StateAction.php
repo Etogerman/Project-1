@@ -59,6 +59,10 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_TRANSITION_LIMIT = 100000;
 
+    private const EDGE_DELAY_UNITS = ['sec', 'min'];
+
+    private const MAX_EDGE_DELAY_VALUE = 100000;
+
     /**
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
@@ -538,7 +542,7 @@ class ValidateScenarioBuilderV3StateAction
             'transition_limit' => $transitionLimit,
             'match' => $this->normalizeEdgeMatch($payload['match'] ?? [], $edgeIndex),
             'input_capture' => $this->normalizeEdgeInputCapture($payload['input_capture'] ?? [], $edgeIndex),
-            'delay' => is_array($payload['delay'] ?? null) ? $payload['delay'] : [],
+            'delay' => $this->normalizeEdgeDelay($payload['delay'] ?? [], $mode, $edgeIndex),
             'flags' => is_array($payload['flags'] ?? null) ? $payload['flags'] : [],
             'ui' => is_array($payload['ui'] ?? null) ? $payload['ui'] : [],
         ];
@@ -568,6 +572,45 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         return in_array($mode, self::EDGE_MODES, true) ? $mode : 'wait_reply';
+    }
+
+    /**
+     * @return array{type: string, value: int, unit: string, cancel_if_left_source_block: bool}
+     */
+    private function normalizeEdgeDelay(mixed $delay, string $mode, int $edgeIndex): array
+    {
+        $delay = is_array($delay) ? $delay : [];
+
+        if ($mode !== 'automatic') {
+            return [
+                'type' => 'immediate',
+                'value' => 0,
+                'unit' => 'sec',
+                'cancel_if_left_source_block' => true,
+            ];
+        }
+
+        $value = $this->nonNegativeIntegerValue(
+            $delay['value'] ?? 0,
+            "builder.edges.$edgeIndex.condition_payload.delay.value",
+            self::MAX_EDGE_DELAY_VALUE,
+        );
+        $unit = trim((string) ($delay['unit'] ?? 'sec'));
+
+        if (! in_array($unit, self::EDGE_DELAY_UNITS, true)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.delay.unit", 'Invalid delay unit.');
+        }
+
+        if ($value === 0) {
+            $unit = 'sec';
+        }
+
+        return [
+            'type' => $value > 0 ? 'relative' : 'immediate',
+            'value' => $value,
+            'unit' => $unit,
+            'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
+        ];
     }
 
     /**

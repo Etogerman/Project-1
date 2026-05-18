@@ -42,6 +42,10 @@ const EDGE_DATA_TYPE_OPTIONS = [
     ['email', 'Email'],
     ['number', 'Число'],
 ];
+const EDGE_DELAY_UNIT_OPTIONS = [
+    ['sec', 'секунды'],
+    ['min', 'минуты'],
+];
 const PHONE_CONDITION_OPTIONS = [
     ['', 'Неважно'],
     ['has_phone', 'Телефон заполнен'],
@@ -2319,6 +2323,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const capture = payload.input_capture ?? {};
     const matchType = match.type ?? 'any_inbound';
     const captureEnabled = capture.enabled === true;
+    const delay = normalizedEdgeDelay(payload.delay);
 
     function updatePayload(patch) {
         onUpdateConditionPayload((current) => ({
@@ -2344,6 +2349,16 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                 ...(current.input_capture ?? {}),
                 ...patch,
             },
+        }));
+    }
+
+    function updateDelay(patch) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            delay: normalizedEdgeDelay({
+                ...normalizedEdgeDelay(current.delay),
+                ...patch,
+            }),
         }));
     }
 
@@ -2395,6 +2410,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                             className={edgeMode === 'automatic' ? 'is-active' : ''}
                             onClick={() => updatePayload({
                                 mode: 'automatic',
+                                delay,
                                 input_capture: {
                                     enabled: false,
                                     field_scope: 'dialog',
@@ -2494,7 +2510,32 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                     <>
                         <label className="ac-v3-builder__field-row">
                             <span>Задержка</span>
-                            <p className="ac-v3-builder__readonly">0 секунд</p>
+                            <input
+                                type="number"
+                                min="0"
+                                max="100000"
+                                value={delay.value}
+                                onChange={(event) => {
+                                    const value = Math.max(0, Math.floor(Number(event.target.value) || 0));
+
+                                    updateDelay({
+                                        value,
+                                        type: value > 0 ? 'relative' : 'immediate',
+                                        unit: value > 0 ? delay.unit : 'sec',
+                                    });
+                                }}
+                            />
+                        </label>
+                        <label className="ac-v3-builder__field-row">
+                            <span>Единица</span>
+                            <select
+                                value={delay.unit}
+                                onChange={(event) => updateDelay({ unit: event.target.value })}
+                            >
+                                {EDGE_DELAY_UNIT_OPTIONS.map(([value, label]) => (
+                                    <option key={value} value={value}>{label}</option>
+                                ))}
+                            </select>
                         </label>
                         <label className="ac-v3-builder__field-row">
                             <span>Лимит переходов</span>
@@ -2504,6 +2545,14 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                 value={payload.transition_limit ?? 0}
                                 onChange={(event) => updatePayload({ transition_limit: Math.max(0, Number(event.target.value)) })}
                             />
+                        </label>
+                        <label className="ac-v3-builder__check">
+                            <input
+                                type="checkbox"
+                                checked={delay.cancel_if_left_source_block !== false}
+                                onChange={(event) => updateDelay({ cancel_if_left_source_block: event.target.checked })}
+                            />
+                            <span>Выполнить только если клиент всё ещё в этом блоке</span>
                         </label>
                     </>
                 ) : null}
@@ -2932,6 +2981,22 @@ function nextButtonId(rows) {
     return id;
 }
 
+function normalizedEdgeDelay(delay) {
+    const raw = delay && typeof delay === 'object' ? delay : {};
+    const rawUnit = typeof raw.unit === 'string' ? raw.unit : 'sec';
+    const value = Math.max(0, Math.floor(Number(raw.value) || 0));
+    const unit = value > 0 && EDGE_DELAY_UNIT_OPTIONS.some(([option]) => option === rawUnit)
+        ? rawUnit
+        : 'sec';
+
+    return {
+        type: value > 0 ? 'relative' : 'immediate',
+        value,
+        unit,
+        cancel_if_left_source_block: raw.cancel_if_left_source_block !== false,
+    };
+}
+
 function edgePayload(outputId, label) {
     const isButton = outputId !== null;
 
@@ -2954,16 +3019,7 @@ function edgePayload(outputId, label) {
             field_key: '',
             data_type: 'any_text',
         },
-        delay: {
-            value: 0,
-            unit: 'sec',
-            cancel_if_left: false,
-            cancel_timed: true,
-            no_cancel: false,
-            send_time: null,
-            send_date: null,
-            send_if_date_passed: true,
-        },
+        delay: normalizedEdgeDelay(),
         flags: {
             as_button: false,
             one_time: false,

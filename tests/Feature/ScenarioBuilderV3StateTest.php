@@ -326,6 +326,192 @@ class ScenarioBuilderV3StateTest extends TestCase
             ]);
     }
 
+    public function test_put_state_normalizes_automatic_edge_delay_settings(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_edge_delay',
+            'name' => 'V3 Edge Delay',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Источник'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Цель'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Авто');
+        $conditionPayload['mode'] = 'automatic';
+        $conditionPayload['delay'] = [
+            'value' => 30,
+            'unit' => 'min',
+            'cancel_if_left_source_block' => false,
+        ];
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk();
+
+        $this->assertSame('relative', $response->json('builder.edges.0.condition_payload.delay.type'));
+        $this->assertSame(30, $response->json('builder.edges.0.condition_payload.delay.value'));
+        $this->assertSame('min', $response->json('builder.edges.0.condition_payload.delay.unit'));
+        $this->assertFalse($response->json('builder.edges.0.condition_payload.delay.cancel_if_left_source_block'));
+
+        $saved = $response->json();
+        $saved['builder']['edges'][0]['condition_payload']['delay'] = [
+            'value' => 0,
+            'unit' => 'min',
+            'cancel_if_left_source_block' => true,
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($saved, $saved['builder']['blocks'], $saved['builder']['edges']))
+            ->assertOk()
+            ->assertJsonPath('builder.edges.0.condition_payload.delay.type', 'immediate')
+            ->assertJsonPath('builder.edges.0.condition_payload.delay.value', 0)
+            ->assertJsonPath('builder.edges.0.condition_payload.delay.unit', 'sec');
+    }
+
+    public function test_put_state_rejects_invalid_automatic_edge_delay(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_invalid_edge_delay',
+            'name' => 'V3 Invalid Edge Delay',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Источник'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Цель'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Авто');
+        $conditionPayload['mode'] = 'automatic';
+        $conditionPayload['delay'] = [
+            'value' => 100001,
+            'unit' => 'sec',
+            'cancel_if_left_source_block' => true,
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.edges.0.condition_payload.delay.value',
+            ]);
+
+        $conditionPayload['delay'] = [
+            'value' => 1,
+            'unit' => 'hour',
+            'cancel_if_left_source_block' => true,
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.edges.0.condition_payload.delay.unit',
+            ]);
+    }
+
+    public function test_publish_rejects_relative_automatic_delay_until_runtime_queue_is_available(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_delayed_edge',
+            'name' => 'V3 Publish Delayed Edge',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $conditionPayload = $this->edgePayload(null, 'Авто');
+        $conditionPayload['mode'] = 'automatic';
+        $conditionPayload['delay'] = [
+            'value' => 5,
+            'unit' => 'min',
+            'cancel_if_left_source_block' => true,
+        ];
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+                ],
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_target',
+                    'type' => 'state',
+                    'title' => 'Цель',
+                    'position' => ['x' => 460, 'y' => 64],
+                    'settings_payload' => $this->messageSettings('Цель'),
+                ],
+            ], [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.edges',
+            ]);
+    }
+
     public function test_put_state_syncs_start_condition_channels_and_conditions(): void
     {
         $admin = $this->adminUser();
@@ -1218,6 +1404,12 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'field_scope' => 'dialog',
                 'field_key' => '',
                 'data_type' => 'any_text',
+            ],
+            'delay' => [
+                'type' => 'immediate',
+                'value' => 0,
+                'unit' => 'sec',
+                'cancel_if_left_source_block' => true,
             ],
         ];
     }

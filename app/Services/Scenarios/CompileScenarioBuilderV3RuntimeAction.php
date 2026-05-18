@@ -332,6 +332,11 @@ class CompileScenarioBuilderV3RuntimeAction
         $sourceDbId = (int) $edge->from_scenario_builder_block_id;
         $targetDbId = (int) $edge->to_scenario_builder_block_id;
         $mode = $this->edgeMode($edge);
+        $delay = $this->compileEdgeDelay($conditionPayload);
+
+        if ($mode === self::EDGE_MODE_AUTOMATIC && $delay['type'] === 'relative') {
+            $this->fail('builder.edges', 'Отложенные automatic-стрелки можно сохранить, публикация будет доступна после подключения runtime-очереди.');
+        }
 
         return [
             'id' => (string) $edge->id,
@@ -346,6 +351,7 @@ class CompileScenarioBuilderV3RuntimeAction
             'from_output_id' => $this->edgeOutputId($edge),
             'label' => (string) ($conditionPayload['label'] ?? ''),
             'match' => $this->compileEdgeMatch($conditionPayload),
+            'delay' => $delay,
             'input_capture' => $mode === self::EDGE_MODE_WAIT_REPLY
                 ? $this->compileEdgeInputCapture($conditionPayload)
                 : $this->disabledEdgeInputCapture(),
@@ -400,6 +406,28 @@ class CompileScenarioBuilderV3RuntimeAction
             'field_scope' => 'dialog',
             'field_key' => '',
             'data_type' => 'any_text',
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $conditionPayload
+     * @return array{type: string, value: int, unit: string, cancel_if_left_source_block: bool}
+     */
+    private function compileEdgeDelay(array $conditionPayload): array
+    {
+        $delay = is_array($conditionPayload['delay'] ?? null) ? $conditionPayload['delay'] : [];
+        $value = max(0, (int) ($delay['value'] ?? 0));
+        $unit = in_array(($delay['unit'] ?? 'sec'), ['sec', 'min'], true) ? (string) $delay['unit'] : 'sec';
+
+        if ($value === 0) {
+            $unit = 'sec';
+        }
+
+        return [
+            'type' => $value > 0 ? 'relative' : 'immediate',
+            'value' => $value,
+            'unit' => $unit,
+            'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
         ];
     }
 
