@@ -937,6 +937,54 @@
     padding: 8px 10px;
 }
 
+.ac-v3-builder__logs-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 12px;
+}
+
+.ac-v3-builder__logs-filters button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text-2);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    min-height: 30px;
+    padding: 5px 9px;
+}
+
+.ac-v3-builder__logs-filters button b {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-3);
+    font-size: 11px;
+    line-height: 1;
+    padding: 0 6px;
+}
+
+.ac-v3-builder__logs-filters button:hover,
+.ac-v3-builder__logs-filters button.is-active {
+    border-color: var(--blue);
+    background: color-mix(in oklch, var(--blue) 9%, white);
+    color: var(--blue-strong);
+}
+
+.ac-v3-builder__logs-filters button.is-active b {
+    background: var(--blue);
+    color: white;
+}
+
 .ac-v3-builder__logs-list {
     display: grid;
     gap: 8px;

@@ -46,6 +46,14 @@ const EDGE_DELAY_UNIT_OPTIONS = [
     ['sec', 'секунды'],
     ['min', 'минуты'],
 ];
+const LOG_STATUS_FILTERS = [
+    ['all', 'Все'],
+    ['active', 'В работе'],
+    ['passed', 'Выполнены'],
+    ['attention', 'Внимание'],
+];
+const LOG_ACTIVE_STATUSES = ['scheduled', 'processing'];
+const LOG_ATTENTION_STATUSES = ['cancelled', 'failed', 'limit_reached'];
 const PHONE_CONDITION_OPTIONS = [
     ['', 'Неважно'],
     ['has_phone', 'Телефон заполнен'],
@@ -108,6 +116,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const [notice, setNotice] = useState(null);
     const [validationIssue, setValidationIssue] = useState(null);
     const [mode, setMode] = useState('design');
+    const [logStatusFilter, setLogStatusFilter] = useState('all');
     const [tool, setTool] = useState('select');
     const [isSaving, setIsSaving] = useState(false);
     const [isPublishing, setIsPublishing] = useState(false);
@@ -1017,6 +1026,8 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                     <ScenarioLogs
                         transitions={scheduledTransitions}
                         edges={edges}
+                        statusFilter={logStatusFilter}
+                        onStatusFilter={setLogStatusFilter}
                         onRefresh={refreshBuilderState}
                         onOpenEdge={openTransitionEdge}
                     />
@@ -1164,8 +1175,10 @@ function Notice({ kind, children, onClose }) {
     );
 }
 
-function ScenarioLogs({ transitions, edges, onRefresh, onOpenEdge }) {
+function ScenarioLogs({ transitions, edges, statusFilter, onStatusFilter, onRefresh, onOpenEdge }) {
     const items = Array.isArray(transitions) ? transitions : [];
+    const filteredItems = items.filter((transition) => logTransitionMatchesFilter(transition, statusFilter));
+    const counts = logTransitionCounts(items);
 
     return (
         <main className="ac-v3-builder__logs">
@@ -1178,8 +1191,25 @@ function ScenarioLogs({ transitions, edges, onRefresh, onOpenEdge }) {
             </div>
 
             {items.length > 0 ? (
+                <div className="ac-v3-builder__logs-filters" role="group" aria-label="Фильтр логов">
+                    {LOG_STATUS_FILTERS.map(([value, label]) => (
+                        <button
+                            type="button"
+                            key={value}
+                            className={statusFilter === value ? 'is-active' : ''}
+                            aria-pressed={statusFilter === value}
+                            onClick={() => onStatusFilter(value)}
+                        >
+                            <span>{label}</span>
+                            <b>{counts[value] ?? 0}</b>
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+
+            {filteredItems.length > 0 ? (
                 <div className="ac-v3-builder__logs-list">
-                    {items.map((transition) => (
+                    {filteredItems.map((transition) => (
                         <ScenarioLogRow
                             key={transition.id}
                             transition={transition}
@@ -1190,8 +1220,12 @@ function ScenarioLogs({ transitions, edges, onRefresh, onOpenEdge }) {
                 </div>
             ) : (
                 <div className="ac-v3-builder__logs-empty">
-                    <strong>Пока нет delayed-переходов</strong>
-                    <span>Когда automatic-стрелка с задержкой сработает в опубликованном сценарии, запись появится здесь.</span>
+                    <strong>{items.length > 0 ? 'Под этот фильтр записей нет' : 'Пока нет delayed-переходов'}</strong>
+                    <span>
+                        {items.length > 0
+                            ? 'Выберите другой статус или обновите логи.'
+                            : 'Когда automatic-стрелка с задержкой сработает в опубликованном сценарии, запись появится здесь.'}
+                    </span>
                 </div>
             )}
         </main>
@@ -1608,6 +1642,49 @@ function edgeTransitionStatusLabel(status) {
     };
 
     return labels[status] ?? 'Неизвестно';
+}
+
+function logTransitionMatchesFilter(transition, filter) {
+    const status = transition?.status;
+
+    if (filter === 'active') {
+        return LOG_ACTIVE_STATUSES.includes(status);
+    }
+
+    if (filter === 'passed') {
+        return status === 'passed';
+    }
+
+    if (filter === 'attention') {
+        return LOG_ATTENTION_STATUSES.includes(status);
+    }
+
+    return true;
+}
+
+function logTransitionCounts(items) {
+    return (Array.isArray(items) ? items : []).reduce((counts, transition) => {
+        counts.all += 1;
+
+        if (LOG_ACTIVE_STATUSES.includes(transition?.status)) {
+            counts.active += 1;
+        }
+
+        if (transition?.status === 'passed') {
+            counts.passed += 1;
+        }
+
+        if (LOG_ATTENTION_STATUSES.includes(transition?.status)) {
+            counts.attention += 1;
+        }
+
+        return counts;
+    }, {
+        all: 0,
+        active: 0,
+        passed: 0,
+        attention: 0,
+    });
 }
 
 function formatDateTime(value) {
