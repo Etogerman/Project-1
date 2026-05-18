@@ -61,6 +61,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_TELEGRAM_BUTTON_CALLBACK_PREFIX = 'v3b:';
 
+    private const V3_TELEGRAM_BUTTON_CALLBACK_MAX_BYTES = 64;
+
     private const PENDING_PROMPT_DELIVERY_STATE_KEY = 'run.pending_prompt_delivery';
 
     private const PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY = 'run.pending_prompt_remove_telegram_keyboard';
@@ -1877,6 +1879,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 (string) ($messagePayload['text_format'] ?? Message::TEXT_FORMAT_PLAIN_TEXT),
                 replyButtonRows: $replyButtonRows,
                 buttonPlacement: $buttonPlacement,
+                v3CallbackBlockId: $blockId,
             )) {
                 $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
 
@@ -2554,9 +2557,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function v3TargetForButtonCallback(string $callbackData, array $block, ?Channel $channel): ?string
     {
-        $outputId = $this->v3ButtonOutputIdFromCallback($callbackData);
+        $callback = $this->v3ButtonCallbackFromData($callbackData);
 
-        if ($outputId === null) {
+        if ($callback === null || ! $this->v3ButtonCallbackMatchesBlock($callback, $block)) {
             return null;
         }
 
@@ -2568,7 +2571,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
                 if (
                     filled($button['target_block_id'] ?? null)
-                    && (string) ($button['output_id'] ?? '') === $outputId
+                    && (string) ($button['output_id'] ?? '') === $callback['output_id']
                 ) {
                     return filled($button['target_block_id'] ?? null) ? (string) $button['target_block_id'] : null;
                 }
@@ -2584,9 +2587,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function v3ButtonCallbackEdges(string $callbackData, array $block, ?Channel $channel): array
     {
-        $outputId = $this->v3ButtonOutputIdFromCallback($callbackData);
+        $callback = $this->v3ButtonCallbackFromData($callbackData);
 
-        if ($outputId === null) {
+        if ($callback === null || ! $this->v3ButtonCallbackMatchesBlock($callback, $block)) {
             return [];
         }
 
@@ -2598,7 +2601,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     continue;
                 }
 
-                if ((string) ($button['output_id'] ?? '') !== $outputId) {
+                if ((string) ($button['output_id'] ?? '') !== $callback['output_id']) {
                     continue;
                 }
 
@@ -2613,15 +2616,48 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return $edges;
     }
 
-    private function v3ButtonOutputIdFromCallback(string $callbackData): ?string
+    /**
+     * @return array{block_id: string, output_id: string}|null
+     */
+    private function v3ButtonCallbackFromData(string $callbackData): ?array
     {
-        if (! str_starts_with($callbackData, self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX)) {
+        if (strlen($callbackData) > self::V3_TELEGRAM_BUTTON_CALLBACK_MAX_BYTES) {
             return null;
         }
 
-        $outputId = trim(substr($callbackData, strlen(self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX)));
+        if (! preg_match('/^v3b:([A-Za-z0-9_-]{1,64}):([A-Za-z0-9_-]{1,64})$/', $callbackData, $matches)) {
+            return null;
+        }
 
-        return $outputId !== '' ? $outputId : null;
+        return [
+            'block_id' => (string) $matches[1],
+            'output_id' => (string) $matches[2],
+        ];
+    }
+
+    /**
+     * @param  array{block_id: string, output_id: string}  $callback
+     * @param  array<string, mixed>  $block
+     */
+    private function v3ButtonCallbackMatchesBlock(array $callback, array $block): bool
+    {
+        return (string) ($block['id'] ?? '') === $callback['block_id'];
+    }
+
+    private function v3TelegramButtonCallbackData(string $blockId, string $outputId): ?string
+    {
+        if (
+            ! preg_match('/^[A-Za-z0-9_-]{1,64}$/', $blockId)
+            || ! preg_match('/^[A-Za-z0-9_-]{1,64}$/', $outputId)
+        ) {
+            return null;
+        }
+
+        $callbackData = self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX.$blockId.':'.$outputId;
+
+        return strlen($callbackData) <= self::V3_TELEGRAM_BUTTON_CALLBACK_MAX_BYTES
+            ? $callbackData
+            : null;
     }
 
     /**
@@ -3153,6 +3189,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         bool $removeTelegramKeyboard = false,
         ?array $replyButtonRows = null,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
+        ?string $v3CallbackBlockId = null,
     ): bool {
         $channel = $message->channel;
 
@@ -3165,7 +3202,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $sendResult = $this->sendBotDialogTextAction->handleMessage(
             $message,
             $content->transportText,
-            telegramReplyMarkup: $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard, $replyButtonRows, $buttonPlacement),
+            telegramReplyMarkup: $this->telegramReplyMarkup($requestPhone, $removeTelegramKeyboard, $replyButtonRows, $buttonPlacement, $v3CallbackBlockId),
             maxAttachments: $this->maxAttachments($requestPhone, $replyButtonRows, $buttonPlacement),
             textFormat: $content->textFormat,
         );
@@ -3481,6 +3518,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         bool $removeTelegramKeyboard,
         ?array $replyButtonRows = null,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
+        ?string $v3CallbackBlockId = null,
     ): ?array {
         if ($requestPhone) {
             return $this->telegramPhoneCaptureReplyMarkup();
@@ -3505,20 +3543,37 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ) {
                 $inlineKeyboard = collect($replyButtonRows)
                     ->map(fn (array $row): array => collect($row)
-                        ->filter(fn (array $button): bool => filled($button['text'] ?? null)
-                            && (
-                                (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK && filled($button['url'] ?? null))
-                                || (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_TEXT && filled($button['output_id'] ?? null))
-                            ))
-                        ->map(fn (array $button): array => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
-                            ? [
-                                'text' => (string) $button['text'],
-                                'url' => (string) $button['url'],
-                            ]
-                            : [
-                                'text' => (string) $button['text'],
-                                'callback_data' => self::V3_TELEGRAM_BUTTON_CALLBACK_PREFIX.(string) $button['output_id'],
-                            ])
+                        ->map(function (array $button) use ($v3CallbackBlockId): ?array {
+                            if (! filled($button['text'] ?? null)) {
+                                return null;
+                            }
+
+                            if (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK) {
+                                return filled($button['url'] ?? null)
+                                    ? [
+                                        'text' => (string) $button['text'],
+                                        'url' => (string) $button['url'],
+                                    ]
+                                    : null;
+                            }
+
+                            if (($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_TEXT || ! filled($button['output_id'] ?? null)) {
+                                return null;
+                            }
+
+                            $callbackData = $this->v3TelegramButtonCallbackData(
+                                (string) $v3CallbackBlockId,
+                                (string) $button['output_id'],
+                            );
+
+                            return $callbackData !== null
+                                ? [
+                                    'text' => (string) $button['text'],
+                                    'callback_data' => $callbackData,
+                                ]
+                                : null;
+                        })
+                        ->filter()
                         ->values()
                         ->all())
                     ->filter(fn (array $row): bool => $row !== [])

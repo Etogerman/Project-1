@@ -2116,7 +2116,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['btn_catalog'], data_get($run->state_payload, 'v3.waiting_output_ids'));
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Получить каталог'
-            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.callback_data') === 'v3b:btn_catalog'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.callback_data') === 'v3b:start:btn_catalog'
             && data_get($request->data(), 'reply_markup.keyboard') === null);
 
         $buttonText = Message::factory()->create([
@@ -2140,6 +2140,54 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('catalog', $run->current_step);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Вот каталог');
+    }
+
+    public function test_v3_inline_message_callback_must_match_current_block(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id, placement: 'inline_message');
+        data_set($schema, 'builder_v3_runtime.blocks.catalog.buttons', [
+            'placement' => 'inline_message',
+            'rows' => [[[
+                'id' => 'btn_catalog',
+                'text' => 'Повторить каталог',
+                'type' => 'text',
+                'normalized_text' => 'повторить каталог',
+                'output_id' => 'btn_catalog',
+                'target_block_id' => 'start',
+            ]]],
+        ]);
+        data_set($schema, 'builder_v3_runtime.edges.1', [
+            'id' => 'edge_back',
+            'source_block_id' => 'catalog',
+            'target_block_id' => 'start',
+            'from_output_id' => 'btn_catalog',
+            'label' => 'Назад',
+        ]);
+        $scenario = $this->createPublishedScenario('v3_inline_callback_block_guard', $schema);
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'catalog',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'current_block_id' => 'catalog',
+                    'status' => 'waiting_input',
+                    'waiting_output_ids' => ['btn_catalog'],
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertFalse($runtime->supportsTelegramCallbackContinuation($run, 'v3b:btn_catalog'));
+        $this->assertFalse($runtime->supportsTelegramCallbackContinuation($run, 'v3b:start:btn_catalog'));
+        $this->assertTrue($runtime->supportsTelegramCallbackContinuation($run, 'v3b:catalog:btn_catalog'));
     }
 
     public function test_v3_link_button_renders_telegram_inline_url(): void

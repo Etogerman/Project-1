@@ -450,7 +450,7 @@ class BotWebhookController extends Controller
                 && $this->activeRunSupportsTelegramScenarioCallback($run, $callbackData);
         }
 
-        if (preg_match('/^v3b:[A-Za-z0-9_-]{1,64}$/', $callbackData)) {
+        if (preg_match('/^v3b:[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{1,64}$/', $callbackData)) {
             $run = $this->findTelegramActiveScenarioRun($channel, $payload);
 
             return $run instanceof ScenarioRun

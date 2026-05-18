@@ -24,7 +24,7 @@ class PublishScenarioBuilderV3Action
      */
     public function handle(Scenario $scenario, int $draftVersionId, string $baseRevision, User $user): array
     {
-        $publishedVersion = DB::transaction(function () use ($scenario, $draftVersionId, $baseRevision): ScenarioVersion {
+        [$publishedVersion, $draftVersion] = DB::transaction(function () use ($scenario, $draftVersionId, $baseRevision, $user): array {
             $lockedScenario = Scenario::query()
                 ->whereKey($scenario->id)
                 ->lockForUpdate()
@@ -62,6 +62,8 @@ class PublishScenarioBuilderV3Action
 
             data_set($schemaPayload, 'builder_v3.published_revision', $currentRevision);
 
+            $this->guardCanManageChannels($this->channelIdsFromRuntime($runtime), $user);
+
             ScenarioVersion::query()
                 ->where('scenario_id', $lockedScenario->id)
                 ->where('status', ScenarioVersion::STATUS_PUBLISHED)
@@ -75,15 +77,18 @@ class PublishScenarioBuilderV3Action
                 'status' => ScenarioVersion::STATUS_PUBLISHED,
             ])->save();
 
-            return $version->fresh(['scenario']);
+            $publishedVersion = $version->fresh(['scenario']);
+
+            $this->syncScenarioBindings($publishedVersion, $user);
+
+            $draftVersion = $this->createNextScenarioDraftAction->handle(
+                $publishedVersion->scenario()->firstOrFail()->fresh(['publishedVersion', 'draftVersion']),
+            );
+
+            return [$publishedVersion->fresh(), $draftVersion->fresh()];
         });
 
         app(ScenarioRegistry::class)->forgetCachedDefinitions();
-        $this->syncScenarioBindings($publishedVersion, $user);
-
-        $draftVersion = $this->createNextScenarioDraftAction->handle(
-            $publishedVersion->scenario()->firstOrFail()->fresh(['publishedVersion', 'draftVersion']),
-        );
 
         return [
             'published_version' => $publishedVersion->fresh(),
@@ -167,5 +172,21 @@ class PublishScenarioBuilderV3Action
                 'builder.start_condition.channels' => 'Недостаточно прав для публикации выбранных каналов.',
             ]);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @return list<int>
+     */
+    private function channelIdsFromRuntime(array $runtime): array
+    {
+        return collect($runtime['entrypoints'] ?? [])
+            ->flatMap(fn (mixed $entrypoint): array => is_array($entrypoint)
+                ? collect($entrypoint['channel_ids'] ?? [])->map(fn (mixed $id): int => (int) $id)->all()
+                : [])
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
     }
 }

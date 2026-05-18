@@ -2544,7 +2544,13 @@ class BotWebhookAutoReplyTest extends TestCase
             'builder_v3_runtime' => [
                 'schema_version' => 3,
                 'source_revision' => 'v3:test',
-                'entrypoints' => [],
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channel->id],
+                    'match' => 'any_inbound',
+                    'values' => ['*'],
+                    'priority' => 10,
+                ]],
                 'blocks' => [
                     'start' => [
                         'id' => 'start',
@@ -2601,7 +2607,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $payload = $this->telegramCallbackPayload(
             callbackId: 'callback-v3-1',
-            callbackData: 'v3b:btn_catalog',
+            callbackData: 'v3b:start:btn_catalog',
             messageId: 96,
         );
 
@@ -2615,11 +2621,12 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $storedMessage = $this->inboundMessages()->firstOrFail();
 
-        $this->assertSame('v3b:btn_catalog', $storedMessage->text);
+        $this->assertSame('v3b:start:btn_catalog', $storedMessage->text);
         Queue::assertPushed(ProcessScenarioInboundJob::class, function (ProcessScenarioInboundJob $job) use ($storedMessage, $run): bool {
             return $job->inboundMessageId === $storedMessage->id
                 && $job->scenarioRunId === $run->id;
         });
+        Queue::assertNotPushed(ProcessScenarioStartJob::class);
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/answerCallbackQuery'
             && $request['callback_query_id'] === 'callback-v3-1');

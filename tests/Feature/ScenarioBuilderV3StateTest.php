@@ -1667,6 +1667,71 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame($draftCardIds[0], $publishedResponse['builder']['blocks'][0]['display_id'] ?? null);
     }
 
+    public function test_publish_v3_graph_rolls_back_when_selected_channel_becomes_unavailable(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_channel_rollback',
+            'name' => 'V3 Publish Channel Rollback',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings('/start', [(int) $channel->id], 'Привет', 'Далее'),
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load(['publishedVersion', 'draftVersion']);
+        $publishedVersionId = $scenario->publishedVersion?->id;
+        $draftVersionId = $scenario->draftVersion?->id;
+        $secondState = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $channel->forceFill(['is_active' => false])->save();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $secondState['scenario']['draft_version_id'],
+                'base_revision' => $secondState['builder']['revision'],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['builder.start_condition.channels']);
+
+        $scenario->refresh()->load(['publishedVersion', 'draftVersion']);
+
+        $this->assertSame($publishedVersionId, $scenario->publishedVersion?->id);
+        $this->assertSame($draftVersionId, $scenario->draftVersion?->id);
+        $this->assertSame(2, $scenario->versions()->count());
+        $this->assertDatabaseHas('scenario_versions', [
+            'id' => $publishedVersionId,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+        ]);
+        $this->assertDatabaseHas('scenario_versions', [
+            'id' => $draftVersionId,
+            'status' => ScenarioVersion::STATUS_DRAFT,
+        ]);
+        $this->assertDatabaseHas('scenario_channel_bindings', [
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+    }
+
     public function test_put_state_rejects_empty_button_text(): void
     {
         $admin = $this->adminUser();

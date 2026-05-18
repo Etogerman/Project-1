@@ -245,9 +245,14 @@ class DispatchStoredInboundScenarioAction
 
     private function isTelegramScenarioCallbackMessage(Message $storedMessage): bool
     {
-        return is_array($storedMessage->raw_payload)
-            && is_array(data_get($storedMessage->raw_payload, 'callback_query'))
-            && str_starts_with((string) data_get($storedMessage->raw_payload, 'callback_query.data', ''), 'scenario:');
+        if (! is_array($storedMessage->raw_payload) || ! is_array(data_get($storedMessage->raw_payload, 'callback_query'))) {
+            return false;
+        }
+
+        $callbackData = (string) data_get($storedMessage->raw_payload, 'callback_query.data', '');
+
+        return str_starts_with($callbackData, 'scenario:')
+            || str_starts_with($callbackData, 'v3b:');
     }
 
     private function isVipIbizaParameterStartMessage(Message $storedMessage): bool

@@ -306,7 +306,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
             'update_id' => 941,
             'callback_query' => [
                 'id' => 'callback-v3-1',
-                'data' => 'v3b:btn_catalog',
+                'data' => 'v3b:start:btn_catalog',
                 'from' => [
                     'id' => 200,
                     'username' => 'telegram_user',
@@ -328,7 +328,7 @@ class BotIncomingMessageNormalizerTest extends TestCase
 
         $this->assertInstanceOf(IncomingBotMessage::class, $message);
         $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
-        $this->assertSame('v3b:btn_catalog', $message->text);
+        $this->assertSame('v3b:start:btn_catalog', $message->text);
         $this->assertNull($message->messageParameter);
         $this->assertSame('callback-v3-1', $message->externalMessageId);
         $this->assertSame('941', $message->providerEventKey);
