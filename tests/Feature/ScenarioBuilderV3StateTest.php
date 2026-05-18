@@ -3,9 +3,13 @@
 namespace Tests\Feature;
 
 use App\Models\Channel;
+use App\Models\Dialog;
+use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
+use App\Models\ScenarioRun;
+use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\User;
 use App\Services\Scenarios\CreateScenarioAction;
@@ -518,6 +522,106 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame(5, $runtimeDelay['value'] ?? null);
         $this->assertSame('min', $runtimeDelay['unit'] ?? null);
         $this->assertTrue($runtimeDelay['cancel_if_left_source_block'] ?? false);
+    }
+
+    public function test_get_state_returns_delayed_transition_diagnostics_for_edge(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_edge_diagnostics',
+            'name' => 'V3 Edge Diagnostics',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $conditionPayload = $this->edgePayload(null, 'Авто');
+        $conditionPayload['mode'] = 'automatic';
+        $conditionPayload['delay'] = [
+            'value' => 15,
+            'unit' => 'sec',
+            'cancel_if_left_source_block' => true,
+        ];
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+                ],
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_target',
+                    'type' => 'state',
+                    'title' => 'Цель',
+                    'position' => ['x' => 460, 'y' => 64],
+                    'settings_payload' => $this->messageSettings('Цель'),
+                ],
+            ], [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk()
+            ->json();
+
+        $publishedState = $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk()
+            ->json();
+
+        $scenario->refresh()->load('publishedVersion');
+        $publishedVersion = $scenario->publishedVersion;
+        $publishedEdge = $publishedVersion?->builderEdges()->firstOrFail();
+        $edgeKey = (string) data_get($publishedState, 'builder.edges.0.condition_payload.edge_key');
+        $dialog = Dialog::factory()->create(['channel_id' => $channel->id]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+        ]);
+        $run = ScenarioRun::query()->create([
+            'scenario_code' => $scenario->code,
+            'dialog_id' => $dialog->id,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => (string) $publishedEdge->from_scenario_builder_block_id,
+            'state_payload' => [
+                'v3' => [
+                    'published_version_id' => $publishedVersion?->id,
+                    'current_block_id' => (string) $publishedEdge->from_scenario_builder_block_id,
+                ],
+            ],
+            'started_at' => now(),
+        ]);
+        $transition = ScenarioV3ScheduledTransition::query()->create([
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'inbound_message_id' => $message->id,
+            'scenario_code' => $scenario->code,
+            'published_version_id' => $publishedVersion?->id,
+            'edge_key' => $edgeKey,
+            'edge_id' => (string) $publishedEdge->id,
+            'source_block_id' => (string) $publishedEdge->from_scenario_builder_block_id,
+            'target_block_id' => (string) $publishedEdge->to_scenario_builder_block_id,
+            'delay_payload' => ['type' => 'relative', 'value' => 15, 'unit' => 'sec', 'cancel_if_left_source_block' => true],
+            'scheduled_for' => now()->addSeconds(15),
+            'status' => ScenarioV3ScheduledTransition::STATUS_SCHEDULED,
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->assertJsonPath('builder.edges.0.diagnostics.scheduled_transitions.0.id', $transition->id)
+            ->assertJsonPath('builder.edges.0.diagnostics.scheduled_transitions.0.status', ScenarioV3ScheduledTransition::STATUS_SCHEDULED)
+            ->assertJsonPath('builder.edges.0.diagnostics.scheduled_transitions.0.status_label', 'Запланирован')
+            ->assertJsonPath('builder.edges.0.diagnostics.scheduled_transitions.0.dialog_id', $dialog->id);
     }
 
     public function test_put_state_syncs_start_condition_channels_and_conditions(): void

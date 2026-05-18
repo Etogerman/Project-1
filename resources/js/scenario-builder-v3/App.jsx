@@ -837,6 +837,32 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }
     }
 
+    async function refreshBuilderState() {
+        const blockBeforeRefresh = selectedBlockKey;
+        const edgeBeforeRefresh = selectedEdgeKey;
+
+        setError(null);
+        setNotice(null);
+
+        try {
+            const response = await loadScenarioBuilderState(stateUrl);
+            const refreshedBlocks = response.builder?.blocks ?? [];
+            const refreshedEdges = response.builder?.edges ?? [];
+
+            setState(response);
+            setSelectedBlockKey(refreshedBlocks.some((block) => block.client_key === blockBeforeRefresh) ? blockBeforeRefresh : null);
+            setSelectedEdgeKey(refreshedEdges.some((edge) => edge.client_key === edgeBeforeRefresh) ? edgeBeforeRefresh : null);
+            setStatus('ready');
+            setNotice('Статусы переходов обновлены');
+        } catch (requestError) {
+            setError(errorText(requestError));
+
+            if (requestError.status === 409) {
+                setStatus('conflict');
+            }
+        }
+    }
+
     function openValidationIssueBlock(issue) {
         setSelectedBlockKey(issue.blockKey);
         setSelectedEdgeKey(null);
@@ -1058,6 +1084,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                 onRemove={() => removeEdge(selectedEdge.client_key)}
                                 onUpdateConditionPayload={(nextPayload) => updateEdgeConditionPayload(selectedEdge.client_key, nextPayload)}
                                 onCopyEdgeId={copyEdgeId}
+                                onRefreshDiagnostics={refreshBuilderState}
                             />
                         ) : (
                             <BlockPanel
@@ -1457,6 +1484,44 @@ function copyableEdgeId(edge) {
     }
 
     return String(edge?.client_key ?? '').replace(/^tmp_edge_/, '').replace(/^edge_/, '').slice(0, 8);
+}
+
+function edgeScheduledTransitions(edge) {
+    const transitions = edge?.diagnostics?.scheduled_transitions;
+
+    return Array.isArray(transitions) ? transitions : [];
+}
+
+function edgeTransitionStatusLabel(status) {
+    const labels = {
+        scheduled: 'Запланирован',
+        processing: 'Выполняется',
+        passed: 'Выполнен',
+        cancelled: 'Отменён',
+        failed: 'Ошибка',
+        limit_reached: 'Лимит достигнут',
+    };
+
+    return labels[status] ?? 'Неизвестно';
+}
+
+function formatDateTime(value) {
+    if (! value) {
+        return '—';
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return '—';
+    }
+
+    return date.toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 
 function blockDisplayId(block) {
@@ -2313,7 +2378,7 @@ function ModuleIcon({ type }) {
     return <AnalyticsIcon />;
 }
 
-function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId }) {
+function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isButton = isButtonEdge(edge);
@@ -2324,6 +2389,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const matchType = match.type ?? 'any_inbound';
     const captureEnabled = capture.enabled === true;
     const delay = normalizedEdgeDelay(payload.delay);
+    const scheduledTransitions = edgeScheduledTransitions(edge);
 
     function updatePayload(patch) {
         onUpdateConditionPayload((current) => ({
@@ -2554,6 +2620,42 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                             />
                             <span>Выполнить только если клиент всё ещё в этом блоке</span>
                         </label>
+                        <div className="ac-v3-builder__edge-diagnostics">
+                            <div className="ac-v3-builder__edge-diagnostics-head">
+                                <span>Отложенные переходы</span>
+                                <button type="button" onClick={onRefreshDiagnostics}>Обновить</button>
+                            </div>
+                            {delay.value > 0 ? (
+                                scheduledTransitions.length > 0 ? (
+                                    <div className="ac-v3-builder__edge-diagnostics-list">
+                                        {scheduledTransitions.map((transition) => (
+                                            <div
+                                                key={transition.id}
+                                                className={`ac-v3-builder__edge-diagnostics-item is-${transition.status ?? 'unknown'}`}
+                                            >
+                                                <div>
+                                                    <strong>{transition.status_label ?? edgeTransitionStatusLabel(transition.status)}</strong>
+                                                    <span>#{transition.id} · диалог #{transition.dialog_id}</span>
+                                                </div>
+                                                <div>
+                                                    <span>План: {formatDateTime(transition.scheduled_for)}</span>
+                                                    {transition.finished_at ? (
+                                                        <span>Финиш: {formatDateTime(transition.finished_at)}</span>
+                                                    ) : null}
+                                                </div>
+                                                {transition.error_message ? (
+                                                    <p>{transition.error_message}</p>
+                                                ) : null}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="ac-v3-builder__edge-diagnostics-empty">Переходов по этой стрелке пока нет.</p>
+                                )
+                            ) : (
+                                <p className="ac-v3-builder__edge-diagnostics-empty">Для задержки 0 секунд переход выполняется сразу.</p>
+                            )}
+                        </div>
                     </>
                 ) : null}
                 <button type="button" className="ac-v3-builder__danger" onClick={onRemove}>Удалить связь</button>

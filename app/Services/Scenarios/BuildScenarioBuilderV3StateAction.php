@@ -7,6 +7,7 @@ use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioBuilderEdge;
+use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\User;
 use Carbon\CarbonImmutable;
@@ -157,6 +158,7 @@ class BuildScenarioBuilderV3StateAction
             ->map(fn (ScenarioBuilderEdge $edge): array => $this->edgeToBuilderState($edge))
             ->values()
             ->all();
+        $edges = $this->edgesWithRuntimeDiagnostics($version, $edges);
 
         return [
             'schema_version' => self::SCHEMA_VERSION,
@@ -410,6 +412,90 @@ class BuildScenarioBuilderV3StateAction
                 'client_key' => $edge->to_scenario_builder_block_id !== null ? 'block_'.$edge->to_scenario_builder_block_id : null,
             ],
             'condition_payload' => $conditionPayload,
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $edges
+     * @return list<array<string, mixed>>
+     */
+    private function edgesWithRuntimeDiagnostics(ScenarioVersion $version, array $edges): array
+    {
+        $edgeKeys = collect($edges)
+            ->map(fn (array $edge): string => trim((string) data_get($edge, 'condition_payload.edge_key', '')))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($edgeKeys->isEmpty()) {
+            return array_map(fn (array $edge): array => $this->edgeWithEmptyDiagnostics($edge), $edges);
+        }
+
+        $scenario = $version->scenario()->with('publishedVersion')->first();
+        $publishedVersionId = $scenario?->publishedVersion?->id;
+
+        if ($scenario === null || $publishedVersionId === null) {
+            return array_map(fn (array $edge): array => $this->edgeWithEmptyDiagnostics($edge), $edges);
+        }
+
+        $transitionsByEdgeKey = ScenarioV3ScheduledTransition::query()
+            ->where('scenario_code', $scenario->code)
+            ->where('published_version_id', $publishedVersionId)
+            ->whereIn('edge_key', $edgeKeys->all())
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get()
+            ->groupBy('edge_key');
+
+        return array_map(function (array $edge) use ($transitionsByEdgeKey): array {
+            $edgeKey = trim((string) data_get($edge, 'condition_payload.edge_key', ''));
+            $transitions = $transitionsByEdgeKey
+                ->get($edgeKey, collect())
+                ->take(5)
+                ->map(fn (ScenarioV3ScheduledTransition $transition): array => $this->scheduledTransitionToBuilderState($transition))
+                ->values()
+                ->all();
+
+            $edge['diagnostics'] = [
+                'scheduled_transitions' => $transitions,
+            ];
+
+            return $edge;
+        }, $edges);
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     * @return array<string, mixed>
+     */
+    private function edgeWithEmptyDiagnostics(array $edge): array
+    {
+        $edge['diagnostics'] = [
+            'scheduled_transitions' => [],
+        ];
+
+        return $edge;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function scheduledTransitionToBuilderState(ScenarioV3ScheduledTransition $transition): array
+    {
+        return [
+            'id' => (int) $transition->id,
+            'status' => (string) $transition->status,
+            'status_label' => $transition->statusLabel(),
+            'scenario_run_id' => (int) $transition->scenario_run_id,
+            'dialog_id' => (int) $transition->dialog_id,
+            'published_version_id' => (int) $transition->published_version_id,
+            'source_block_id' => (string) $transition->source_block_id,
+            'target_block_id' => (string) $transition->target_block_id,
+            'scheduled_for' => $transition->scheduled_for?->toJSON(),
+            'processing_started_at' => $transition->processing_started_at?->toJSON(),
+            'finished_at' => $transition->finished_at?->toJSON(),
+            'created_at' => $transition->created_at?->toJSON(),
+            'error_message' => filled($transition->error_message) ? (string) $transition->error_message : null,
         ];
     }
 

@@ -1701,6 +1701,18 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ProcessScenarioV3ScheduledTransitionJob::dispatch($transition->id, $run->id)
             ->delay($scheduledFor)
             ->afterCommit();
+
+        Log::info('scenario.v3.delayed_transition.scheduled', [
+            'transition_id' => $transition->id,
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $message->dialog_id,
+            'published_version_id' => $this->publishedVersion->id,
+            'edge_key' => $transition->edge_key,
+            'source_block_id' => $sourceBlockId,
+            'target_block_id' => $targetBlockId,
+            'scheduled_for' => $scheduledFor->toJSON(),
+        ]);
     }
 
     private function claimScheduledV3Transition(ScenarioV3ScheduledTransition $transition): ?ScenarioV3ScheduledTransition
@@ -1864,6 +1876,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'finished_at' => now(),
             'error_message' => $errorMessage,
         ])->save();
+
+        Log::info('scenario.v3.delayed_transition.finished', [
+            'transition_id' => $transition->id,
+            'status' => $status,
+            'scenario_code' => $transition->scenario_code,
+            'scenario_run_id' => $transition->scenario_run_id,
+            'dialog_id' => $transition->dialog_id,
+            'published_version_id' => $transition->published_version_id,
+            'edge_key' => $transition->edge_key,
+            'error_message' => $errorMessage,
+        ]);
     }
 
     private function v3ScheduledTransitionRequiresSourceBlock(ScenarioV3ScheduledTransition $transition): bool

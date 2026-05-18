@@ -1872,6 +1872,99 @@
     color: var(--text-1);
 }
 
+.ac-v3-builder__edge-diagnostics {
+    display: grid;
+    gap: 7px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: color-mix(in oklch, var(--edge-auto) 4%, var(--surface));
+    padding: 9px;
+}
+
+.ac-v3-builder__edge-diagnostics-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--text-3);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.ac-v3-builder__edge-diagnostics-head button {
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--text-2);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 8px;
+    text-transform: none;
+}
+
+.ac-v3-builder__edge-diagnostics-list {
+    display: grid;
+    gap: 6px;
+}
+
+.ac-v3-builder__edge-diagnostics-item {
+    display: grid;
+    gap: 4px;
+    border-left: 3px solid var(--text-3);
+    border-radius: 7px;
+    background: var(--surface);
+    padding: 7px 8px;
+}
+
+.ac-v3-builder__edge-diagnostics-item.is-scheduled,
+.ac-v3-builder__edge-diagnostics-item.is-processing {
+    border-left-color: var(--edge-auto);
+}
+
+.ac-v3-builder__edge-diagnostics-item.is-passed {
+    border-left-color: var(--success);
+}
+
+.ac-v3-builder__edge-diagnostics-item.is-cancelled,
+.ac-v3-builder__edge-diagnostics-item.is-limit_reached {
+    border-left-color: var(--warning);
+}
+
+.ac-v3-builder__edge-diagnostics-item.is-failed {
+    border-left-color: var(--danger);
+}
+
+.ac-v3-builder__edge-diagnostics-item > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.ac-v3-builder__edge-diagnostics-item strong {
+    color: var(--text-1);
+    font-size: 12px;
+}
+
+.ac-v3-builder__edge-diagnostics-item span,
+.ac-v3-builder__edge-diagnostics-empty {
+    color: var(--text-3);
+    font-size: 11px;
+}
+
+.ac-v3-builder__edge-diagnostics-item p,
+.ac-v3-builder__edge-diagnostics-empty {
+    margin: 0;
+}
+
+.ac-v3-builder__edge-diagnostics-item p {
+    color: var(--danger);
+    font-size: 11px;
+}
+
 .ac-v3-builder__field-row {
     align-items: center;
     grid-template-columns: minmax(0, 1fr) 92px;

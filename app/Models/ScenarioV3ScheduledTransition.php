@@ -81,6 +81,26 @@ class ScenarioV3ScheduledTransition extends Model
         ];
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function statusLabels(): array
+    {
+        return [
+            self::STATUS_SCHEDULED => 'Запланирован',
+            self::STATUS_PROCESSING => 'Выполняется',
+            self::STATUS_PASSED => 'Выполнен',
+            self::STATUS_CANCELLED => 'Отменён',
+            self::STATUS_FAILED => 'Ошибка',
+            self::STATUS_LIMIT_REACHED => 'Лимит достигнут',
+        ];
+    }
+
+    public function statusLabel(): string
+    {
+        return self::statusLabels()[$this->status] ?? 'Неизвестно';
+    }
+
     public function scenarioRun(): BelongsTo
     {
         return $this->belongsTo(ScenarioRun::class);
