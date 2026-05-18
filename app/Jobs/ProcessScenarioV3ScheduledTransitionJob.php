@@ -11,6 +11,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
 class ProcessScenarioV3ScheduledTransitionJob implements ShouldQueue
 {
@@ -63,12 +64,41 @@ class ProcessScenarioV3ScheduledTransitionJob implements ShouldQueue
             return;
         }
 
-        $runtime = $scenarioRegistry->makeRuntime($transition->scenario_code);
+        $runtime = $scenarioRegistry->makeRuntimeForVersion(
+            $transition->scenario_code,
+            (int) $transition->published_version_id,
+        );
 
         if (! $runtime instanceof GenericDbScenarioRuntime) {
+            $this->cancelTransition($transition, 'Версия сценария недоступна.');
+
             return;
         }
 
         $runtime->handleScheduledV3Transition($transition);
+    }
+
+    private function cancelTransition(ScenarioV3ScheduledTransition $transition, string $errorMessage): void
+    {
+        if ($transition->status !== ScenarioV3ScheduledTransition::STATUS_SCHEDULED) {
+            return;
+        }
+
+        $transition->forceFill([
+            'status' => ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+            'finished_at' => now(),
+            'error_message' => $errorMessage,
+        ])->save();
+
+        Log::info('scenario.v3.delayed_transition.finished', [
+            'transition_id' => $transition->id,
+            'status' => ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+            'scenario_code' => $transition->scenario_code,
+            'scenario_run_id' => $transition->scenario_run_id,
+            'dialog_id' => $transition->dialog_id,
+            'published_version_id' => $transition->published_version_id,
+            'edge_key' => $transition->edge_key,
+            'error_message' => $errorMessage,
+        ]);
     }
 }

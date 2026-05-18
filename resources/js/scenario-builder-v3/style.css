@@ -142,6 +142,15 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     text-overflow: ellipsis;
 }
 
+.ac-v3-builder__server-time {
+    border-radius: 999px;
+    background: #eef6ff;
+    color: #1d4f8f;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+}
+
 .ac-v3-builder__top-actions {
     display: flex;
     min-width: max-content;
@@ -2069,7 +2078,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     min-height: 34px;
     align-items: center;
     gap: 3px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
     border-radius: 9px;
     background: #f4f3f1;
     padding: 3px;

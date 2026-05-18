@@ -27,6 +27,7 @@ use App\Services\Contacts\NormalizePhoneNumberAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Messages\PrepareMessageContentAction;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -1625,8 +1626,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 continue;
             }
 
-            if ($run instanceof ScenarioRun && $sourceBlockId !== null && $this->v3AutomaticEdgeDelaySeconds($edge) > 0) {
-                $this->scheduleV3DelayedAutomaticTransition($message, $run, $edge, $sourceBlockId);
+            if ($run instanceof ScenarioRun && $sourceBlockId !== null && $this->v3AutomaticEdgeUsesQueue($edge)) {
+                $scheduledFor = $this->v3AutomaticEdgeScheduledFor($edge);
+
+                if ($scheduledFor !== null) {
+                    $this->scheduleV3DelayedAutomaticTransition($message, $run, $edge, $sourceBlockId, $scheduledFor);
+                }
 
                 continue;
             }
@@ -1665,14 +1670,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ScenarioRun $run,
         array $edge,
         string $sourceBlockId,
+        \DateTimeInterface $scheduledFor,
     ): void {
         if ($message->dialog_id === null) {
-            return;
-        }
-
-        $delaySeconds = $this->v3AutomaticEdgeDelaySeconds($edge);
-
-        if ($delaySeconds < 1) {
             return;
         }
 
@@ -1682,7 +1682,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return;
         }
 
-        $scheduledFor = now()->addSeconds($delaySeconds);
         $transition = ScenarioV3ScheduledTransition::query()->create([
             'scenario_run_id' => $run->id,
             'dialog_id' => $message->dialog_id,
@@ -1711,7 +1710,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'edge_key' => $transition->edge_key,
             'source_block_id' => $sourceBlockId,
             'target_block_id' => $targetBlockId,
-            'scheduled_for' => $scheduledFor->toJSON(),
+            'scheduled_for' => CarbonImmutable::instance($scheduledFor)->toJSON(),
         ]);
     }
 
@@ -1936,18 +1935,82 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     /**
      * @param  array<string, mixed>  $edge
-     * @return array{type: string, value: int, unit: string, cancel_if_left_source_block: bool}
+     */
+    private function v3AutomaticEdgeUsesQueue(array $edge): bool
+    {
+        $delay = $this->v3EdgeDelay($edge);
+
+        return ($delay['type'] ?? null) === 'scheduled'
+            || $this->v3AutomaticEdgeDelaySeconds($edge) > 0;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3AutomaticEdgeScheduledFor(array $edge): ?CarbonImmutable
+    {
+        $delay = $this->v3EdgeDelay($edge);
+
+        if (($delay['type'] ?? null) === 'scheduled') {
+            try {
+                $scheduledFor = CarbonImmutable::parse((string) ($delay['scheduled_at'] ?? ''), config('app.timezone', 'UTC'));
+            } catch (Throwable $throwable) {
+                Log::warning('scenario.v3.delayed_transition.invalid_scheduled_at', [
+                    'scenario_code' => $this->code(),
+                    'published_version_id' => $this->publishedVersion->id,
+                    'edge_key' => (string) ($edge['edge_key'] ?? $edge['id'] ?? ''),
+                    'scheduled_at' => $delay['scheduled_at'] ?? null,
+                    'error' => $throwable->getMessage(),
+                ]);
+
+                return null;
+            }
+
+            if ($scheduledFor->lessThanOrEqualTo(CarbonImmutable::now())) {
+                Log::warning('scenario.v3.delayed_transition.scheduled_at_in_past', [
+                    'scenario_code' => $this->code(),
+                    'published_version_id' => $this->publishedVersion->id,
+                    'edge_key' => (string) ($edge['edge_key'] ?? $edge['id'] ?? ''),
+                    'scheduled_at' => $scheduledFor->toJSON(),
+                ]);
+
+                return null;
+            }
+
+            return $scheduledFor->setTimezone(config('app.timezone', 'UTC'));
+        }
+
+        $delaySeconds = $this->v3AutomaticEdgeDelaySeconds($edge);
+
+        return $delaySeconds > 0 ? CarbonImmutable::now()->addSeconds($delaySeconds) : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     * @return array{type: string, value: int, unit: string, scheduled_at: string|null, cancel_if_left_source_block: bool}
      */
     private function v3EdgeDelay(array $edge): array
     {
         $delay = is_array($edge['delay'] ?? null) ? $edge['delay'] : [];
+        $type = (string) ($delay['type'] ?? '');
         $value = max(0, (int) ($delay['value'] ?? 0));
         $unit = $value > 0 && ($delay['unit'] ?? 'sec') === 'min' ? 'min' : 'sec';
+
+        if ($type === 'scheduled') {
+            return [
+                'type' => 'scheduled',
+                'value' => 0,
+                'unit' => 'sec',
+                'scheduled_at' => filled($delay['scheduled_at'] ?? null) ? (string) $delay['scheduled_at'] : null,
+                'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
+            ];
+        }
 
         return [
             'type' => $value > 0 ? 'relative' : 'immediate',
             'value' => $value,
             'unit' => $unit,
+            'scheduled_at' => null,
             'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
         ];
     }

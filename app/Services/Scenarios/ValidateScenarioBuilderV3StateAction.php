@@ -4,8 +4,10 @@ namespace App\Services\Scenarios;
 
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class ValidateScenarioBuilderV3StateAction
 {
@@ -60,6 +62,8 @@ class ValidateScenarioBuilderV3StateAction
     private const MAX_TRANSITION_LIMIT = 100000;
 
     private const EDGE_DELAY_UNITS = ['sec', 'min'];
+
+    private const EDGE_DELAY_TYPES = ['immediate', 'relative', 'scheduled'];
 
     private const MAX_EDGE_DELAY_VALUE = 100000;
 
@@ -575,7 +579,7 @@ class ValidateScenarioBuilderV3StateAction
     }
 
     /**
-     * @return array{type: string, value: int, unit: string, cancel_if_left_source_block: bool}
+     * @return array{type: string, value: int, unit: string, scheduled_at: string|null, cancel_if_left_source_block: bool}
      */
     private function normalizeEdgeDelay(mixed $delay, string $mode, int $edgeIndex): array
     {
@@ -586,31 +590,72 @@ class ValidateScenarioBuilderV3StateAction
                 'type' => 'immediate',
                 'value' => 0,
                 'unit' => 'sec',
+                'scheduled_at' => null,
                 'cancel_if_left_source_block' => true,
             ];
         }
 
+        $type = trim((string) ($delay['type'] ?? ''));
         $value = $this->nonNegativeIntegerValue(
             $delay['value'] ?? 0,
             "builder.edges.$edgeIndex.condition_payload.delay.value",
             self::MAX_EDGE_DELAY_VALUE,
         );
         $unit = trim((string) ($delay['unit'] ?? 'sec'));
+        $type = $type !== '' ? $type : ($value > 0 ? 'relative' : 'immediate');
+
+        if (! in_array($type, self::EDGE_DELAY_TYPES, true)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.delay.type", 'Invalid delay type.');
+        }
 
         if (! in_array($unit, self::EDGE_DELAY_UNITS, true)) {
             $this->fail("builder.edges.$edgeIndex.condition_payload.delay.unit", 'Invalid delay unit.');
         }
 
+        if ($type === 'scheduled') {
+            $scheduledAt = $this->normalizeScheduledAt(
+                $delay['scheduled_at'] ?? null,
+                "builder.edges.$edgeIndex.condition_payload.delay.scheduled_at",
+            );
+
+            return [
+                'type' => 'scheduled',
+                'value' => 0,
+                'unit' => 'sec',
+                'scheduled_at' => $scheduledAt,
+                'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
+            ];
+        }
+
         if ($value === 0) {
             $unit = 'sec';
+            $type = 'immediate';
+        } else {
+            $type = 'relative';
         }
 
         return [
-            'type' => $value > 0 ? 'relative' : 'immediate',
+            'type' => $type,
             'value' => $value,
             'unit' => $unit,
+            'scheduled_at' => null,
             'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
         ];
+    }
+
+    private function normalizeScheduledAt(mixed $value, string $key): string
+    {
+        $scheduledAt = trim((string) $value);
+
+        if ($scheduledAt === '') {
+            $this->fail($key, 'Scheduled date-time is required.');
+        }
+
+        try {
+            return CarbonImmutable::parse($scheduledAt, config('app.timezone', 'UTC'))->toIso8601String();
+        } catch (Throwable) {
+            $this->fail($key, 'Invalid scheduled date-time.');
+        }
     }
 
     /**

@@ -10,6 +10,7 @@ use App\Models\ScenarioVersion;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class CompileScenarioBuilderV3RuntimeAction
 {
@@ -407,13 +408,30 @@ class CompileScenarioBuilderV3RuntimeAction
 
     /**
      * @param  array<string, mixed>  $conditionPayload
-     * @return array{type: string, value: int, unit: string, cancel_if_left_source_block: bool}
+     * @return array{type: string, value: int, unit: string, scheduled_at: string|null, cancel_if_left_source_block: bool}
      */
     private function compileEdgeDelay(array $conditionPayload): array
     {
         $delay = is_array($conditionPayload['delay'] ?? null) ? $conditionPayload['delay'] : [];
+        $type = (string) ($delay['type'] ?? '');
         $value = max(0, (int) ($delay['value'] ?? 0));
         $unit = in_array(($delay['unit'] ?? 'sec'), ['sec', 'min'], true) ? (string) $delay['unit'] : 'sec';
+
+        if ($type === 'scheduled') {
+            $scheduledAt = $this->compiledScheduledAt($delay['scheduled_at'] ?? null);
+
+            if ($scheduledAt->lessThanOrEqualTo(CarbonImmutable::now())) {
+                $this->fail('builder.edges', 'Дата и время automatic-стрелки должны быть в будущем.');
+            }
+
+            return [
+                'type' => 'scheduled',
+                'value' => 0,
+                'unit' => 'sec',
+                'scheduled_at' => $scheduledAt->toIso8601String(),
+                'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
+            ];
+        }
 
         if ($value === 0) {
             $unit = 'sec';
@@ -423,8 +441,24 @@ class CompileScenarioBuilderV3RuntimeAction
             'type' => $value > 0 ? 'relative' : 'immediate',
             'value' => $value,
             'unit' => $unit,
+            'scheduled_at' => null,
             'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
         ];
+    }
+
+    private function compiledScheduledAt(mixed $value): CarbonImmutable
+    {
+        $scheduledAt = trim((string) $value);
+
+        if ($scheduledAt === '') {
+            $this->fail('builder.edges', 'Для automatic-стрелки в дату и время нужно указать дату запуска.');
+        }
+
+        try {
+            return CarbonImmutable::parse($scheduledAt, config('app.timezone', 'UTC'));
+        } catch (Throwable) {
+            $this->fail('builder.edges', 'Некорректная дата запуска automatic-стрелки.');
+        }
     }
 
     /**

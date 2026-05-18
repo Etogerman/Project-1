@@ -39,7 +39,8 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.active_sheet_id', 'main')
             ->assertJsonPath('builder.blocks', [])
             ->assertJsonPath('builder.edges', [])
-            ->assertJsonPath('builder.visible_scope.block_ids', []);
+            ->assertJsonPath('builder.visible_scope.block_ids', [])
+            ->assertJsonPath('server.timezone', config('app.timezone', 'UTC'));
     }
 
     public function test_get_state_adapts_existing_start_block_without_writing_database(): void
@@ -461,6 +462,106 @@ class ScenarioBuilderV3StateTest extends TestCase
             ]);
     }
 
+    public function test_put_state_normalizes_scheduled_automatic_edge_delay_settings(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_scheduled_edge_delay',
+            'name' => 'V3 Scheduled Edge Delay',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $scheduledAt = CarbonImmutable::now()->addDay()->startOfMinute();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Источник'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Цель'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Авто');
+        $conditionPayload['mode'] = 'automatic';
+        $conditionPayload['delay'] = [
+            'type' => 'scheduled',
+            'scheduled_at' => $scheduledAt->toIso8601String(),
+            'cancel_if_left_source_block' => false,
+        ];
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk();
+
+        $this->assertSame('scheduled', $response->json('builder.edges.0.condition_payload.delay.type'));
+        $this->assertSame(0, $response->json('builder.edges.0.condition_payload.delay.value'));
+        $this->assertSame('sec', $response->json('builder.edges.0.condition_payload.delay.unit'));
+        $this->assertTrue(CarbonImmutable::parse($response->json('builder.edges.0.condition_payload.delay.scheduled_at'))->equalTo($scheduledAt));
+        $this->assertFalse($response->json('builder.edges.0.condition_payload.delay.cancel_if_left_source_block'));
+    }
+
+    public function test_put_state_rejects_invalid_scheduled_automatic_edge_delay(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_invalid_scheduled_edge_delay',
+            'name' => 'V3 Invalid Scheduled Edge Delay',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Источник'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Цель'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Авто');
+        $conditionPayload['mode'] = 'automatic';
+        $conditionPayload['delay'] = [
+            'type' => 'scheduled',
+            'scheduled_at' => 'not-a-date',
+            'cancel_if_left_source_block' => true,
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.edges.0.condition_payload.delay.scheduled_at',
+            ]);
+    }
+
     public function test_publish_includes_relative_automatic_delay_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
@@ -522,6 +623,122 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame(5, $runtimeDelay['value'] ?? null);
         $this->assertSame('min', $runtimeDelay['unit'] ?? null);
         $this->assertTrue($runtimeDelay['cancel_if_left_source_block'] ?? false);
+    }
+
+    public function test_publish_includes_scheduled_automatic_delay_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_scheduled_edge',
+            'name' => 'V3 Publish Scheduled Edge',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $scheduledAt = CarbonImmutable::now()->addDay()->startOfMinute();
+        $conditionPayload = $this->edgePayload(null, 'Авто');
+        $conditionPayload['mode'] = 'automatic';
+        $conditionPayload['delay'] = [
+            'type' => 'scheduled',
+            'scheduled_at' => $scheduledAt->toIso8601String(),
+            'cancel_if_left_source_block' => true,
+        ];
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+                ],
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_target',
+                    'type' => 'state',
+                    'title' => 'Цель',
+                    'position' => ['x' => 460, 'y' => 64],
+                    'settings_payload' => $this->messageSettings('Цель'),
+                ],
+            ], [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $startBlockId = (string) $savedState['id_map']['blocks']['tmp_start'];
+        $runtimeDelay = data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$startBlockId.automatic_edges.0.delay");
+
+        $this->assertSame('scheduled', $runtimeDelay['type'] ?? null);
+        $this->assertSame(0, $runtimeDelay['value'] ?? null);
+        $this->assertSame('sec', $runtimeDelay['unit'] ?? null);
+        $this->assertTrue(CarbonImmutable::parse($runtimeDelay['scheduled_at'] ?? null)->equalTo($scheduledAt));
+        $this->assertTrue($runtimeDelay['cancel_if_left_source_block'] ?? false);
+    }
+
+    public function test_publish_rejects_past_scheduled_automatic_delay(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_past_scheduled_edge',
+            'name' => 'V3 Publish Past Scheduled Edge',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $conditionPayload = $this->edgePayload(null, 'Авто');
+        $conditionPayload['mode'] = 'automatic';
+        $conditionPayload['delay'] = [
+            'type' => 'scheduled',
+            'scheduled_at' => CarbonImmutable::now()->subMinute()->toIso8601String(),
+            'cancel_if_left_source_block' => true,
+        ];
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+                ],
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_target',
+                    'type' => 'state',
+                    'title' => 'Цель',
+                    'position' => ['x' => 460, 'y' => 64],
+                    'settings_payload' => $this->messageSettings('Цель'),
+                ],
+            ], [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['builder.edges']);
     }
 
     public function test_get_state_returns_delayed_transition_diagnostics_for_edge(): void

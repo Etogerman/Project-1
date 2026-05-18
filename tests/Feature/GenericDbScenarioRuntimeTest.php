@@ -913,6 +913,179 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['Стартовый блок', 'Автоматический переход'], $sentTexts);
     }
 
+    public function test_v3_scheduled_automatic_edge_is_scheduled_for_exact_time_and_processed(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3ScheduledTransitionJob::class,
+        ]);
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9471]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9472]]),
+        ]);
+
+        $now = now()->startOfSecond();
+        $this->travelTo($now);
+        $scheduledAt = $now->copy()->addMinutes(10);
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_automatic_scheduled',
+            $this->v3AutomaticRuntimeSchema($channel->id, delay: [
+                'type' => 'scheduled',
+                'value' => 0,
+                'unit' => 'sec',
+                'scheduled_at' => $scheduledAt->toIso8601String(),
+                'cancel_if_left_source_block' => true,
+            ]),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $transition = ScenarioV3ScheduledTransition::query()->firstOrFail();
+
+        Queue::assertPushed(ProcessScenarioV3ScheduledTransitionJob::class, fn (ProcessScenarioV3ScheduledTransitionJob $job): bool => $job->scheduledTransitionId === $transition->id
+            && $job->scenarioRunId === $run->id);
+
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_SCHEDULED, $transition->status);
+        $this->assertSame('start', $run->current_step);
+        $this->assertTrue($transition->scheduled_for->equalTo($scheduledAt));
+
+        (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $transition->refresh();
+        $run->refresh();
+
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_SCHEDULED, $transition->status);
+        $this->assertSame('start', $run->current_step);
+
+        $this->travelTo($scheduledAt);
+        (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $transition->refresh();
+        $dialog->refresh();
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_auto_next';
+
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_PASSED, $transition->status);
+        $this->assertSame('next', $run->current_step);
+        $this->assertSame('next', data_get($run->state_payload, 'v3.current_block_id'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Стартовый блок', 'Автоматический переход'], $sentTexts);
+    }
+
+    public function test_v3_scheduled_automatic_edge_uses_original_published_version_after_republish(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3ScheduledTransitionJob::class,
+        ]);
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9481]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9482]]),
+        ]);
+
+        $now = now()->startOfSecond();
+        $this->travelTo($now);
+        $scheduledAt = $now->copy()->addMinutes(10);
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_automatic_scheduled_republish',
+            $this->v3AutomaticRuntimeSchema($channel->id, delay: [
+                'type' => 'scheduled',
+                'value' => 0,
+                'unit' => 'sec',
+                'scheduled_at' => $scheduledAt->toIso8601String(),
+                'cancel_if_left_source_block' => true,
+            ]),
+        );
+        $firstPublishedVersion = $scenario->publishedVersion()->firstOrFail();
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $transition = ScenarioV3ScheduledTransition::query()->firstOrFail();
+        $secondSchema = $this->v3AutomaticRuntimeSchema($channel->id);
+        data_set($secondSchema, 'builder_v3_runtime.blocks.next.message.text', 'Новая опубликованная версия');
+
+        $firstPublishedVersion->forceFill([
+            'status' => ScenarioVersion::STATUS_ARCHIVED,
+        ])->save();
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 2,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => $secondSchema,
+        ]);
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+
+        $this->travelTo($scheduledAt);
+        (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $transition->refresh();
+
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_PASSED, $transition->status);
+        $this->assertSame((int) $firstPublishedVersion->id, (int) $transition->published_version_id);
+        $this->assertSame('next', $run->current_step);
+
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Стартовый блок', 'Автоматический переход'], $sentTexts);
+    }
+
     public function test_v3_delayed_automatic_edge_cancels_when_dialog_left_source_block(): void
     {
         Queue::fake([

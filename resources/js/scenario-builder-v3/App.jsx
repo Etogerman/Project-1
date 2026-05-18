@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { loadScenarioBuilderState, publishScenarioBuilderState, saveScenarioBuilderState } from './api.js';
 
 const MAIN_SHEET = {
@@ -46,6 +46,12 @@ const EDGE_DELAY_UNIT_OPTIONS = [
     ['sec', 'секунды'],
     ['min', 'минуты'],
 ];
+const EDGE_DELAY_TYPE_OPTIONS = [
+    ['immediate', 'Сразу'],
+    ['relative', 'Через время'],
+    ['scheduled', 'В дату и время'],
+];
+const DIAGNOSTICS_REFRESH_INTERVAL_MS = 10000;
 const LOG_STATUS_FILTERS = [
     ['all', 'Все'],
     ['active', 'В работе'],
@@ -159,6 +165,70 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         };
     }, [stateUrl]);
 
+    const refreshBuilderDiagnostics = useCallback(async ({ quiet = false } = {}) => {
+        if (! quiet) {
+            setError(null);
+            setNotice(null);
+        }
+
+        try {
+            const response = await loadScenarioBuilderState(stateUrl);
+
+            setState((current) => mergeBuilderDiagnostics(current, response));
+            setStatus('ready');
+
+            if (! quiet) {
+                setNotice('Статусы переходов обновлены');
+            }
+
+            return response;
+        } catch (requestError) {
+            if (! quiet) {
+                setError(errorText(requestError));
+
+                if (requestError.status === 409) {
+                    setStatus('conflict');
+                }
+            }
+
+            return null;
+        }
+    }, [stateUrl]);
+
+    useEffect(() => {
+        if (status !== 'ready' || isSaving || isPublishing) {
+            return undefined;
+        }
+
+        let disposed = false;
+        let inFlight = false;
+
+        const refresh = async () => {
+            if (
+                disposed
+                || inFlight
+                || (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+            ) {
+                return;
+            }
+
+            inFlight = true;
+
+            try {
+                await refreshBuilderDiagnostics({ quiet: true });
+            } finally {
+                inFlight = false;
+            }
+        };
+
+        const interval = window.setInterval(refresh, DIAGNOSTICS_REFRESH_INTERVAL_MS);
+
+        return () => {
+            disposed = true;
+            window.clearInterval(interval);
+        };
+    }, [status, isSaving, isPublishing, refreshBuilderDiagnostics]);
+
     const builder = state?.builder ?? null;
     const blocks = builder?.blocks ?? [];
     const edges = builder?.edges ?? [];
@@ -167,6 +237,9 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const activeSheet = activeSheetFrom(builder);
     const view = activeSheet.view ?? MAIN_SHEET.view;
     const revision = builder?.revision ?? null;
+    const serverClock = state?.server ?? null;
+    const serverTimezone = serverClock?.timezone || '';
+    const serverTimezoneLabel = serverClock?.timezone_abbr || serverClock?.utc_offset || '';
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
     const canSave = state?.permissions?.can_update === true && status === 'ready' && ! isSaving && ! isPublishing;
@@ -847,32 +920,6 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }
     }
 
-    async function refreshBuilderState() {
-        const blockBeforeRefresh = selectedBlockKey;
-        const edgeBeforeRefresh = selectedEdgeKey;
-
-        setError(null);
-        setNotice(null);
-
-        try {
-            const response = await loadScenarioBuilderState(stateUrl);
-            const refreshedBlocks = response.builder?.blocks ?? [];
-            const refreshedEdges = response.builder?.edges ?? [];
-
-            setState(response);
-            setSelectedBlockKey(refreshedBlocks.some((block) => block.client_key === blockBeforeRefresh) ? blockBeforeRefresh : null);
-            setSelectedEdgeKey(refreshedEdges.some((edge) => edge.client_key === edgeBeforeRefresh) ? edgeBeforeRefresh : null);
-            setStatus('ready');
-            setNotice('Статусы переходов обновлены');
-        } catch (requestError) {
-            setError(errorText(requestError));
-
-            if (requestError.status === 409) {
-                setStatus('conflict');
-            }
-        }
-    }
-
     function openTransitionEdge(transition) {
         const edge = findEdgeByTransition(edges, transition);
 
@@ -960,6 +1007,11 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 <div className="ac-v3-builder__crumb">
                     <strong>{state?.scenario?.name ?? 'Сценарий'}</strong>
                     {revision ? <em>{revision}</em> : null}
+                    {serverClock?.time ? (
+                        <span className="ac-v3-builder__server-time">
+                            Время сервера: {formatDateTime(serverClock.time, serverTimezoneLabel, serverTimezone)}
+                        </span>
+                    ) : null}
                 </div>
 
                 <div className="ac-v3-builder__top-actions">
@@ -1028,8 +1080,10 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                         edges={edges}
                         statusFilter={logStatusFilter}
                         onStatusFilter={setLogStatusFilter}
-                        onRefresh={refreshBuilderState}
+                        onRefresh={refreshBuilderDiagnostics}
                         onOpenEdge={openTransitionEdge}
+                        timezone={serverTimezone}
+                        timezoneLabel={serverTimezoneLabel}
                     />
                 ) : (
                     <main
@@ -1124,7 +1178,9 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                 onRemove={() => removeEdge(selectedEdge.client_key)}
                                 onUpdateConditionPayload={(nextPayload) => updateEdgeConditionPayload(selectedEdge.client_key, nextPayload)}
                                 onCopyEdgeId={copyEdgeId}
-                                onRefreshDiagnostics={refreshBuilderState}
+                                onRefreshDiagnostics={refreshBuilderDiagnostics}
+                                timezone={serverTimezone}
+                                timezoneLabel={serverTimezoneLabel}
                             />
                         ) : (
                             <BlockPanel
@@ -1175,7 +1231,7 @@ function Notice({ kind, children, onClose }) {
     );
 }
 
-function ScenarioLogs({ transitions, edges, statusFilter, onStatusFilter, onRefresh, onOpenEdge }) {
+function ScenarioLogs({ transitions, edges, statusFilter, onStatusFilter, onRefresh, onOpenEdge, timezone, timezoneLabel }) {
     const items = Array.isArray(transitions) ? transitions : [];
     const filteredItems = items.filter((transition) => logTransitionMatchesFilter(transition, statusFilter));
     const counts = logTransitionCounts(items);
@@ -1215,6 +1271,8 @@ function ScenarioLogs({ transitions, edges, statusFilter, onStatusFilter, onRefr
                             transition={transition}
                             edge={findEdgeByTransition(edges, transition)}
                             onOpenEdge={onOpenEdge}
+                            timezone={timezone}
+                            timezoneLabel={timezoneLabel}
                         />
                     ))}
                 </div>
@@ -1232,12 +1290,12 @@ function ScenarioLogs({ transitions, edges, statusFilter, onStatusFilter, onRefr
     );
 }
 
-function ScenarioLogRow({ transition, edge, onOpenEdge }) {
+function ScenarioLogRow({ transition, edge, onOpenEdge, timezone, timezoneLabel }) {
     return (
         <article className={`ac-v3-builder__log-row is-${transition.status ?? 'unknown'}`}>
             <div className="ac-v3-builder__log-main">
                 <strong>{transition.status_label ?? edgeTransitionStatusLabel(transition.status)}</strong>
-                <span>Переход #{transition.id} · run #{transition.scenario_run_id}</span>
+                <span>Переход #{transition.id} · v{transition.published_version_id} · run #{transition.scenario_run_id}</span>
             </div>
             <div className="ac-v3-builder__log-route">
                 <span>Блок #{transition.source_block_id}</span>
@@ -1245,8 +1303,8 @@ function ScenarioLogRow({ transition, edge, onOpenEdge }) {
                 <span>Блок #{transition.target_block_id}</span>
             </div>
             <div className="ac-v3-builder__log-time">
-                <span>План: {formatDateTime(transition.scheduled_for)}</span>
-                <span>Финиш: {formatDateTime(transition.finished_at)}</span>
+                <span>План: {formatDateTime(transition.scheduled_for, timezoneLabel, timezone)}</span>
+                <span>Финиш: {formatDateTime(transition.finished_at, timezoneLabel, timezone)}</span>
             </div>
             <div className="ac-v3-builder__log-actions">
                 <a href={`/admin/dialogs/${transition.dialog_id}`}>Диалог #{transition.dialog_id}</a>
@@ -1687,7 +1745,7 @@ function logTransitionCounts(items) {
     });
 }
 
-function formatDateTime(value) {
+function formatDateTime(value, timezoneLabel = '', timezone = '') {
     if (! value) {
         return '—';
     }
@@ -1698,12 +1756,31 @@ function formatDateTime(value) {
         return '—';
     }
 
-    return date.toLocaleString('ru-RU', {
+    const options = {
         day: '2-digit',
         month: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-    });
+    };
+
+    if (timezone) {
+        options.timeZone = timezone;
+    }
+
+    let formatted = '';
+
+    try {
+        formatted = date.toLocaleString('ru-RU', options);
+    } catch {
+        formatted = date.toLocaleString('ru-RU', {
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    }
+
+    return timezoneLabel ? `${formatted} ${timezoneLabel}` : formatted;
 }
 
 function blockDisplayId(block) {
@@ -2560,7 +2637,7 @@ function ModuleIcon({ type }) {
     return <AnalyticsIcon />;
 }
 
-function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics }) {
+function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isButton = isButtonEdge(edge);
@@ -2756,35 +2833,91 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                     </>
                 ) : edgeMode === 'automatic' ? (
                     <>
-                        <label className="ac-v3-builder__field-row">
-                            <span>Задержка</span>
-                            <input
-                                type="number"
-                                min="0"
-                                max="100000"
-                                value={delay.value}
-                                onChange={(event) => {
-                                    const value = Math.max(0, Math.floor(Number(event.target.value) || 0));
+                        <div className="ac-v3-builder__edge-mode" role="group" aria-label="Запуск automatic-связи">
+                            {EDGE_DELAY_TYPE_OPTIONS.map(([value, label]) => (
+                                <button
+                                    type="button"
+                                    key={value}
+                                    className={delay.type === value ? 'is-active' : ''}
+                                    onClick={() => {
+                                        if (value === 'immediate') {
+                                            updateDelay({ type: 'immediate', value: 0, unit: 'sec', scheduled_at: null });
 
-                                    updateDelay({
-                                        value,
-                                        type: value > 0 ? 'relative' : 'immediate',
-                                        unit: value > 0 ? delay.unit : 'sec',
-                                    });
-                                }}
-                            />
-                        </label>
-                        <label className="ac-v3-builder__field-row">
-                            <span>Единица</span>
-                            <select
-                                value={delay.unit}
-                                onChange={(event) => updateDelay({ unit: event.target.value })}
-                            >
-                                {EDGE_DELAY_UNIT_OPTIONS.map(([value, label]) => (
-                                    <option key={value} value={value}>{label}</option>
-                                ))}
-                            </select>
-                        </label>
+                                            return;
+                                        }
+
+                                        if (value === 'relative') {
+                                            updateDelay({
+                                                type: 'relative',
+                                                value: Math.max(1, delay.value || 1),
+                                                unit: delay.unit || 'sec',
+                                                scheduled_at: null,
+                                            });
+
+                                            return;
+                                        }
+
+                                        updateDelay({
+                                            type: 'scheduled',
+                                            value: 0,
+                                            unit: 'sec',
+                                            scheduled_at: delay.scheduled_at || defaultScheduledAtIso(),
+                                        });
+                                    }}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                        {delay.type === 'relative' ? (
+                            <>
+                                <label className="ac-v3-builder__field-row">
+                                    <span>Задержка</span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max="100000"
+                                        value={Math.max(1, delay.value || 1)}
+                                        onChange={(event) => {
+                                            const value = Math.max(1, Math.floor(Number(event.target.value) || 1));
+
+                                            updateDelay({
+                                                type: 'relative',
+                                                value,
+                                                unit: delay.unit,
+                                                scheduled_at: null,
+                                            });
+                                        }}
+                                    />
+                                </label>
+                                <label className="ac-v3-builder__field-row">
+                                    <span>Единица</span>
+                                    <select
+                                        value={delay.unit}
+                                        onChange={(event) => updateDelay({ type: 'relative', unit: event.target.value })}
+                                    >
+                                        {EDGE_DELAY_UNIT_OPTIONS.map(([value, label]) => (
+                                            <option key={value} value={value}>{label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </>
+                        ) : null}
+                        {delay.type === 'scheduled' ? (
+                            <label>
+                                <span>Дата и время запуска</span>
+                                <input
+                                    type="datetime-local"
+                                    value={datetimeLocalValue(delay.scheduled_at)}
+                                    onChange={(event) => updateDelay({
+                                        type: 'scheduled',
+                                        scheduled_at: scheduledIsoFromLocalInput(event.target.value),
+                                        value: 0,
+                                        unit: 'sec',
+                                    })}
+                                />
+                            </label>
+                        ) : null}
                         <label className="ac-v3-builder__field-row">
                             <span>Лимит переходов</span>
                             <input
@@ -2807,7 +2940,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                 <span>Отложенные переходы</span>
                                 <button type="button" onClick={onRefreshDiagnostics}>Обновить</button>
                             </div>
-                            {delay.value > 0 ? (
+                            {delay.type !== 'immediate' ? (
                                 scheduledTransitions.length > 0 ? (
                                     <div className="ac-v3-builder__edge-diagnostics-list">
                                         {scheduledTransitions.map((transition) => (
@@ -2817,12 +2950,12 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                             >
                                                 <div>
                                                     <strong>{transition.status_label ?? edgeTransitionStatusLabel(transition.status)}</strong>
-                                                    <span>#{transition.id} · диалог #{transition.dialog_id}</span>
+                                                    <span>#{transition.id} · v{transition.published_version_id} · диалог #{transition.dialog_id}</span>
                                                 </div>
                                                 <div>
-                                                    <span>План: {formatDateTime(transition.scheduled_for)}</span>
+                                                    <span>План: {formatDateTime(transition.scheduled_for, timezoneLabel, timezone)}</span>
                                                     {transition.finished_at ? (
-                                                        <span>Финиш: {formatDateTime(transition.finished_at)}</span>
+                                                        <span>Финиш: {formatDateTime(transition.finished_at, timezoneLabel, timezone)}</span>
                                                     ) : null}
                                                 </div>
                                                 {transition.error_message ? (
@@ -2835,7 +2968,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                     <p className="ac-v3-builder__edge-diagnostics-empty">Переходов по этой стрелке пока нет.</p>
                                 )
                             ) : (
-                                <p className="ac-v3-builder__edge-diagnostics-empty">Для задержки 0 секунд переход выполняется сразу.</p>
+                                <p className="ac-v3-builder__edge-diagnostics-empty">Для режима «Сразу» переход выполняется без очереди.</p>
                             )}
                         </div>
                     </>
@@ -2844,6 +2977,50 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
             </section>
         </div>
     );
+}
+
+function mergeBuilderDiagnostics(current, refreshed) {
+    if (! current) {
+        return refreshed;
+    }
+
+    if (! refreshed?.builder) {
+        return current;
+    }
+
+    const refreshedEdges = refreshed.builder.edges ?? [];
+
+    return {
+        ...current,
+        server: refreshed.server ?? current.server,
+        builder: {
+            ...current.builder,
+            diagnostics: refreshed.builder.diagnostics ?? current.builder?.diagnostics,
+            edges: (current.builder?.edges ?? []).map((edge) => {
+                const diagnostics = findRefreshedEdgeDiagnostics(edge, refreshedEdges);
+
+                return diagnostics ? { ...edge, diagnostics } : edge;
+            }),
+        },
+    };
+}
+
+function findRefreshedEdgeDiagnostics(edge, refreshedEdges) {
+    const key = edgeDiagnosticsKey(edge);
+
+    if (! key) {
+        return null;
+    }
+
+    const refreshedEdge = refreshedEdges.find((item) => edgeDiagnosticsKey(item) === key);
+
+    return refreshedEdge?.diagnostics ?? null;
+}
+
+function edgeDiagnosticsKey(edge) {
+    return edge?.condition_payload?.edge_key
+        || edge?.client_key
+        || (edge?.id ? `id:${edge.id}` : null);
 }
 
 function activeSheetFrom(builder) {
@@ -3267,18 +3444,65 @@ function nextButtonId(rows) {
 
 function normalizedEdgeDelay(delay) {
     const raw = delay && typeof delay === 'object' ? delay : {};
+    const type = EDGE_DELAY_TYPE_OPTIONS.some(([option]) => option === raw.type)
+        ? raw.type
+        : null;
     const rawUnit = typeof raw.unit === 'string' ? raw.unit : 'sec';
     const value = Math.max(0, Math.floor(Number(raw.value) || 0));
     const unit = value > 0 && EDGE_DELAY_UNIT_OPTIONS.some(([option]) => option === rawUnit)
         ? rawUnit
         : 'sec';
+    const scheduledAt = typeof raw.scheduled_at === 'string' && raw.scheduled_at.trim() !== ''
+        ? raw.scheduled_at.trim()
+        : null;
+
+    if (type === 'scheduled') {
+        return {
+            type: 'scheduled',
+            value: 0,
+            unit: 'sec',
+            scheduled_at: scheduledAt || defaultScheduledAtIso(),
+            cancel_if_left_source_block: raw.cancel_if_left_source_block !== false,
+        };
+    }
 
     return {
-        type: value > 0 ? 'relative' : 'immediate',
-        value,
+        type: type === 'relative' && value > 0 ? 'relative' : (value > 0 ? 'relative' : 'immediate'),
+        value: value > 0 ? value : 0,
         unit,
+        scheduled_at: null,
         cancel_if_left_source_block: raw.cancel_if_left_source_block !== false,
     };
+}
+
+function defaultScheduledAtIso() {
+    return new Date(Date.now() + 60 * 60 * 1000).toISOString();
+}
+
+function datetimeLocalValue(value) {
+    if (! value) {
+        return '';
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    const offset = date.getTimezoneOffset() * 60000;
+
+    return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function scheduledIsoFromLocalInput(value) {
+    if (! value) {
+        return null;
+    }
+
+    const date = new Date(value);
+
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function edgePayload(outputId, label) {

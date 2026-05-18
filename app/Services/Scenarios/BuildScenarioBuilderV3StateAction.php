@@ -55,6 +55,7 @@ class BuildScenarioBuilderV3StateAction
                 'can_update' => $user instanceof User && $user->hasRolePermission('scenarios.edit') && $user->can('update', $scenario),
                 'can_publish' => $user instanceof User && $user->hasRolePermission('scenarios.edit') && $user->can('update', $scenario),
             ],
+            'server' => $this->serverClock(),
             'warnings' => [],
             'id_map' => $idMap,
         ];
@@ -103,6 +104,22 @@ class BuildScenarioBuilderV3StateAction
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    /**
+     * @return array{time: string, timezone: string, timezone_abbr: string, utc_offset: string}
+     */
+    private function serverClock(): array
+    {
+        $timezone = (string) config('app.timezone', 'UTC');
+        $now = CarbonImmutable::now($timezone);
+
+        return [
+            'time' => $now->toIso8601String(),
+            'timezone' => $timezone,
+            'timezone_abbr' => $now->format('T'),
+            'utc_offset' => $now->format('P'),
+        ];
     }
 
     /**
@@ -445,7 +462,6 @@ class BuildScenarioBuilderV3StateAction
 
         $transitionsByEdgeKey = ScenarioV3ScheduledTransition::query()
             ->where('scenario_code', $scenarioCode)
-            ->where('published_version_id', $publishedVersionId)
             ->whereIn('edge_key', $edgeKeys->all())
             ->orderByDesc('id')
             ->limit(100)
@@ -482,7 +498,6 @@ class BuildScenarioBuilderV3StateAction
 
         return ScenarioV3ScheduledTransition::query()
             ->where('scenario_code', $scenarioCode)
-            ->where('published_version_id', $publishedVersionId)
             ->orderByDesc('id')
             ->limit(30)
             ->get()
@@ -533,12 +548,23 @@ class BuildScenarioBuilderV3StateAction
             'edge_id' => filled($transition->edge_id) ? (string) $transition->edge_id : null,
             'source_block_id' => (string) $transition->source_block_id,
             'target_block_id' => (string) $transition->target_block_id,
-            'scheduled_for' => $transition->scheduled_for?->toJSON(),
+            'scheduled_for' => $this->scheduledTransitionScheduledFor($transition),
             'processing_started_at' => $transition->processing_started_at?->toJSON(),
             'finished_at' => $transition->finished_at?->toJSON(),
             'created_at' => $transition->created_at?->toJSON(),
             'error_message' => filled($transition->error_message) ? (string) $transition->error_message : null,
         ];
+    }
+
+    private function scheduledTransitionScheduledFor(ScenarioV3ScheduledTransition $transition): ?string
+    {
+        $delay = is_array($transition->delay_payload) ? $transition->delay_payload : [];
+
+        if (($delay['type'] ?? null) === 'scheduled' && filled($delay['scheduled_at'] ?? null)) {
+            return CarbonImmutable::parse((string) $delay['scheduled_at'])->toJSON();
+        }
+
+        return $transition->scheduled_for?->toJSON();
     }
 
     /**
