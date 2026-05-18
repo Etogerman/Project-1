@@ -331,7 +331,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 }
 
 .ac-v3-builder__workbench.is-panel-open {
-    grid-template-columns: 48px minmax(0, 1fr) 420px;
+    grid-template-columns: 48px minmax(0, 1fr) var(--ac-v3-panel-width, 420px);
 }
 
 .ac-v3-builder__toolrail {
@@ -1165,12 +1165,46 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 }
 
 .ac-v3-builder__panel {
+    position: relative;
     min-width: 0;
     overflow-x: hidden;
     overflow-y: auto;
     border-left: 1px solid var(--border);
     background: var(--surface);
     box-shadow: -8px 0 24px rgba(20, 20, 20, 0.04);
+}
+
+.ac-v3-builder .ac-v3-builder__panel-resizer {
+    position: absolute;
+    top: 0;
+    left: -5px;
+    z-index: 18;
+    width: 10px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: ew-resize;
+}
+
+.ac-v3-builder .ac-v3-builder__panel-resizer::after {
+    position: absolute;
+    top: 0;
+    left: 4px;
+    width: 2px;
+    height: 100%;
+    background: transparent;
+    content: '';
+}
+
+.ac-v3-builder .ac-v3-builder__panel-resizer:hover::after,
+.ac-v3-builder .ac-v3-builder__panel-resizer:focus-visible::after {
+    background: var(--accent);
+}
+
+.ac-v3-builder-is-resizing-panel {
+    cursor: ew-resize;
+    user-select: none;
 }
 
 .ac-v3-builder__panel-reopen {
@@ -1996,6 +2030,17 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     white-space: nowrap;
 }
 
+.ac-v3-builder__module-card-summary {
+    overflow: hidden;
+    flex: 0 1 auto;
+    color: var(--text-3);
+    font-size: 11px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .ac-v3-builder__module-card-body {
     display: grid;
     gap: 10px;
@@ -2273,20 +2318,6 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     color: var(--text-1);
 }
 
-.ac-v3-builder__buttons-meta {
-    display: flex;
-    align-items: center;
-    color: var(--text-3);
-    font-size: 11.5px;
-    font-variant-numeric: tabular-nums;
-    padding: 1px 2px;
-}
-
-.ac-v3-builder__buttons-meta b {
-    color: var(--text-2);
-    font-weight: 650;
-}
-
 .ac-v3-builder__buttons-editor {
     display: grid;
     gap: 5px;
@@ -2381,9 +2412,10 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     min-height: 38px !important;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--border-strong) !important;
+    border: 1px solid color-mix(in oklch, var(--text-3) 68%, var(--border)) !important;
     border-radius: 8px !important;
-    background: var(--surface) !important;
+    background: color-mix(in oklch, var(--surface) 88%, var(--text-3)) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58);
     color: var(--text) !important;
     gap: 6px;
     padding: 6px 32px 6px 10px !important;
@@ -2399,8 +2431,9 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 }
 
 .ac-v3-builder__button-edit-trigger:hover {
-    border-color: var(--accent) !important;
-    background: color-mix(in oklch, var(--accent) 5%, var(--surface)) !important;
+    border-color: color-mix(in oklch, var(--accent) 76%, var(--text-3)) !important;
+    background: color-mix(in oklch, var(--accent) 8%, var(--surface)) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62), 0 0 0 1px color-mix(in oklch, var(--accent) 18%, transparent);
 }
 
 .ac-v3-builder__button-edit-trigger span {
@@ -2682,6 +2715,10 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
         grid-column: 1 / -1;
         border-top: 1px solid var(--border);
         border-left: 0;
+    }
+
+    .ac-v3-builder__panel-resizer {
+        display: none;
     }
 
     .ac-v3-builder__notice {

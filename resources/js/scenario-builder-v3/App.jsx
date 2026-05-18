@@ -74,6 +74,10 @@ const EDGE_DELAY_TYPE_OPTIONS = [
     ['relative', 'Через время'],
     ['scheduled', 'В дату и время'],
 ];
+const PANEL_WIDTH_STORAGE_KEY = 'scenario-builder-v3-panel-width';
+const PANEL_WIDTH_DEFAULT = 420;
+const PANEL_WIDTH_MIN = 320;
+const PANEL_WIDTH_MAX = 620;
 const DIAGNOSTICS_REFRESH_INTERVAL_MS = 10000;
 const LOG_STATUS_FILTERS = [
     ['all', 'Все'],
@@ -155,6 +159,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const [pendingButtonFocus, setPendingButtonFocus] = useState(null);
     const [pendingConnection, setPendingConnection] = useState(null);
     const [anchors, setAnchors] = useState({ ports: {} });
+    const [panelWidth, setPanelWidth] = useState(() => storedPanelWidth());
 
     useEffect(() => {
         let isMounted = true;
@@ -463,6 +468,33 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         window.addEventListener('pointerup', stopGlobalDrag, { once: true });
     }
 
+    function startPanelResize(event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const maxWidth = panelMaxWidth();
+
+        dragRef.current = {
+            type: 'panel-resize',
+            start: { x: event.clientX, y: event.clientY },
+            origin: {
+                width: panelWidth,
+                maxWidth,
+            },
+        };
+
+        document.body.classList.add('ac-v3-builder-is-resizing-panel');
+        window.addEventListener('pointermove', handleGlobalPointerMove);
+        window.addEventListener('pointerup', stopGlobalDrag, { once: true });
+    }
+
+    function resetPanelWidth(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        setPanelWidth(PANEL_WIDTH_DEFAULT);
+        savePanelWidth(PANEL_WIDTH_DEFAULT);
+    }
+
     function handleGlobalPointerMove(event) {
         const drag = dragRef.current;
 
@@ -484,6 +516,19 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             return;
         }
 
+        if (drag.type === 'panel-resize') {
+            const nextWidth = clamp(
+                drag.origin.width - (event.clientX - drag.start.x),
+                PANEL_WIDTH_MIN,
+                drag.origin.maxWidth,
+            );
+
+            setPanelWidth(nextWidth);
+            savePanelWidth(nextWidth);
+
+            return;
+        }
+
         updateView({
             ...drag.origin,
             tx: Math.round(drag.origin.tx + event.clientX - drag.start.x),
@@ -494,6 +539,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     function stopGlobalDrag() {
         dragRef.current = null;
         window.removeEventListener('pointermove', handleGlobalPointerMove);
+        document.body.classList.remove('ac-v3-builder-is-resizing-panel');
     }
 
     function handleWheel(event) {
@@ -1097,7 +1143,10 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 </Notice>
             ) : null}
 
-            <div className={`ac-v3-builder__workbench ${isPanelOpen ? 'is-panel-open' : ''}`}>
+            <div
+                className={`ac-v3-builder__workbench ${isPanelOpen ? 'is-panel-open' : ''}`}
+                style={{ '--ac-v3-panel-width': `${panelWidth}px` }}
+            >
                 <ToolRail tool={tool} onTool={setTool} onAddBlock={addBlock} />
 
                 {mode === 'logs' ? (
@@ -1195,6 +1244,14 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
 
                 {isPanelOpen ? (
                     <aside className="ac-v3-builder__panel">
+                        <button
+                            type="button"
+                            className="ac-v3-builder__panel-resizer"
+                            title="Изменить ширину панели"
+                            aria-label="Изменить ширину панели"
+                            onPointerDown={startPanelResize}
+                            onDoubleClick={resetPanelWidth}
+                        />
                         {selectedEdge ? (
                             <EdgePanel
                                 edge={selectedEdge}
@@ -1255,6 +1312,32 @@ function Notice({ kind, children, onClose }) {
             <button type="button" onClick={onClose}>Закрыть</button>
         </div>
     );
+}
+
+function storedPanelWidth() {
+    if (typeof window === 'undefined') {
+        return PANEL_WIDTH_DEFAULT;
+    }
+
+    const width = Number(window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY));
+
+    return Number.isFinite(width) ? clamp(width, PANEL_WIDTH_MIN, panelMaxWidth()) : PANEL_WIDTH_DEFAULT;
+}
+
+function savePanelWidth(width) {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(Math.round(width)));
+}
+
+function panelMaxWidth() {
+    if (typeof window === 'undefined') {
+        return PANEL_WIDTH_MAX;
+    }
+
+    return Math.max(PANEL_WIDTH_MIN, Math.min(PANEL_WIDTH_MAX, Math.floor(window.innerWidth * 0.55)));
 }
 
 function ScenarioLogs({ transitions, edges, statusFilter, onStatusFilter, onRefresh, onOpenEdge, timezone, timezoneLabel }) {
@@ -1907,6 +1990,7 @@ function BlockPanel({
     const message = findModule(block.settings_payload, 'message');
     const buttons = findModule(block.settings_payload, 'buttons');
     const startChannels = start?.payload?.channels?.ids ?? [];
+    const buttonsSummary = buttons ? buttonSummary(buttons) : '';
     const activeModules = modulesFrom(block.settings_payload).length;
     const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
     const activeModuleTypes = new Set(modulesFrom(block.settings_payload).map((module) => module.type));
@@ -2028,6 +2112,7 @@ function BlockPanel({
                             <ModuleConfigCard
                                 key={type}
                                 type={type}
+                                summary={type === 'buttons' ? buttonsSummary : null}
                                 onRemove={type === 'message' && buttons ? null : () => onToggleModule(block.client_key, type, false)}
                             >
                                 {type === 'start_condition' ? (
@@ -2087,7 +2172,6 @@ function ButtonsFields({
     const rows = buttonRows(buttons);
     const flat = rows.flat();
     const editingButton = flat.find((button) => button.id === editingButtonId) ?? null;
-    const totalButtons = rows.reduce((sum, row) => sum + row.length, 0);
     const placement = buttonPlacement(buttons);
 
     useEffect(() => {
@@ -2199,14 +2283,6 @@ function ButtonsFields({
                         {label}
                     </button>
                 ))}
-            </div>
-
-            <div className="ac-v3-builder__buttons-meta">
-                {totalButtons > 0 ? (
-                    <span><b>{totalButtons}</b> / 100 · {rows.length} {pluralRows(rows.length)}</span>
-                ) : (
-                    <span>Пока нет ни одной кнопки</span>
-                )}
             </div>
 
             <div className="ac-v3-builder__buttons-editor">
@@ -2494,8 +2570,8 @@ function StartConditionFields({
                     {PHONE_CONDITION_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
             </label>
-            <label>
-                Приоритет
+            <label className="ac-v3-builder__field-row">
+                <span>Приоритет</span>
                 <input
                     type="number"
                     value={start?.payload?.priority ?? 10}
@@ -2536,7 +2612,7 @@ function StartConditionFields({
     );
 }
 
-function ModuleConfigCard({ type, children, onRemove }) {
+function ModuleConfigCard({ type, children, onRemove, summary = null }) {
     const [collapsed, setCollapsed] = useState(false);
     const meta = MODULE_META[type];
 
@@ -2547,6 +2623,9 @@ function ModuleConfigCard({ type, children, onRemove }) {
                     <ModuleIcon type={type} />
                 </span>
                 <span className="ac-v3-builder__module-card-title">{meta.label}</span>
+                {summary ? (
+                    <span className="ac-v3-builder__module-card-summary">{summary}</span>
+                ) : null}
                 <button
                     type="button"
                     className="ac-v3-builder__module-fold"
@@ -3595,6 +3674,13 @@ function buttonRows(buttonsModule) {
     return Array.isArray(buttonsModule?.payload?.rows)
         ? buttonsModule.payload.rows.map((row) => (Array.isArray(row) ? row : [])).filter((row) => row.length > 0)
         : [];
+}
+
+function buttonSummary(buttonsModule) {
+    const rows = buttonRows(buttonsModule);
+    const total = rows.reduce((sum, row) => sum + row.length, 0);
+
+    return total > 0 ? `(${total} / 100 · ${rows.length} ${pluralRows(rows.length)})` : '(0 / 100)';
 }
 
 function normalizeButtonRows(rows) {
