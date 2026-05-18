@@ -208,8 +208,11 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertMatchesRegularExpression('/^edge_[a-z0-9]{12}$/', $edgeKey);
         $this->assertSame((string) $saved['id_map']['edges']['tmp_edge'], $edgeDisplayId);
 
+        $edgesWithInvalidDisplayId = $saved['builder']['edges'];
+        data_set($edgesWithInvalidDisplayId, '0.condition_payload.ui.edge_id', 'j1nvpzsuc4ue');
+
         $savedAgain = $this->actingAs($admin)
-            ->putJson($this->stateUrl($scenario), $this->payloadFromState($saved, $saved['builder']['blocks'], $saved['builder']['edges']))
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($saved, $saved['builder']['blocks'], $edgesWithInvalidDisplayId))
             ->assertOk()
             ->json();
 

@@ -1317,11 +1317,13 @@ function ScenarioLogs({ transitions, edges, statusFilter, onStatusFilter, onRefr
 }
 
 function ScenarioLogRow({ transition, edge, onOpenEdge, timezone, timezoneLabel }) {
+    const edgeId = transitionEdgeId(transition, edge);
+
     return (
         <article className={`ac-v3-builder__log-row is-${transition.status ?? 'unknown'}`}>
             <div className="ac-v3-builder__log-main">
                 <strong>{transition.status_label ?? edgeTransitionStatusLabel(transition.status)}</strong>
-                <span>Переход #{transition.id} · v{transition.published_version_id} · run #{transition.scenario_run_id}</span>
+                <span>Стрелка {edgeId} · переход #{transition.id} · v{transition.published_version_id} · run #{transition.scenario_run_id}</span>
             </div>
             <div className="ac-v3-builder__log-route">
                 <span>Блок #{transition.source_block_id}</span>
@@ -1683,7 +1685,7 @@ function shortEdgeId(edge) {
 }
 
 function copyableEdgeId(edge) {
-    const displayId = String(edge?.condition_payload?.ui?.edge_id ?? '').trim();
+    const displayId = numericEdgeId(edge?.condition_payload?.ui?.edge_id);
 
     if (displayId) {
         return displayId;
@@ -1694,6 +1696,22 @@ function copyableEdgeId(edge) {
     }
 
     return String(edge?.client_key ?? '').replace(/^tmp_edge_/, '').replace(/^edge_/, '').slice(0, 8);
+}
+
+function numericEdgeId(value) {
+    const displayId = String(value ?? '').trim();
+
+    return /^\d+$/.test(displayId) ? displayId : '';
+}
+
+function transitionEdgeId(transition, edge) {
+    if (edge) {
+        return shortEdgeId(edge);
+    }
+
+    const edgeId = numericEdgeId(transition?.edge_id);
+
+    return edgeId ? `#${edgeId}` : '#draft';
 }
 
 function edgeScheduledTransitions(edge) {
@@ -3177,7 +3195,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                             >
                                                 <div>
                                                     <strong>{transition.status_label ?? edgeTransitionStatusLabel(transition.status)}</strong>
-                                                    <span>#{transition.id} · v{transition.published_version_id} · диалог #{transition.dialog_id}</span>
+                                                    <span>Стрелка {shortEdgeId(edge)} · переход #{transition.id} · v{transition.published_version_id} · диалог #{transition.dialog_id}</span>
                                                 </div>
                                                 <div>
                                                     <span>План: {formatDateTime(transition.scheduled_for, timezoneLabel, timezone)}</span>

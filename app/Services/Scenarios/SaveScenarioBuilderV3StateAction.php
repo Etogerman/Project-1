@@ -302,7 +302,7 @@ class SaveScenarioBuilderV3StateAction
     {
         $displayId = trim((string) data_get($conditionPayload, 'ui.edge_id', ''));
 
-        data_set($conditionPayload, 'ui.edge_id', $displayId !== '' ? $displayId : (string) $edge->id);
+        data_set($conditionPayload, 'ui.edge_id', ctype_digit($displayId) ? $displayId : (string) $edge->id);
 
         return $conditionPayload;
     }
