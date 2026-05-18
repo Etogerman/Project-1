@@ -944,7 +944,7 @@
 
 .ac-v3-builder__log-row {
     display: grid;
-    grid-template-columns: minmax(180px, 1.25fr) minmax(150px, 0.85fr) minmax(190px, 1fr);
+    grid-template-columns: minmax(180px, 1.15fr) minmax(150px, 0.8fr) minmax(170px, 0.9fr) minmax(190px, auto);
     align-items: center;
     gap: 12px;
     border: 1px solid var(--border);
@@ -1001,6 +1001,37 @@
 
 .ac-v3-builder__log-route b {
     color: var(--text-2);
+}
+
+.ac-v3-builder__log-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 7px;
+}
+
+.ac-v3-builder__log-actions a,
+.ac-v3-builder__log-actions button {
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--text-2);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 6px 8px;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.ac-v3-builder__log-actions a:hover,
+.ac-v3-builder__log-actions button:hover {
+    color: var(--text-1);
+}
+
+.ac-v3-builder__log-actions button:disabled {
+    cursor: default;
+    opacity: 0.48;
 }
 
 .ac-v3-builder__log-row p {

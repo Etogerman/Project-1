@@ -620,6 +620,8 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertOk()
             ->assertJsonPath('builder.diagnostics.scheduled_transitions.0.id', $transition->id)
             ->assertJsonPath('builder.diagnostics.scheduled_transitions.0.status_label', 'Запланирован')
+            ->assertJsonPath('builder.diagnostics.scheduled_transitions.0.edge_key', $edgeKey)
+            ->assertJsonPath('builder.diagnostics.scheduled_transitions.0.edge_id', (string) $publishedEdge->id)
             ->assertJsonPath('builder.edges.0.diagnostics.scheduled_transitions.0.id', $transition->id)
             ->assertJsonPath('builder.edges.0.diagnostics.scheduled_transitions.0.status', ScenarioV3ScheduledTransition::STATUS_SCHEDULED)
             ->assertJsonPath('builder.edges.0.diagnostics.scheduled_transitions.0.status_label', 'Запланирован')

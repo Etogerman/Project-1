@@ -529,6 +529,8 @@ class BuildScenarioBuilderV3StateAction
             'scenario_run_id' => (int) $transition->scenario_run_id,
             'dialog_id' => (int) $transition->dialog_id,
             'published_version_id' => (int) $transition->published_version_id,
+            'edge_key' => (string) $transition->edge_key,
+            'edge_id' => filled($transition->edge_id) ? (string) $transition->edge_id : null,
             'source_block_id' => (string) $transition->source_block_id,
             'target_block_id' => (string) $transition->target_block_id,
             'scheduled_for' => $transition->scheduled_for?->toJSON(),

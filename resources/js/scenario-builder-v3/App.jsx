@@ -864,6 +864,25 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }
     }
 
+    function openTransitionEdge(transition) {
+        const edge = findEdgeByTransition(edges, transition);
+
+        if (! edge) {
+            setNotice(null);
+            setError('Связь из этой записи не найдена в текущем черновике.');
+
+            return;
+        }
+
+        setMode('design');
+        setSelectedEdgeKey(edge.client_key);
+        setSelectedBlockKey(null);
+        setIsPanelCollapsed(false);
+        setPendingConnection(null);
+        setError(null);
+        setNotice(`Открыта связь ${shortEdgeId(edge)}`);
+    }
+
     function openValidationIssueBlock(issue) {
         setSelectedBlockKey(issue.blockKey);
         setSelectedEdgeKey(null);
@@ -995,7 +1014,12 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 <ToolRail tool={tool} onTool={setTool} onAddBlock={addBlock} />
 
                 {mode === 'logs' ? (
-                    <ScenarioLogs transitions={scheduledTransitions} onRefresh={refreshBuilderState} />
+                    <ScenarioLogs
+                        transitions={scheduledTransitions}
+                        edges={edges}
+                        onRefresh={refreshBuilderState}
+                        onOpenEdge={openTransitionEdge}
+                    />
                 ) : (
                     <main
                         ref={canvasRef}
@@ -1140,7 +1164,7 @@ function Notice({ kind, children, onClose }) {
     );
 }
 
-function ScenarioLogs({ transitions, onRefresh }) {
+function ScenarioLogs({ transitions, edges, onRefresh, onOpenEdge }) {
     const items = Array.isArray(transitions) ? transitions : [];
 
     return (
@@ -1156,24 +1180,12 @@ function ScenarioLogs({ transitions, onRefresh }) {
             {items.length > 0 ? (
                 <div className="ac-v3-builder__logs-list">
                     {items.map((transition) => (
-                        <article key={transition.id} className={`ac-v3-builder__log-row is-${transition.status ?? 'unknown'}`}>
-                            <div className="ac-v3-builder__log-main">
-                                <strong>{transition.status_label ?? edgeTransitionStatusLabel(transition.status)}</strong>
-                                <span>Переход #{transition.id} · диалог #{transition.dialog_id} · run #{transition.scenario_run_id}</span>
-                            </div>
-                            <div className="ac-v3-builder__log-route">
-                                <span>Блок #{transition.source_block_id}</span>
-                                <b>→</b>
-                                <span>Блок #{transition.target_block_id}</span>
-                            </div>
-                            <div className="ac-v3-builder__log-time">
-                                <span>План: {formatDateTime(transition.scheduled_for)}</span>
-                                <span>Финиш: {formatDateTime(transition.finished_at)}</span>
-                            </div>
-                            {transition.error_message ? (
-                                <p>{transition.error_message}</p>
-                            ) : null}
-                        </article>
+                        <ScenarioLogRow
+                            key={transition.id}
+                            transition={transition}
+                            edge={findEdgeByTransition(edges, transition)}
+                            onOpenEdge={onOpenEdge}
+                        />
                     ))}
                 </div>
             ) : (
@@ -1183,6 +1195,35 @@ function ScenarioLogs({ transitions, onRefresh }) {
                 </div>
             )}
         </main>
+    );
+}
+
+function ScenarioLogRow({ transition, edge, onOpenEdge }) {
+    return (
+        <article className={`ac-v3-builder__log-row is-${transition.status ?? 'unknown'}`}>
+            <div className="ac-v3-builder__log-main">
+                <strong>{transition.status_label ?? edgeTransitionStatusLabel(transition.status)}</strong>
+                <span>Переход #{transition.id} · run #{transition.scenario_run_id}</span>
+            </div>
+            <div className="ac-v3-builder__log-route">
+                <span>Блок #{transition.source_block_id}</span>
+                <b>→</b>
+                <span>Блок #{transition.target_block_id}</span>
+            </div>
+            <div className="ac-v3-builder__log-time">
+                <span>План: {formatDateTime(transition.scheduled_for)}</span>
+                <span>Финиш: {formatDateTime(transition.finished_at)}</span>
+            </div>
+            <div className="ac-v3-builder__log-actions">
+                <a href={`/admin/dialogs/${transition.dialog_id}`}>Диалог #{transition.dialog_id}</a>
+                <button type="button" disabled={! edge} onClick={() => onOpenEdge(transition)}>
+                    Открыть связь
+                </button>
+            </div>
+            {transition.error_message ? (
+                <p>{transition.error_message}</p>
+            ) : null}
+        </article>
     );
 }
 
@@ -1541,6 +1582,19 @@ function edgeScheduledTransitions(edge) {
     const transitions = edge?.diagnostics?.scheduled_transitions;
 
     return Array.isArray(transitions) ? transitions : [];
+}
+
+function findEdgeByTransition(edges, transition) {
+    const edgeKey = String(transition?.edge_key ?? '').trim();
+    const edgeId = String(transition?.edge_id ?? '').trim();
+
+    return (Array.isArray(edges) ? edges : []).find((edge) => {
+        const candidateKey = String(edge?.condition_payload?.edge_key ?? '').trim();
+        const candidateId = String(edge?.id ?? '').trim();
+
+        return (edgeKey !== '' && candidateKey === edgeKey)
+            || (edgeId !== '' && candidateId === edgeId);
+    }) ?? null;
 }
 
 function edgeTransitionStatusLabel(status) {
