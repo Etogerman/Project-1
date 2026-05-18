@@ -20,6 +20,8 @@ class CompileScenarioBuilderV3RuntimeAction
 
     private const EDGE_MODE_AUTOMATIC = 'automatic';
 
+    private const EDGE_MATCH_EXACT_CALLBACK = 'exact_callback';
+
     /**
      * @return array<string, mixed>
      */
@@ -365,13 +367,25 @@ class CompileScenarioBuilderV3RuntimeAction
         $type = (string) ($match['type'] ?? 'any_inbound');
         $text = (string) ($match['text'] ?? '');
         $variants = $this->normalizedMatchVariants($text);
+        $allowedTypes = [
+            'any_inbound',
+            'exact_text',
+            'contains_text',
+            AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+            self::EDGE_MATCH_EXACT_CALLBACK,
+        ];
 
-        if (in_array($type, ['exact_text', 'contains_text'], true) && $variants === []) {
-            $this->fail('builder.edges', 'У стрелки с текстовым условием должен быть текст условия.');
+        if (! in_array($type, $allowedTypes, true)) {
+            $type = 'any_inbound';
+        }
+
+        if ($type !== 'any_inbound' && $variants === []) {
+            $this->fail('builder.edges', 'У стрелки с условием должен быть текст условия.');
         }
 
         return [
-            'type' => in_array($type, ['any_inbound', 'exact_text', 'contains_text'], true) ? $type : 'any_inbound',
+            'type' => $type,
             'text' => $text,
             'variants' => $variants,
         ];

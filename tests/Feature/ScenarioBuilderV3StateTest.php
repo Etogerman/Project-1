@@ -282,6 +282,106 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertDatabaseCount('scenario_builder_edges', 2);
     }
 
+    public function test_publish_keeps_extended_wait_reply_match_types_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_extended_edge_match',
+            'name' => 'V3 Extended Edge Match',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_parameter',
+                'type' => 'state',
+                'title' => 'Параметр',
+                'position' => ['x' => 480, 'y' => 80],
+                'settings_payload' => $this->messageSettings('Параметр'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_text_or_parameter',
+                'type' => 'state',
+                'title' => 'Текст или параметр',
+                'position' => ['x' => 480, 'y' => 220],
+                'settings_payload' => $this->messageSettings('Текст или параметр'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_callback',
+                'type' => 'state',
+                'title' => 'Callback',
+                'position' => ['x' => 480, 'y' => 360],
+                'settings_payload' => $this->messageSettings('Callback'),
+            ],
+        ];
+        $parameterPayload = $this->edgePayload(null, 'Параметр');
+        $parameterPayload['match'] = ['type' => 'exact_parameter', 'text' => "payload_1\npayload_2"];
+        $textOrParameterPayload = $this->edgePayload(null, 'Текст или параметр');
+        $textOrParameterPayload['match'] = ['type' => 'exact_text_or_parameter', 'text' => 'mixed_1'];
+        $callbackPayload = $this->edgePayload(null, 'Callback');
+        $callbackPayload['match'] = ['type' => 'exact_callback', 'text' => 'callback_1'];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_edge_parameter',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_parameter'],
+                'condition_payload' => $parameterPayload,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_edge_text_or_parameter',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_text_or_parameter'],
+                'condition_payload' => $textOrParameterPayload,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_edge_callback',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_callback'],
+                'condition_payload' => $callbackPayload,
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.edges.0.condition_payload.match.type', 'exact_parameter')
+            ->assertJsonPath('builder.edges.1.condition_payload.match.type', 'exact_text_or_parameter')
+            ->assertJsonPath('builder.edges.2.condition_payload.match.type', 'exact_callback')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $sourceBlockId = (string) $saved['id_map']['blocks']['tmp_source'];
+        $waitReplyEdges = data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$sourceBlockId.wait_reply_edges", []);
+        $edgesByMatchType = collect($waitReplyEdges)->keyBy('match.type');
+
+        $this->assertSame(
+            ['exact_callback', 'exact_parameter', 'exact_text_or_parameter'],
+            collect($waitReplyEdges)->pluck('match.type')->sort()->values()->all(),
+        );
+        $this->assertSame(['payload_1', 'payload_2'], data_get($edgesByMatchType->get('exact_parameter'), 'match.variants'));
+    }
+
     public function test_put_state_normalizes_disabled_edge_input_capture_without_requiring_fields(): void
     {
         $admin = $this->adminUser();

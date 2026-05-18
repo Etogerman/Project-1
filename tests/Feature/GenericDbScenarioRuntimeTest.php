@@ -349,6 +349,128 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Код принят');
     }
 
+    public function test_v3_wait_reply_exact_parameter_matches_message_parameter(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9251]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9252]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_parameter', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_parameter',
+                targetBlockId: 'accepted',
+                matchType: 'exact_parameter',
+                variants: ['payload_42'],
+            ),
+        ], [
+            'accepted' => 'Параметр принят',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'не payload', [
+            'message_parameter' => 'payload_42',
+        ]);
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('accepted', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Параметр принят');
+    }
+
+    public function test_v3_wait_reply_exact_callback_matches_callback_payload(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9261]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9262]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_callback', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_callback',
+                targetBlockId: 'accepted',
+                matchType: 'exact_callback',
+                variants: ['callback_42'],
+            ),
+        ], [
+            'accepted' => 'Callback принят',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'callback_42', [
+            'raw_payload' => [
+                'callback_query' => [
+                    'data' => 'callback_42',
+                ],
+            ],
+        ]);
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('accepted', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Callback принят');
+    }
+
     public function test_v3_wait_reply_skips_exhausted_transition_limit_and_uses_next_edge(): void
     {
         Http::fake([
@@ -5407,8 +5529,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Dialog $dialog,
         ScenarioRun $run,
         string $text,
+        array $overrides = [],
     ): void {
-        $message = Message::factory()->create([
+        $message = Message::factory()->create(array_merge([
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
@@ -5418,7 +5541,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
             'external_chat_id' => $dialog->external_chat_id,
             'text' => $text,
-        ]);
+        ], $overrides));
 
         (new ProcessScenarioInboundJob($message->id, $run->id))
             ->handle(app(ScenarioRegistry::class));

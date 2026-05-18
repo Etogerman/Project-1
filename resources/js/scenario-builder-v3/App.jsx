@@ -35,6 +35,9 @@ const EDGE_MATCH_OPTIONS = [
     ['any_inbound', 'Любое входящее'],
     ['exact_text', 'Точный текст'],
     ['contains_text', 'Содержит текст'],
+    ['exact_parameter', 'Точный параметр'],
+    ['exact_text_or_parameter', 'Текст или параметр'],
+    ['exact_callback', 'Точный callback'],
 ];
 const EDGE_DATA_TYPE_OPTIONS = [
     ['any_text', 'Любой текст'],
@@ -2658,6 +2661,22 @@ function edgeDataTypeLabel(value) {
     return EDGE_DATA_TYPE_OPTIONS.find(([optionValue]) => optionValue === value)?.[1] ?? value;
 }
 
+function edgeMatchInputLabel(matchType) {
+    if (matchType === 'exact_parameter') {
+        return 'Параметр';
+    }
+
+    if (matchType === 'exact_text_or_parameter') {
+        return 'Текст или параметр';
+    }
+
+    if (matchType === 'exact_callback') {
+        return 'Callback';
+    }
+
+    return 'Текст условия';
+}
+
 function contactCaptureField(fieldKey) {
     return EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === fieldKey) ?? EDGE_CONTACT_FIELD_OPTIONS[0];
 }
@@ -2800,7 +2819,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         </label>
                         {matchType !== 'any_inbound' ? (
                             <label>
-                                <span>Текст условия</span>
+                                <span>{edgeMatchInputLabel(matchType)}</span>
                                 <textarea
                                     className="ac-v3-builder__textarea-auto"
                                     rows={1}

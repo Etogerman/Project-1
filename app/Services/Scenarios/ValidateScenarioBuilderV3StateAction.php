@@ -55,7 +55,14 @@ class ValidateScenarioBuilderV3StateAction
 
     private const EDGE_MODES = ['wait_reply', 'automatic', 'button'];
 
-    private const EDGE_MATCH_TYPES = ['any_inbound', 'exact_text', 'contains_text'];
+    private const EDGE_MATCH_TYPES = [
+        'any_inbound',
+        'exact_text',
+        'contains_text',
+        AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+        AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
+        self::MATCH_EXACT_CALLBACK,
+    ];
 
     private const EDGE_CAPTURE_DATA_TYPES = ['any_text', 'phone', 'email', 'number'];
 
@@ -686,6 +693,7 @@ class ValidateScenarioBuilderV3StateAction
             $type = match ($type) {
                 'strict', AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD => 'exact_text',
                 'contains', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT => 'contains_text',
+                'exact' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
                 default => 'any_inbound',
             };
         }

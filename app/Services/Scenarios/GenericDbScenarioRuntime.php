@@ -1320,18 +1320,32 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $messageText = $this->normalizeV3ButtonText((string) $message->text);
+        $messageParameter = $this->normalizeV3ButtonText((string) $message->message_parameter);
         $variants = collect($match['variants'] ?? [])
             ->map(fn (mixed $variant): string => $this->normalizeV3ButtonText((string) $variant))
             ->filter(fn (string $variant): bool => $variant !== '')
             ->values();
 
-        if ($messageText === '' || $variants->isEmpty()) {
+        if ($variants->isEmpty()) {
             return false;
         }
 
-        return $type === 'contains_text'
-            ? $variants->contains(fn (string $variant): bool => str_contains($messageText, $variant))
-            : $variants->contains($messageText);
+        if ($this->messageIsV3Callback($message) && $type !== self::V3_MATCH_EXACT_CALLBACK) {
+            return false;
+        }
+
+        return match ($type) {
+            'contains_text' => $messageText !== ''
+                && $variants->contains(fn (string $variant): bool => str_contains($messageText, $variant)),
+            AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER => $messageParameter !== ''
+                && $variants->contains($messageParameter),
+            AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER => ($messageText !== '' && $variants->contains($messageText))
+                || ($messageParameter !== '' && $variants->contains($messageParameter)),
+            self::V3_MATCH_EXACT_CALLBACK => $variants->contains(
+                fn (string $variant): bool => $this->messageMatchesV3Callback($message, $variant),
+            ),
+            default => $messageText !== '' && $variants->contains($messageText),
+        };
     }
 
     /**
