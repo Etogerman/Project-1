@@ -95,13 +95,15 @@ class ProcessScenarioInboundJob implements ShouldQueue
             throw $throwable;
         }
 
-        $run->forceFill([
-            'status' => $result->status,
-            'current_step' => $result->currentStep,
-            'state_payload' => $result->statePayload,
-            'exit_outcome' => $result->exitOutcome,
-            'finished_at' => $result->status === ScenarioRun::STATUS_ACTIVE ? null : now(),
-        ])->save();
+        if (! $result->persisted) {
+            $run->forceFill([
+                'status' => $result->status,
+                'current_step' => $result->currentStep,
+                'state_payload' => $result->statePayload,
+                'exit_outcome' => $result->exitOutcome,
+                'finished_at' => $result->status === ScenarioRun::STATUS_ACTIVE ? null : now(),
+            ])->save();
+        }
 
         if (! $result->consumed) {
             ProcessAutoReplyJob::dispatch($message->id)->afterCommit();

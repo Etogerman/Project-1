@@ -57,6 +57,8 @@ class ValidateScenarioBuilderV3StateAction
 
     private const EDGE_CAPTURE_DATA_TYPES = ['any_text', 'phone', 'email', 'number'];
 
+    private const MAX_TRANSITION_LIMIT = 100000;
+
     /**
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
@@ -519,7 +521,11 @@ class ValidateScenarioBuilderV3StateAction
         $edgeKey = $this->normalizeEdgeKey($payload['edge_key'] ?? null, $edgeIndex);
         $mode = $this->normalizeEdgeMode($payload['mode'] ?? null, $sourceOutputId);
         $priority = (int) ($payload['priority'] ?? 10);
-        $transitionLimit = max(0, (int) ($payload['transition_limit'] ?? 0));
+        $transitionLimit = $this->nonNegativeIntegerValue(
+            $payload['transition_limit'] ?? 0,
+            "builder.edges.$edgeIndex.condition_payload.transition_limit",
+            self::MAX_TRANSITION_LIMIT,
+        );
 
         return [
             'schema_version' => BuildScenarioBuilderV3StateAction::SCHEMA_VERSION,
@@ -599,20 +605,35 @@ class ValidateScenarioBuilderV3StateAction
     {
         $capture = is_array($capture) ? $capture : [];
         $enabled = (bool) ($capture['enabled'] ?? false);
+
+        if (! $enabled) {
+            return [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ];
+        }
+
+        $fieldScope = trim((string) ($capture['field_scope'] ?? 'dialog'));
         $fieldKey = trim((string) ($capture['field_key'] ?? ''));
         $dataType = trim((string) ($capture['data_type'] ?? 'any_text'));
 
-        if (! in_array($dataType, self::EDGE_CAPTURE_DATA_TYPES, true)) {
-            $dataType = 'any_text';
+        if ($fieldScope !== 'dialog') {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_scope", 'Only dialog field scope is supported.');
         }
 
-        if ($enabled && ! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+        if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
             $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_key", 'Invalid dialog field key.');
         }
 
+        if (! in_array($dataType, self::EDGE_CAPTURE_DATA_TYPES, true)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.data_type", 'Unknown capture data type.');
+        }
+
         return [
-            'enabled' => $enabled,
-            'field_scope' => 'dialog',
+            'enabled' => true,
+            'field_scope' => $fieldScope,
             'field_key' => $fieldKey,
             'data_type' => $dataType,
         ];
@@ -895,6 +916,28 @@ class ValidateScenarioBuilderV3StateAction
 
         if ($integer <= 0) {
             $this->fail($key, 'Value must be a positive integer.');
+        }
+
+        return $integer;
+    }
+
+    private function nonNegativeIntegerValue(mixed $value, string $key, int $max): int
+    {
+        if (is_string($value)) {
+            $value = trim($value);
+        }
+
+        if (
+            ! is_int($value)
+            && ! (is_string($value) && preg_match('/^\d+$/', $value))
+        ) {
+            $this->fail($key, 'Value must be a non-negative integer.');
+        }
+
+        $integer = (int) $value;
+
+        if ($integer < 0 || $integer > $max) {
+            $this->fail($key, "Value must be between 0 and {$max}.");
         }
 
         return $integer;

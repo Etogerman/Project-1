@@ -209,6 +209,120 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame($edgeKey, data_get($savedAgain, 'builder.edges.0.condition_payload.edge_key'));
     }
 
+    public function test_put_state_normalizes_disabled_edge_input_capture_without_requiring_fields(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_disabled_capture',
+            'name' => 'V3 Disabled Capture',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Напишите код'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Принято'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Код');
+        $conditionPayload['input_capture'] = [
+            'enabled' => false,
+            'field_scope' => 'contact',
+            'field_key' => '',
+            'data_type' => 'unknown',
+        ];
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk();
+
+        $this->assertSame(false, $response->json('builder.edges.0.condition_payload.input_capture.enabled'));
+        $this->assertSame('dialog', $response->json('builder.edges.0.condition_payload.input_capture.field_scope'));
+        $this->assertSame('', $response->json('builder.edges.0.condition_payload.input_capture.field_key'));
+        $this->assertSame('any_text', $response->json('builder.edges.0.condition_payload.input_capture.data_type'));
+    }
+
+    public function test_put_state_rejects_invalid_enabled_edge_input_capture_and_transition_limit(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_invalid_capture',
+            'name' => 'V3 Invalid Capture',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Напишите код'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Принято'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Код');
+        $conditionPayload['transition_limit'] = 100001;
+        $conditionPayload['input_capture'] = [
+            'enabled' => true,
+            'field_scope' => 'contact',
+            'field_key' => 'client_code',
+            'data_type' => 'any_text',
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.edges.0.condition_payload.transition_limit',
+            ]);
+
+        $conditionPayload['transition_limit'] = 0;
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.edges.0.condition_payload.input_capture.field_scope',
+            ]);
+    }
+
     public function test_put_state_syncs_start_condition_channels_and_conditions(): void
     {
         $admin = $this->adminUser();

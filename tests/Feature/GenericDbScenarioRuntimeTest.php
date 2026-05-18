@@ -475,6 +475,80 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertCount(1, Http::recorded());
     }
 
+    public function test_v3_wait_reply_number_capture_enforces_format_and_saves_normalized_decimal(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9411]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9412]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_number_capture', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_budget',
+                targetBlockId: 'accepted',
+                inputCapture: [
+                    'enabled' => true,
+                    'field_key' => 'budget',
+                    'data_type' => 'number',
+                ],
+            ),
+        ], [
+            'accepted' => 'Число принято',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, '1234567890123456789');
+
+        $run->refresh();
+        $dialog->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('start', $run->current_step);
+        $this->assertNull(data_get($dialog->fields_payload, 'budget'));
+        $this->assertSame([], data_get($dialog->fields_payload, '_v3.transition_counts', []));
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, '12,3400');
+
+        $run->refresh();
+        $dialog->refresh();
+
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_budget';
+
+        $this->assertSame('accepted', $run->current_step);
+        $this->assertSame('12.3400', data_get($dialog->fields_payload, 'budget'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Число принято');
+    }
+
     public function test_v3_start_chooses_one_matching_entrypoint_by_highest_priority_then_latest_block_id(): void
     {
         Http::fake([

@@ -1012,9 +1012,111 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
         $transitionEdge = $this->v3TransitionEdgeForMessage($message, is_array($block) ? $block : [], $message->dialog);
-        $targetBlockId = null;
 
         if ($transitionEdge !== null) {
+            return $this->handleV3TransitionInbound($run, $message, $runtime);
+        }
+
+        return new ScenarioInboundResult(
+            consumed: true,
+            status: ScenarioRun::STATUS_ACTIVE,
+            currentStep: $currentBlockId,
+            statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
+            exitOutcome: null,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     */
+    private function handleV3TransitionInbound(ScenarioRun $run, Message $message, array $runtime): ScenarioInboundResult
+    {
+        if ($message->dialog_id === null) {
+            return new ScenarioInboundResult(
+                consumed: false,
+                status: $run->status,
+                currentStep: $run->current_step,
+                statePayload: $this->v3StatePayload($run->state_payload),
+                exitOutcome: $run->exit_outcome,
+            );
+        }
+
+        return DB::transaction(function () use ($run, $message, $runtime): ScenarioInboundResult {
+            $dialog = Dialog::query()
+                ->whereKey($message->dialog_id)
+                ->lockForUpdate()
+                ->first();
+            $lockedRun = ScenarioRun::query()
+                ->whereKey($run->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ! $dialog instanceof Dialog
+                || ! $lockedRun instanceof ScenarioRun
+                || ! $lockedRun->isActive()
+                || (int) $lockedRun->dialog_id !== (int) $message->dialog_id
+            ) {
+                return new ScenarioInboundResult(
+                    consumed: false,
+                    status: $run->status,
+                    currentStep: $run->current_step,
+                    statePayload: $this->v3StatePayload($run->state_payload),
+                    exitOutcome: $run->exit_outcome,
+                );
+            }
+
+            $statePayload = $this->v3StatePayload($lockedRun->state_payload);
+            $rawRunCurrentBlockId = filled($lockedRun->current_step) ? trim((string) $lockedRun->current_step) : null;
+            $rawStateCurrentBlockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+            $rawCurrentBlockId = $rawRunCurrentBlockId ?: $rawStateCurrentBlockId;
+            $currentBlockId = $this->v3RuntimeBlockId($runtime, $rawCurrentBlockId, $statePayload);
+
+            if (
+                $rawRunCurrentBlockId !== null
+                && $rawStateCurrentBlockId !== ''
+                && $this->v3RuntimeBlockId($runtime, $rawRunCurrentBlockId, $statePayload) !== $this->v3RuntimeBlockId($runtime, $rawStateCurrentBlockId, $statePayload)
+            ) {
+                Log::warning('scenario.v3_current_block_mismatch', [
+                    'scenario_code' => $this->code(),
+                    'scenario_run_id' => $lockedRun->id,
+                    'dialog_id' => $message->dialog_id,
+                    'current_step' => $lockedRun->current_step,
+                    'state_current_block_id' => $rawStateCurrentBlockId,
+                ]);
+
+                return new ScenarioInboundResult(
+                    consumed: false,
+                    status: $lockedRun->status,
+                    currentStep: $lockedRun->current_step,
+                    statePayload: $statePayload,
+                    exitOutcome: $lockedRun->exit_outcome,
+                );
+            }
+
+            if ($currentBlockId === null) {
+                return new ScenarioInboundResult(
+                    consumed: false,
+                    status: $lockedRun->status,
+                    currentStep: $lockedRun->current_step,
+                    statePayload: $statePayload,
+                    exitOutcome: $lockedRun->exit_outcome,
+                );
+            }
+
+            $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
+            $transitionEdge = $this->v3TransitionEdgeForMessage($message, is_array($block) ? $block : [], $dialog);
+
+            if ($transitionEdge === null) {
+                return new ScenarioInboundResult(
+                    consumed: true,
+                    status: ScenarioRun::STATUS_ACTIVE,
+                    currentStep: $currentBlockId,
+                    statePayload: $this->markV3Waiting($statePayload, $currentBlockId, is_array($block) ? $block : [], $message->channel),
+                    exitOutcome: null,
+                );
+            }
+
             $capturedValue = $this->v3CapturedValueForEdge($message, $transitionEdge);
 
             if ($capturedValue['valid'] !== true) {
@@ -1027,7 +1129,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 );
             }
 
-            if (! $this->applyV3WaitReplySideEffects($message, $transitionEdge, $capturedValue['value'])) {
+            if (! $this->applyV3WaitReplySideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue['value'])) {
                 return new ScenarioInboundResult(
                     consumed: true,
                     status: ScenarioRun::STATUS_ACTIVE,
@@ -1038,27 +1140,36 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
 
             $targetBlockId = filled($transitionEdge['target_block_id'] ?? null) ? (string) $transitionEdge['target_block_id'] : null;
-        }
 
-        if ($targetBlockId === null) {
+            if ($targetBlockId === null) {
+                return new ScenarioInboundResult(
+                    consumed: true,
+                    status: ScenarioRun::STATUS_ACTIVE,
+                    currentStep: $currentBlockId,
+                    statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
+                    exitOutcome: null,
+                );
+            }
+
+            $progress = $this->advanceV3FromBlock($message, $runtime, $targetBlockId, $statePayload);
+
+            $lockedRun->forceFill([
+                'status' => $progress['status'],
+                'current_step' => $progress['current_step'],
+                'state_payload' => $progress['state_payload'],
+                'exit_outcome' => $progress['exit_outcome'],
+                'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+            ])->save();
+
             return new ScenarioInboundResult(
                 consumed: true,
-                status: ScenarioRun::STATUS_ACTIVE,
-                currentStep: $currentBlockId,
-                statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
-                exitOutcome: null,
+                status: $progress['status'],
+                currentStep: $progress['current_step'],
+                statePayload: $progress['state_payload'],
+                exitOutcome: $progress['exit_outcome'],
+                persisted: true,
             );
-        }
-
-        $progress = $this->advanceV3FromBlock($message, $runtime, $targetBlockId, $statePayload);
-
-        return new ScenarioInboundResult(
-            consumed: true,
-            status: $progress['status'],
-            currentStep: $progress['current_step'],
-            statePayload: $progress['state_payload'],
-            exitOutcome: $progress['exit_outcome'],
-        );
+        });
     }
 
     /**
@@ -1220,7 +1331,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         if ($dataType === 'number') {
             $normalized = str_replace(',', '.', $value);
 
-            return is_numeric($normalized)
+            return preg_match('/^-?\d{1,18}(?:\.\d{1,6})?$/', $normalized) === 1
                 ? ['valid' => true, 'value' => (string) $normalized]
                 : ['valid' => false, 'value' => null];
         }
@@ -1240,75 +1351,60 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     /**
      * @param  array<string, mixed>  $edge
      */
-    private function applyV3WaitReplySideEffects(Message $message, array $edge, ?string $capturedValue): bool
+    private function applyV3WaitReplySideEffectsToDialog(Dialog $dialog, Message $message, array $edge, ?string $capturedValue): bool
     {
-        if ($message->dialog_id === null) {
+        $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+        $limit = max(0, (int) ($edge['transition_limit'] ?? 0));
+        $counterKey = $this->v3TransitionCountKey($edge);
+        $currentCount = (int) data_get($fieldsPayload, '_v3.transition_counts.'.$counterKey, 0);
+
+        if ($limit > 0 && $currentCount >= $limit) {
             return false;
         }
 
-        return DB::transaction(function () use ($message, $edge, $capturedValue): bool {
-            $dialog = Dialog::query()
-                ->whereKey($message->dialog_id)
-                ->lockForUpdate()
-                ->first();
+        $capture = is_array($edge['input_capture'] ?? null) ? $edge['input_capture'] : [];
 
-            if (! $dialog instanceof Dialog) {
+        if ((bool) ($capture['enabled'] ?? false) === true) {
+            $fieldKey = trim((string) ($capture['field_key'] ?? ''));
+
+            if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
                 return false;
             }
 
-            $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
-            $limit = max(0, (int) ($edge['transition_limit'] ?? 0));
-            $counterKey = $this->v3TransitionCountKey($edge);
-            $currentCount = (int) data_get($fieldsPayload, '_v3.transition_counts.'.$counterKey, 0);
-
-            if ($limit > 0 && $currentCount >= $limit) {
+            if ($capturedValue === null || mb_strlen($capturedValue) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
                 return false;
             }
 
-            $capture = is_array($edge['input_capture'] ?? null) ? $edge['input_capture'] : [];
+            $userFieldCount = collect($fieldsPayload)
+                ->keys()
+                ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
+                ->unique()
+                ->count();
 
-            if ((bool) ($capture['enabled'] ?? false) === true) {
-                $fieldKey = trim((string) ($capture['field_key'] ?? ''));
-
-                if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
-                    return false;
-                }
-
-                if ($capturedValue === null || mb_strlen($capturedValue) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
-                    return false;
-                }
-
-                $userFieldCount = collect($fieldsPayload)
-                    ->keys()
-                    ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
-                    ->unique()
-                    ->count();
-
-                if (! array_key_exists($fieldKey, $fieldsPayload) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
-                    return false;
-                }
-
-                $fieldsPayload[$fieldKey] = $capturedValue;
-            }
-
-            data_set($fieldsPayload, '_v3.transition_counts.'.$counterKey, $currentCount + 1);
-
-            $encoded = json_encode($fieldsPayload);
-
-            if ($encoded === false || strlen($encoded) > self::V3_DIALOG_FIELDS_MAX_BYTES) {
-                Log::warning('scenario.v3_dialog_fields_payload_limit_exceeded', [
-                    'scenario_code' => $this->code(),
-                    'dialog_id' => $message->dialog_id,
-                    'edge_key' => $edge['edge_key'] ?? null,
-                ]);
-
+            if (! array_key_exists($fieldKey, $fieldsPayload) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
                 return false;
             }
 
-            $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
+            $fieldsPayload[$fieldKey] = $capturedValue;
+        }
 
-            return true;
-        });
+        data_set($fieldsPayload, '_v3.transition_counts.'.$counterKey, $currentCount + 1);
+
+        $encoded = json_encode($fieldsPayload);
+
+        if ($encoded === false || strlen($encoded) > self::V3_DIALOG_FIELDS_MAX_BYTES) {
+            Log::warning('scenario.v3_dialog_fields_payload_limit_exceeded', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'edge_key' => $edge['edge_key'] ?? null,
+            ]);
+
+            return false;
+        }
+
+        $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
+
+        return true;
     }
 
     /**
