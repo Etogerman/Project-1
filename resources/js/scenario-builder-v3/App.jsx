@@ -2965,7 +2965,23 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                             <input
                                 type="checkbox"
                                 checked={captureEnabled}
-                                onChange={(event) => updateCapture({ enabled: event.target.checked })}
+                                onChange={(event) => {
+                                    const enabled = event.target.checked;
+
+                                    onUpdateConditionPayload((current) => ({
+                                        ...current,
+                                        match: enabled
+                                            ? {
+                                                ...(current.match ?? {}),
+                                                type: 'any_inbound',
+                                            }
+                                            : current.match,
+                                        input_capture: {
+                                            ...(current.input_capture ?? {}),
+                                            enabled,
+                                        },
+                                    }));
+                                }}
                             />
                             <span>Пользователь вводит данные</span>
                         </label>
