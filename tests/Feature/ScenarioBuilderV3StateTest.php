@@ -197,9 +197,11 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->json();
 
         $edgeKey = data_get($saved, 'builder.edges.0.condition_payload.edge_key');
+        $edgeDisplayId = data_get($saved, 'builder.edges.0.condition_payload.ui.edge_id');
 
         $this->assertIsString($edgeKey);
         $this->assertMatchesRegularExpression('/^edge_[a-z0-9]{12}$/', $edgeKey);
+        $this->assertSame((string) $saved['id_map']['edges']['tmp_edge'], $edgeDisplayId);
 
         $savedAgain = $this->actingAs($admin)
             ->putJson($this->stateUrl($scenario), $this->payloadFromState($saved, $saved['builder']['blocks'], $saved['builder']['edges']))
@@ -207,6 +209,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->json();
 
         $this->assertSame($edgeKey, data_get($savedAgain, 'builder.edges.0.condition_payload.edge_key'));
+        $this->assertSame($edgeDisplayId, data_get($savedAgain, 'builder.edges.0.condition_payload.ui.edge_id'));
     }
 
     public function test_put_state_normalizes_disabled_edge_input_capture_without_requiring_fields(): void

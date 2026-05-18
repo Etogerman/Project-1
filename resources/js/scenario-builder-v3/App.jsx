@@ -1395,6 +1395,12 @@ function shortEdgeId(edge) {
 }
 
 function copyableEdgeId(edge) {
+    const displayId = String(edge?.condition_payload?.ui?.edge_id ?? '').trim();
+
+    if (displayId) {
+        return displayId;
+    }
+
     if (edge?.id) {
         return String(edge.id);
     }

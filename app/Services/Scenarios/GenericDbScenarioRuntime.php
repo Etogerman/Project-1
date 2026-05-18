@@ -8,6 +8,7 @@ use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
@@ -406,13 +407,29 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $block = $currentStep !== null ? $this->v3RuntimeBlock($v3Runtime, $currentStep) : null;
             $channel = $run->dialog?->channel;
 
-            return is_array($block) && $this->v3TargetForContactShare($block, $channel) !== null;
+            return is_array($block) && (
+                $this->v3TargetForContactShare($block, $channel) !== null
+                || $this->v3BlockAcceptsContactShareWaitReply($block)
+            );
         }
 
         $schema = $this->validatedSchemaOrNull();
         $block = $schema['blocks'][$currentStep] ?? null;
 
         return is_array($block) && ($block['type'] ?? null) === 'phone_capture';
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3BlockAcceptsContactShareWaitReply(array $block): bool
+    {
+        return collect($this->v3WaitReplyEdges($block))
+            ->contains(function (array $edge): bool {
+                $match = is_array($edge['match'] ?? null) ? $edge['match'] : [];
+
+                return ($match['type'] ?? 'any_inbound') === 'any_inbound';
+            });
     }
 
     public function supportsTelegramCallbackContinuation(ScenarioRun $run, string $callbackData): bool
@@ -1313,8 +1330,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return ['valid' => true, 'value' => null];
         }
 
-        $value = trim((string) $message->text);
         $dataType = (string) ($capture['data_type'] ?? 'any_text');
+        $sharedPhone = $this->v3SharedPhoneValue($message);
+        $value = trim((string) ($sharedPhone ?? $message->text));
 
         if ($value === '') {
             return ['valid' => false, 'value' => null];
@@ -1346,6 +1364,34 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return ['valid' => true, 'value' => $value];
+    }
+
+    private function v3SharedPhoneValue(Message $message): ?string
+    {
+        if (
+            $message->message_kind !== Message::KIND_INBOUND_CONTACT_SHARE
+            || ! $message->contact instanceof Contact
+        ) {
+            return null;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+        $phoneNumber = $contact->phoneNumbers()
+            ->whereIn('source', [
+                ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+                ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+            ])
+            ->latest('id')
+            ->first()
+            ?? $contact->phoneNumbers()->first();
+
+        if (! $phoneNumber instanceof ContactPhoneNumber) {
+            return null;
+        }
+
+        return filled($phoneNumber->phone_normalized)
+            ? (string) $phoneNumber->phone_normalized
+            : (string) $phoneNumber->phone_raw;
     }
 
     /**

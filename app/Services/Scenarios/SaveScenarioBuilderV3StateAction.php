@@ -252,6 +252,12 @@ class SaveScenarioBuilderV3StateAction
                 'sort_order' => 1,
             ])->save();
 
+            $conditionPayload = $this->conditionPayloadWithStableDisplayId($model, $conditionPayload);
+
+            $model->forceFill([
+                'condition_payload' => $conditionPayload,
+            ])->save();
+
             if ($edgeId === null) {
                 $idMap['edges'][$edge['client_key']] = (int) $model->id;
             }
@@ -284,6 +290,19 @@ class SaveScenarioBuilderV3StateAction
         $conditionPayload['edge_key'] = $edgeKey;
         $conditionPayload['edge_schema_version'] = BuildScenarioBuilderV3StateAction::SCHEMA_VERSION;
         $conditionPayload['schema_version'] = BuildScenarioBuilderV3StateAction::SCHEMA_VERSION;
+
+        return $conditionPayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $conditionPayload
+     * @return array<string, mixed>
+     */
+    private function conditionPayloadWithStableDisplayId(ScenarioBuilderEdge $edge, array $conditionPayload): array
+    {
+        $displayId = trim((string) data_get($conditionPayload, 'ui.edge_id', ''));
+
+        data_set($conditionPayload, 'ui.edge_id', $displayId !== '' ? $displayId : (string) $edge->id);
 
         return $conditionPayload;
     }

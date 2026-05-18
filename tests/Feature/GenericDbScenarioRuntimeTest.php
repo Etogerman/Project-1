@@ -549,6 +549,155 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Число принято');
     }
 
+    public function test_v3_wait_reply_contact_share_capture_saves_phone_and_advances(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9421]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9422]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_phone_share_capture', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_phone_share',
+                targetBlockId: 'accepted',
+                inputCapture: [
+                    'enabled' => true,
+                    'field_key' => 'client_phone',
+                    'data_type' => 'any_text',
+                ],
+            ),
+        ], [
+            'accepted' => 'Телефон принят',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertTrue(app(ScenarioRegistry::class)->makeRuntime($scenario->code)->supportsContactShareContinuation($run));
+
+        $contact->phoneNumbers()->create([
+            'phone_raw' => '79263527111',
+            'phone_normalized' => '+79263527111',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $phoneShare = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => null,
+        ]);
+
+        (new ProcessScenarioInboundJob($phoneShare->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $dialog->refresh();
+
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_phone_share';
+
+        $this->assertSame('accepted', $run->current_step);
+        $this->assertSame('+79263527111', data_get($dialog->fields_payload, 'client_phone'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Телефон принят');
+    }
+
+    public function test_v3_contact_share_wait_reply_continuation_is_dispatched(): void
+    {
+        Queue::fake();
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_dispatch_phone_share_wait_reply', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_phone_share',
+                targetBlockId: 'accepted',
+                inputCapture: [
+                    'enabled' => true,
+                    'field_key' => 'client_phone',
+                    'data_type' => 'any_text',
+                ],
+            ),
+        ], [
+            'accepted' => 'Телефон принят',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'start',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'published_version_id' => $scenario->publishedVersion?->id,
+                    'status' => 'waiting_input',
+                    'current_block_id' => 'start',
+                    'waiting_output_ids' => [],
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $phoneShare = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => null,
+        ]);
+
+        $handled = app(DispatchStoredInboundScenarioAction::class)->continueActiveRun($phoneShare);
+
+        $this->assertTrue($handled);
+        Queue::assertPushed(ProcessScenarioInboundJob::class, fn (ProcessScenarioInboundJob $job): bool => $job->scenarioRunId === $run->id
+            && $job->inboundMessageId === $phoneShare->id);
+    }
+
     public function test_v3_start_chooses_one_matching_entrypoint_by_highest_priority_then_latest_block_id(): void
     {
         Http::fake([
