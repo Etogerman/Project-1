@@ -2748,7 +2748,7 @@ function StartConditionFields({
                     </button>
                 </div>
                 {channels.map((channel) => (
-                    <label key={channel.id} className="ac-v3-builder__check">
+                    <label key={channel.id} className="ac-v3-builder__check" title={channel.name}>
                         <input
                             type="checkbox"
                             checked={startChannels.map(Number).includes(Number(channel.id))}
