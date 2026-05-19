@@ -13,5 +13,6 @@ final readonly class ScenarioInboundResult
         public ?string $currentStep,
         public array $statePayload,
         public ?string $exitOutcome,
+        public bool $persisted = false,
     ) {}
 }

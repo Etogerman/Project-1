@@ -21,8 +21,8 @@ use Filament\Pages\Page;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -47,7 +47,7 @@ class ScenarioConstructor extends Page
         'y' => 64,
     ];
 
-    protected static ?string $slug = 'scenario-constructor';
+    protected static ?string $slug = 'constructor';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedAdjustmentsHorizontal;
 
@@ -122,7 +122,7 @@ class ScenarioConstructor extends Page
 
     public static function shouldRegisterNavigation(): bool
     {
-        return false;
+        return static::canAccess();
     }
 
     public function getTitle(): string|Htmlable
@@ -143,6 +143,26 @@ class ScenarioConstructor extends Page
     public function getRecord(): Scenario
     {
         return $this->getScenarioRecord();
+    }
+
+    /**
+     * @return array<string, string|int|null>
+     */
+    public function scenarioBuilderV3Config(): array
+    {
+        return [
+            'scenarioId' => $this->scenarioId,
+            'stateUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.state.show', ['scenario' => $this->scenarioId])
+                : null,
+            'saveUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.state.update', ['scenario' => $this->scenarioId])
+                : null,
+            'publishUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.publish', ['scenario' => $this->scenarioId])
+                : null,
+            'csrfToken' => csrf_token(),
+        ];
     }
 
     public function addStartBuilderBlock(): void

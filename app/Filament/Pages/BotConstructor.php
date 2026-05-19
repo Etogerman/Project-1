@@ -28,7 +28,7 @@ class BotConstructor extends Page
 
     private const NEW_BLOCK_OFFSET = 32;
 
-    protected static ?string $slug = 'constructor';
+    protected static ?string $slug = 'constructor-legacy';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedAdjustmentsHorizontal;
 
@@ -116,7 +116,7 @@ class BotConstructor extends Page
 
     public static function shouldRegisterNavigation(): bool
     {
-        return static::canAccess();
+        return false;
     }
 
     public function getTitle(): string|Htmlable

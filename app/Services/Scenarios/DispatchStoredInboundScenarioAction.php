@@ -36,6 +36,13 @@ class DispatchStoredInboundScenarioAction
             return false;
         }
 
+        if (
+            $storedMessage->message_kind === Message::KIND_INBOUND_USER
+            && $this->startPriorityScenario($channel, $storedMessage)
+        ) {
+            return true;
+        }
+
         if ($this->continueActiveRun($storedMessage)) {
             return true;
         }
@@ -45,6 +52,41 @@ class DispatchStoredInboundScenarioAction
         }
 
         return $this->startMatchingScenario($channel, $storedMessage);
+    }
+
+    public function startPriorityScenario(Channel $channel, Message $storedMessage): bool
+    {
+        if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER || $storedMessage->dialog_id === null) {
+            return false;
+        }
+
+        if ($this->isStoredTelegramScenarioCallback($channel, $storedMessage)) {
+            return false;
+        }
+
+        $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog']);
+
+        foreach ($this->activeBindingsForChannel($channel->id) as $binding) {
+            $runtime = $this->scenarioRegistry->makeRuntime($binding->scenario_code);
+
+            if (! $runtime instanceof PrioritizedScenarioRuntime) {
+                continue;
+            }
+
+            if (! $runtime->shouldStartBeforeActiveRun($storedMessage)) {
+                continue;
+            }
+
+            ProcessScenarioStartJob::dispatch(
+                $storedMessage->id,
+                $storedMessage->dialog_id,
+                $binding->scenario_code,
+            )->afterCommit();
+
+            return true;
+        }
+
+        return false;
     }
 
     public function continueActiveRun(Message $storedMessage): bool
@@ -87,6 +129,22 @@ class DispatchStoredInboundScenarioAction
         }
 
         return false;
+    }
+
+    public function hasActiveV3Run(Message $storedMessage): bool
+    {
+        if ($storedMessage->dialog_id === null) {
+            return false;
+        }
+
+        $activeRun = ScenarioRun::query()
+            ->active()
+            ->where('dialog_id', $storedMessage->dialog_id)
+            ->orderBy('id')
+            ->first();
+
+        return $activeRun instanceof ScenarioRun
+            && (int) data_get($activeRun->state_payload, 'v3.schema_version') === 3;
     }
 
     public function shouldBlockVipIbizaParameterStartBecauseBusyState(Message $storedMessage): bool
@@ -187,9 +245,14 @@ class DispatchStoredInboundScenarioAction
 
     private function isTelegramScenarioCallbackMessage(Message $storedMessage): bool
     {
-        return is_array($storedMessage->raw_payload)
-            && is_array(data_get($storedMessage->raw_payload, 'callback_query'))
-            && str_starts_with((string) data_get($storedMessage->raw_payload, 'callback_query.data', ''), 'scenario:');
+        if (! is_array($storedMessage->raw_payload) || ! is_array(data_get($storedMessage->raw_payload, 'callback_query'))) {
+            return false;
+        }
+
+        $callbackData = (string) data_get($storedMessage->raw_payload, 'callback_query.data', '');
+
+        return str_starts_with($callbackData, 'scenario:')
+            || str_starts_with($callbackData, 'v3b:');
     }
 
     private function isVipIbizaParameterStartMessage(Message $storedMessage): bool

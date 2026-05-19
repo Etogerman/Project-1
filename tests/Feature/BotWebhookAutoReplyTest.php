@@ -7,6 +7,7 @@ use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
+use App\Jobs\ProcessDeferredParameterAutoReplyJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
@@ -34,6 +35,20 @@ use Tests\TestCase;
 class BotWebhookAutoReplyTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_user_facing_bot_jobs_use_bot_replies_queue(): void
+    {
+        config()->set('bots.auto_reply_queue', 'bot-replies');
+        config()->set('bots.scenario_queue', 'bot-replies');
+
+        $this->assertSame('bot-replies', (new ProcessAutoReplyJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessPhoneCaptureFollowUpJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessDeferredParameterAutoReplyJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessDataCollectionQuestionJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessDataCollectionResponseJob(1))->queue);
+        $this->assertSame('bot-replies', (new ProcessScenarioStartJob(1, 1, '__scenario_constructor_workspace'))->queue);
+        $this->assertSame('bot-replies', (new ProcessScenarioInboundJob(1, 1))->queue);
+    }
 
     public function test_telegram_webhook_endpoint_accepts_valid_event_and_queues_auto_reply(): void
     {
@@ -389,6 +404,49 @@ class BotWebhookAutoReplyTest extends TestCase
         $response = $this->withHeaders([
             'X-Max-Bot-Api-Secret' => 'max-secret',
         ])->postJson("/webhooks/max/{$channel->id}", $this->maxBotStartedPayload(payload: 'promo_123'));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_max_text_message_checks_priority_scenario_before_active_run(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $dispatcher = Mockery::mock(DispatchStoredInboundScenarioAction::class);
+        $dispatcher->shouldReceive('shouldBlockVipIbizaParameterStartBecauseBusyState')
+            ->once()
+            ->ordered()
+            ->andReturn(false);
+        $dispatcher->shouldReceive('startPriorityScenario')
+            ->once()
+            ->ordered()
+            ->andReturn(true);
+        $dispatcher->shouldNotReceive('continueActiveRun');
+        $dispatcher->shouldNotReceive('startMatchingScenario');
+        $this->app->instance(DispatchStoredInboundScenarioAction::class, $dispatcher);
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $this->maxPayload(
+            messageId: 'max-priority-start-1',
+            text: 'старт',
+        ));
 
         $response->assertOk()->assertExactJson([
             'ok' => true,
@@ -1129,6 +1187,183 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertSame(1, $this->inboundMessages()->count());
         $this->assertDatabaseMissing('messages', [
             'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+        ]);
+    }
+
+    public function test_telegram_contact_share_suppresses_global_phone_confirmation_during_active_v3_run(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+            'external_username' => 'telegram_user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '300',
+        ]);
+        $scenario = $this->createPublishedScenario('v3_suppression', [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'blocks' => [],
+            ],
+        ]);
+
+        ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'some_block',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'current_block_id' => 'some_block',
+                    'status' => 'waiting_input',
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $payload = $this->telegramPayload(messageId: 910, text: null);
+        $payload['message']['contact'] = [
+            'phone_number' => '+7 999 123 45 67',
+            'user_id' => 200,
+        ];
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertSame(Message::KIND_INBOUND_CONTACT_SHARE, $storedMessage->message_kind);
+        $this->assertDatabaseHas('contact_phone_numbers', [
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_confirmation_suppressed_for_v3',
+        ]);
+    }
+
+    public function test_max_contact_share_suppresses_global_phone_confirmation_after_v3_request_contact_prompt(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '500',
+            'external_username' => 'max_user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '700',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => 'scenario_'.Scenario::CONSTRUCTOR_WORKSPACE_CODE,
+            'external_chat_id' => '700',
+            'text' => 'Стартовое при любом сообщении (серый блок)',
+            'raw_payload' => [
+                'message' => [
+                    'body' => [
+                        'attachments' => [[
+                            'type' => 'inline_keyboard',
+                            'payload' => [
+                                'buttons' => [[[
+                                    'type' => 'request_contact',
+                                    'text' => '1',
+                                ]]],
+                            ],
+                        ]],
+                    ],
+                ],
+            ],
+            'created_at' => now()->subMinute(),
+        ]);
+
+        $payload = $this->maxPayload(messageId: 'max-v3-contact-91', text: null);
+        $payload['message']['body'] = [
+            'mid' => 'max-v3-contact-91',
+            'contact' => [
+                'phone' => '+7 999 123 45 67',
+                'user_id' => 500,
+            ],
+        ];
+
+        $response = $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertSame(Message::KIND_INBOUND_CONTACT_SHARE, $storedMessage->message_kind);
+        $this->assertDatabaseHas('contact_phone_numbers', [
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'source' => ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE,
+        ]);
+        $this->assertDatabaseMissing('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'contact.phone_capture_confirmation_suppressed_for_v3',
         ]);
     }
 
@@ -2272,6 +2507,129 @@ class BotWebhookAutoReplyTest extends TestCase
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
 
         $this->assertSame('warmup:positive', $storedMessage->text);
+    }
+
+    public function test_telegram_v3_inline_button_callback_queues_inbound_job_for_active_run(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => true,
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => '200',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '300',
+        ]);
+        $scenario = $this->createPublishedScenario('v3_inline_callback', [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channel->id],
+                    'match' => 'any_inbound',
+                    'values' => ['*'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Выберите действие',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => [
+                            'placement' => 'inline_message',
+                            'rows' => [[[
+                                'id' => 'btn_catalog',
+                                'text' => 'Получить каталог',
+                                'type' => 'text',
+                                'normalized_text' => 'получить каталог',
+                                'output_id' => 'btn_catalog',
+                                'target_block_id' => 'catalog',
+                            ]]],
+                        ],
+                        'default_target_block_id' => null,
+                    ],
+                    'catalog' => [
+                        'id' => 'catalog',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Каталог',
+                        'message' => [
+                            'text' => 'Вот каталог',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'default_target_block_id' => null,
+                    ],
+                ],
+            ],
+        ]);
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'start',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'current_block_id' => 'start',
+                    'status' => 'waiting_input',
+                    'waiting_output_ids' => ['btn_catalog'],
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $payload = $this->telegramCallbackPayload(
+            callbackId: 'callback-v3-1',
+            callbackData: 'v3b:start:btn_catalog',
+            messageId: 96,
+        );
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload);
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        $storedMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertSame('v3b:start:btn_catalog', $storedMessage->text);
+        Queue::assertPushed(ProcessScenarioInboundJob::class, function (ProcessScenarioInboundJob $job) use ($storedMessage, $run): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->scenarioRunId === $run->id;
+        });
+        Queue::assertNotPushed(ProcessScenarioStartJob::class);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/answerCallbackQuery'
+            && $request['callback_query_id'] === 'callback-v3-1');
     }
 
     public function test_max_contact_share_webhook_saves_phone_and_queues_confirmation_follow_up(): void

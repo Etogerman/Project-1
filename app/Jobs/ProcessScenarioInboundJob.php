@@ -15,6 +15,8 @@ use Throwable;
 
 class ProcessScenarioInboundJob implements ShouldQueue
 {
+    public const DEFAULT_QUEUE = 'bot-replies';
+
     use Dispatchable;
     use InteractsWithQueue;
     use Queueable;
@@ -25,7 +27,16 @@ class ProcessScenarioInboundJob implements ShouldQueue
     public function __construct(
         public int $inboundMessageId,
         public int $scenarioRunId,
-    ) {}
+    ) {
+        $this->onQueue(self::queueName());
+    }
+
+    public static function queueName(): string
+    {
+        $queue = trim((string) config('bots.scenario_queue', self::DEFAULT_QUEUE));
+
+        return $queue !== '' ? $queue : self::DEFAULT_QUEUE;
+    }
 
     /**
      * @return list<int>
@@ -84,13 +95,15 @@ class ProcessScenarioInboundJob implements ShouldQueue
             throw $throwable;
         }
 
-        $run->forceFill([
-            'status' => $result->status,
-            'current_step' => $result->currentStep,
-            'state_payload' => $result->statePayload,
-            'exit_outcome' => $result->exitOutcome,
-            'finished_at' => $result->status === ScenarioRun::STATUS_ACTIVE ? null : now(),
-        ])->save();
+        if (! $result->persisted) {
+            $run->forceFill([
+                'status' => $result->status,
+                'current_step' => $result->currentStep,
+                'state_payload' => $result->statePayload,
+                'exit_outcome' => $result->exitOutcome,
+                'finished_at' => $result->status === ScenarioRun::STATUS_ACTIVE ? null : now(),
+            ])->save();
+        }
 
         if (! $result->consumed) {
             ProcessAutoReplyJob::dispatch($message->id)->afterCommit();

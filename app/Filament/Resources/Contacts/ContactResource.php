@@ -2,16 +2,16 @@
 
 namespace App\Filament\Resources\Contacts;
 
+use App\Data\Contacts\ResolvedContactDeletePreviewResult;
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Filament\Resources\Contacts\Pages\ViewContact;
-use App\Data\Contacts\ResolvedContactDeletePreviewResult;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
-use App\Models\Dialog;
-use App\Models\ContactStartTag;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactStartTag;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
@@ -42,7 +42,6 @@ use Filament\Tables\Table;
 use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
@@ -1727,6 +1726,7 @@ class ContactResource extends Resource
         return match ($source) {
             ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE => 'Telegram contact share',
             ContactPhoneNumber::SOURCE_MAX_CONTACT_SHARE => 'MAX contact share',
+            ContactPhoneNumber::SOURCE_V3_CAPTURE => 'V3-конструктор',
             default => $source ?? '—',
         };
     }

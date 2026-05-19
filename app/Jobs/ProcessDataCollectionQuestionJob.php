@@ -38,7 +38,9 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         public bool $forceSend = false,
         public ?int $contactId = null,
         public ?string $expectedField = null,
-    ) {}
+    ) {
+        $this->onQueue(ProcessAutoReplyJob::queueName());
+    }
 
     /**
      * @return list<int>

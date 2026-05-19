@@ -1,7 +1,8 @@
 <?php
 
-use App\Http\Controllers\Bitrix24CallbackController;
+use App\Http\Controllers\Admin\ScenarioBuilderV3StateController;
 use App\Http\Controllers\Bitrix24AdminOAuthController;
+use App\Http\Controllers\Bitrix24CallbackController;
 use App\Http\Controllers\Bitrix24ProbeController;
 use App\Http\Controllers\BotWebhookController;
 use App\Http\Controllers\TelegramAccountGatewayController;
@@ -41,6 +42,20 @@ Route::get('/admin/bitrix24/oauth/start', [Bitrix24AdminOAuthController::class, 
 
 Route::get('/admin/bitrix24/oauth/callback', [Bitrix24AdminOAuthController::class, 'callback'])
     ->name('admin.bitrix24.oauth.callback');
+
+Route::middleware('auth')
+    ->prefix('/admin/scenario-constructor/{scenario}/v3')
+    ->name('admin.scenario-constructor.v3.')
+    ->group(function (): void {
+        Route::get('/state', [ScenarioBuilderV3StateController::class, 'show'])
+            ->name('state.show');
+
+        Route::put('/state', [ScenarioBuilderV3StateController::class, 'update'])
+            ->name('state.update');
+
+        Route::post('/publish', [ScenarioBuilderV3StateController::class, 'publish'])
+            ->name('publish');
+    });
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])
     ->middleware('throttle:bitrix24-install')
