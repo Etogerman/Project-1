@@ -33,7 +33,7 @@ class AdminPanelProvider extends PanelProvider
             ->id('admin')
             ->path('admin')
             ->login()
-            ->brandName('Abrikosoff Connector')
+            ->brandName('AB Connector')
             ->globalSearch(false)
             ->favicon(fn (): string => asset(match (app()->environment()) {
                 'local' => 'favicons/favicon-local.svg',
