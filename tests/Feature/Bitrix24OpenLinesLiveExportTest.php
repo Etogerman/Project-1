@@ -35,6 +35,7 @@ use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\StoreOutboundAutoReplyMessageAction;
+use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\Bots\StorePhoneCaptureConfirmationAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -235,10 +236,23 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             $dialog,
         );
 
-        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, 6);
+        $scenario = app(StoreOutboundScenarioMessageAction::class)->handle(
+            $channel,
+            $inboundMessage,
+            new AutoReplyDeliveryResult(
+                text: 'Ответ V3-конструктора',
+                externalMessageId: 'scenario-1',
+                rawPayload: ['ok' => true],
+            ),
+            Message::SENT_BY_SYSTEM_CODE_SCENARIO_BUILDER_START_CONDITION,
+            $dialog,
+        );
+
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, 8);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $autoReply->id);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $phoneCapture->id);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $collector->id);
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $scenario->id);
     }
 
     public function test_send_manual_dialog_reply_queues_live_export_job(): void

@@ -7,6 +7,7 @@ use App\Data\Messages\PreparedMessageContentData;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Support\Facades\DB;
 
@@ -14,6 +15,7 @@ class StoreOutboundScenarioMessageAction
 {
     public function __construct(
         private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
+        private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
     ) {}
 
     public function handle(
@@ -62,6 +64,8 @@ class StoreOutboundScenarioMessageAction
                 null,
                 $systemCode,
             );
+
+            $this->queueBitrix24LiveMessageExportAction->handle($outboundMessage);
 
             return $outboundMessage;
         });
