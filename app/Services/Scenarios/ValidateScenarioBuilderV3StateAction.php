@@ -40,7 +40,6 @@ class ValidateScenarioBuilderV3StateAction
         'contains',
         'starts',
         'starts_with',
-        'regex',
     ];
 
     private const CONTACT_PHONE_CONDITIONS = [

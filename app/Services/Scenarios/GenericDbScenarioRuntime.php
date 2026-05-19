@@ -179,14 +179,26 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         try {
             $this->processClaimedV3ScheduledTransition($transition);
         } catch (Throwable $throwable) {
-            report($throwable);
+            $safeErrorMessage = $this->safeV3ScheduledTransitionErrorMessage($throwable->getMessage(), $transition);
+
+            Log::warning('scenario.v3.delayed_transition.exception', [
+                'transition_id' => $transition->id,
+                'scenario_code' => $transition->scenario_code,
+                'scenario_run_id' => $transition->scenario_run_id,
+                'dialog_id' => $transition->dialog_id,
+                'published_version_id' => $transition->published_version_id,
+                'edge_key' => $transition->edge_key,
+                'exception' => get_class($throwable),
+                'error_message' => $safeErrorMessage,
+            ]);
+
             $transition->refresh();
 
             if ($transition->status === ScenarioV3ScheduledTransition::STATUS_PROCESSING) {
                 $this->finishV3ScheduledTransition(
                     $transition,
                     ScenarioV3ScheduledTransition::STATUS_FAILED,
-                    $throwable->getMessage(),
+                    $safeErrorMessage,
                 );
             }
         }
@@ -1890,6 +1902,23 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
         }
 
+        if ($isNonStateBlock) {
+            if ($previousBlockId !== null) {
+                return $this->activeProgress($previousBlockId, $statePayload);
+            }
+
+            data_set($statePayload, 'v3.status', 'completed');
+            data_set($statePayload, 'v3.current_block_id', null);
+            data_set($statePayload, 'v3.waiting_output_ids', []);
+
+            return [
+                'status' => ScenarioRun::STATUS_COMPLETED,
+                'current_step' => null,
+                'state_payload' => $statePayload,
+                'exit_outcome' => 'completed',
+            ];
+        }
+
         $automaticProgress = $this->advanceV3AutomaticEdges(
             $message,
             $runtime,
@@ -1903,34 +1932,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return $automaticProgress;
         }
 
-        if (! $isNonStateBlock && $waitingButtonRows !== []) {
+        if ($waitingButtonRows !== []) {
             return $this->activeProgress(
                 $blockId,
                 $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
             );
         }
 
-        if ($isNonStateBlock && $previousBlockId !== null) {
-            return $this->activeProgress($previousBlockId, $statePayload);
-        }
-
-        if (! $isNonStateBlock) {
-            return $this->activeProgress(
-                $blockId,
-                $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
-            );
-        }
-
-        data_set($statePayload, 'v3.status', 'completed');
-        data_set($statePayload, 'v3.current_block_id', null);
-        data_set($statePayload, 'v3.waiting_output_ids', []);
-
-        return [
-            'status' => ScenarioRun::STATUS_COMPLETED,
-            'current_step' => null,
-            'state_payload' => $statePayload,
-            'exit_outcome' => 'completed',
-        ];
+        return $this->activeProgress(
+            $blockId,
+            $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
+        );
     }
 
     /**
@@ -2213,10 +2225,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         string $status,
         ?string $errorMessage = null,
     ): void {
+        $safeErrorMessage = $this->safeV3ScheduledTransitionErrorMessage($errorMessage, $transition);
+
         $transition->forceFill([
             'status' => $status,
             'finished_at' => now(),
-            'error_message' => $errorMessage,
+            'error_message' => $safeErrorMessage,
         ])->save();
 
         Log::info('scenario.v3.delayed_transition.finished', [
@@ -2227,8 +2241,31 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'dialog_id' => $transition->dialog_id,
             'published_version_id' => $transition->published_version_id,
             'edge_key' => $transition->edge_key,
-            'error_message' => $errorMessage,
+            'error_message' => $safeErrorMessage,
         ]);
+    }
+
+    private function safeV3ScheduledTransitionErrorMessage(
+        ?string $message,
+        ScenarioV3ScheduledTransition $transition,
+    ): ?string {
+        if (! filled($message)) {
+            return null;
+        }
+
+        $safeMessage = trim((string) $message);
+        $channel = $transition->inboundMessage()->with('channel')->first()?->channel;
+
+        foreach ([$channel?->getToken(), $channel?->getWebhookSecret()] as $secret) {
+            if (filled($secret)) {
+                $safeMessage = str_replace((string) $secret, '[secret]', $safeMessage);
+            }
+        }
+
+        $safeMessage = preg_replace('/bot[0-9A-Za-z:_-]+(?=\/)/u', 'bot[secret]', $safeMessage) ?? $safeMessage;
+        $safeMessage = preg_replace('/([?&](?:token|access_token|auth|secret)=)[^&\s]+/iu', '$1[secret]', $safeMessage) ?? $safeMessage;
+
+        return mb_substr($safeMessage, 0, 1000);
     }
 
     private function v3ScheduledTransitionRequiresSourceBlock(ScenarioV3ScheduledTransition $transition): bool
@@ -3123,7 +3160,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 || str_contains($messageParameter, $expectedValue),
             'starts', 'starts_with' => str_starts_with($messageText, $expectedValue)
                 || str_starts_with($messageParameter, $expectedValue),
-            'regex' => $this->messageMatchesV3Regex($messageText, $messageParameter, $expectedValue),
             AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER => $messageParameter === $expectedValue,
             AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD => $messageText === $expectedValue,
             AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER => $messageText === $expectedValue
@@ -3150,16 +3186,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private function messageIsV3Callback(Message $message): bool
     {
         return is_array(data_get($message->raw_payload, 'callback_query'));
-    }
-
-    private function messageMatchesV3Regex(string $messageText, string $messageParameter, string $pattern): bool
-    {
-        try {
-            return @preg_match('/'.$pattern.'/u', $messageText) === 1
-                || @preg_match('/'.$pattern.'/u', $messageParameter) === 1;
-        } catch (Throwable) {
-            return false;
-        }
     }
 
     private function normalizeV3ButtonText(string $text): string

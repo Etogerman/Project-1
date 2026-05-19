@@ -1328,6 +1328,37 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertUnprocessable();
     }
 
+    public function test_put_state_rejects_regex_start_condition_match(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Test']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_regex_start_disabled',
+            'name' => 'V3 Regex Start Disabled',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $settings = $this->startSettings('^start.*$', [(int) $channel->id]);
+        $settings['modules'][0]['payload']['match'] = 'regex';
+
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 64, 'y' => 64],
+                'settings_payload' => $settings,
+            ],
+        ]);
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.blocks.0.settings_payload.modules.0.payload.match',
+            ]);
+    }
+
     public function test_put_state_rejects_unknown_channel_id(): void
     {
         $admin = $this->adminUser();

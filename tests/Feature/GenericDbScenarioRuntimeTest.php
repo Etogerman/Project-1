@@ -1451,6 +1451,71 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['Стартовый блок', 'Автоматический переход'], $sentTexts);
     }
 
+    public function test_v3_delayed_transition_error_message_is_sanitized(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_delayed_error_sanitize', $this->v3AutomaticRuntimeSchema($channel->id));
+
+        $inboundMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'start',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'published_version_id' => $scenario->publishedVersion?->id,
+                    'current_block_id' => 'start',
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+        ]);
+        $transition = ScenarioV3ScheduledTransition::query()->create([
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'inbound_message_id' => $inboundMessage->id,
+            'scenario_code' => $scenario->code,
+            'published_version_id' => $scenario->publishedVersion?->id,
+            'edge_key' => 'edge_auto_next',
+            'edge_id' => 'edge_auto_next',
+            'source_block_id' => 'start',
+            'target_block_id' => 'next',
+            'delay_payload' => ['type' => 'relative', 'value' => 5, 'unit' => 'min'],
+            'scheduled_for' => now()->addMinutes(5),
+            'status' => ScenarioV3ScheduledTransition::STATUS_PROCESSING,
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+        $this->assertInstanceOf(\App\Services\Scenarios\GenericDbScenarioRuntime::class, $runtime);
+
+        $method = new \ReflectionMethod($runtime, 'finishV3ScheduledTransition');
+        $method->setAccessible(true);
+        $method->invoke(
+            $runtime,
+            $transition,
+            ScenarioV3ScheduledTransition::STATUS_FAILED,
+            'POST https://api.telegram.org/bottelegram-token/sendMessage failed token=telegram-token',
+        );
+
+        $transition->refresh();
+
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_FAILED, $transition->status);
+        $this->assertStringNotContainsString('telegram-token', (string) $transition->error_message);
+        $this->assertStringContainsString('[secret]', (string) $transition->error_message);
+    }
+
     public function test_v3_scheduled_automatic_edge_is_scheduled_for_exact_time_and_processed(): void
     {
         Queue::fake([
@@ -2609,6 +2674,84 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Кнопка сработала');
+    }
+
+    public function test_v3_non_state_start_does_not_follow_outgoing_edges(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9311]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9312]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3NonStateStartOverlayRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.overlay.default_target_block_id', 'after_overlay');
+        data_set($schema, 'builder_v3_runtime.blocks.after_overlay', [
+            'id' => 'after_overlay',
+            'db_id' => 4,
+            'kind' => 'state',
+            'title' => 'После серого',
+            'message' => [
+                'text' => 'Этого сообщения быть не должно',
+                'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            ],
+            'buttons' => null,
+            'default_target_block_id' => null,
+        ]);
+        $scenario = $this->createPublishedScenario('v3_non_state_ignores_edges', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'block_1',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'published_version_id' => $scenario->publishedVersion?->id,
+                    'status' => 'waiting_input',
+                    'current_block_id' => 'block_1',
+                    'waiting_output_ids' => ['btn_1'],
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт серый',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('block_1', $run->current_step);
+        $this->assertSame('block_1', data_get($run->state_payload, 'v3.current_block_id'));
+
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Серый ответ'], $sentTexts);
     }
 
     public function test_v3_runtime_accepts_legacy_db_id_current_step_and_moves_to_card_id(): void
