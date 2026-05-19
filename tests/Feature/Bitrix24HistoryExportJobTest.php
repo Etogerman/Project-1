@@ -297,6 +297,19 @@ class Bitrix24HistoryExportJobTest extends TestCase
             'created_at' => $sameMoment,
         ]);
 
+        $fourth = Message::factory()->create([
+            'contact_identity_id' => $rootIdentity->id,
+            'contact_id' => $root->id,
+            'channel_id' => $rootIdentity->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_SCENARIO_BUILDER_START_CONDITION,
+            'text' => 'Ответ V3-конструктора',
+            'received_at' => $sameMoment->copy()->addMinute(),
+            'created_at' => $sameMoment->copy()->addMinute(),
+        ]);
+
         Http::fake([
             'https://client-endpoint.example/rest/crm.timeline.comment.add.json' => Http::response([
                 'result' => 910,
@@ -310,7 +323,7 @@ class Bitrix24HistoryExportJobTest extends TestCase
         $this->assertSame(Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED, $root->bitrix24_history_sync_status);
         $this->assertFalse($root->bitrix24_history_sync_pending);
 
-        Http::assertSent(function ($request) use ($first, $second, $third): bool {
+        Http::assertSent(function ($request) use ($first, $second, $third, $fourth): bool {
             if ($request->url() !== 'https://client-endpoint.example/rest/crm.timeline.comment.add.json') {
                 return false;
             }
@@ -319,13 +332,16 @@ class Bitrix24HistoryExportJobTest extends TestCase
             $firstPosition = mb_strpos($comment, $first->text);
             $secondPosition = mb_strpos($comment, $second->text);
             $thirdPosition = mb_strpos($comment, 'Клиент поделился номером телефона');
+            $fourthPosition = mb_strpos($comment, $fourth->text);
 
             return $request['fields']['ENTITY_TYPE'] === 'contact'
                 && $firstPosition !== false
                 && $secondPosition !== false
                 && $thirdPosition !== false
+                && $fourthPosition !== false
                 && $firstPosition < $secondPosition
                 && $secondPosition < $thirdPosition
+                && $thirdPosition < $fourthPosition
                 && str_contains($comment, 'Клиент / Telegram')
                 && str_contains($comment, 'Оператор / MAX');
         });
@@ -345,6 +361,12 @@ class Bitrix24HistoryExportJobTest extends TestCase
         ]);
         $this->assertDatabaseHas('bitrix24_message_exports', [
             'message_id' => $third->id,
+            'contact_id' => $root->id,
+            'export_mode' => Bitrix24MessageExport::MODE_HISTORY,
+            'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
+        ]);
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $fourth->id,
             'contact_id' => $root->id,
             'export_mode' => Bitrix24MessageExport::MODE_HISTORY,
             'export_status' => Bitrix24MessageExport::STATUS_EXPORTED,
