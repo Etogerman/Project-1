@@ -3072,6 +3072,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                         'target_block_id' => filled($button['target_block_id'] ?? null)
                             ? (string) $button['target_block_id']
                             : null,
+                        'edge_id' => filled($button['edge_id'] ?? null) ? (string) $button['edge_id'] : null,
+                        'edge_key' => filled($button['edge_key'] ?? null) ? (string) $button['edge_key'] : null,
+                        'edge' => is_array($button['edge'] ?? null) ? $button['edge'] : null,
                     ];
                 })
                 ->values()
