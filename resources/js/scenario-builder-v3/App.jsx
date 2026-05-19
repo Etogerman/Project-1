@@ -1623,7 +1623,7 @@ function ScenarioNode({
     onStartConnection,
     onStartDefaultConnection,
 }) {
-    const outputs = blockOutputs(block);
+    const visibleOutputs = visibleBlockOutputs(block);
     const start = findModule(block.settings_payload, 'start_condition');
     const message = findModule(block.settings_payload, 'message');
     const buttons = findModule(block.settings_payload, 'buttons');
@@ -1693,27 +1693,29 @@ function ScenarioNode({
                 ) : null}
             </div>
 
-            <div className="ac-v3-builder__ports">
-                {outputs.map((output) => (
-                    <button
-                        key={output.id ?? 'default'}
-                        type="button"
-                        className={[
-                            connectedOutputIds.has(output.id ?? 'default') ? 'is-connected' : '',
-                            output.kind === 'default' ? 'is-default-output' : 'is-button-output',
-                        ].filter(Boolean).join(' ')}
-                        title={output.kind === 'default' ? 'Связать автопереход с блоком' : 'Связать кнопку с блоком'}
-                        onPointerDown={(event) => onStartConnection(event, block, output)}
-                        onClick={(event) => event.stopPropagation()}
-                    >
-                        <span>
-                            <strong>{output.label}</strong>
-                            {output.caption ? <em>{output.caption}</em> : null}
-                        </span>
-                        <i data-port-key={portAnchorKey(block.client_key, output.id)} />
-                    </button>
-                ))}
-            </div>
+            {visibleOutputs.length > 0 ? (
+                <div className="ac-v3-builder__ports">
+                    {visibleOutputs.map((output) => (
+                        <button
+                            key={output.id ?? 'default'}
+                            type="button"
+                            className={[
+                                connectedOutputIds.has(output.id ?? 'default') ? 'is-connected' : '',
+                                output.kind === 'default' ? 'is-default-output' : 'is-button-output',
+                            ].filter(Boolean).join(' ')}
+                            title={output.kind === 'default' ? 'Связать автопереход с блоком' : 'Связать кнопку с блоком'}
+                            onPointerDown={(event) => onStartConnection(event, block, output)}
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <span>
+                                <strong>{output.label}</strong>
+                                {output.caption ? <em>{output.caption}</em> : null}
+                            </span>
+                            <i data-port-key={portAnchorKey(block.client_key, output.id)} />
+                        </button>
+                    ))}
+                </div>
+            ) : null}
         </article>
     );
 }
@@ -1738,8 +1740,7 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
     const source = edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors);
     const target = edgeTargetAnchor(targetBlock, source, anchors);
     const d = edgeCurvePath(source, target);
-    const labelX = (source.x + target.x) / 2;
-    const labelY = (source.y + target.y) / 2 - 8;
+    const labelPoint = edgeCurveLabelPoint(source, target);
     const isButton = isButtonEdge(edge);
     const visualKind = edgeVisualKind(edge);
     const edgeClassName = [
@@ -1765,7 +1766,15 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
                 />
             ) : null}
             {label ? (
-                <text x={labelX} y={labelY} className="ac-v3-builder__edge-label">{label}</text>
+                <text
+                    x={labelPoint.x}
+                    y={labelPoint.y}
+                    className="ac-v3-builder__edge-label"
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                >
+                    {label}
+                </text>
             ) : null}
         </g>
     );
@@ -1792,6 +1801,18 @@ function edgeTargetAnchor(targetBlock, source, anchors) {
 }
 
 function edgeCurvePath(source, target) {
+    const { c1, c2 } = edgeCurveControlPoints(source, target);
+
+    return `M ${source.x} ${source.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${target.x} ${target.y}`;
+}
+
+function edgeCurveLabelPoint(source, target) {
+    const { c1, c2 } = edgeCurveControlPoints(source, target);
+
+    return cubicBezierPoint(source, c1, c2, target, 0.5);
+}
+
+function edgeCurveControlPoints(source, target) {
     const sourceVector = sideVector(source.side);
     const targetVector = sideVector(target.side);
     const distance = Math.hypot(target.x - source.x, target.y - source.y);
@@ -1805,7 +1826,20 @@ function edgeCurvePath(source, target) {
         y: target.y + (targetVector.y * curve),
     };
 
-    return `M ${source.x} ${source.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${target.x} ${target.y}`;
+    return { c1, c2 };
+}
+
+function cubicBezierPoint(p0, p1, p2, p3, t) {
+    const oneMinusT = 1 - t;
+    const a = oneMinusT ** 3;
+    const b = 3 * (oneMinusT ** 2) * t;
+    const c = 3 * oneMinusT * (t ** 2);
+    const d = t ** 3;
+
+    return {
+        x: (a * p0.x) + (b * p1.x) + (c * p2.x) + (d * p3.x),
+        y: (a * p0.y) + (b * p1.y) + (c * p2.y) + (d * p3.y),
+    };
 }
 
 function sideVector(side) {
@@ -3547,9 +3581,17 @@ function blockOutputs(block) {
     return [DEFAULT_OUTPUT];
 }
 
+function visibleBlockOutputs(block) {
+    return blockOutputs(block).filter((output) => output.id !== null && output.kind !== 'default');
+}
+
 function outputAnchor(block, outputId) {
+    if (outputId === null) {
+        return blockSideAnchor(block, 'right');
+    }
+
     const position = blockPosition(block);
-    const outputs = blockOutputs(block);
+    const outputs = visibleBlockOutputs(block);
     const index = Math.max(0, outputs.findIndex((output) => output.id === outputId));
 
     return {
@@ -3642,10 +3684,10 @@ function blockRect(block, anchors = {}) {
 }
 
 function blockHeight(block) {
-    const outputs = blockOutputs(block);
+    const outputs = visibleBlockOutputs(block);
     const portsHeight = (outputs.length * PORT_ROW_HEIGHT)
         + (Math.max(0, outputs.length - 1) * PORT_ROW_GAP)
-        + 12;
+        + (outputs.length > 0 ? 12 : 0);
 
     return Math.max(186, portsTopOffset(block) + portsHeight);
 }
