@@ -31,11 +31,13 @@ use App\Models\Tag;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
+use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\Feature\Concerns\BuildsIbizaMvpSchema;
@@ -1687,6 +1689,84 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Телефон сохранён');
     }
 
+    public function test_v3_contact_phone_capture_logs_safe_error_without_phone(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9433]]),
+        ]);
+        Log::spy();
+
+        $addContactPhoneAction = Mockery::mock(AddContactPhoneAction::class);
+        $addContactPhoneAction
+            ->shouldReceive('handle')
+            ->once()
+            ->andThrow(new \RuntimeException('SQL failed for phone +79263527111'));
+        $this->app->instance(AddContactPhoneAction::class, $addContactPhoneAction);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_contact_phone_safe_log', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_contact_phone',
+                targetBlockId: 'accepted',
+                inputCapture: [
+                    'enabled' => true,
+                    'field_scope' => 'contact',
+                    'field_key' => 'phone',
+                    'data_type' => 'phone',
+                ],
+            ),
+        ], [
+            'accepted' => 'Телефон сохранён',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, '+7 926 352-71-11');
+
+        $run->refresh();
+        $dialog->refresh();
+
+        $this->assertSame('start', $run->current_step);
+        $this->assertNull($dialog->confirmed_phone_normalized);
+
+        Log::shouldHaveReceived('warning')
+            ->with('scenario.v3_contact_phone_capture_failed', Mockery::on(function (array $context): bool {
+                $encoded = json_encode($context, JSON_UNESCAPED_UNICODE) ?: '';
+
+                return ($context['exception'] ?? null) === \RuntimeException::class
+                    && ($context['error_message'] ?? null) === 'Не удалось сохранить телефон из V3-сценария.'
+                    && ! array_key_exists('error', $context)
+                    && ! str_contains($encoded, '+79263527111')
+                    && ! str_contains($encoded, '79263527111');
+            }))
+            ->once();
+    }
+
     public function test_v3_wait_reply_contact_first_name_capture_respects_manual_source_and_advances(): void
     {
         Queue::fake();
@@ -2268,6 +2348,83 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ScenarioV3ScheduledTransition::STATUS_PASSED,
             ScenarioV3ScheduledTransition::query()->findOrFail($transitionId)->status,
         );
+        $this->assertSame(2, $sendCount);
+    }
+
+    public function test_v3_delayed_transition_stale_processing_can_be_reclaimed(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3ScheduledTransitionJob::class,
+        ]);
+
+        $sendCount = 0;
+        $sendAction = Mockery::mock(SendBotDialogTextAction::class);
+        $sendAction
+            ->shouldReceive('handleMessage')
+            ->twice()
+            ->andReturnUsing(function (...$args) use (&$sendCount): BotDialogTextSendResult {
+                $sendCount++;
+                $message = $args[0];
+                $text = (string) $args[1];
+                $dialog = $message instanceof Message && $message->dialog instanceof Dialog
+                    ? $message->dialog
+                    : Dialog::query()->findOrFail($message->dialog_id);
+
+                return $this->successfulBotSendResult($dialog, $text, 'mock-v3-delayed-stale-'.$sendCount);
+            });
+        $this->app->instance(SendBotDialogTextAction::class, $sendAction);
+
+        $this->travelTo(now()->startOfSecond());
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_delayed_stale_processing',
+            $this->v3AutomaticRuntimeSchema($channel->id, delay: [
+                'type' => 'relative',
+                'value' => 5,
+                'unit' => 'min',
+                'cancel_if_left_source_block' => true,
+            ]),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $transition = ScenarioV3ScheduledTransition::query()->firstOrFail();
+
+        $this->travelTo(now()->addMinutes(5));
+        $transition->forceFill([
+            'status' => ScenarioV3ScheduledTransition::STATUS_PROCESSING,
+            'processing_started_at' => now()->subMinutes(11),
+        ])->save();
+
+        (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $transition->refresh();
+
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_PASSED, $transition->status);
+        $this->assertSame('next', $run->current_step);
         $this->assertSame(2, $sendCount);
     }
 

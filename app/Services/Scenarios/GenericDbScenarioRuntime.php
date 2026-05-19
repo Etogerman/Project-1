@@ -79,6 +79,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_OUTBOUND_PROCESSING_TIMEOUT_SECONDS = 600;
 
+    private const V3_SCHEDULED_TRANSITION_PROCESSING_TIMEOUT_SECONDS = 600;
+
     private const V3_OUTBOUND_RETRY_BACKOFF_SECONDS = [10, 30, 60, 180];
 
     private const V3_CONTACT_CAPTURE_FIELDS = [
@@ -1783,7 +1785,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'scenario_code' => $this->code(),
                 'contact_id' => $contact->id,
                 'message_id' => $message->id,
-                'error' => $throwable->getMessage(),
+                'exception' => get_class($throwable),
+                'exception_code' => $throwable->getCode(),
+                'error_message' => 'Не удалось сохранить телефон из V3-сценария.',
             ]);
 
             return false;
@@ -2119,14 +2123,22 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ->lockForUpdate()
                 ->first();
 
-            if (
-                ! $lockedTransition instanceof ScenarioV3ScheduledTransition
-                || $lockedTransition->status !== ScenarioV3ScheduledTransition::STATUS_SCHEDULED
-            ) {
+            if (! $lockedTransition instanceof ScenarioV3ScheduledTransition) {
                 return null;
             }
 
-            if ($lockedTransition->scheduled_for !== null && $lockedTransition->scheduled_for->isFuture()) {
+            $isScheduled = $lockedTransition->status === ScenarioV3ScheduledTransition::STATUS_SCHEDULED;
+            $isStaleProcessing = $lockedTransition->status === ScenarioV3ScheduledTransition::STATUS_PROCESSING
+                && (
+                    $lockedTransition->processing_started_at === null
+                    || $lockedTransition->processing_started_at->lte(now()->subSeconds(self::V3_SCHEDULED_TRANSITION_PROCESSING_TIMEOUT_SECONDS))
+                );
+
+            if (! $isScheduled && ! $isStaleProcessing) {
+                return null;
+            }
+
+            if ($isScheduled && $lockedTransition->scheduled_for !== null && $lockedTransition->scheduled_for->isFuture()) {
                 return null;
             }
 

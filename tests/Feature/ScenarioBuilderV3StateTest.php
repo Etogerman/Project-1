@@ -2087,6 +2087,59 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_employee_without_channel_edit_cannot_see_or_save_v3_start_channels(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Канал без права',
+            'is_active' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_channel_permissions',
+            'name' => 'V3 Channel Permissions',
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'scenarios.edit')
+            ->update(['granted' => true]);
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'channels.edit')
+            ->update(['granted' => false]);
+
+        $state = $this->actingAs($employee->fresh())
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+
+        $this->assertNotContains(
+            $channel->id,
+            collect($state['catalogs']['channels'])->pluck('id')->all(),
+        );
+
+        $this->actingAs($employee->fresh())
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings('/start', [(int) $channel->id], 'Привет', 'Далее'),
+                ],
+            ]))
+            ->assertJsonValidationErrors(['builder.start_condition.channels']);
+
+        $this->assertDatabaseMissing('scenario_builder_block_channels', [
+            'channel_id' => $channel->id,
+        ]);
+    }
+
     private function saveSingleStartBlockState(User $admin, Scenario $scenario, Channel $channel): array
     {
         $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
