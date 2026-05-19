@@ -16,6 +16,8 @@ class ScenarioV3OutboundMessage extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    public const STATUS_FAILED_UNCERTAIN = 'failed_uncertain';
+
     /**
      * @var list<string>
      */
@@ -77,6 +79,7 @@ class ScenarioV3OutboundMessage extends Model
             self::STATUS_PROCESSING,
             self::STATUS_SENT,
             self::STATUS_FAILED,
+            self::STATUS_FAILED_UNCERTAIN,
         ];
     }
 
@@ -90,6 +93,7 @@ class ScenarioV3OutboundMessage extends Model
             self::STATUS_PROCESSING => 'Отправляется',
             self::STATUS_SENT => 'Отправлено',
             self::STATUS_FAILED => 'Ошибка доставки',
+            self::STATUS_FAILED_UNCERTAIN => 'Статус доставки неизвестен',
         ];
     }
 

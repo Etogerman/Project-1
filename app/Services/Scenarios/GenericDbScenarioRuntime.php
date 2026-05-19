@@ -77,6 +77,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_OUTBOUND_MAX_ATTEMPTS = 5;
 
+    private const V3_OUTBOUND_PROCESSING_TIMEOUT_SECONDS = 600;
+
     private const V3_OUTBOUND_RETRY_BACKOFF_SECONDS = [10, 30, 60, 180];
 
     private const V3_CONTACT_CAPTURE_FIELDS = [
@@ -3337,7 +3339,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $payload = is_array($outboundMessage->delivery_payload) ? $outboundMessage->delivery_payload : [];
 
         try {
-            $sentMessage = $this->dispatchScenarioMessageNow(
+            $this->markV3OutboundExternalDeliveryStarted($outboundMessage);
+
+            $delivery = $this->dispatchScenarioMessageNow(
                 $inboundMessage,
                 (string) $outboundMessage->text,
                 (string) $outboundMessage->text_format,
@@ -3348,19 +3352,50 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 is_string($payload['v3_callback_block_id'] ?? null) ? (string) $payload['v3_callback_block_id'] : null,
             );
 
+            $sentMessage = $delivery['sent_message'];
+            $deliveryError = $delivery['error'];
+
+            if ($sentMessage instanceof Message) {
+                $this->finishV3OutboundMessage($outboundMessage, $sentMessage);
+
+                return;
+            }
+
+            if ($delivery['delivery_accepted']) {
+                $this->finishV3OutboundMessage(
+                    $outboundMessage,
+                    null,
+                    $this->safeV3OutboundMessageErrorMessage(
+                        $deliveryError instanceof Throwable ? $deliveryError->getMessage() : 'Сообщение могло уйти во внешний канал, но локальная запись не сохранилась.',
+                        $outboundMessage,
+                    ),
+                    retryable: false,
+                    uncertain: true,
+                );
+
+                Log::warning('scenario.v3_outbound_message.delivery_uncertain', [
+                    'outbound_message_id' => $outboundMessage->id,
+                    'scenario_code' => $outboundMessage->scenario_code,
+                    'scenario_run_id' => $outboundMessage->scenario_run_id,
+                    'dialog_id' => $outboundMessage->dialog_id,
+                    'exception' => $deliveryError instanceof Throwable ? get_class($deliveryError) : null,
+                ]);
+
+                return;
+            }
+
             if (! $sentMessage instanceof Message) {
                 $this->finishV3OutboundMessage($outboundMessage, null, 'Канал не принял V3-сообщение.', retryable: true);
 
                 return;
             }
-
-            $this->finishV3OutboundMessage($outboundMessage, $sentMessage);
         } catch (Throwable $throwable) {
             $this->finishV3OutboundMessage(
                 $outboundMessage,
                 null,
                 $this->safeV3OutboundMessageErrorMessage($throwable->getMessage(), $outboundMessage),
-                retryable: true,
+                retryable: false,
+                uncertain: true,
             );
 
             Log::warning('scenario.v3_outbound_message.exception', [
@@ -3403,28 +3438,66 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ? (int) $outboundMessage->id
             : (int) $outboundMessage;
 
-        return DB::transaction(function () use ($outboundMessageId): ?ScenarioV3OutboundMessage {
+        $staleUncertainMessage = null;
+        $staleUncertainErrorMessage = 'Отправка зависла после начала внешней доставки; автоматический повтор остановлен.';
+
+        $claimedMessage = DB::transaction(function () use ($outboundMessageId, &$staleUncertainMessage, $staleUncertainErrorMessage): ?ScenarioV3OutboundMessage {
             $lockedMessage = ScenarioV3OutboundMessage::query()
                 ->whereKey($outboundMessageId)
                 ->lockForUpdate()
                 ->first();
 
-            if (
-                ! $lockedMessage instanceof ScenarioV3OutboundMessage
-                || $lockedMessage->status !== ScenarioV3OutboundMessage::STATUS_PENDING
-                || ($lockedMessage->available_at !== null && $lockedMessage->available_at->isFuture())
-            ) {
+            if (! $lockedMessage instanceof ScenarioV3OutboundMessage) {
+                return null;
+            }
+
+            $isPending = $lockedMessage->status === ScenarioV3OutboundMessage::STATUS_PENDING
+                && ($lockedMessage->available_at === null || ! $lockedMessage->available_at->isFuture());
+            $isStaleProcessing = $lockedMessage->status === ScenarioV3OutboundMessage::STATUS_PROCESSING
+                && (
+                    $lockedMessage->processing_started_at === null
+                    || $lockedMessage->processing_started_at->lte(now()->subSeconds(self::V3_OUTBOUND_PROCESSING_TIMEOUT_SECONDS))
+                );
+
+            if ($isStaleProcessing && $this->v3OutboundExternalDeliveryWasStarted($lockedMessage)) {
+                $lockedMessage->forceFill([
+                    'status' => ScenarioV3OutboundMessage::STATUS_FAILED_UNCERTAIN,
+                    'failed_at' => now(),
+                    'processing_started_at' => null,
+                    'error_message' => $staleUncertainErrorMessage,
+                ])->save();
+
+                $staleUncertainMessage = $lockedMessage->fresh();
+
+                return null;
+            }
+
+            if (! $isPending && ! $isStaleProcessing) {
                 return null;
             }
 
             $lockedMessage->forceFill([
                 'status' => ScenarioV3OutboundMessage::STATUS_PROCESSING,
                 'attempts' => ((int) $lockedMessage->attempts) + 1,
+                'available_at' => null,
                 'processing_started_at' => now(),
             ])->save();
 
             return $lockedMessage->fresh();
         });
+
+        if ($claimedMessage instanceof ScenarioV3OutboundMessage) {
+            ProcessScenarioV3OutboundMessageJob::dispatch((int) $claimedMessage->id)
+                ->delay(now()->addSeconds(self::V3_OUTBOUND_PROCESSING_TIMEOUT_SECONDS))
+                ->afterCommit();
+        }
+
+        if ($staleUncertainMessage instanceof ScenarioV3OutboundMessage) {
+            $this->markV3RunDeliveryFailure($staleUncertainMessage, $staleUncertainErrorMessage);
+            $this->failV3ScheduledTransitionDelivery($staleUncertainMessage, $staleUncertainErrorMessage);
+        }
+
+        return $claimedMessage;
     }
 
     private function finishV3OutboundMessage(
@@ -3432,6 +3505,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ?Message $sentMessage,
         ?string $errorMessage = null,
         bool $retryable = false,
+        bool $uncertain = false,
     ): void {
         $outboundMessage->refresh();
 
@@ -3452,7 +3526,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $safeErrorMessage = $this->safeV3OutboundMessageErrorMessage($errorMessage, $outboundMessage);
-        $hasAttemptsLeft = $retryable && (int) $outboundMessage->attempts < self::V3_OUTBOUND_MAX_ATTEMPTS;
+        $hasAttemptsLeft = ! $uncertain
+            && $retryable
+            && (int) $outboundMessage->attempts < self::V3_OUTBOUND_MAX_ATTEMPTS;
 
         if ($hasAttemptsLeft) {
             $availableAt = now()->addSeconds($this->v3OutboundRetryBackoffSeconds((int) $outboundMessage->attempts));
@@ -3461,6 +3537,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'status' => ScenarioV3OutboundMessage::STATUS_PENDING,
                 'available_at' => $availableAt,
                 'processing_started_at' => null,
+                'delivery_payload' => $this->v3OutboundDeliveryPayloadWithoutExternalStartedFlag($outboundMessage),
                 'error_message' => $safeErrorMessage,
             ])->save();
 
@@ -3472,9 +3549,14 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $outboundMessage->forceFill([
-            'status' => ScenarioV3OutboundMessage::STATUS_FAILED,
+            'status' => $uncertain
+                ? ScenarioV3OutboundMessage::STATUS_FAILED_UNCERTAIN
+                : ScenarioV3OutboundMessage::STATUS_FAILED,
             'failed_at' => now(),
             'processing_started_at' => null,
+            'delivery_payload' => $uncertain
+                ? $outboundMessage->delivery_payload
+                : $this->v3OutboundDeliveryPayloadWithoutExternalStartedFlag($outboundMessage),
             'error_message' => $safeErrorMessage,
         ])->save();
 
@@ -3488,6 +3570,32 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $attempts - 1,
             count(self::V3_OUTBOUND_RETRY_BACKOFF_SECONDS) - 1,
         ))];
+    }
+
+    private function markV3OutboundExternalDeliveryStarted(ScenarioV3OutboundMessage $outboundMessage): void
+    {
+        $payload = is_array($outboundMessage->delivery_payload) ? $outboundMessage->delivery_payload : [];
+        $payload['external_delivery_started_at'] = now()->toJSON();
+
+        $outboundMessage->forceFill([
+            'delivery_payload' => $payload,
+        ])->save();
+    }
+
+    private function v3OutboundExternalDeliveryWasStarted(ScenarioV3OutboundMessage $outboundMessage): bool
+    {
+        return filled(data_get($outboundMessage->delivery_payload, 'external_delivery_started_at'));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3OutboundDeliveryPayloadWithoutExternalStartedFlag(ScenarioV3OutboundMessage $outboundMessage): array
+    {
+        $payload = is_array($outboundMessage->delivery_payload) ? $outboundMessage->delivery_payload : [];
+        unset($payload['external_delivery_started_at']);
+
+        return $payload;
     }
 
     private function completeV3ScheduledTransitionDeliveryIfReady(ScenarioV3OutboundMessage $outboundMessage): void
@@ -3636,7 +3744,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return true;
         }
 
-        return $this->dispatchScenarioMessageNow(
+        $delivery = $this->dispatchScenarioMessageNow(
             $message,
             $text,
             $textFormat,
@@ -3645,7 +3753,13 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $replyButtonRows,
             $buttonPlacement,
             $v3CallbackBlockId,
-        ) instanceof Message;
+        );
+
+        if ($delivery['error'] instanceof Throwable) {
+            throw $delivery['error'];
+        }
+
+        return $delivery['sent_message'] instanceof Message;
     }
 
     /**
@@ -3691,6 +3805,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     /**
      * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     * @return array{sent_message: Message|null, delivery_accepted: bool, error: Throwable|null}
      */
     private function dispatchScenarioMessageNow(
         Message $message,
@@ -3701,7 +3816,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ?array $replyButtonRows = null,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
         ?string $v3CallbackBlockId = null,
-    ): ?Message {
+    ): array {
         $channel = $message->channel;
 
         if (! $channel instanceof Channel) {
@@ -3719,21 +3834,39 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         );
 
         if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
-            return null;
+            return [
+                'sent_message' => null,
+                'delivery_accepted' => false,
+                'error' => null,
+            ];
         }
 
-        $outboundMessage = $this->storeOutboundScenarioMessageAction->handle(
-            channel: $channel,
-            inboundMessage: $message,
-            deliveryResult: $sendResult->deliveryResult,
-            systemCode: $this->systemCode(),
-            routeDialog: $sendResult->dialog,
-            content: $content,
-        );
+        $outboundMessage = null;
 
-        $channel->markReplySent();
+        try {
+            $outboundMessage = $this->storeOutboundScenarioMessageAction->handle(
+                channel: $channel,
+                inboundMessage: $message,
+                deliveryResult: $sendResult->deliveryResult,
+                systemCode: $this->systemCode(),
+                routeDialog: $sendResult->dialog,
+                content: $content,
+            );
 
-        return $outboundMessage;
+            $channel->markReplySent();
+        } catch (Throwable $throwable) {
+            return [
+                'sent_message' => $outboundMessage,
+                'delivery_accepted' => true,
+                'error' => $outboundMessage instanceof Message ? null : $throwable,
+            ];
+        }
+
+        return [
+            'sent_message' => $outboundMessage,
+            'delivery_accepted' => true,
+            'error' => null,
+        ];
     }
 
     /**

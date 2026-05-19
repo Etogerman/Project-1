@@ -30,6 +30,7 @@ use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Bots\SendBotDialogTextAction;
+use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use App\Services\Scenarios\ScenarioRegistry;
@@ -584,6 +585,257 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(ScenarioV3OutboundMessage::STATUS_SENT, $pendingOutbound->status);
         $this->assertSame(2, $pendingOutbound->attempts);
         $this->assertCount(2, Message::query()->where('direction', Message::DIRECTION_OUTBOUND)->get());
+    }
+
+    public function test_v3_outbound_stale_processing_message_can_be_reclaimed(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3OutboundMessageJob::class,
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_outbox_stale', $this->v3CatalogRuntimeSchema($channel->id));
+        $sendCount = 0;
+        $sendAction = Mockery::mock(SendBotDialogTextAction::class);
+        $sendAction
+            ->shouldReceive('handleMessage')
+            ->twice()
+            ->andReturnUsing(function (...$args) use (&$sendCount, $dialog): BotDialogTextSendResult {
+                $sendCount++;
+                $text = (string) $args[1];
+
+                if ($text === 'Вот каталог') {
+                    return $this->blockedBotSendResult($dialog);
+                }
+
+                return $this->successfulBotSendResult($dialog, $text, 'mock-v3-stale-'.$sendCount);
+            });
+        $this->app->instance(SendBotDialogTextAction::class, $sendAction);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $buttonMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Получить каталог',
+        ]);
+
+        (new ProcessScenarioInboundJob($buttonMessage->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $staleOutbound = ScenarioV3OutboundMessage::query()
+            ->where('text', 'Вот каталог')
+            ->firstOrFail();
+        $staleOutbound->forceFill([
+            'status' => ScenarioV3OutboundMessage::STATUS_PROCESSING,
+            'processing_started_at' => now()->subMinutes(11),
+            'available_at' => null,
+        ])->save();
+
+        $retryAction = Mockery::mock(SendBotDialogTextAction::class);
+        $retryAction
+            ->shouldReceive('handleMessage')
+            ->once()
+            ->andReturnUsing(fn (...$args): BotDialogTextSendResult => $this->successfulBotSendResult($dialog, (string) $args[1], 'mock-v3-stale-reclaimed'));
+        $this->app->instance(SendBotDialogTextAction::class, $retryAction);
+
+        (new ProcessScenarioV3OutboundMessageJob($staleOutbound->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $staleOutbound->refresh();
+
+        $this->assertSame(ScenarioV3OutboundMessage::STATUS_SENT, $staleOutbound->status);
+        $this->assertSame(2, $staleOutbound->attempts);
+        $this->assertCount(2, Message::query()->where('direction', Message::DIRECTION_OUTBOUND)->get());
+    }
+
+    public function test_v3_outbound_stale_processing_after_external_send_start_becomes_uncertain(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3OutboundMessageJob::class,
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_outbox_stale_uncertain', $this->v3CatalogRuntimeSchema($channel->id));
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'catalog',
+            'state_payload' => [
+                'v3' => [
+                    'published_version_id' => $scenario->publishedVersion?->id,
+                    'current_block_id' => 'catalog',
+                ],
+            ],
+            'started_at' => now(),
+        ]);
+
+        $inboundMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Получить каталог',
+        ]);
+
+        $outbound = ScenarioV3OutboundMessage::query()->create([
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'inbound_message_id' => $inboundMessage->id,
+            'published_version_id' => $scenario->publishedVersion?->id,
+            'scenario_code' => $scenario->code,
+            'block_id' => 'catalog',
+            'text' => 'Вот каталог',
+            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            'delivery_payload' => [
+                'request_phone' => false,
+                'remove_telegram_keyboard' => false,
+                'reply_button_rows' => null,
+                'button_placement' => 'auto',
+                'v3_callback_block_id' => 'catalog',
+                'external_delivery_started_at' => now()->subMinutes(11)->toJSON(),
+            ],
+            'status' => ScenarioV3OutboundMessage::STATUS_PROCESSING,
+            'attempts' => 1,
+            'processing_started_at' => now()->subMinutes(11),
+        ]);
+
+        $sendAction = Mockery::mock(SendBotDialogTextAction::class);
+        $sendAction->shouldNotReceive('handleMessage');
+        $this->app->instance(SendBotDialogTextAction::class, $sendAction);
+
+        (new ProcessScenarioV3OutboundMessageJob($outbound->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $outbound->refresh();
+        $run->refresh();
+
+        $this->assertSame(ScenarioV3OutboundMessage::STATUS_FAILED_UNCERTAIN, $outbound->status);
+        $this->assertSame(1, $outbound->attempts);
+        $this->assertSame('Отправка зависла после начала внешней доставки; автоматический повтор остановлен.', $outbound->error_message);
+        $this->assertSame($outbound->id, data_get($run->state_payload, 'v3.delivery_error.outbound_message_id'));
+    }
+
+    public function test_v3_outbound_store_failure_after_provider_acceptance_is_uncertain_without_retry(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3OutboundMessageJob::class,
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_outbox_uncertain_store', $this->v3CatalogRuntimeSchema($channel->id));
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'start',
+            'state_payload' => [
+                'v3' => [
+                    'published_version_id' => $scenario->publishedVersion?->id,
+                    'current_block_id' => 'start',
+                ],
+            ],
+            'started_at' => now(),
+        ]);
+
+        $inboundMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Получить каталог',
+        ]);
+
+        $outbound = ScenarioV3OutboundMessage::query()->create([
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'inbound_message_id' => $inboundMessage->id,
+            'published_version_id' => $scenario->publishedVersion?->id,
+            'scenario_code' => $scenario->code,
+            'block_id' => 'catalog',
+            'text' => 'Вот каталог',
+            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            'delivery_payload' => [
+                'request_phone' => false,
+                'remove_telegram_keyboard' => false,
+                'reply_button_rows' => null,
+                'button_placement' => 'auto',
+                'v3_callback_block_id' => 'catalog',
+            ],
+            'status' => ScenarioV3OutboundMessage::STATUS_PENDING,
+            'attempts' => 0,
+            'available_at' => now(),
+        ]);
+
+        $sendAction = Mockery::mock(SendBotDialogTextAction::class);
+        $sendAction
+            ->shouldReceive('handleMessage')
+            ->once()
+            ->andReturnUsing(fn (...$args): BotDialogTextSendResult => $this->successfulBotSendResult($dialog, (string) $args[1], 'mock-v3-accepted-before-store-fail'));
+        $this->app->instance(SendBotDialogTextAction::class, $sendAction);
+
+        $storeAction = Mockery::mock(StoreOutboundScenarioMessageAction::class);
+        $storeAction
+            ->shouldReceive('handle')
+            ->once()
+            ->andThrow(new \RuntimeException('local store failed after provider accepted'));
+        $this->app->instance(StoreOutboundScenarioMessageAction::class, $storeAction);
+
+        (new ProcessScenarioV3OutboundMessageJob($outbound->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $outbound->refresh();
+        $run->refresh();
+
+        $this->assertSame(ScenarioV3OutboundMessage::STATUS_FAILED_UNCERTAIN, $outbound->status);
+        $this->assertSame(1, $outbound->attempts);
+        $this->assertNull($outbound->outbound_message_id);
+        $this->assertSame('local store failed after provider accepted', $outbound->error_message);
+        $this->assertSame($outbound->id, data_get($run->state_payload, 'v3.delivery_error.outbound_message_id'));
+        $this->assertCount(0, Message::query()->where('direction', Message::DIRECTION_OUTBOUND)->get());
     }
 
     public function test_v3_wait_reply_exact_multiline_saves_dialog_field_and_counter(): void
