@@ -111,6 +111,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
                 $text,
             ),
             Message::KIND_OUTBOUND_AUTO_REPLY => $this->prefixLegacyFallbackText('ℹ️ [Автоответ]', $text),
+            Message::KIND_OUTBOUND_SCENARIO_MESSAGE => $this->prefixLegacyFallbackText('ℹ️ [Автоответ]', $text),
             default => $text,
         };
     }
