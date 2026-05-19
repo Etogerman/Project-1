@@ -5,6 +5,7 @@ namespace App\Services\Scenarios;
 use App\Models\Channel;
 use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
+use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -13,6 +14,10 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class PublishScenarioBuilderV3Action
 {
+    public const SCHEDULED_TRANSITIONS_CANCEL = 'cancel';
+
+    public const SCHEDULED_TRANSITIONS_KEEP = 'keep';
+
     public function __construct(
         private readonly BuildScenarioBuilderV3StateAction $buildScenarioBuilderV3StateAction,
         private readonly CompileScenarioBuilderV3RuntimeAction $compileScenarioBuilderV3RuntimeAction,
@@ -20,11 +25,23 @@ class PublishScenarioBuilderV3Action
     ) {}
 
     /**
-     * @return array{published_version: ScenarioVersion, draft_version: ScenarioVersion}
+     * @return array{published_version: ScenarioVersion, draft_version: ScenarioVersion, cancelled_scheduled_transitions: int}
      */
-    public function handle(Scenario $scenario, int $draftVersionId, string $baseRevision, User $user): array
+    public function handle(
+        Scenario $scenario,
+        int $draftVersionId,
+        string $baseRevision,
+        User $user,
+        string $scheduledTransitionPolicy = self::SCHEDULED_TRANSITIONS_KEEP,
+    ): array
     {
-        [$publishedVersion, $draftVersion] = DB::transaction(function () use ($scenario, $draftVersionId, $baseRevision, $user): array {
+        [$publishedVersion, $draftVersion, $cancelledScheduledTransitions] = DB::transaction(function () use (
+            $scenario,
+            $draftVersionId,
+            $baseRevision,
+            $user,
+            $scheduledTransitionPolicy,
+        ): array {
             $lockedScenario = Scenario::query()
                 ->whereKey($scenario->id)
                 ->lockForUpdate()
@@ -63,6 +80,9 @@ class PublishScenarioBuilderV3Action
             data_set($schemaPayload, 'builder_v3.published_revision', $currentRevision);
 
             $this->guardCanManageChannels($this->channelIdsFromRuntime($runtime), $user);
+            $cancelledScheduledTransitions = $scheduledTransitionPolicy === self::SCHEDULED_TRANSITIONS_CANCEL
+                ? $this->cancelPendingScheduledTransitions($lockedScenario)
+                : 0;
 
             ScenarioVersion::query()
                 ->where('scenario_id', $lockedScenario->id)
@@ -85,7 +105,7 @@ class PublishScenarioBuilderV3Action
                 $publishedVersion->scenario()->firstOrFail()->fresh(['publishedVersion', 'draftVersion']),
             );
 
-            return [$publishedVersion->fresh(), $draftVersion->fresh()];
+            return [$publishedVersion->fresh(), $draftVersion->fresh(), $cancelledScheduledTransitions];
         });
 
         app(ScenarioRegistry::class)->forgetCachedDefinitions();
@@ -93,6 +113,38 @@ class PublishScenarioBuilderV3Action
         return [
             'published_version' => $publishedVersion->fresh(),
             'draft_version' => $draftVersion->fresh(),
+            'cancelled_scheduled_transitions' => $cancelledScheduledTransitions,
+        ];
+    }
+
+    /**
+     * @return array{count: int, items: list<array{id: int, published_version_id: int, dialog_id: int, edge_key: string, scheduled_for: ?string}>}
+     */
+    public function pendingScheduledTransitionsSummary(Scenario $scenario): array
+    {
+        $query = ScenarioV3ScheduledTransition::query()
+            ->where('scenario_code', $scenario->code)
+            ->where('status', ScenarioV3ScheduledTransition::STATUS_SCHEDULED);
+
+        $count = (clone $query)->count();
+        $items = $query
+            ->orderBy('scheduled_for')
+            ->orderBy('id')
+            ->limit(5)
+            ->get()
+            ->map(fn (ScenarioV3ScheduledTransition $transition): array => [
+                'id' => (int) $transition->id,
+                'published_version_id' => (int) $transition->published_version_id,
+                'dialog_id' => (int) $transition->dialog_id,
+                'edge_key' => (string) $transition->edge_key,
+                'scheduled_for' => $transition->scheduled_for?->toJSON(),
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'count' => $count,
+            'items' => $items,
         ];
     }
 
@@ -140,6 +192,19 @@ class PublishScenarioBuilderV3Action
                 ],
             );
         }
+    }
+
+    private function cancelPendingScheduledTransitions(Scenario $scenario): int
+    {
+        return ScenarioV3ScheduledTransition::query()
+            ->where('scenario_code', $scenario->code)
+            ->where('status', ScenarioV3ScheduledTransition::STATUS_SCHEDULED)
+            ->update([
+                'status' => ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                'finished_at' => now(),
+                'error_message' => 'Отменено при публикации новой версии сценария.',
+                'updated_at' => now(),
+            ]);
     }
 
     /**

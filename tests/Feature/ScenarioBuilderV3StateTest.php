@@ -1763,6 +1763,118 @@ class ScenarioBuilderV3StateTest extends TestCase
         ]);
     }
 
+    public function test_publish_v3_graph_warns_about_pending_scheduled_transitions(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_pending_warning',
+            'name' => 'V3 Publish Pending Warning',
+        ]);
+        $savedState = $this->saveSingleStartBlockState($admin, $scenario, $channel);
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load(['publishedVersion', 'draftVersion']);
+        $publishedVersionId = $scenario->publishedVersion?->id;
+        $draftVersionId = $scenario->draftVersion?->id;
+        $transition = $this->createScheduledTransitionForScenario($scenario, $channel, $scenario->publishedVersion);
+        $secondState = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $secondState['scenario']['draft_version_id'],
+                'base_revision' => $secondState['builder']['revision'],
+            ])
+            ->assertStatus(409)
+            ->assertJsonPath('code', 'scheduled_transitions_pending')
+            ->assertJsonPath('warning.scheduled_transitions.count', 1)
+            ->assertJsonPath('warning.scheduled_transitions.items.0.id', $transition->id);
+
+        $scenario->refresh()->load(['publishedVersion', 'draftVersion']);
+        $transition->refresh();
+
+        $this->assertSame($publishedVersionId, $scenario->publishedVersion?->id);
+        $this->assertSame($draftVersionId, $scenario->draftVersion?->id);
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_SCHEDULED, $transition->status);
+    }
+
+    public function test_publish_v3_graph_can_keep_pending_scheduled_transitions(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_pending_keep',
+            'name' => 'V3 Publish Pending Keep',
+        ]);
+        $savedState = $this->saveSingleStartBlockState($admin, $scenario, $channel);
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load(['publishedVersion']);
+        $transition = $this->createScheduledTransitionForScenario($scenario, $channel, $scenario->publishedVersion);
+        $secondState = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $secondState['scenario']['draft_version_id'],
+                'base_revision' => $secondState['builder']['revision'],
+                'scheduled_transition_policy' => 'keep',
+            ])
+            ->assertOk()
+            ->assertJsonPath('published.cancelled_scheduled_transitions', 0);
+
+        $transition->refresh();
+
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_SCHEDULED, $transition->status);
+    }
+
+    public function test_publish_v3_graph_can_cancel_pending_scheduled_transitions(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_pending_cancel',
+            'name' => 'V3 Publish Pending Cancel',
+        ]);
+        $savedState = $this->saveSingleStartBlockState($admin, $scenario, $channel);
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load(['publishedVersion']);
+        $transition = $this->createScheduledTransitionForScenario($scenario, $channel, $scenario->publishedVersion);
+        $secondState = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $secondState['scenario']['draft_version_id'],
+                'base_revision' => $secondState['builder']['revision'],
+                'scheduled_transition_policy' => 'cancel',
+            ])
+            ->assertOk()
+            ->assertJsonPath('published.cancelled_scheduled_transitions', 1);
+
+        $transition->refresh();
+
+        $this->assertSame(ScenarioV3ScheduledTransition::STATUS_CANCELLED, $transition->status);
+        $this->assertSame('Отменено при публикации новой версии сценария.', $transition->error_message);
+    }
+
     public function test_put_state_rejects_empty_button_text(): void
     {
         $admin = $this->adminUser();
@@ -1973,6 +2085,67 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->actingAs($employee->fresh())
             ->getJson($this->stateUrl($scenario))
             ->assertForbidden();
+    }
+
+    private function saveSingleStartBlockState(User $admin, Scenario $scenario, Channel $channel): array
+    {
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        return $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings('/start', [(int) $channel->id], 'Привет', 'Далее'),
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+    }
+
+    private function createScheduledTransitionForScenario(
+        Scenario $scenario,
+        Channel $channel,
+        ?ScenarioVersion $publishedVersion,
+    ): ScenarioV3ScheduledTransition {
+        $dialog = Dialog::factory()->create(['channel_id' => $channel->id]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+        ]);
+        $run = ScenarioRun::query()->create([
+            'scenario_code' => $scenario->code,
+            'dialog_id' => $dialog->id,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'source',
+            'state_payload' => [
+                'v3' => [
+                    'published_version_id' => $publishedVersion?->id,
+                    'current_block_id' => 'source',
+                ],
+            ],
+            'started_at' => now(),
+        ]);
+
+        return ScenarioV3ScheduledTransition::query()->create([
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'inbound_message_id' => $message->id,
+            'scenario_code' => $scenario->code,
+            'published_version_id' => $publishedVersion?->id,
+            'edge_key' => 'edge_pending',
+            'edge_id' => 'edge_pending',
+            'source_block_id' => 'source',
+            'target_block_id' => 'target',
+            'delay_payload' => ['type' => 'relative', 'value' => 15, 'unit' => 'sec', 'cancel_if_left_source_block' => true],
+            'scheduled_for' => now()->addSeconds(15),
+            'status' => ScenarioV3ScheduledTransition::STATUS_SCHEDULED,
+        ]);
     }
 
     private function adminUser(): User

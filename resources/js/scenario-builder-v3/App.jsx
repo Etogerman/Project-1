@@ -160,6 +160,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
     const [pendingButtonFocus, setPendingButtonFocus] = useState(null);
     const [pendingConnection, setPendingConnection] = useState(null);
+    const [pendingPublishWarning, setPendingPublishWarning] = useState(null);
     const [anchors, setAnchors] = useState({ ports: {} });
     const [panelWidth, setPanelWidth] = useState(() => storedPanelWidth());
 
@@ -981,24 +982,91 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 return;
             }
 
-            const response = await publishScenarioBuilderState(publishUrl, csrfToken, {
-                draft_version_id: savedState.scenario.draft_version_id,
-                base_revision: savedState.builder.revision,
-            });
+            await publishSavedState(savedState, blockBeforePublish, edgeBeforePublish);
+        } catch (requestError) {
+            if (requestError?.data?.code === 'scheduled_transitions_pending') {
+                return;
+            }
+
+            handlePublishError(requestError, null, blockBeforePublish, edgeBeforePublish);
+        } finally {
+            setIsPublishing(false);
+        }
+    }
+
+    async function publishSavedState(savedState, blockBeforePublish, edgeBeforePublish, scheduledTransitionPolicy = null) {
+        const payload = {
+            draft_version_id: savedState.scenario.draft_version_id,
+            base_revision: savedState.builder.revision,
+        };
+
+        if (scheduledTransitionPolicy) {
+            payload.scheduled_transition_policy = scheduledTransitionPolicy;
+        }
+
+        try {
+            const response = await publishScenarioBuilderState(publishUrl, csrfToken, payload);
             const selection = resolvePublishedSelection(savedState, response, blockBeforePublish, edgeBeforePublish);
+            const cancelledCount = Number(response.published?.cancelled_scheduled_transitions ?? 0);
 
             setState(response);
             setSelectedBlockKey(selection.blockKey);
             setSelectedEdgeKey(selection.edgeKey);
+            setPendingPublishWarning(null);
             cancelConnection();
             setStatus('ready');
-            setNotice(`Опубликовано v${response.published?.version_number ?? ''}`.trim());
+            setNotice([
+                `Опубликовано v${response.published?.version_number ?? ''}`.trim(),
+                cancelledCount > 0 ? `отменено переходов: ${cancelledCount}` : null,
+            ].filter(Boolean).join(' · '));
         } catch (requestError) {
-            setError(errorText(requestError));
+            handlePublishError(requestError, savedState, blockBeforePublish, edgeBeforePublish);
+            throw requestError;
+        }
+    }
 
-            if (requestError.status === 409) {
-                setStatus('conflict');
-            }
+    function handlePublishError(requestError, savedState, blockBeforePublish, edgeBeforePublish) {
+        if (requestError.status === 409 && requestError.data?.code === 'scheduled_transitions_pending' && savedState) {
+            setError(null);
+            setPendingPublishWarning({
+                savedState,
+                blockBeforePublish,
+                edgeBeforePublish,
+                warning: requestError.data.warning ?? {},
+            });
+            setStatus('ready');
+
+            return;
+        }
+
+        setError(errorText(requestError));
+
+        if (requestError.status === 409) {
+            setStatus('conflict');
+        }
+    }
+
+    async function resolvePendingPublishWarning(policy) {
+        if (! pendingPublishWarning || isPublishing) {
+            return;
+        }
+
+        const warning = pendingPublishWarning;
+
+        setIsPublishing(true);
+        setPendingPublishWarning(null);
+        setError(null);
+        setNotice(null);
+
+        try {
+            await publishSavedState(
+                warning.savedState,
+                warning.blockBeforePublish,
+                warning.edgeBeforePublish,
+                policy,
+            );
+        } catch {
+            // Error state is already rendered by publishSavedState.
         } finally {
             setIsPublishing(false);
         }
@@ -1153,6 +1221,16 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 <Notice kind="connection" onClose={cancelConnection}>
                     {connectionNotice(pendingConnection)}
                 </Notice>
+            ) : null}
+
+            {pendingPublishWarning ? (
+                <ScheduledPublishDialog
+                    warning={pendingPublishWarning.warning}
+                    isPublishing={isPublishing}
+                    onKeep={() => resolvePendingPublishWarning('keep')}
+                    onCancelScheduled={() => resolvePendingPublishWarning('cancel')}
+                    onClose={() => setPendingPublishWarning(null)}
+                />
             ) : null}
 
             <div
@@ -1322,6 +1400,51 @@ function Notice({ kind, children, onClose }) {
         <div className="ac-v3-builder__notice" data-kind={kind}>
             <div className="ac-v3-builder__notice-body">{children}</div>
             <button type="button" onClick={onClose}>Закрыть</button>
+        </div>
+    );
+}
+
+function ScheduledPublishDialog({ warning, isPublishing, onKeep, onCancelScheduled, onClose }) {
+    const transitions = warning?.scheduled_transitions ?? {};
+    const count = Number(transitions.count ?? 0);
+    const items = Array.isArray(transitions.items) ? transitions.items : [];
+
+    return (
+        <div className="ac-v3-builder__dialog-backdrop" role="presentation">
+            <div className="ac-v3-builder__publish-dialog" role="dialog" aria-modal="true" aria-labelledby="publish-warning-title">
+                <div className="ac-v3-builder__publish-dialog-head">
+                    <h2 id="publish-warning-title">Есть запланированные переходы</h2>
+                    <button type="button" title="Закрыть" disabled={isPublishing} onClick={onClose}>×</button>
+                </div>
+
+                <div className="ac-v3-builder__publish-dialog-body">
+                    <p>
+                        В этом сценарии сейчас запланировано переходов: <strong>{count}</strong>.
+                        При публикации новой версии можно сохранить их или отменить.
+                    </p>
+
+                    {items.length > 0 ? (
+                        <ul>
+                            {items.map((transition) => (
+                                <li key={transition.id}>
+                                    <span>#{transition.id}</span>
+                                    <span>v{transition.published_version_id}</span>
+                                    <span>диалог #{transition.dialog_id}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : null}
+                </div>
+
+                <div className="ac-v3-builder__publish-dialog-footer">
+                    <button type="button" disabled={isPublishing} onClick={onKeep}>
+                        Сохранить переходы
+                    </button>
+                    <button type="button" className="is-danger" disabled={isPublishing} onClick={onCancelScheduled}>
+                        Отменить переходы
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
