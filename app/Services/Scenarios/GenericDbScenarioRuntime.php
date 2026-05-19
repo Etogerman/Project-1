@@ -4,6 +4,7 @@ namespace App\Services\Scenarios;
 
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
+use App\Jobs\ProcessScenarioV3OutboundMessageJob;
 use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
@@ -17,6 +18,7 @@ use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioRun;
+use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
@@ -73,6 +75,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_DIALOG_FIELD_VALUE_MAX_LENGTH = 2000;
 
+    private const V3_OUTBOUND_MAX_ATTEMPTS = 5;
+
+    private const V3_OUTBOUND_RETRY_BACKOFF_SECONDS = [10, 30, 60, 180];
+
     private const V3_CONTACT_CAPTURE_FIELDS = [
         'phone',
         'first_name',
@@ -95,18 +101,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private int $v3ScenarioMessageDeferralDepth = 0;
 
     /**
-     * @var list<array{
-     *     message: Message,
-     *     text: string,
-     *     text_format: string,
-     *     request_phone: bool,
-     *     remove_telegram_keyboard: bool,
-     *     reply_button_rows: list<list<array<string, mixed>>>|null,
-     *     button_placement: string,
-     *     v3_callback_block_id: string|null
-     * }>
+     * @var list<int>
      */
-    private array $deferredV3ScenarioMessages = [];
+    private array $deferredV3ScenarioOutboundMessageIds = [];
+
+    private ?int $activeV3ScheduledTransitionId = null;
 
     public function __construct(
         private readonly Scenario $scenario,
@@ -164,14 +163,27 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return false;
         }
 
-        $this->advanceV3FromBlock(
-            $message,
-            $runtime,
-            $blockId,
-            $this->v3StatePayload($activeRun->state_payload),
-            run: $activeRun,
-            preservePreviousStateForTerminalNonState: true,
-        );
+        $this->withDeferredV3ScenarioMessages(function () use ($message, $runtime, $blockId, $activeRun): void {
+            DB::transaction(function () use ($message, $runtime, $blockId, $activeRun): void {
+                $lockedRun = ScenarioRun::query()
+                    ->whereKey($activeRun->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $lockedRun instanceof ScenarioRun || ! $lockedRun->isActive()) {
+                    return;
+                }
+
+                $this->advanceV3FromBlock(
+                    $message,
+                    $runtime,
+                    $blockId,
+                    $this->v3StatePayload($lockedRun->state_payload),
+                    run: $lockedRun,
+                    preservePreviousStateForTerminalNonState: true,
+                );
+            });
+        });
 
         return true;
     }
@@ -1050,22 +1062,31 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function startV3(ScenarioRun $run, Message $message, array $runtime): void
     {
-        $startBlockId = $this->v3StartBlockIdForMessage($message, $runtime);
-        $progress = $this->advanceV3FromBlock(
-            $message,
-            $runtime,
-            $startBlockId,
-            $this->v3StatePayload($run->state_payload),
-            run: $run,
-        );
+        $this->withDeferredV3ScenarioMessages(function () use ($run, $message, $runtime): void {
+            DB::transaction(function () use ($run, $message, $runtime): void {
+                $lockedRun = ScenarioRun::query()
+                    ->whereKey($run->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-        $run->forceFill([
-            'status' => $progress['status'],
-            'current_step' => $progress['current_step'],
-            'state_payload' => $progress['state_payload'],
-            'exit_outcome' => $progress['exit_outcome'],
-            'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
-        ])->save();
+                $startBlockId = $this->v3StartBlockIdForMessage($message, $runtime);
+                $progress = $this->advanceV3FromBlock(
+                    $message,
+                    $runtime,
+                    $startBlockId,
+                    $this->v3StatePayload($lockedRun->state_payload),
+                    run: $lockedRun,
+                );
+
+                $lockedRun->forceFill([
+                    'status' => $progress['status'],
+                    'current_step' => $progress['current_step'],
+                    'state_payload' => $progress['state_payload'],
+                    'exit_outcome' => $progress['exit_outcome'],
+                    'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                ])->save();
+            });
+        });
     }
 
     /**
@@ -1910,6 +1931,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 replyButtonRows: $replyButtonRows,
                 buttonPlacement: $buttonPlacement,
                 v3CallbackBlockId: $blockId,
+                scenarioRun: $run,
             )) {
                 $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
 
@@ -2219,13 +2241,20 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     return;
                 }
 
-                $progress = $this->advanceV3FromBlock(
-                    $message,
-                    $runtime,
-                    $lockedTransition->target_block_id,
-                    $statePayload,
-                    run: $run,
-                );
+                $previousScheduledTransitionId = $this->activeV3ScheduledTransitionId;
+                $this->activeV3ScheduledTransitionId = (int) $lockedTransition->id;
+
+                try {
+                    $progress = $this->advanceV3FromBlock(
+                        $message,
+                        $runtime,
+                        $lockedTransition->target_block_id,
+                        $statePayload,
+                        run: $run,
+                    );
+                } finally {
+                    $this->activeV3ScheduledTransitionId = $previousScheduledTransitionId;
+                }
 
                 $run->forceFill([
                     'status' => $progress['status'],
@@ -2235,7 +2264,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
                 ])->save();
 
-                $this->finishV3ScheduledTransition($lockedTransition, ScenarioV3ScheduledTransition::STATUS_PASSED);
+                $hasPendingDelivery = ScenarioV3OutboundMessage::query()
+                    ->where('scheduled_transition_id', $lockedTransition->id)
+                    ->exists();
+
+                $this->finishV3ScheduledTransition(
+                    $lockedTransition,
+                    $hasPendingDelivery
+                        ? ScenarioV3ScheduledTransition::STATUS_DELIVERY_PENDING
+                        : ScenarioV3ScheduledTransition::STATUS_PASSED,
+                );
             });
         });
     }
@@ -3230,6 +3268,347 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return $runtime;
     }
 
+    /**
+     * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     */
+    private function createDeferredV3OutboundMessage(
+        Message $message,
+        string $text,
+        string $textFormat,
+        bool $requestPhone,
+        bool $removeTelegramKeyboard,
+        ?array $replyButtonRows,
+        string $buttonPlacement,
+        ?string $v3CallbackBlockId,
+        ?ScenarioRun $scenarioRun,
+    ): int {
+        if (! $scenarioRun instanceof ScenarioRun) {
+            throw new RuntimeException("Scenario [{$this->code()}] V3 deferred message requires a scenario run.");
+        }
+
+        if ($message->dialog_id === null || $message->channel_id === null) {
+            throw new RuntimeException("Scenario [{$this->code()}] V3 deferred message requires dialog and channel context.");
+        }
+
+        $outboundMessage = ScenarioV3OutboundMessage::query()->create([
+            'scenario_run_id' => $scenarioRun->id,
+            'dialog_id' => $message->dialog_id,
+            'channel_id' => $message->channel_id,
+            'inbound_message_id' => $message->id,
+            'published_version_id' => $this->publishedVersion->id,
+            'scheduled_transition_id' => $this->activeV3ScheduledTransitionId,
+            'scenario_code' => $this->code(),
+            'block_id' => $v3CallbackBlockId,
+            'text' => $text,
+            'text_format' => $textFormat,
+            'delivery_payload' => [
+                'request_phone' => $requestPhone,
+                'remove_telegram_keyboard' => $removeTelegramKeyboard,
+                'reply_button_rows' => $replyButtonRows,
+                'button_placement' => $buttonPlacement,
+                'v3_callback_block_id' => $v3CallbackBlockId,
+            ],
+            'status' => ScenarioV3OutboundMessage::STATUS_PENDING,
+            'attempts' => 0,
+            'available_at' => now(),
+        ]);
+
+        return (int) $outboundMessage->id;
+    }
+
+    public function handleV3OutboundMessage(int|ScenarioV3OutboundMessage $outboundMessage): void
+    {
+        $outboundMessage = $this->claimV3OutboundMessage($outboundMessage);
+
+        if (! $outboundMessage instanceof ScenarioV3OutboundMessage) {
+            return;
+        }
+
+        $inboundMessage = $outboundMessage->inbound_message_id !== null
+            ? Message::query()->with(['channel', 'contact', 'contactIdentity', 'dialog'])->find($outboundMessage->inbound_message_id)
+            : null;
+
+        if (! $inboundMessage instanceof Message) {
+            $this->finishV3OutboundMessage($outboundMessage, null, 'Исходное сообщение для доставки не найдено.', retryable: false);
+
+            return;
+        }
+
+        $payload = is_array($outboundMessage->delivery_payload) ? $outboundMessage->delivery_payload : [];
+
+        try {
+            $sentMessage = $this->dispatchScenarioMessageNow(
+                $inboundMessage,
+                (string) $outboundMessage->text,
+                (string) $outboundMessage->text_format,
+                (bool) ($payload['request_phone'] ?? false),
+                (bool) ($payload['remove_telegram_keyboard'] ?? false),
+                is_array($payload['reply_button_rows'] ?? null) ? $payload['reply_button_rows'] : null,
+                is_string($payload['button_placement'] ?? null) ? (string) $payload['button_placement'] : self::V3_BUTTON_PLACEMENT_AUTO,
+                is_string($payload['v3_callback_block_id'] ?? null) ? (string) $payload['v3_callback_block_id'] : null,
+            );
+
+            if (! $sentMessage instanceof Message) {
+                $this->finishV3OutboundMessage($outboundMessage, null, 'Канал не принял V3-сообщение.', retryable: true);
+
+                return;
+            }
+
+            $this->finishV3OutboundMessage($outboundMessage, $sentMessage);
+        } catch (Throwable $throwable) {
+            $this->finishV3OutboundMessage(
+                $outboundMessage,
+                null,
+                $this->safeV3OutboundMessageErrorMessage($throwable->getMessage(), $outboundMessage),
+                retryable: true,
+            );
+
+            Log::warning('scenario.v3_outbound_message.exception', [
+                'outbound_message_id' => $outboundMessage->id,
+                'scenario_code' => $outboundMessage->scenario_code,
+                'scenario_run_id' => $outboundMessage->scenario_run_id,
+                'dialog_id' => $outboundMessage->dialog_id,
+                'exception' => get_class($throwable),
+            ]);
+        }
+    }
+
+    public static function failV3OutboundMessageWithoutRuntime(ScenarioV3OutboundMessage $outboundMessage, string $errorMessage): void
+    {
+        $safeErrorMessage = mb_substr(trim($errorMessage), 0, 1000);
+
+        $outboundMessage->forceFill([
+            'status' => ScenarioV3OutboundMessage::STATUS_FAILED,
+            'failed_at' => now(),
+            'processing_started_at' => null,
+            'error_message' => $safeErrorMessage,
+        ])->save();
+
+        if ($outboundMessage->scheduled_transition_id !== null) {
+            ScenarioV3ScheduledTransition::query()
+                ->whereKey($outboundMessage->scheduled_transition_id)
+                ->where('status', ScenarioV3ScheduledTransition::STATUS_DELIVERY_PENDING)
+                ->update([
+                    'status' => ScenarioV3ScheduledTransition::STATUS_FAILED,
+                    'finished_at' => now(),
+                    'error_message' => $safeErrorMessage,
+                    'updated_at' => now(),
+                ]);
+        }
+    }
+
+    private function claimV3OutboundMessage(int|ScenarioV3OutboundMessage $outboundMessage): ?ScenarioV3OutboundMessage
+    {
+        $outboundMessageId = $outboundMessage instanceof ScenarioV3OutboundMessage
+            ? (int) $outboundMessage->id
+            : (int) $outboundMessage;
+
+        return DB::transaction(function () use ($outboundMessageId): ?ScenarioV3OutboundMessage {
+            $lockedMessage = ScenarioV3OutboundMessage::query()
+                ->whereKey($outboundMessageId)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ! $lockedMessage instanceof ScenarioV3OutboundMessage
+                || $lockedMessage->status !== ScenarioV3OutboundMessage::STATUS_PENDING
+                || ($lockedMessage->available_at !== null && $lockedMessage->available_at->isFuture())
+            ) {
+                return null;
+            }
+
+            $lockedMessage->forceFill([
+                'status' => ScenarioV3OutboundMessage::STATUS_PROCESSING,
+                'attempts' => ((int) $lockedMessage->attempts) + 1,
+                'processing_started_at' => now(),
+            ])->save();
+
+            return $lockedMessage->fresh();
+        });
+    }
+
+    private function finishV3OutboundMessage(
+        ScenarioV3OutboundMessage $outboundMessage,
+        ?Message $sentMessage,
+        ?string $errorMessage = null,
+        bool $retryable = false,
+    ): void {
+        $outboundMessage->refresh();
+
+        if ($sentMessage instanceof Message) {
+            $outboundMessage->forceFill([
+                'status' => ScenarioV3OutboundMessage::STATUS_SENT,
+                'outbound_message_id' => $sentMessage->id,
+                'sent_at' => now(),
+                'processing_started_at' => null,
+                'failed_at' => null,
+                'error_message' => null,
+            ])->save();
+
+            $this->clearV3RunDeliveryFailure($outboundMessage);
+            $this->completeV3ScheduledTransitionDeliveryIfReady($outboundMessage);
+
+            return;
+        }
+
+        $safeErrorMessage = $this->safeV3OutboundMessageErrorMessage($errorMessage, $outboundMessage);
+        $hasAttemptsLeft = $retryable && (int) $outboundMessage->attempts < self::V3_OUTBOUND_MAX_ATTEMPTS;
+
+        if ($hasAttemptsLeft) {
+            $availableAt = now()->addSeconds($this->v3OutboundRetryBackoffSeconds((int) $outboundMessage->attempts));
+
+            $outboundMessage->forceFill([
+                'status' => ScenarioV3OutboundMessage::STATUS_PENDING,
+                'available_at' => $availableAt,
+                'processing_started_at' => null,
+                'error_message' => $safeErrorMessage,
+            ])->save();
+
+            ProcessScenarioV3OutboundMessageJob::dispatch((int) $outboundMessage->id)
+                ->delay($availableAt)
+                ->afterCommit();
+
+            return;
+        }
+
+        $outboundMessage->forceFill([
+            'status' => ScenarioV3OutboundMessage::STATUS_FAILED,
+            'failed_at' => now(),
+            'processing_started_at' => null,
+            'error_message' => $safeErrorMessage,
+        ])->save();
+
+        $this->markV3RunDeliveryFailure($outboundMessage, $safeErrorMessage);
+        $this->failV3ScheduledTransitionDelivery($outboundMessage, $safeErrorMessage);
+    }
+
+    private function v3OutboundRetryBackoffSeconds(int $attempts): int
+    {
+        return self::V3_OUTBOUND_RETRY_BACKOFF_SECONDS[max(0, min(
+            $attempts - 1,
+            count(self::V3_OUTBOUND_RETRY_BACKOFF_SECONDS) - 1,
+        ))];
+    }
+
+    private function completeV3ScheduledTransitionDeliveryIfReady(ScenarioV3OutboundMessage $outboundMessage): void
+    {
+        if ($outboundMessage->scheduled_transition_id === null) {
+            return;
+        }
+
+        DB::transaction(function () use ($outboundMessage): void {
+            $transition = ScenarioV3ScheduledTransition::query()
+                ->whereKey($outboundMessage->scheduled_transition_id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ! $transition instanceof ScenarioV3ScheduledTransition
+                || $transition->status !== ScenarioV3ScheduledTransition::STATUS_DELIVERY_PENDING
+            ) {
+                return;
+            }
+
+            $pendingDeliveryExists = ScenarioV3OutboundMessage::query()
+                ->where('scheduled_transition_id', $transition->id)
+                ->where('status', '!=', ScenarioV3OutboundMessage::STATUS_SENT)
+                ->exists();
+
+            if ($pendingDeliveryExists) {
+                return;
+            }
+
+            $this->finishV3ScheduledTransition($transition, ScenarioV3ScheduledTransition::STATUS_PASSED);
+        });
+    }
+
+    private function failV3ScheduledTransitionDelivery(ScenarioV3OutboundMessage $outboundMessage, ?string $errorMessage): void
+    {
+        if ($outboundMessage->scheduled_transition_id === null) {
+            return;
+        }
+
+        DB::transaction(function () use ($outboundMessage, $errorMessage): void {
+            $transition = ScenarioV3ScheduledTransition::query()
+                ->whereKey($outboundMessage->scheduled_transition_id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ! $transition instanceof ScenarioV3ScheduledTransition
+                || $transition->status !== ScenarioV3ScheduledTransition::STATUS_DELIVERY_PENDING
+            ) {
+                return;
+            }
+
+            $this->finishV3ScheduledTransition($transition, ScenarioV3ScheduledTransition::STATUS_FAILED, $errorMessage);
+        });
+    }
+
+    private function markV3RunDeliveryFailure(ScenarioV3OutboundMessage $outboundMessage, ?string $errorMessage): void
+    {
+        $run = ScenarioRun::query()->find($outboundMessage->scenario_run_id);
+
+        if (! $run instanceof ScenarioRun) {
+            return;
+        }
+
+        $statePayload = $this->v3StatePayload($run->state_payload);
+        data_set($statePayload, 'v3.delivery_error', [
+            'outbound_message_id' => (int) $outboundMessage->id,
+            'message' => $errorMessage,
+            'failed_at' => now()->toJSON(),
+        ]);
+
+        $run->forceFill([
+            'state_payload' => $statePayload,
+        ])->save();
+    }
+
+    private function clearV3RunDeliveryFailure(ScenarioV3OutboundMessage $outboundMessage): void
+    {
+        $run = ScenarioRun::query()->find($outboundMessage->scenario_run_id);
+
+        if (! $run instanceof ScenarioRun) {
+            return;
+        }
+
+        $statePayload = $this->v3StatePayload($run->state_payload);
+
+        if ((int) data_get($statePayload, 'v3.delivery_error.outbound_message_id') !== (int) $outboundMessage->id) {
+            return;
+        }
+
+        data_forget($statePayload, 'v3.delivery_error');
+
+        $run->forceFill([
+            'state_payload' => $statePayload,
+        ])->save();
+    }
+
+    private function safeV3OutboundMessageErrorMessage(
+        ?string $message,
+        ScenarioV3OutboundMessage $outboundMessage,
+    ): ?string {
+        if (! filled($message)) {
+            return null;
+        }
+
+        $safeMessage = trim((string) $message);
+        $channel = $outboundMessage->channel()->first();
+
+        foreach ([$channel?->getToken(), $channel?->getWebhookSecret()] as $secret) {
+            if (filled($secret)) {
+                $safeMessage = str_replace((string) $secret, '[secret]', $safeMessage);
+            }
+        }
+
+        $safeMessage = preg_replace('/bot[0-9A-Za-z:_-]+(?=\/)/u', 'bot[secret]', $safeMessage) ?? $safeMessage;
+        $safeMessage = preg_replace('/([?&](?:token|access_token|auth|secret)=)[^&\s]+/iu', '$1[secret]', $safeMessage) ?? $safeMessage;
+
+        return mb_substr($safeMessage, 0, 1000);
+    }
+
     private function dispatchScenarioMessage(
         Message $message,
         string $text,
@@ -3239,18 +3618,20 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ?array $replyButtonRows = null,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
         ?string $v3CallbackBlockId = null,
+        ?ScenarioRun $scenarioRun = null,
     ): bool {
         if ($this->v3ScenarioMessageDeferralDepth > 0) {
-            $this->deferredV3ScenarioMessages[] = [
-                'message' => $message,
-                'text' => $text,
-                'text_format' => $textFormat,
-                'request_phone' => $requestPhone,
-                'remove_telegram_keyboard' => $removeTelegramKeyboard,
-                'reply_button_rows' => $replyButtonRows,
-                'button_placement' => $buttonPlacement,
-                'v3_callback_block_id' => $v3CallbackBlockId,
-            ];
+            $this->deferredV3ScenarioOutboundMessageIds[] = $this->createDeferredV3OutboundMessage(
+                $message,
+                $text,
+                $textFormat,
+                $requestPhone,
+                $removeTelegramKeyboard,
+                $replyButtonRows,
+                $buttonPlacement,
+                $v3CallbackBlockId,
+                $scenarioRun,
+            );
 
             return true;
         }
@@ -3264,7 +3645,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $replyButtonRows,
             $buttonPlacement,
             $v3CallbackBlockId,
-        );
+        ) instanceof Message;
     }
 
     /**
@@ -3281,7 +3662,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $result = $callback();
         } catch (Throwable $throwable) {
             if ($this->v3ScenarioMessageDeferralDepth === 1) {
-                $this->deferredV3ScenarioMessages = [];
+                $this->deferredV3ScenarioOutboundMessageIds = [];
             }
 
             throw $throwable;
@@ -3290,56 +3671,21 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         if ($this->v3ScenarioMessageDeferralDepth === 0) {
-            $messages = $this->deferredV3ScenarioMessages;
-            $this->deferredV3ScenarioMessages = [];
-            $this->flushDeferredV3ScenarioMessages($messages);
+            $outboundMessageIds = array_values(array_unique($this->deferredV3ScenarioOutboundMessageIds));
+            $this->deferredV3ScenarioOutboundMessageIds = [];
+            $this->flushDeferredV3ScenarioMessages($outboundMessageIds);
         }
 
         return $result;
     }
 
     /**
-     * @param  list<array{
-     *     message: Message,
-     *     text: string,
-     *     text_format: string,
-     *     request_phone: bool,
-     *     remove_telegram_keyboard: bool,
-     *     reply_button_rows: list<list<array<string, mixed>>>|null,
-     *     button_placement: string,
-     *     v3_callback_block_id: string|null
-     * }>  $messages
+     * @param  list<int>  $outboundMessageIds
      */
-    private function flushDeferredV3ScenarioMessages(array $messages): void
+    private function flushDeferredV3ScenarioMessages(array $outboundMessageIds): void
     {
-        foreach ($messages as $message) {
-            try {
-                $sent = $this->dispatchScenarioMessageNow(
-                    $message['message'],
-                    $message['text'],
-                    $message['text_format'],
-                    $message['request_phone'],
-                    $message['remove_telegram_keyboard'],
-                    $message['reply_button_rows'],
-                    $message['button_placement'],
-                    $message['v3_callback_block_id'],
-                );
-
-                if (! $sent) {
-                    Log::warning('scenario.v3_deferred_message_not_sent', [
-                        'scenario_code' => $this->code(),
-                        'inbound_message_id' => $message['message']->id,
-                        'dialog_id' => $message['message']->dialog_id,
-                    ]);
-                }
-            } catch (Throwable $throwable) {
-                Log::warning('scenario.v3_deferred_message_failed', [
-                    'scenario_code' => $this->code(),
-                    'inbound_message_id' => $message['message']->id,
-                    'dialog_id' => $message['message']->dialog_id,
-                    'exception' => $throwable::class,
-                ]);
-            }
+        foreach ($outboundMessageIds as $outboundMessageId) {
+            $this->handleV3OutboundMessage($outboundMessageId);
         }
     }
 
@@ -3355,7 +3701,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ?array $replyButtonRows = null,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
         ?string $v3CallbackBlockId = null,
-    ): bool {
+    ): ?Message {
         $channel = $message->channel;
 
         if (! $channel instanceof Channel) {
@@ -3373,10 +3719,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         );
 
         if (! $sendResult->wasSent() || $sendResult->deliveryResult === null) {
-            return false;
+            return null;
         }
 
-        $this->storeOutboundScenarioMessageAction->handle(
+        $outboundMessage = $this->storeOutboundScenarioMessageAction->handle(
             channel: $channel,
             inboundMessage: $message,
             deliveryResult: $sendResult->deliveryResult,
@@ -3387,7 +3733,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         $channel->markReplySent();
 
-        return true;
+        return $outboundMessage;
     }
 
     /**

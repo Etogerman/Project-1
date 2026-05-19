@@ -6,21 +6,15 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Validation\ValidationException;
 
-class ScenarioV3ScheduledTransition extends Model
+class ScenarioV3OutboundMessage extends Model
 {
-    public const STATUS_SCHEDULED = 'scheduled';
+    public const STATUS_PENDING = 'pending';
 
     public const STATUS_PROCESSING = 'processing';
 
-    public const STATUS_PASSED = 'passed';
-
-    public const STATUS_DELIVERY_PENDING = 'delivery_pending';
-
-    public const STATUS_CANCELLED = 'cancelled';
+    public const STATUS_SENT = 'sent';
 
     public const STATUS_FAILED = 'failed';
-
-    public const STATUS_LIMIT_REACHED = 'limit_reached';
 
     /**
      * @var list<string>
@@ -28,18 +22,22 @@ class ScenarioV3ScheduledTransition extends Model
     protected $fillable = [
         'scenario_run_id',
         'dialog_id',
+        'channel_id',
         'inbound_message_id',
-        'scenario_code',
+        'outbound_message_id',
         'published_version_id',
-        'edge_key',
-        'edge_id',
-        'source_block_id',
-        'target_block_id',
-        'delay_payload',
-        'scheduled_for',
-        'processing_started_at',
-        'finished_at',
+        'scheduled_transition_id',
+        'scenario_code',
+        'block_id',
+        'text',
+        'text_format',
+        'delivery_payload',
         'status',
+        'attempts',
+        'available_at',
+        'processing_started_at',
+        'sent_at',
+        'failed_at',
         'error_message',
     ];
 
@@ -47,23 +45,24 @@ class ScenarioV3ScheduledTransition extends Model
      * @var array<string, string>
      */
     protected $casts = [
-        'delay_payload' => 'array',
-        'scheduled_for' => 'datetime',
+        'delivery_payload' => 'array',
+        'available_at' => 'datetime',
         'processing_started_at' => 'datetime',
-        'finished_at' => 'datetime',
+        'sent_at' => 'datetime',
+        'failed_at' => 'datetime',
     ];
 
     protected static function booted(): void
     {
-        static::saving(function (ScenarioV3ScheduledTransition $transition): void {
-            if (! in_array($transition->status, self::statuses(), true)) {
+        static::saving(function (ScenarioV3OutboundMessage $message): void {
+            if (! in_array($message->status, self::statuses(), true)) {
                 throw ValidationException::withMessages([
-                    'status' => 'Неизвестный статус отложенного перехода V3.',
+                    'status' => 'Неизвестный статус исходящего V3-сообщения.',
                 ]);
             }
 
-            if (filled($transition->error_message)) {
-                $transition->error_message = mb_substr(trim((string) $transition->error_message), 0, 1000);
+            if (filled($message->error_message)) {
+                $message->error_message = mb_substr(trim((string) $message->error_message), 0, 1000);
             }
         });
     }
@@ -74,13 +73,10 @@ class ScenarioV3ScheduledTransition extends Model
     public static function statuses(): array
     {
         return [
-            self::STATUS_SCHEDULED,
+            self::STATUS_PENDING,
             self::STATUS_PROCESSING,
-            self::STATUS_PASSED,
-            self::STATUS_DELIVERY_PENDING,
-            self::STATUS_CANCELLED,
+            self::STATUS_SENT,
             self::STATUS_FAILED,
-            self::STATUS_LIMIT_REACHED,
         ];
     }
 
@@ -90,13 +86,10 @@ class ScenarioV3ScheduledTransition extends Model
     public static function statusLabels(): array
     {
         return [
-            self::STATUS_SCHEDULED => 'Запланирован',
-            self::STATUS_PROCESSING => 'Выполняется',
-            self::STATUS_PASSED => 'Выполнен',
-            self::STATUS_DELIVERY_PENDING => 'Ожидает доставку',
-            self::STATUS_CANCELLED => 'Отменён',
-            self::STATUS_FAILED => 'Ошибка',
-            self::STATUS_LIMIT_REACHED => 'Лимит достигнут',
+            self::STATUS_PENDING => 'Ожидает отправку',
+            self::STATUS_PROCESSING => 'Отправляется',
+            self::STATUS_SENT => 'Отправлено',
+            self::STATUS_FAILED => 'Ошибка доставки',
         ];
     }
 
@@ -115,13 +108,28 @@ class ScenarioV3ScheduledTransition extends Model
         return $this->belongsTo(Dialog::class);
     }
 
+    public function channel(): BelongsTo
+    {
+        return $this->belongsTo(Channel::class);
+    }
+
     public function inboundMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'inbound_message_id');
     }
 
+    public function outboundMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'outbound_message_id');
+    }
+
     public function publishedVersion(): BelongsTo
     {
         return $this->belongsTo(ScenarioVersion::class, 'published_version_id');
+    }
+
+    public function scheduledTransition(): BelongsTo
+    {
+        return $this->belongsTo(ScenarioV3ScheduledTransition::class, 'scheduled_transition_id');
     }
 }

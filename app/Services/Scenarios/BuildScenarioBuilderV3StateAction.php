@@ -7,6 +7,7 @@ use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioBuilderEdge;
+use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\User;
@@ -553,6 +554,33 @@ class BuildScenarioBuilderV3StateAction
             'finished_at' => $transition->finished_at?->toJSON(),
             'created_at' => $transition->created_at?->toJSON(),
             'error_message' => filled($transition->error_message) ? (string) $transition->error_message : null,
+            'delivery' => $this->scheduledTransitionDeliveryToBuilderState($transition),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function scheduledTransitionDeliveryToBuilderState(ScenarioV3ScheduledTransition $transition): ?array
+    {
+        $message = ScenarioV3OutboundMessage::query()
+            ->where('scheduled_transition_id', $transition->id)
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $message instanceof ScenarioV3OutboundMessage) {
+            return null;
+        }
+
+        return [
+            'id' => (int) $message->id,
+            'status' => (string) $message->status,
+            'status_label' => $message->statusLabel(),
+            'attempts' => (int) $message->attempts,
+            'available_at' => $message->available_at?->toJSON(),
+            'sent_at' => $message->sent_at?->toJSON(),
+            'failed_at' => $message->failed_at?->toJSON(),
+            'error_message' => filled($message->error_message) ? (string) $message->error_message : null,
         ];
     }
 
