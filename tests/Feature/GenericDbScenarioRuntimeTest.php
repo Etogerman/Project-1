@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Data\Bitrix24\Bitrix24ContactSyncQueueResultData;
+use App\Data\Bots\AutoReplyDeliveryResult;
+use App\Data\Bots\BotDialogTextSendResult;
+use App\Data\Dialogs\DialogRouteStatusData;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
@@ -24,6 +27,7 @@ use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use App\Services\Scenarios\ScenarioRegistry;
@@ -416,6 +420,73 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Сработала обычная стрелка с большим приоритетом');
+    }
+
+    public function test_v3_wait_reply_sends_target_message_after_run_transition_is_persisted(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_deferred_send', $this->v3CatalogRuntimeSchema($channel->id));
+        $sendCount = 0;
+        $runId = null;
+        $sendAction = Mockery::mock(SendBotDialogTextAction::class);
+        $sendAction
+            ->shouldReceive('handleMessage')
+            ->twice()
+            ->andReturnUsing(function (...$args) use (&$sendCount, &$runId, $dialog): BotDialogTextSendResult {
+                $sendCount++;
+                $text = (string) $args[1];
+
+                if ($text === 'Вот каталог') {
+                    $this->assertNotNull($runId);
+                    $this->assertSame('catalog', ScenarioRun::query()->findOrFail($runId)->current_step);
+                    $this->assertSame('catalog', data_get(ScenarioRun::query()->findOrFail($runId)->state_payload, 'v3.current_block_id'));
+                }
+
+                return $this->successfulBotSendResult($dialog, $text, 'mock-v3-'.$sendCount);
+            });
+        $this->app->instance(SendBotDialogTextAction::class, $sendAction);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $runId = $run->id;
+
+        $buttonMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Получить каталог',
+        ]);
+
+        (new ProcessScenarioInboundJob($buttonMessage->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $this->assertSame(2, $sendCount);
     }
 
     public function test_v3_wait_reply_exact_multiline_saves_dialog_field_and_counter(): void
@@ -1753,6 +1824,88 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->all();
 
         $this->assertSame(['Стартовый блок', 'Автоматический переход'], $sentTexts);
+    }
+
+    public function test_v3_delayed_transition_sends_target_message_after_transition_is_persisted(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3ScheduledTransitionJob::class,
+        ]);
+
+        $sendCount = 0;
+        $runId = null;
+        $transitionId = null;
+        $sendAction = Mockery::mock(SendBotDialogTextAction::class);
+        $sendAction
+            ->shouldReceive('handleMessage')
+            ->twice()
+            ->andReturnUsing(function (...$args) use (&$sendCount, &$runId, &$transitionId): BotDialogTextSendResult {
+                $sendCount++;
+                $message = $args[0];
+                $text = (string) $args[1];
+                $dialog = $message instanceof Message && $message->dialog instanceof Dialog
+                    ? $message->dialog
+                    : Dialog::query()->findOrFail($message->dialog_id);
+
+                if ($text === 'Автоматический переход') {
+                    $this->assertNotNull($runId);
+                    $this->assertNotNull($transitionId);
+                    $this->assertSame('next', ScenarioRun::query()->findOrFail($runId)->current_step);
+                    $this->assertSame(
+                        ScenarioV3ScheduledTransition::STATUS_PASSED,
+                        ScenarioV3ScheduledTransition::query()->findOrFail($transitionId)->status,
+                    );
+                }
+
+                return $this->successfulBotSendResult($dialog, $text, 'mock-v3-delayed-'.$sendCount);
+            });
+        $this->app->instance(SendBotDialogTextAction::class, $sendAction);
+
+        $this->travelTo(now()->startOfSecond());
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_delayed_deferred_send',
+            $this->v3AutomaticRuntimeSchema($channel->id, delay: [
+                'type' => 'relative',
+                'value' => 5,
+                'unit' => 'min',
+                'cancel_if_left_source_block' => true,
+            ]),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $transition = ScenarioV3ScheduledTransition::query()->firstOrFail();
+        $runId = $run->id;
+        $transitionId = $transition->id;
+
+        $this->travelTo(now()->addMinutes(5));
+
+        (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $this->assertSame(2, $sendCount);
     }
 
     public function test_v3_delayed_transition_error_message_is_sanitized(): void
@@ -5510,6 +5663,25 @@ class GenericDbScenarioRuntimeTest extends TestCase
         ]);
 
         return $scenario->fresh('publishedVersion');
+    }
+
+    private function successfulBotSendResult(Dialog $dialog, string $text, string $externalMessageId): BotDialogTextSendResult
+    {
+        return new BotDialogTextSendResult(
+            routeStatus: new DialogRouteStatusData(
+                code: DialogRouteStatusData::CODE_READY,
+                label: 'Готов',
+                tone: 'success',
+                isSendable: true,
+                blockedReason: null,
+            ),
+            dialog: $dialog->fresh(['channel', 'currentContactIdentity']),
+            deliveryResult: new AutoReplyDeliveryResult(
+                text: $text,
+                externalMessageId: $externalMessageId,
+                rawPayload: ['ok' => true],
+            ),
+        );
     }
 
     /**

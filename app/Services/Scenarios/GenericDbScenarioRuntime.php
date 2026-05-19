@@ -92,6 +92,22 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private ?string $matchedV3RuntimeBlockId = null;
 
+    private int $v3ScenarioMessageDeferralDepth = 0;
+
+    /**
+     * @var list<array{
+     *     message: Message,
+     *     text: string,
+     *     text_format: string,
+     *     request_phone: bool,
+     *     remove_telegram_keyboard: bool,
+     *     reply_button_rows: list<list<array<string, mixed>>>|null,
+     *     button_placement: string,
+     *     v3_callback_block_id: string|null
+     * }>
+     */
+    private array $deferredV3ScenarioMessages = [];
+
     public function __construct(
         private readonly Scenario $scenario,
         private readonly ScenarioVersion $publishedVersion,
@@ -1126,125 +1142,127 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             );
         }
 
-        return DB::transaction(function () use ($run, $message, $runtime): ScenarioInboundResult {
-            $dialog = Dialog::query()
-                ->whereKey($message->dialog_id)
-                ->lockForUpdate()
-                ->first();
-            $lockedRun = ScenarioRun::query()
-                ->whereKey($run->id)
-                ->lockForUpdate()
-                ->first();
+        return $this->withDeferredV3ScenarioMessages(function () use ($run, $message, $runtime): ScenarioInboundResult {
+            return DB::transaction(function () use ($run, $message, $runtime): ScenarioInboundResult {
+                $dialog = Dialog::query()
+                    ->whereKey($message->dialog_id)
+                    ->lockForUpdate()
+                    ->first();
+                $lockedRun = ScenarioRun::query()
+                    ->whereKey($run->id)
+                    ->lockForUpdate()
+                    ->first();
 
-            if (
-                ! $dialog instanceof Dialog
-                || ! $lockedRun instanceof ScenarioRun
-                || ! $lockedRun->isActive()
-                || (int) $lockedRun->dialog_id !== (int) $message->dialog_id
-            ) {
-                return new ScenarioInboundResult(
-                    consumed: false,
-                    status: $run->status,
-                    currentStep: $run->current_step,
-                    statePayload: $this->v3StatePayload($run->state_payload),
-                    exitOutcome: $run->exit_outcome,
-                );
-            }
+                if (
+                    ! $dialog instanceof Dialog
+                    || ! $lockedRun instanceof ScenarioRun
+                    || ! $lockedRun->isActive()
+                    || (int) $lockedRun->dialog_id !== (int) $message->dialog_id
+                ) {
+                    return new ScenarioInboundResult(
+                        consumed: false,
+                        status: $run->status,
+                        currentStep: $run->current_step,
+                        statePayload: $this->v3StatePayload($run->state_payload),
+                        exitOutcome: $run->exit_outcome,
+                    );
+                }
 
-            $statePayload = $this->v3StatePayload($lockedRun->state_payload);
-            $rawRunCurrentBlockId = filled($lockedRun->current_step) ? trim((string) $lockedRun->current_step) : null;
-            $rawStateCurrentBlockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
-            $rawCurrentBlockId = $rawRunCurrentBlockId ?: $rawStateCurrentBlockId;
-            $currentBlockId = $this->v3RuntimeBlockId($runtime, $rawCurrentBlockId, $statePayload);
+                $statePayload = $this->v3StatePayload($lockedRun->state_payload);
+                $rawRunCurrentBlockId = filled($lockedRun->current_step) ? trim((string) $lockedRun->current_step) : null;
+                $rawStateCurrentBlockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+                $rawCurrentBlockId = $rawRunCurrentBlockId ?: $rawStateCurrentBlockId;
+                $currentBlockId = $this->v3RuntimeBlockId($runtime, $rawCurrentBlockId, $statePayload);
 
-            if (
-                $rawRunCurrentBlockId !== null
-                && $rawStateCurrentBlockId !== ''
-                && $this->v3RuntimeBlockId($runtime, $rawRunCurrentBlockId, $statePayload) !== $this->v3RuntimeBlockId($runtime, $rawStateCurrentBlockId, $statePayload)
-            ) {
-                Log::warning('scenario.v3_current_block_mismatch', [
-                    'scenario_code' => $this->code(),
-                    'scenario_run_id' => $lockedRun->id,
-                    'dialog_id' => $message->dialog_id,
-                    'current_step' => $lockedRun->current_step,
-                    'state_current_block_id' => $rawStateCurrentBlockId,
-                ]);
+                if (
+                    $rawRunCurrentBlockId !== null
+                    && $rawStateCurrentBlockId !== ''
+                    && $this->v3RuntimeBlockId($runtime, $rawRunCurrentBlockId, $statePayload) !== $this->v3RuntimeBlockId($runtime, $rawStateCurrentBlockId, $statePayload)
+                ) {
+                    Log::warning('scenario.v3_current_block_mismatch', [
+                        'scenario_code' => $this->code(),
+                        'scenario_run_id' => $lockedRun->id,
+                        'dialog_id' => $message->dialog_id,
+                        'current_step' => $lockedRun->current_step,
+                        'state_current_block_id' => $rawStateCurrentBlockId,
+                    ]);
 
-                return new ScenarioInboundResult(
-                    consumed: false,
-                    status: $lockedRun->status,
-                    currentStep: $lockedRun->current_step,
-                    statePayload: $statePayload,
-                    exitOutcome: $lockedRun->exit_outcome,
-                );
-            }
+                    return new ScenarioInboundResult(
+                        consumed: false,
+                        status: $lockedRun->status,
+                        currentStep: $lockedRun->current_step,
+                        statePayload: $statePayload,
+                        exitOutcome: $lockedRun->exit_outcome,
+                    );
+                }
 
-            if ($currentBlockId === null) {
-                return new ScenarioInboundResult(
-                    consumed: false,
-                    status: $lockedRun->status,
-                    currentStep: $lockedRun->current_step,
-                    statePayload: $statePayload,
-                    exitOutcome: $lockedRun->exit_outcome,
-                );
-            }
+                if ($currentBlockId === null) {
+                    return new ScenarioInboundResult(
+                        consumed: false,
+                        status: $lockedRun->status,
+                        currentStep: $lockedRun->current_step,
+                        statePayload: $statePayload,
+                        exitOutcome: $lockedRun->exit_outcome,
+                    );
+                }
 
-            $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
-            $transition = $this->v3TransitionForMessage($message, is_array($block) ? $block : [], $dialog);
+                $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
+                $transition = $this->v3TransitionForMessage($message, is_array($block) ? $block : [], $dialog);
 
-            if ($transition === null) {
+                if ($transition === null) {
+                    return new ScenarioInboundResult(
+                        consumed: true,
+                        status: ScenarioRun::STATUS_ACTIVE,
+                        currentStep: $currentBlockId,
+                        statePayload: $this->markV3Waiting($statePayload, $currentBlockId, is_array($block) ? $block : [], $message->channel),
+                        exitOutcome: null,
+                    );
+                }
+
+                $transitionEdge = $transition['edge'];
+                $capturedValue = $transition['captured_value'];
+
+                if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue)) {
+                    return new ScenarioInboundResult(
+                        consumed: true,
+                        status: ScenarioRun::STATUS_ACTIVE,
+                        currentStep: $currentBlockId,
+                        statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
+                        exitOutcome: null,
+                    );
+                }
+
+                $targetBlockId = filled($transitionEdge['target_block_id'] ?? null) ? (string) $transitionEdge['target_block_id'] : null;
+
+                if ($targetBlockId === null) {
+                    return new ScenarioInboundResult(
+                        consumed: true,
+                        status: ScenarioRun::STATUS_ACTIVE,
+                        currentStep: $currentBlockId,
+                        statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
+                        exitOutcome: null,
+                    );
+                }
+
+                $progress = $this->advanceV3FromBlock($message, $runtime, $targetBlockId, $statePayload, run: $lockedRun);
+
+                $lockedRun->forceFill([
+                    'status' => $progress['status'],
+                    'current_step' => $progress['current_step'],
+                    'state_payload' => $progress['state_payload'],
+                    'exit_outcome' => $progress['exit_outcome'],
+                    'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                ])->save();
+
                 return new ScenarioInboundResult(
                     consumed: true,
-                    status: ScenarioRun::STATUS_ACTIVE,
-                    currentStep: $currentBlockId,
-                    statePayload: $this->markV3Waiting($statePayload, $currentBlockId, is_array($block) ? $block : [], $message->channel),
-                    exitOutcome: null,
+                    status: $progress['status'],
+                    currentStep: $progress['current_step'],
+                    statePayload: $progress['state_payload'],
+                    exitOutcome: $progress['exit_outcome'],
+                    persisted: true,
                 );
-            }
-
-            $transitionEdge = $transition['edge'];
-            $capturedValue = $transition['captured_value'];
-
-            if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue)) {
-                return new ScenarioInboundResult(
-                    consumed: true,
-                    status: ScenarioRun::STATUS_ACTIVE,
-                    currentStep: $currentBlockId,
-                    statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
-                    exitOutcome: null,
-                );
-            }
-
-            $targetBlockId = filled($transitionEdge['target_block_id'] ?? null) ? (string) $transitionEdge['target_block_id'] : null;
-
-            if ($targetBlockId === null) {
-                return new ScenarioInboundResult(
-                    consumed: true,
-                    status: ScenarioRun::STATUS_ACTIVE,
-                    currentStep: $currentBlockId,
-                    statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
-                    exitOutcome: null,
-                );
-            }
-
-            $progress = $this->advanceV3FromBlock($message, $runtime, $targetBlockId, $statePayload, run: $lockedRun);
-
-            $lockedRun->forceFill([
-                'status' => $progress['status'],
-                'current_step' => $progress['current_step'],
-                'state_payload' => $progress['state_payload'],
-                'exit_outcome' => $progress['exit_outcome'],
-                'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
-            ])->save();
-
-            return new ScenarioInboundResult(
-                consumed: true,
-                status: $progress['status'],
-                currentStep: $progress['current_step'],
-                statePayload: $progress['state_payload'],
-                exitOutcome: $progress['exit_outcome'],
-                persisted: true,
-            );
+            });
         });
     }
 
@@ -2099,124 +2117,126 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private function processClaimedV3ScheduledTransition(ScenarioV3ScheduledTransition $transition): void
     {
-        DB::transaction(function () use ($transition): void {
-            $lockedTransition = ScenarioV3ScheduledTransition::query()
-                ->whereKey($transition->id)
-                ->lockForUpdate()
-                ->first();
+        $this->withDeferredV3ScenarioMessages(function () use ($transition): void {
+            DB::transaction(function () use ($transition): void {
+                $lockedTransition = ScenarioV3ScheduledTransition::query()
+                    ->whereKey($transition->id)
+                    ->lockForUpdate()
+                    ->first();
 
-            if (
-                ! $lockedTransition instanceof ScenarioV3ScheduledTransition
-                || $lockedTransition->status !== ScenarioV3ScheduledTransition::STATUS_PROCESSING
-            ) {
-                return;
-            }
+                if (
+                    ! $lockedTransition instanceof ScenarioV3ScheduledTransition
+                    || $lockedTransition->status !== ScenarioV3ScheduledTransition::STATUS_PROCESSING
+                ) {
+                    return;
+                }
 
-            if ((int) $lockedTransition->published_version_id !== (int) $this->publishedVersion->id) {
-                $this->finishV3ScheduledTransition(
-                    $lockedTransition,
-                    ScenarioV3ScheduledTransition::STATUS_CANCELLED,
-                    'Версия сценария изменилась.',
-                );
-
-                return;
-            }
-
-            $dialog = Dialog::query()
-                ->whereKey($lockedTransition->dialog_id)
-                ->lockForUpdate()
-                ->first();
-            $run = ScenarioRun::query()
-                ->whereKey($lockedTransition->scenario_run_id)
-                ->lockForUpdate()
-                ->first();
-            $message = Message::query()
-                ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
-                ->find($lockedTransition->inbound_message_id);
-
-            if (
-                ! $dialog instanceof Dialog
-                || ! $run instanceof ScenarioRun
-                || ! $run->isActive()
-                || ! $message instanceof Message
-                || (int) $run->dialog_id !== (int) $lockedTransition->dialog_id
-            ) {
-                $this->finishV3ScheduledTransition(
-                    $lockedTransition,
-                    ScenarioV3ScheduledTransition::STATUS_CANCELLED,
-                    'Активный run, диалог или исходное сообщение не найдены.',
-                );
-
-                return;
-            }
-
-            $runtime = $this->v3RuntimeOrNull();
-
-            if ($runtime === null) {
-                $this->finishV3ScheduledTransition(
-                    $lockedTransition,
-                    ScenarioV3ScheduledTransition::STATUS_CANCELLED,
-                    'Runtime V3 недоступен.',
-                );
-
-                return;
-            }
-
-            $statePayload = $this->v3StatePayload($run->state_payload);
-
-            if ($this->v3ScheduledTransitionRequiresSourceBlock($lockedTransition)) {
-                $currentBlockId = $this->v3CurrentRuntimeBlockId($runtime, $statePayload);
-
-                if ($currentBlockId !== $lockedTransition->source_block_id) {
+                if ((int) $lockedTransition->published_version_id !== (int) $this->publishedVersion->id) {
                     $this->finishV3ScheduledTransition(
                         $lockedTransition,
                         ScenarioV3ScheduledTransition::STATUS_CANCELLED,
-                        'Диалог ушёл из исходного блока.',
+                        'Версия сценария изменилась.',
                     );
 
                     return;
                 }
-            }
 
-            $edge = $this->v3ScheduledAutomaticEdge($runtime, $lockedTransition);
+                $dialog = Dialog::query()
+                    ->whereKey($lockedTransition->dialog_id)
+                    ->lockForUpdate()
+                    ->first();
+                $run = ScenarioRun::query()
+                    ->whereKey($lockedTransition->scenario_run_id)
+                    ->lockForUpdate()
+                    ->first();
+                $message = Message::query()
+                    ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+                    ->find($lockedTransition->inbound_message_id);
 
-            if ($edge === null) {
-                $this->finishV3ScheduledTransition(
-                    $lockedTransition,
-                    ScenarioV3ScheduledTransition::STATUS_CANCELLED,
-                    'Стрелка больше не найдена в опубликованном runtime.',
+                if (
+                    ! $dialog instanceof Dialog
+                    || ! $run instanceof ScenarioRun
+                    || ! $run->isActive()
+                    || ! $message instanceof Message
+                    || (int) $run->dialog_id !== (int) $lockedTransition->dialog_id
+                ) {
+                    $this->finishV3ScheduledTransition(
+                        $lockedTransition,
+                        ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                        'Активный run, диалог или исходное сообщение не найдены.',
+                    );
+
+                    return;
+                }
+
+                $runtime = $this->v3RuntimeOrNull();
+
+                if ($runtime === null) {
+                    $this->finishV3ScheduledTransition(
+                        $lockedTransition,
+                        ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                        'Runtime V3 недоступен.',
+                    );
+
+                    return;
+                }
+
+                $statePayload = $this->v3StatePayload($run->state_payload);
+
+                if ($this->v3ScheduledTransitionRequiresSourceBlock($lockedTransition)) {
+                    $currentBlockId = $this->v3CurrentRuntimeBlockId($runtime, $statePayload);
+
+                    if ($currentBlockId !== $lockedTransition->source_block_id) {
+                        $this->finishV3ScheduledTransition(
+                            $lockedTransition,
+                            ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                            'Диалог ушёл из исходного блока.',
+                        );
+
+                        return;
+                    }
+                }
+
+                $edge = $this->v3ScheduledAutomaticEdge($runtime, $lockedTransition);
+
+                if ($edge === null) {
+                    $this->finishV3ScheduledTransition(
+                        $lockedTransition,
+                        ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                        'Стрелка больше не найдена в опубликованном runtime.',
+                    );
+
+                    return;
+                }
+
+                if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)) {
+                    $this->finishV3ScheduledTransition(
+                        $lockedTransition,
+                        ScenarioV3ScheduledTransition::STATUS_LIMIT_REACHED,
+                        'Лимит переходов исчерпан или данные диалога не сохранены.',
+                    );
+
+                    return;
+                }
+
+                $progress = $this->advanceV3FromBlock(
+                    $message,
+                    $runtime,
+                    $lockedTransition->target_block_id,
+                    $statePayload,
+                    run: $run,
                 );
 
-                return;
-            }
+                $run->forceFill([
+                    'status' => $progress['status'],
+                    'current_step' => $progress['current_step'],
+                    'state_payload' => $progress['state_payload'],
+                    'exit_outcome' => $progress['exit_outcome'],
+                    'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                ])->save();
 
-            if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)) {
-                $this->finishV3ScheduledTransition(
-                    $lockedTransition,
-                    ScenarioV3ScheduledTransition::STATUS_LIMIT_REACHED,
-                    'Лимит переходов исчерпан или данные диалога не сохранены.',
-                );
-
-                return;
-            }
-
-            $progress = $this->advanceV3FromBlock(
-                $message,
-                $runtime,
-                $lockedTransition->target_block_id,
-                $statePayload,
-                run: $run,
-            );
-
-            $run->forceFill([
-                'status' => $progress['status'],
-                'current_step' => $progress['current_step'],
-                'state_payload' => $progress['state_payload'],
-                'exit_outcome' => $progress['exit_outcome'],
-                'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
-            ])->save();
-
-            $this->finishV3ScheduledTransition($lockedTransition, ScenarioV3ScheduledTransition::STATUS_PASSED);
+                $this->finishV3ScheduledTransition($lockedTransition, ScenarioV3ScheduledTransition::STATUS_PASSED);
+            });
         });
     }
 
@@ -3211,6 +3231,122 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     }
 
     private function dispatchScenarioMessage(
+        Message $message,
+        string $text,
+        string $textFormat,
+        bool $requestPhone = false,
+        bool $removeTelegramKeyboard = false,
+        ?array $replyButtonRows = null,
+        string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
+        ?string $v3CallbackBlockId = null,
+    ): bool {
+        if ($this->v3ScenarioMessageDeferralDepth > 0) {
+            $this->deferredV3ScenarioMessages[] = [
+                'message' => $message,
+                'text' => $text,
+                'text_format' => $textFormat,
+                'request_phone' => $requestPhone,
+                'remove_telegram_keyboard' => $removeTelegramKeyboard,
+                'reply_button_rows' => $replyButtonRows,
+                'button_placement' => $buttonPlacement,
+                'v3_callback_block_id' => $v3CallbackBlockId,
+            ];
+
+            return true;
+        }
+
+        return $this->dispatchScenarioMessageNow(
+            $message,
+            $text,
+            $textFormat,
+            $requestPhone,
+            $removeTelegramKeyboard,
+            $replyButtonRows,
+            $buttonPlacement,
+            $v3CallbackBlockId,
+        );
+    }
+
+    /**
+     * @template T
+     *
+     * @param  callable(): T  $callback
+     * @return T
+     */
+    private function withDeferredV3ScenarioMessages(callable $callback): mixed
+    {
+        $this->v3ScenarioMessageDeferralDepth++;
+
+        try {
+            $result = $callback();
+        } catch (Throwable $throwable) {
+            if ($this->v3ScenarioMessageDeferralDepth === 1) {
+                $this->deferredV3ScenarioMessages = [];
+            }
+
+            throw $throwable;
+        } finally {
+            $this->v3ScenarioMessageDeferralDepth--;
+        }
+
+        if ($this->v3ScenarioMessageDeferralDepth === 0) {
+            $messages = $this->deferredV3ScenarioMessages;
+            $this->deferredV3ScenarioMessages = [];
+            $this->flushDeferredV3ScenarioMessages($messages);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  list<array{
+     *     message: Message,
+     *     text: string,
+     *     text_format: string,
+     *     request_phone: bool,
+     *     remove_telegram_keyboard: bool,
+     *     reply_button_rows: list<list<array<string, mixed>>>|null,
+     *     button_placement: string,
+     *     v3_callback_block_id: string|null
+     * }>  $messages
+     */
+    private function flushDeferredV3ScenarioMessages(array $messages): void
+    {
+        foreach ($messages as $message) {
+            try {
+                $sent = $this->dispatchScenarioMessageNow(
+                    $message['message'],
+                    $message['text'],
+                    $message['text_format'],
+                    $message['request_phone'],
+                    $message['remove_telegram_keyboard'],
+                    $message['reply_button_rows'],
+                    $message['button_placement'],
+                    $message['v3_callback_block_id'],
+                );
+
+                if (! $sent) {
+                    Log::warning('scenario.v3_deferred_message_not_sent', [
+                        'scenario_code' => $this->code(),
+                        'inbound_message_id' => $message['message']->id,
+                        'dialog_id' => $message['message']->dialog_id,
+                    ]);
+                }
+            } catch (Throwable $throwable) {
+                Log::warning('scenario.v3_deferred_message_failed', [
+                    'scenario_code' => $this->code(),
+                    'inbound_message_id' => $message['message']->id,
+                    'dialog_id' => $message['message']->dialog_id,
+                    'exception' => $throwable::class,
+                ]);
+            }
+        }
+    }
+
+    /**
+     * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     */
+    private function dispatchScenarioMessageNow(
         Message $message,
         string $text,
         string $textFormat,
