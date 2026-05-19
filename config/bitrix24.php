@@ -68,7 +68,7 @@ return [
             env('BITRIX24_OPENLINES_ALLOW_OFFICIAL_CONNECTORS_IN_LOCAL', false),
             FILTER_VALIDATE_BOOL,
         ),
-        'live_export_queue' => env('BITRIX24_OPENLINES_LIVE_EXPORT_QUEUE', 'default'),
+        'live_export_queue' => env('BITRIX24_OPENLINES_LIVE_EXPORT_QUEUE', 'bitrix-live'),
         'runtime_application_token_hashes' => array_values(array_filter(array_map(
             static fn (string $hash): string => trim($hash),
             explode(',', (string) env(

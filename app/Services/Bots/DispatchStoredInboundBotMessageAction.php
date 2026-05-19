@@ -11,6 +11,7 @@ use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Models\Scenario;
 use App\Services\DataCollection\DataCollectionPromptHelper;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 
@@ -65,6 +66,24 @@ class DispatchStoredInboundBotMessageAction
                 return;
             }
 
+            if (
+                $storedResult->shouldQueuePhoneCaptureFollowUp()
+                && $this->dispatchStoredInboundScenarioAction->hasActiveV3Run($storedMessage)
+            ) {
+                $this->logPhoneCaptureConfirmationSuppressedForV3($channel, $storedMessage, $storedResult, 'active_v3_run');
+
+                return;
+            }
+
+            if (
+                $storedResult->shouldQueuePhoneCaptureFollowUp()
+                && $this->hasRecentV3RequestContactPrompt($storedMessage)
+            ) {
+                $this->logPhoneCaptureConfirmationSuppressedForV3($channel, $storedMessage, $storedResult, 'recent_v3_request_contact_prompt');
+
+                return;
+            }
+
             $this->dispatchContactShareFollowUp($channel, $storedMessage, $storedResult, $deliveryLagSeconds);
 
             return;
@@ -91,6 +110,10 @@ class DispatchStoredInboundBotMessageAction
         }
 
         if ($storedMessage->message_kind !== Message::KIND_INBOUND_USER) {
+            return;
+        }
+
+        if ($this->dispatchStoredInboundScenarioAction->startPriorityScenario($channel, $storedMessage)) {
             return;
         }
 
@@ -323,6 +346,71 @@ class DispatchStoredInboundBotMessageAction
                 'phone_capture_status' => $storedResult->phoneCaptureStatus,
             ],
         );
+    }
+
+    protected function logPhoneCaptureConfirmationSuppressedForV3(
+        Channel $channel,
+        Message $storedMessage,
+        StoredInboundMessageResult $storedResult,
+        string $reason,
+    ): void {
+        $this->channelActivityLogger->info(
+            $channel,
+            'contact.phone_capture_confirmation_suppressed_for_v3',
+            'Глобальное подтверждение телефона не отправлено, потому что телефон обрабатывается V3-конструктором.',
+            [
+                'platform' => $channel->platform,
+                'contact_id' => $storedMessage->contact_id,
+                'message_id' => $storedMessage->id,
+                'phone_capture_status' => $storedResult->phoneCaptureStatus,
+                'reason' => $reason,
+            ],
+        );
+    }
+
+    protected function hasRecentV3RequestContactPrompt(Message $storedMessage): bool
+    {
+        if ($storedMessage->dialog_id === null) {
+            return false;
+        }
+
+        $createdAt = $storedMessage->created_at ?? now();
+
+        return Message::query()
+            ->where('dialog_id', $storedMessage->dialog_id)
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_SCENARIO_MESSAGE)
+            ->where('sent_by_system_code', 'scenario_'.Scenario::CONSTRUCTOR_WORKSPACE_CODE)
+            ->where('id', '<', $storedMessage->id)
+            ->where('created_at', '>=', $createdAt->copy()->subMinutes(30))
+            ->latest('id')
+            ->limit(10)
+            ->get()
+            ->contains(fn (Message $message): bool => $this->outboundMessageHasRequestContactButton($message));
+    }
+
+    protected function outboundMessageHasRequestContactButton(Message $message): bool
+    {
+        return $this->payloadHasRequestContactButton($message->raw_payload);
+    }
+
+    protected function payloadHasRequestContactButton(mixed $payload): bool
+    {
+        if (! is_array($payload)) {
+            return false;
+        }
+
+        if (($payload['type'] ?? null) === 'request_contact' || ($payload['request_contact'] ?? false) === true) {
+            return true;
+        }
+
+        foreach ($payload as $value) {
+            if ($this->payloadHasRequestContactButton($value)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function isStoredMaxBotStartedEvent(Channel $channel, Message $storedMessage): bool

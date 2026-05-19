@@ -33,7 +33,9 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
     public function __construct(
         public int $inboundMessageId,
         public string $phoneCaptureStatus = StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW,
-    ) {}
+    ) {
+        $this->onQueue(ProcessAutoReplyJob::queueName());
+    }
 
     /**
      * @return list<int>

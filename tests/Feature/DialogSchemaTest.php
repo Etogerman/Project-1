@@ -28,6 +28,7 @@ class DialogSchemaTest extends TestCase
             'confirmed_phone_normalized',
             'phone_confirmed_at',
             'phone_confirmed_via',
+            'fields_payload',
             'last_message_at',
             'last_inbound_at',
             'last_outbound_at',

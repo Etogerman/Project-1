@@ -72,7 +72,7 @@
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
-            "npx concurrently -c \"#93c5fd,#facc15,#22c55e,#c4b5fd,#fb7185,#fdba74\" \"php artisan serve --host=0.0.0.0\" \"php artisan queue:work --queue=bot-replies --tries=1 --sleep=0\" \"php artisan queue:work --queue=bitrix-live --tries=1 --sleep=1\" \"php artisan queue:work --queue=default --tries=1 --sleep=1\" \"php artisan pail --timeout=0\" \"npm run build -- --watch\" --names=server,bot-replies,bitrix-live,queue,logs,vite"
+            "npx concurrently -c \"#93c5fd,#facc15,#22c55e,#c4b5fd,#fb7185,#fdba74\" \"php artisan serve --host=0.0.0.0\" \"sh scripts/dev-queue-worker.sh bot-replies 0\" \"sh scripts/dev-queue-worker.sh bitrix-live 1\" \"sh scripts/dev-queue-worker.sh default 1\" \"php artisan pail --timeout=0\" \"npm run build -- --watch\" --names=server,bot-replies,bitrix-live,queue,logs,vite"
         ],
         "docker:build": "docker compose build",
         "docker:up": "docker compose up -d",

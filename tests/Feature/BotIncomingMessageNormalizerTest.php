@@ -296,6 +296,44 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('94', $message->providerEventKey);
     }
 
+    public function test_telegram_v3_button_callback_query_is_normalized(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 941,
+            'callback_query' => [
+                'id' => 'callback-v3-1',
+                'data' => 'v3b:start:btn_catalog',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'first_name' => 'Герман',
+                    'is_bot' => false,
+                ],
+                'message' => [
+                    'message_id' => 911,
+                    'date' => 1_711_539_200,
+                    'chat' => [
+                        'id' => 300,
+                        'type' => 'private',
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
+        $this->assertSame('v3b:start:btn_catalog', $message->text);
+        $this->assertNull($message->messageParameter);
+        $this->assertSame('callback-v3-1', $message->externalMessageId);
+        $this->assertSame('941', $message->providerEventKey);
+    }
+
     public function test_telegram_my_chat_member_block_event_is_normalized(): void
     {
         $channel = Channel::factory()->create([

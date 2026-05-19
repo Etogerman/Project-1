@@ -195,6 +195,24 @@
                     </div>
                 </div>
 
+                @if ($dialogFields['is_visible'])
+                    <div class="ac-dialog-summary__section ac-surface__divider">
+                        <p class="ac-dialog-summary__section-title">Поля диалога</p>
+                        <div class="ac-meta-grid ac-meta-grid--compact" data-role="dialog-fields">
+                            @foreach ($dialogFields['fields'] as $field)
+                                <div class="ac-meta" data-role="dialog-field">
+                                    <p class="ac-meta__label">
+                                        {{ $field['key'] }}
+                                    </p>
+                                    <p class="ac-meta__value">
+                                        {{ $field['value'] }}
+                                    </p>
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
+
                 @if ($peerSyncState['is_visible'])
                     <div class="ac-dialog-summary__section ac-surface__divider">
                         <p class="ac-dialog-summary__section-title">Загрузка истории</p>

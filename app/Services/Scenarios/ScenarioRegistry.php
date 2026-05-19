@@ -2,8 +2,8 @@
 
 namespace App\Services\Scenarios;
 
-use App\Models\Scenario;
 use App\Models\Channel;
+use App\Models\Scenario;
 use App\Models\ScenarioVersion;
 use App\Services\Scenarios\Adapters\BuiltinScenarioAdapter;
 use Illuminate\Support\Facades\Cache;
@@ -121,6 +121,39 @@ class ScenarioRegistry
         return app()->make(GenericDbScenarioRuntime::class, [
             'scenario' => $scenario,
             'publishedVersion' => $scenario->publishedVersion,
+        ]);
+    }
+
+    public function makeRuntimeForVersion(?string $scenarioCode, int $scenarioVersionId): ?GenericDbScenarioRuntime
+    {
+        $normalizedScenarioCode = $this->normalizeScenarioCode($scenarioCode);
+
+        if ($normalizedScenarioCode === null || $scenarioVersionId <= 0) {
+            return null;
+        }
+
+        $scenario = Scenario::query()
+            ->where('code', $normalizedScenarioCode)
+            ->where('is_active', true)
+            ->where('is_archived', false)
+            ->first();
+
+        if (! $scenario instanceof Scenario) {
+            return null;
+        }
+
+        $version = ScenarioVersion::query()
+            ->whereKey($scenarioVersionId)
+            ->where('scenario_id', $scenario->id)
+            ->first();
+
+        if (! $version instanceof ScenarioVersion) {
+            return null;
+        }
+
+        return app()->make(GenericDbScenarioRuntime::class, [
+            'scenario' => $scenario,
+            'publishedVersion' => $version,
         ]);
     }
 

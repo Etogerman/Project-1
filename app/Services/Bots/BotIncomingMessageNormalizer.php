@@ -211,6 +211,13 @@ class BotIncomingMessageNormalizer
             return $key !== '' ? 'scenario:'.$key : null;
         }
 
+        if (preg_match('/^v3b:([A-Za-z0-9_-]{1,64}):([A-Za-z0-9_-]{1,64})$/', $value, $matches)) {
+            $blockId = trim((string) ($matches[1] ?? ''));
+            $outputId = trim((string) ($matches[2] ?? ''));
+
+            return $blockId !== '' && $outputId !== '' ? 'v3b:'.$blockId.':'.$outputId : null;
+        }
+
         return null;
     }
 

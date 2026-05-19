@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
+use App\Services\Scenarios\PrioritizedScenarioRuntime;
 use App\Services\Dialogs\CanSendThroughDialogAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Database\QueryException;
@@ -14,10 +15,13 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class ProcessScenarioStartJob implements ShouldQueue
 {
+    public const DEFAULT_QUEUE = 'bot-replies';
+
     use Dispatchable;
     use InteractsWithQueue;
     use Queueable;
@@ -29,7 +33,16 @@ class ProcessScenarioStartJob implements ShouldQueue
         public int $inboundMessageId,
         public ?int $dialogId,
         public string $scenarioCode,
-    ) {}
+    ) {
+        $this->onQueue(self::queueName());
+    }
+
+    public static function queueName(): string
+    {
+        $queue = trim((string) config('bots.scenario_queue', self::DEFAULT_QUEUE));
+
+        return $queue !== '' ? $queue : self::DEFAULT_QUEUE;
+    }
 
     /**
      * @return list<int>
@@ -95,8 +108,20 @@ class ProcessScenarioStartJob implements ShouldQueue
             return;
         }
 
-        if ($this->activeRunExists($effectiveDialogId)) {
-            return;
+        $activeRun = $this->activeRun($effectiveDialogId);
+
+        if ($activeRun instanceof ScenarioRun) {
+            if (! $runtime instanceof PrioritizedScenarioRuntime) {
+                return;
+            }
+
+            if (! $runtime->shouldCancelActiveRunOnStart($message)) {
+                $runtime->startBeforeActiveRunWithoutCancelling($message, $activeRun);
+
+                return;
+            }
+
+            $this->cancelActiveRuns($effectiveDialogId, $binding->scenario_code, $message->id);
         }
 
         try {
@@ -134,10 +159,45 @@ class ProcessScenarioStartJob implements ShouldQueue
 
     protected function activeRunExists(int $dialogId): bool
     {
+        return $this->activeRun($dialogId) instanceof ScenarioRun;
+    }
+
+    protected function activeRun(int $dialogId): ?ScenarioRun
+    {
         return ScenarioRun::query()
             ->active()
             ->where('dialog_id', $dialogId)
-            ->exists();
+            ->orderBy('id')
+            ->first();
+    }
+
+    protected function cancelActiveRuns(int $dialogId, string $newScenarioCode, int $messageId): void
+    {
+        $activeRuns = ScenarioRun::query()
+            ->active()
+            ->where('dialog_id', $dialogId)
+            ->lockForUpdate()
+            ->get();
+
+        foreach ($activeRuns as $activeRun) {
+            /** @var ScenarioRun $activeRun */
+            $oldScenarioCode = (string) $activeRun->scenario_code;
+
+            $activeRun->forceFill([
+                'status' => ScenarioRun::STATUS_CANCELLED,
+                'current_step' => null,
+                'exit_outcome' => 'interrupted_by_v3_start',
+                'finished_at' => now(),
+            ])->save();
+
+            Log::info('scenario.v3_start_interrupted_active_run', [
+                'dialog_id' => $dialogId,
+                'message_id' => $messageId,
+                'old_scenario_code' => $oldScenarioCode,
+                'new_scenario_code' => $newScenarioCode,
+                'old_run_id' => $activeRun->id,
+            ]);
+        }
     }
 
     protected function wasUniqueConstraintViolation(QueryException $exception): bool

@@ -222,7 +222,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
 
         $this->assertSame('danger', $health['tone']);
         $this->assertStringStartsWith('1 · 1 мин', $health['details'][2]['value']);
-        $this->assertSame('Запустите worker-ы очередей: default, bot-replies.', $health['recommendation']);
+        $this->assertSame('Запустите worker-ы очередей: default, bot-replies, bitrix-live.', $health['recommendation']);
     }
 
     public function test_bitrix24_connection_view_builds_bitrix_box_config_snippet(): void
