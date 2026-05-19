@@ -427,6 +427,10 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
     public function test_v3_wait_reply_sends_target_message_after_run_transition_is_persisted(): void
     {
+        Queue::fake([
+            ProcessScenarioV3OutboundMessageJob::class,
+        ]);
+
         $channel = $this->createTelegramChannel();
         [$contact, $identity, $dialog] = $this->createDialogContext($channel);
         $scenario = $this->createPublishedScenario('v3_wait_reply_deferred_send', $this->v3CatalogRuntimeSchema($channel->id));
@@ -489,7 +493,13 @@ class GenericDbScenarioRuntimeTest extends TestCase
         (new ProcessScenarioInboundJob($buttonMessage->id, $run->id))
             ->handle(app(ScenarioRegistry::class));
 
+        $targetOutbound = ScenarioV3OutboundMessage::query()
+            ->where('text', 'Вот каталог')
+            ->firstOrFail();
+
         $this->assertSame(2, $sendCount);
+        $this->assertSame(ScenarioV3OutboundMessage::STATUS_SENT, $targetOutbound->status);
+        Queue::assertPushed(ProcessScenarioV3OutboundMessageJob::class, fn (ProcessScenarioV3OutboundMessageJob $job): bool => $job->outboundMessageId === $targetOutbound->id);
     }
 
     public function test_v3_wait_reply_delivery_failure_stays_pending_and_can_retry(): void

@@ -3315,6 +3315,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'available_at' => now(),
         ]);
 
+        $this->scheduleV3OutboundDeliveryJobs((int) $outboundMessage->id, $outboundMessage->available_at);
+
         return (int) $outboundMessage->id;
     }
 
@@ -3486,12 +3488,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return $lockedMessage->fresh();
         });
 
-        if ($claimedMessage instanceof ScenarioV3OutboundMessage) {
-            ProcessScenarioV3OutboundMessageJob::dispatch((int) $claimedMessage->id)
-                ->delay(now()->addSeconds(self::V3_OUTBOUND_PROCESSING_TIMEOUT_SECONDS))
-                ->afterCommit();
-        }
-
         if ($staleUncertainMessage instanceof ScenarioV3OutboundMessage) {
             $this->markV3RunDeliveryFailure($staleUncertainMessage, $staleUncertainErrorMessage);
             $this->failV3ScheduledTransitionDelivery($staleUncertainMessage, $staleUncertainErrorMessage);
@@ -3541,9 +3537,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'error_message' => $safeErrorMessage,
             ])->save();
 
-            ProcessScenarioV3OutboundMessageJob::dispatch((int) $outboundMessage->id)
-                ->delay($availableAt)
-                ->afterCommit();
+            $this->scheduleV3OutboundDeliveryJobs((int) $outboundMessage->id, $availableAt);
 
             return;
         }
@@ -3570,6 +3564,28 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $attempts - 1,
             count(self::V3_OUTBOUND_RETRY_BACKOFF_SECONDS) - 1,
         ))];
+    }
+
+    private function scheduleV3OutboundDeliveryJobs(int $outboundMessageId, mixed $availableAt): void
+    {
+        $this->scheduleV3OutboundMessageJob($outboundMessageId, $availableAt);
+
+        $watchdogAt = $availableAt instanceof \DateTimeInterface
+            ? (clone $availableAt)->modify('+'.self::V3_OUTBOUND_PROCESSING_TIMEOUT_SECONDS.' seconds')
+            : now()->addSeconds(self::V3_OUTBOUND_PROCESSING_TIMEOUT_SECONDS);
+
+        $this->scheduleV3OutboundMessageJob($outboundMessageId, $watchdogAt);
+    }
+
+    private function scheduleV3OutboundMessageJob(int $outboundMessageId, mixed $delay = null): void
+    {
+        $job = ProcessScenarioV3OutboundMessageJob::dispatch($outboundMessageId);
+
+        if ($delay !== null) {
+            $job->delay($delay);
+        }
+
+        $job->afterCommit();
     }
 
     private function markV3OutboundExternalDeliveryStarted(ScenarioV3OutboundMessage $outboundMessage): void
