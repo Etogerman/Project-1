@@ -20,6 +20,14 @@ class Bitrix24OpenLinesExportJobTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_live_export_job_uses_bitrix_live_queue(): void
+    {
+        config()->set('bitrix24.openlines.live_export_queue', 'bitrix-live');
+
+        $this->assertSame('bitrix-live', ExportMessageToBitrix24OpenLinesJob::queueName());
+        $this->assertSame('bitrix-live', (new ExportMessageToBitrix24OpenLinesJob(messageId: 1))->queue);
+    }
+
     public function test_job_returns_quietly_when_message_is_missing(): void
     {
         Log::spy();

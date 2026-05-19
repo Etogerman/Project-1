@@ -14,6 +14,8 @@ class ContactPhoneNumber extends Model
 
     public const SOURCE_MAX_CONTACT_SHARE = 'max_contact_share';
 
+    public const SOURCE_V3_CAPTURE = 'v3_capture';
+
     /**
      * @var list<string>
      */

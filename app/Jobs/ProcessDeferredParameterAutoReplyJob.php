@@ -22,7 +22,9 @@ class ProcessDeferredParameterAutoReplyJob implements ShouldQueue
 
     public function __construct(
         public readonly int $dialogId,
-    ) {}
+    ) {
+        $this->onQueue(ProcessAutoReplyJob::queueName());
+    }
 
     /**
      * @return list<int>

@@ -321,13 +321,17 @@ class SyncScenarioBuilderStartBlockAction
 
         foreach ($sourceBlocks as $sourceBlock) {
             /** @var ScenarioBuilderBlock $sourceBlock */
+            $settingsPayload = is_array($sourceBlock->settings_payload) ? $sourceBlock->settings_payload : [];
+            $cardId = trim((string) data_get($settingsPayload, 'ui.card_id', ''));
+            data_set($settingsPayload, 'ui.card_id', $cardId !== '' ? $cardId : (string) $sourceBlock->id);
+
             $targetBlock = ScenarioBuilderBlock::query()->create([
                 'scenario_version_id' => $targetVersion->id,
                 'type' => $sourceBlock->type,
                 'title' => $sourceBlock->title,
                 'position_x' => $sourceBlock->position_x,
                 'position_y' => $sourceBlock->position_y,
-                'settings_payload' => $sourceBlock->settings_payload ?? [],
+                'settings_payload' => $settingsPayload,
             ]);
 
             $blockIdMap[$sourceBlock->id] = $targetBlock->id;

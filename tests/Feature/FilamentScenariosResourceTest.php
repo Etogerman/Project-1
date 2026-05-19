@@ -472,32 +472,10 @@ JSON,
         $response
             ->assertOk()
             ->assertSee('Конструктор')
-            ->assertSee('Полотно конструктора')
-            ->assertSee('Настройки элемента')
-            ->assertSee('Стартовое условие')
-            ->assertSee('Состояние диалога')
-            ->assertSee('ID: #')
-            ->assertSee('Тип блока')
-            ->assertSee('Название блока')
-            ->assertSee('Куда вести после старта')
-            ->assertSee('alternate')
-            ->assertSee('Канал')
-            ->assertSee('Telegram визуальный')
-            ->assertSee('Условия')
-            ->assertSee('Область срабатывания')
-            ->assertSee('Содержит текст в сообщении')
-            ->assertSee('Точное соответствие текста в сообщении')
-            ->assertSee('Точное соответствие параметра сообщения')
-            ->assertDontSee('Начинается с')
-            ->assertDontSee('Заканчивается на')
-            ->assertSee('Текст ответа')
-            ->assertSee('Калькулятор')
-            ->assertSee('Действия')
-            ->assertSee('Кнопки')
-            ->assertSee('События для аналитики')
-            ->assertSee('Вложения')
-            ->assertSee('start_condition')
-            ->assertSee('Добавить стартовое условие');
+            ->assertSee('data-scenario-builder-v3', false)
+            ->assertSee('Конструктор загружается')
+            ->assertDontSee('Полотно конструктора')
+            ->assertDontSee('Добавить стартовое условие');
 
         Livewire::actingAs($admin)
             ->test(ScenarioConstructor::class, ['scenario' => $scenario->id])
@@ -604,7 +582,8 @@ JSON,
             ->get(ScenarioConstructor::getUrl())
             ->assertOk()
             ->assertSee('Конструктор')
-            ->assertSee('Полотно конструктора')
+            ->assertSee('data-scenario-builder-v3', false)
+            ->assertSee('Конструктор загружается')
             ->assertDontSee('К списку сценариев');
 
         $this->assertDatabaseHas('scenarios', [
@@ -749,10 +728,9 @@ JSON,
         $response
             ->assertOk()
             ->assertSee('Конструктор')
-            ->assertSee('Полотно конструктора')
-            ->assertSee('Добавить стартовое условие')
-            ->assertSee('ID: #')
-            ->assertSee('Тип блока');
+            ->assertSee('data-scenario-builder-v3', false)
+            ->assertSee('Конструктор загружается')
+            ->assertDontSee('Добавить стартовое условие');
     }
 
     public function test_admin_can_create_select_save_and_delete_multiple_green_start_blocks(): void

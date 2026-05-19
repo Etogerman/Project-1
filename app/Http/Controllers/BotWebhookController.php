@@ -450,6 +450,13 @@ class BotWebhookController extends Controller
                 && $this->activeRunSupportsTelegramScenarioCallback($run, $callbackData);
         }
 
+        if (preg_match('/^v3b:[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{1,64}$/', $callbackData)) {
+            $run = $this->findTelegramActiveScenarioRun($channel, $payload);
+
+            return $run instanceof ScenarioRun
+                && $this->activeRunSupportsTelegramScenarioCallback($run, $callbackData);
+        }
+
         if (! preg_match('/^scenario:(\d+):([A-Za-z0-9_-]{1,32})$/', $callbackData, $matches)) {
             return false;
         }
@@ -476,7 +483,7 @@ class BotWebhookController extends Controller
         }
 
         $run = ScenarioRun::query()
-            ->with('dialog.currentContactIdentity')
+            ->with(['dialog.channel', 'dialog.currentContactIdentity'])
             ->active()
             ->whereKey($runId)
             ->first();
@@ -494,6 +501,35 @@ class BotWebhookController extends Controller
         }
 
         return $run;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function findTelegramActiveScenarioRun(Channel $channel, array $payload): ?ScenarioRun
+    {
+        $externalUserId = trim((string) data_get($payload, 'callback_query.from.id', ''));
+        $externalChatId = trim((string) data_get($payload, 'callback_query.message.chat.id', ''));
+
+        if ($externalUserId === '' || $externalChatId === '') {
+            return null;
+        }
+
+        $run = ScenarioRun::query()
+            ->with(['dialog.channel', 'dialog.currentContactIdentity'])
+            ->active()
+            ->whereHas('dialog', function ($query) use ($channel, $externalChatId, $externalUserId): void {
+                $query
+                    ->where('channel_id', $channel->id)
+                    ->where('external_chat_id', $externalChatId)
+                    ->whereHas('currentContactIdentity', function ($identityQuery) use ($externalUserId): void {
+                        $identityQuery->where('external_user_id', $externalUserId);
+                    });
+            })
+            ->orderByDesc('id')
+            ->first();
+
+        return $run instanceof ScenarioRun ? $run : null;
     }
 
     protected function activeRunSupportsTelegramScenarioCallback(ScenarioRun $run, string $callbackData): bool
