@@ -10,6 +10,10 @@ class BuildBitrix24TimelineCommentAction
 {
     private const COMMENT_HEADER_TEMPLATE = 'Архив переписки Abrikosoff (%d/%d)';
 
+    public function __construct(
+        private readonly FormatV3ScenarioButtonsForBitrixAction $formatV3ScenarioButtonsForBitrixAction,
+    ) {}
+
     public function handle(Bitrix24HistoryExportChunkData $chunk): string
     {
         $body = implode(
@@ -78,6 +82,12 @@ class BuildBitrix24TimelineCommentAction
             return 'Клиент поделился номером телефона';
         }
 
-        return trim((string) $message->text);
+        $text = trim((string) $message->text);
+
+        if ($message->message_kind === Message::KIND_OUTBOUND_SCENARIO_MESSAGE) {
+            return $this->formatV3ScenarioButtonsForBitrixAction->append($message, $text);
+        }
+
+        return $text;
     }
 }

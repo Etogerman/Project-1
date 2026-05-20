@@ -2189,6 +2189,7 @@ class ExportMessageToBitrix24OpenLinesAction
         return in_array($message->message_kind, [
             Message::KIND_OUTBOUND_MANUAL_REPLY,
             Message::KIND_OUTBOUND_AUTO_REPLY,
+            Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
         ], true);
     }
 

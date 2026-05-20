@@ -3,11 +3,13 @@
 namespace App\Services\Scenarios;
 
 use App\Models\AutoReplyRule;
+use App\Models\Channel;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioVersion;
+use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -28,12 +30,13 @@ class SaveScenarioBuilderV3StateAction
     public function handle(Scenario $scenario, array $input): array
     {
         $validated = $this->validateScenarioBuilderV3StateAction->handle($input);
+        $user = auth()->user();
         $idMap = [
             'blocks' => [],
             'edges' => [],
         ];
 
-        DB::transaction(function () use ($scenario, $validated, &$idMap): void {
+        DB::transaction(function () use ($scenario, $validated, $user, &$idMap): void {
             $version = ScenarioVersion::query()
                 ->whereKey($validated['draft_version_id'])
                 ->where('scenario_id', $scenario->id)
@@ -55,6 +58,7 @@ class SaveScenarioBuilderV3StateAction
 
             $serverVisibleScope = $this->serverVisibleScope($version);
             $this->guardVisibleScope($validated['builder']['visible_scope'], $serverVisibleScope);
+            $this->guardStartConditionChannels($validated['builder'], $user instanceof User ? $user : null);
 
             $blockMap = $this->saveBlocks($version, $validated['builder']['blocks'], $serverVisibleScope, $idMap);
             $this->deleteRemovedEdges($version, $validated['builder']['edges'], $serverVisibleScope, $blockMap['deleted_block_ids']);
@@ -86,6 +90,50 @@ class SaveScenarioBuilderV3StateAction
         if ($unknownBlockIds !== [] || $unknownEdgeIds !== []) {
             throw ValidationException::withMessages([
                 'visible_scope' => 'Client visible_scope cannot contain ids that were not shown by backend.',
+            ]);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $builder
+     */
+    private function guardStartConditionChannels(array $builder, ?User $user): void
+    {
+        $channelIds = collect($builder['blocks'] ?? [])
+            ->filter(fn (mixed $block): bool => is_array($block))
+            ->flatMap(function (array $block): array {
+                $settingsPayload = is_array($block['settings_payload'] ?? null) ? $block['settings_payload'] : [];
+                $modules = is_array($settingsPayload['modules'] ?? null) ? $settingsPayload['modules'] : [];
+
+                return collect($modules)
+                    ->filter(fn (mixed $module): bool => is_array($module) && ($module['type'] ?? null) === 'start_condition')
+                    ->flatMap(fn (array $module): array => $this->normalizeIdList(data_get($module, 'payload.channels.ids', [])))
+                    ->all();
+            })
+            ->map(fn (mixed $id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($channelIds === []) {
+            return;
+        }
+
+        if (! ($user instanceof User)) {
+            throw ValidationException::withMessages([
+                'builder.start_condition.channels' => 'Недостаточно прав для выбора каналов.',
+            ]);
+        }
+
+        $channels = Channel::query()->whereKey($channelIds)->get();
+
+        if (
+            $channels->count() !== count($channelIds)
+            || $channels->contains(fn (Channel $channel): bool => ! $user->can('update', $channel))
+        ) {
+            throw ValidationException::withMessages([
+                'builder.start_condition.channels' => 'Недостаточно прав для выбора каналов.',
             ]);
         }
     }
