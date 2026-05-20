@@ -8,9 +8,11 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -216,6 +218,7 @@ class DialogMetadataSyncTest extends TestCase
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
             'external_chat_id' => 'created-chat',
+            'text' => 'Новое входящее',
             'received_at' => Carbon::parse('2026-03-31 12:35:00'),
             'created_at' => Carbon::parse('2026-03-31 12:35:00'),
             'sent_by_type' => null,
@@ -236,6 +239,10 @@ class DialogMetadataSyncTest extends TestCase
 
         $this->assertSame('2026-03-31 12:35:00', $dialog->last_inbound_at?->format('Y-m-d H:i:s'));
         $this->assertSame('2026-03-31 12:35:00', $dialog->last_message_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($message->id, $dialog->last_message_id);
+        $this->assertSame($message->id, $dialog->last_inbound_message_id);
+        $this->assertSame('Новое входящее', $dialog->last_message_preview);
+        $this->assertSame('Новое входящее', $dialog->last_inbound_message_preview);
         $this->assertSame($identity->id, $dialog->current_contact_identity_id);
         $this->assertSame('created-chat', $dialog->external_chat_id);
     }
@@ -267,6 +274,7 @@ class DialogMetadataSyncTest extends TestCase
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'external_chat_id' => '500',
+            'text' => 'Новый ответ',
             'received_at' => Carbon::parse('2026-03-31 12:25:00'),
             'created_at' => Carbon::parse('2026-03-31 12:25:00'),
             'sent_by_type' => null,
@@ -288,6 +296,182 @@ class DialogMetadataSyncTest extends TestCase
 
         $this->assertSame('2026-03-31 12:25:00', $dialog->last_outbound_at?->format('Y-m-d H:i:s'));
         $this->assertSame('2026-03-31 12:25:00', $dialog->last_message_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($message->id, $dialog->last_message_id);
+        $this->assertSame($message->id, $dialog->last_outbound_message_id);
+        $this->assertSame('Новый ответ', $dialog->last_message_preview);
+        $this->assertSame('Новый ответ', $dialog->last_outbound_message_preview);
+    }
+
+    public function test_older_message_sync_does_not_replace_last_message_snapshots(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $currentMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Свежий текст',
+            'received_at' => Carbon::parse('2026-03-31 12:50:00'),
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'last_message_id' => $currentMessage->id,
+            'last_inbound_message_id' => $currentMessage->id,
+            'last_message_preview' => 'Свежий текст',
+            'last_inbound_message_preview' => 'Свежий текст',
+            'last_message_at' => Carbon::parse('2026-03-31 12:50:00'),
+            'last_inbound_at' => Carbon::parse('2026-03-31 12:50:00'),
+        ]);
+        $olderMessage = Message::factory()->create([
+            'dialog_id' => null,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Старый текст',
+            'received_at' => Carbon::parse('2026-03-31 12:45:00'),
+            'sent_by_type' => null,
+        ]);
+
+        DB::transaction(function () use ($olderMessage, $contact, $channel, $identity): void {
+            app(SyncMessageDialogMetadataAction::class)->handle(
+                $olderMessage,
+                $contact,
+                $channel,
+                $identity,
+                '500',
+                Message::SENT_BY_TYPE_CONTACT,
+            );
+        });
+
+        $dialog->refresh();
+
+        $this->assertSame($currentMessage->id, $dialog->last_message_id);
+        $this->assertSame($currentMessage->id, $dialog->last_inbound_message_id);
+        $this->assertSame('Свежий текст', $dialog->last_message_preview);
+        $this->assertSame('Свежий текст', $dialog->last_inbound_message_preview);
+    }
+
+    public function test_outbound_status_change_does_not_replace_visible_last_message_snapshot(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $visibleMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'text' => 'Ответ клиенту',
+            'received_at' => Carbon::parse('2026-03-31 13:00:00'),
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'last_message_id' => $visibleMessage->id,
+            'last_outbound_message_id' => $visibleMessage->id,
+            'last_message_preview' => 'Ответ клиенту',
+            'last_outbound_message_preview' => 'Ответ клиенту',
+            'last_message_at' => Carbon::parse('2026-03-31 13:00:00'),
+            'last_outbound_at' => Carbon::parse('2026-03-31 13:00:00'),
+        ]);
+        $statusMessage = Message::factory()->create([
+            'dialog_id' => null,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            'text' => 'Оператор изменил статус',
+            'received_at' => Carbon::parse('2026-03-31 13:05:00'),
+        ]);
+
+        DB::transaction(function () use ($statusMessage, $contact, $channel, $identity): void {
+            app(SyncMessageDialogMetadataAction::class)->handle(
+                $statusMessage,
+                $contact,
+                $channel,
+                $identity,
+                '500',
+                Message::SENT_BY_TYPE_SYSTEM,
+                null,
+                Message::SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE,
+            );
+        });
+
+        $dialog->refresh();
+
+        $this->assertSame($visibleMessage->id, $dialog->last_message_id);
+        $this->assertSame($visibleMessage->id, $dialog->last_outbound_message_id);
+        $this->assertSame('Ответ клиенту', $dialog->last_message_preview);
+        $this->assertSame('Ответ клиенту', $dialog->last_outbound_message_preview);
+        $this->assertSame('2026-03-31 13:05:00', $dialog->last_message_at?->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-03-31 13:05:00', $dialog->last_outbound_at?->format('Y-m-d H:i:s'));
+    }
+
+    public function test_full_snapshot_recompute_clears_missing_message_snapshots(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Старый текст',
+            'received_at' => Carbon::parse('2026-03-31 13:10:00'),
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'last_message_id' => $message->id,
+            'last_inbound_message_id' => $message->id,
+            'last_outbound_message_id' => $message->id,
+            'last_message_preview' => 'Старый текст',
+            'last_inbound_message_preview' => 'Старый текст',
+            'last_outbound_message_preview' => 'Старый ответ',
+        ]);
+
+        $dialog->forceFill(app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(new Collection()))->save();
+        $dialog->refresh();
+
+        $this->assertNull($dialog->last_message_id);
+        $this->assertNull($dialog->last_inbound_message_id);
+        $this->assertNull($dialog->last_outbound_message_id);
+        $this->assertNull($dialog->last_message_preview);
+        $this->assertNull($dialog->last_inbound_message_preview);
+        $this->assertNull($dialog->last_outbound_message_preview);
     }
 
     public function test_older_phone_capture_does_not_downgrade_confirmed_phone(): void

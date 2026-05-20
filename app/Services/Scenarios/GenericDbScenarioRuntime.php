@@ -29,7 +29,6 @@ use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\NormalizePhoneNumberAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
-use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Messages\PrepareMessageContentAction;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
@@ -125,7 +124,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly AddContactPhoneAction $addContactPhoneAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
-        private readonly SyncDialogConfirmedPhoneAction $syncDialogConfirmedPhoneAction,
     ) {}
 
     public function code(): string
@@ -1343,6 +1341,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ->merge($this->v3WaitReplyEdges($block))
             ->filter(fn (array $edge): bool => filled($edge['target_block_id'] ?? null)
                 && $this->v3EdgeAllowsContactPhone($message, $edge)
+                && $this->v3EdgeAllowsDialogPhone($message, $edge)
                 && $this->v3EdgeAllowsFieldCondition($message, $edge)
                 && (
                     ($edge['mode'] ?? null) !== 'wait_reply'
@@ -1432,6 +1431,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return $condition === AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
             ? $hasPhone
             : ! $hasPhone;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3EdgeAllowsDialogPhone(Message $message, array $edge): bool
+    {
+        $condition = trim((string) ($edge['dialog_phone_condition'] ?? ''));
+
+        return $this->v3PhoneConditionAllows($condition, $this->messageDialogHasConfirmedPhone($message));
     }
 
     /**
@@ -1779,7 +1788,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         try {
             $this->addContactPhoneAction->handle($contact, $phoneRaw, ContactPhoneNumber::SOURCE_V3_CAPTURE);
-            $this->syncDialogConfirmedPhoneAction->handle($message, $phoneRaw, $phoneNormalized);
         } catch (Throwable $throwable) {
             Log::warning('scenario.v3_contact_phone_capture_failed', [
                 'scenario_code' => $this->code(),
@@ -2016,6 +2024,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         foreach ($this->v3AutomaticEdges($block) as $edge) {
             if (
                 ! $this->v3EdgeAllowsContactPhone($message, $edge)
+                || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
                 || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
             ) {
                 continue;
@@ -2545,6 +2554,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return null;
         }
 
+        if (! $this->v3EntrypointAllowsDialogPhone($message, $entrypoint)) {
+            return null;
+        }
+
         $match = (string) ($entrypoint['match'] ?? 'strict');
 
         foreach ($entrypoint['values'] ?? [] as $value) {
@@ -2586,6 +2599,64 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return $condition === AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
             ? $hasPhone
             : ! $hasPhone;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function v3EntrypointAllowsDialogPhone(Message $message, array $entrypoint): bool
+    {
+        $condition = trim((string) ($entrypoint['dialog_phone_condition'] ?? ''));
+
+        return $this->v3PhoneConditionAllows($condition, $this->messageDialogHasConfirmedPhone($message));
+    }
+
+    private function v3PhoneConditionAllows(string $condition, bool $hasPhone): bool
+    {
+        if ($condition === '') {
+            return true;
+        }
+
+        if (! in_array($condition, [
+            AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+        ], true)) {
+            return false;
+        }
+
+        return $condition === AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
+            ? $hasPhone
+            : ! $hasPhone;
+    }
+
+    private function messageDialogHasConfirmedPhone(Message $message): bool
+    {
+        $dialog = $message->relationLoaded('dialog') ? $message->dialog : null;
+
+        if ($dialog instanceof Dialog) {
+            return filled($dialog->confirmed_phone_raw) || filled($dialog->confirmed_phone_normalized);
+        }
+
+        if ($message->dialog_id === null) {
+            return false;
+        }
+
+        return Dialog::query()
+            ->whereKey($message->dialog_id)
+            ->where(function ($query): void {
+                $query
+                    ->where(function ($query): void {
+                        $query
+                            ->whereNotNull('confirmed_phone_raw')
+                            ->where('confirmed_phone_raw', '!=', '');
+                    })
+                    ->orWhere(function ($query): void {
+                        $query
+                            ->whereNotNull('confirmed_phone_normalized')
+                            ->where('confirmed_phone_normalized', '!=', '');
+                    });
+            })
+            ->exists();
     }
 
     /**

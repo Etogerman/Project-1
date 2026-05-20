@@ -7,15 +7,12 @@ use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
 use App\Models\Dialog;
-use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
-use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\UpdateDialogStageAction;
-use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Filament\Support\Enums\Width;
@@ -59,11 +56,6 @@ class DialogKanban extends Page
 
     public int $moveSequence = 0;
 
-    /**
-     * @var array<int, array<string, mixed>>
-     */
-    protected array $previewFeedCache = [];
-
     protected function queryString(): array
     {
         return [
@@ -104,22 +96,6 @@ class DialogKanban extends Page
     public function getBreadcrumb(): ?string
     {
         return 'Канбан';
-    }
-
-    protected function getHeaderActions(): array
-    {
-        return [
-            Action::make('filters')
-                ->label('Фильтры')
-                ->icon('heroicon-m-funnel')
-                ->color('gray')
-                ->action(fn (): null => $this->toggleFiltersPanel()),
-            Action::make('table')
-                ->label('Таблица')
-                ->icon('heroicon-m-table-cells')
-                ->color('warning')
-                ->url(DialogResource::getUrl('index')),
-        ];
     }
 
     public function loadMoreCards(string $stage): void
@@ -233,6 +209,7 @@ class DialogKanban extends Page
             ],
             'columns' => $this->buildColumns($dialogs),
             'can_manage_stages' => $this->canCurrentUserManageDialogStages(),
+            'table_url' => DialogResource::getUrl('index'),
         ];
     }
 
@@ -571,20 +548,9 @@ class DialogKanban extends Page
 
     private function resolvePreviewText(Dialog $dialog): string
     {
-        $previewMessage = $dialog->previewMessage;
-
-        if (! $previewMessage instanceof Message) {
-            return 'Сообщений ещё не было.';
-        }
-
-        if (array_key_exists($previewMessage->id, $this->previewFeedCache)) {
-            return (string) ($this->previewFeedCache[$previewMessage->id]['display_text'] ?? 'Сообщений ещё не было.');
-        }
-
-        $feed = app(BuildConversationFeedViewDataAction::class)->handle(new Collection([$previewMessage]));
-        $this->previewFeedCache[$previewMessage->id] = $feed[0] ?? [];
-
-        return (string) ($this->previewFeedCache[$previewMessage->id]['display_text'] ?? 'Сообщений ещё не было.');
+        return filled($dialog->last_message_preview)
+            ? (string) $dialog->last_message_preview
+            : 'Сообщений ещё не было.';
     }
 
     private function timestampSortKey(mixed $value): string

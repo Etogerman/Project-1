@@ -49,6 +49,12 @@ class DialogFactory extends Factory
             'last_message_at' => null,
             'last_inbound_at' => null,
             'last_outbound_at' => null,
+            'last_message_id' => null,
+            'last_inbound_message_id' => null,
+            'last_outbound_message_id' => null,
+            'last_message_preview' => null,
+            'last_inbound_message_preview' => null,
+            'last_outbound_message_preview' => null,
         ];
     }
 

@@ -1,6 +1,11 @@
 <section
     data-role="conversation-reply-form"
-    class="ac-surface ac-surface--emphasis ac-composer"
+    @class([
+        'ac-surface',
+        'ac-surface--emphasis',
+        'ac-composer',
+        $composerClass ?? '',
+    ])
 >
     @php
         $replyTextModel = $replyTextModel ?? 'dialogReplyText';
@@ -13,6 +18,23 @@
     <div class="ac-inline-split">
         <div class="ac-surface__title-group">
             <h3 class="ac-surface__title">Написать клиенту</h3>
+        </div>
+
+        <div class="ac-button-group ac-composer__format-toggle">
+            @foreach ($replyFormatOptions as $replyFormatValue => $replyFormatLabel)
+                <button
+                    type="button"
+                    wire:click="$set('{{ $replyFormatModel }}', '{{ $replyFormatValue }}')"
+                    @class([
+                        'ac-button',
+                        'ac-button--warning-soft' => $this->{$replyFormatModel} === $replyFormatValue,
+                        'ac-button--secondary' => $this->{$replyFormatModel} !== $replyFormatValue,
+                    ])
+                    @disabled(! $canReply)
+                >
+                    {{ $replyFormatLabel }}
+                </button>
+            @endforeach
         </div>
 
         <p class="ac-note">
@@ -32,29 +54,14 @@
             </p>
         @endif
 
-        <div class="ac-button-group">
-            @foreach ($replyFormatOptions as $replyFormatValue => $replyFormatLabel)
-                <button
-                    type="button"
-                    wire:click="$set('{{ $replyFormatModel }}', '{{ $replyFormatValue }}')"
-                    @class([
-                        'ac-button',
-                        'ac-button--warning-soft' => $this->{$replyFormatModel} === $replyFormatValue,
-                        'ac-button--secondary' => $this->{$replyFormatModel} !== $replyFormatValue,
-                    ])
-                    @disabled(! $canReply)
-                >
-                    {{ $replyFormatLabel }}
-                </button>
-            @endforeach
-        </div>
         <textarea
             id="conversation-reply-textarea"
             data-role="conversation-reply-textarea"
             wire:model.defer="{{ $replyTextModel }}"
             onkeydown="if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.isComposing) { event.preventDefault(); this.closest('[data-role=conversation-reply-form]').querySelector('[data-role=conversation-reply-submit]').click(); }"
+            oninput="const minHeight = 44; const maxHeight = 160; this.style.height = minHeight + 'px'; const nextHeight = Math.max(minHeight, Math.min(this.scrollHeight, maxHeight)); this.style.height = nextHeight + 'px'; this.style.overflowY = this.scrollHeight > maxHeight ? 'auto' : 'hidden';"
             aria-label="Текст ответа"
-            rows="4"
+            rows="2"
             maxlength="2000"
             placeholder="Введите текст ответа клиенту"
             @disabled(! $canReply)
