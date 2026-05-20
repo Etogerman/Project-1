@@ -19,6 +19,7 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         private readonly MessageChronology $messageChronology,
         private readonly BuildBitrix24OpenLinesExternalUserIdAction $buildExternalUserIdAction,
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
+        private readonly FormatV3ScenarioButtonsForBitrixAction $formatV3ScenarioButtonsForBitrixAction,
     ) {}
 
     /**
@@ -111,7 +112,10 @@ class BuildBitrix24OpenLinesMessagePayloadAction
                 $text,
             ),
             Message::KIND_OUTBOUND_AUTO_REPLY => $this->prefixLegacyFallbackText('ℹ️ [Автоответ]', $text),
-            Message::KIND_OUTBOUND_SCENARIO_MESSAGE => $this->prefixLegacyFallbackText('ℹ️ [Автоответ]', $text),
+            Message::KIND_OUTBOUND_SCENARIO_MESSAGE => $this->formatV3ScenarioButtonsForBitrixAction->append(
+                $message,
+                $this->prefixLegacyFallbackText('ℹ️ [Автоответ]', $text),
+            ),
             default => $text,
         };
     }

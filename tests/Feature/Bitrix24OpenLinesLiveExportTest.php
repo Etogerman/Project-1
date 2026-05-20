@@ -245,7 +245,17 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 rawPayload: ['ok' => true],
             ),
             Message::SENT_BY_SYSTEM_CODE_SCENARIO_BUILDER_START_CONDITION,
-            $dialog,
+            routeDialog: $dialog,
+            rawPayloadMetadata: [
+                'v3' => [
+                    'buttons' => [
+                        'placement' => 'auto',
+                        'rows' => [[
+                            ['text' => 'Выбрать', 'type' => 'text'],
+                        ]],
+                    ],
+                ],
+            ],
         );
 
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, 8);
@@ -253,6 +263,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $phoneCapture->id);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $collector->id);
         Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, fn (ExportMessageToBitrix24OpenLinesJob $job): bool => $job->messageId === $scenario->id);
+        $this->assertTrue(data_get($scenario->raw_payload, 'ok'));
+        $this->assertSame('Выбрать', data_get($scenario->raw_payload, 'v3.buttons.rows.0.0.text'));
     }
 
     public function test_send_manual_dialog_reply_queues_live_export_job(): void
@@ -1613,6 +1625,22 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_SCENARIO_BUILDER_START_CONDITION,
             'text' => 'Ответ V3-конструктора',
+            'raw_payload' => [
+                'v3' => [
+                    'buttons' => [
+                        'placement' => 'auto',
+                        'rows' => [
+                            [
+                                ['text' => 'Выбрать', 'type' => 'text'],
+                                ['text' => 'Поделиться телефоном', 'type' => 'request_phone'],
+                            ],
+                            [
+                                ['text' => 'Открыть сайт', 'type' => 'link', 'url' => 'https://example.com'],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
         ]);
 
         Http::fake([
@@ -1637,7 +1665,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
             parse_str($request->body(), $payload);
 
-            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'ℹ️ [Автоответ] Ответ V3-конструктора';
+            return ($payload['MESSAGES'][0]['message']['text'] ?? null) === "ℹ️ [Автоответ] Ответ V3-конструктора\n\nКнопки:\n1. Выбрать\n2. Поделиться телефоном (запрос телефона)\n3. Открыть сайт (ссылка)";
         });
     }
 

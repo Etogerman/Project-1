@@ -25,8 +25,9 @@ class StoreOutboundScenarioMessageAction
         string $systemCode,
         ?Dialog $routeDialog = null,
         ?PreparedMessageContentData $content = null,
+        array $rawPayloadMetadata = [],
     ): Message {
-        return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult, $systemCode, $routeDialog, $content): Message {
+        return DB::transaction(function () use ($channel, $inboundMessage, $deliveryResult, $systemCode, $routeDialog, $content, $rawPayloadMetadata): Message {
             $inboundMessage->forceFill([
                 'auto_reply_sent_at' => now(),
             ])->save();
@@ -50,7 +51,7 @@ class StoreOutboundScenarioMessageAction
                 'text' => $content?->plainText ?? $deliveryResult->text,
                 'text_format' => $content?->textFormat ?? Message::TEXT_FORMAT_PLAIN_TEXT,
                 'source_text' => $content?->sourceText,
-                'raw_payload' => $deliveryResult->rawPayload,
+                'raw_payload' => $this->rawPayload($deliveryResult->rawPayload, $rawPayloadMetadata),
                 'received_at' => now(),
             ]);
 
@@ -69,5 +70,19 @@ class StoreOutboundScenarioMessageAction
 
             return $outboundMessage;
         });
+    }
+
+    /**
+     * @param  array<string, mixed>  $deliveryPayload
+     * @param  array<string, mixed>  $metadata
+     * @return array<string, mixed>
+     */
+    private function rawPayload(array $deliveryPayload, array $metadata): array
+    {
+        if ($metadata === []) {
+            return $deliveryPayload;
+        }
+
+        return array_replace($deliveryPayload, $metadata);
     }
 }
