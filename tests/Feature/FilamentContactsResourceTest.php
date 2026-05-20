@@ -968,6 +968,7 @@ class FilamentContactsResourceTest extends TestCase
             ],
             'received_at' => now(),
         ]);
+        $this->refreshDialogMessageSnapshots($dialog);
 
         ContactStartTag::query()->create([
             'contact_id' => $contact->id,
