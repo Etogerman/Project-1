@@ -165,6 +165,23 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee($dialog->contact->display_name);
     }
 
+    public function test_dialogs_inbox_record_link_contains_back_to_dialogs_list(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $expectedUrl = DialogResource::getUrl('view', ['record' => $dialog]).'?'.http_build_query([
+            'back_to' => DialogResource::getUrl('index'),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee($expectedUrl, false);
+    }
+
     public function test_dialogs_inbox_page_enables_live_polling(): void
     {
         $admin = User::factory()->create([

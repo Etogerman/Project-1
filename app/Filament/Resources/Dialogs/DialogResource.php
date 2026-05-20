@@ -256,7 +256,10 @@ class DialogResource extends Resource
                     ->query(fn (Builder $query): Builder => $query->whereRouteProblem()),
             ])
             ->defaultSort('last_message_at', 'desc')
-            ->recordUrl(fn (Dialog $record): string => static::getUrl('view', ['record' => $record]))
+            ->recordUrl(fn (Dialog $record): string => static::getUrl('view', [
+                'record' => $record,
+                'back_to' => static::getUrl('index'),
+            ]))
             ->emptyStateHeading('Диалогов ещё нет')
             ->emptyStateDescription('Диалоги появятся после первых входящих сообщений от внешней аудитории.')
             ->columnManager()
