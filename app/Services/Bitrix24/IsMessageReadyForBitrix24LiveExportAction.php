@@ -15,6 +15,7 @@ class IsMessageReadyForBitrix24LiveExportAction
         Message::KIND_INBOUND_USER,
         Message::KIND_INBOUND_CONTACT_SHARE,
         Message::KIND_OUTBOUND_AUTO_REPLY,
+        Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
         Message::KIND_OUTBOUND_MANUAL_REPLY,
         Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
         Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,

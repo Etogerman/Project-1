@@ -79,6 +79,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_OUTBOUND_PROCESSING_TIMEOUT_SECONDS = 600;
 
+    private const V3_SCHEDULED_TRANSITION_PROCESSING_TIMEOUT_SECONDS = 600;
+
     private const V3_OUTBOUND_RETRY_BACKOFF_SECONDS = [10, 30, 60, 180];
 
     private const V3_CONTACT_CAPTURE_FIELDS = [
@@ -1783,7 +1785,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'scenario_code' => $this->code(),
                 'contact_id' => $contact->id,
                 'message_id' => $message->id,
-                'error' => $throwable->getMessage(),
+                'exception' => get_class($throwable),
+                'exception_code' => $throwable->getCode(),
+                'error_message' => 'Не удалось сохранить телефон из V3-сценария.',
             ]);
 
             return false;
@@ -2119,14 +2123,22 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ->lockForUpdate()
                 ->first();
 
-            if (
-                ! $lockedTransition instanceof ScenarioV3ScheduledTransition
-                || $lockedTransition->status !== ScenarioV3ScheduledTransition::STATUS_SCHEDULED
-            ) {
+            if (! $lockedTransition instanceof ScenarioV3ScheduledTransition) {
                 return null;
             }
 
-            if ($lockedTransition->scheduled_for !== null && $lockedTransition->scheduled_for->isFuture()) {
+            $isScheduled = $lockedTransition->status === ScenarioV3ScheduledTransition::STATUS_SCHEDULED;
+            $isStaleProcessing = $lockedTransition->status === ScenarioV3ScheduledTransition::STATUS_PROCESSING
+                && (
+                    $lockedTransition->processing_started_at === null
+                    || $lockedTransition->processing_started_at->lte(now()->subSeconds(self::V3_SCHEDULED_TRANSITION_PROCESSING_TIMEOUT_SECONDS))
+                );
+
+            if (! $isScheduled && ! $isStaleProcessing) {
+                return null;
+            }
+
+            if ($isScheduled && $lockedTransition->scheduled_for !== null && $lockedTransition->scheduled_for->isFuture()) {
                 return null;
             }
 
@@ -3867,6 +3879,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 systemCode: $this->systemCode(),
                 routeDialog: $sendResult->dialog,
                 content: $content,
+                rawPayloadMetadata: $this->v3OutboundRawPayloadMetadata($replyButtonRows, $buttonPlacement),
             );
 
             $channel->markReplySent();
@@ -3882,6 +3895,46 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'sent_message' => $outboundMessage,
             'delivery_accepted' => true,
             'error' => null,
+        ];
+    }
+
+    /**
+     * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     * @return array<string, mixed>
+     */
+    private function v3OutboundRawPayloadMetadata(?array $replyButtonRows, string $buttonPlacement): array
+    {
+        if ($replyButtonRows === null || $replyButtonRows === []) {
+            return [];
+        }
+
+        $rows = collect($replyButtonRows)
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (array $button): bool => filled($button['text'] ?? null))
+                ->map(fn (array $button): array => array_filter([
+                    'text' => (string) $button['text'],
+                    'type' => (string) ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT),
+                    'url' => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
+                        ? (string) ($button['url'] ?? '')
+                        : null,
+                ], static fn (mixed $value): bool => $value !== null && $value !== ''))
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+
+        if ($rows === []) {
+            return [];
+        }
+
+        return [
+            'v3' => [
+                'buttons' => [
+                    'placement' => $buttonPlacement,
+                    'rows' => $rows,
+                ],
+            ],
         ];
     }
 

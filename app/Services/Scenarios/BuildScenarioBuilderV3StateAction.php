@@ -49,7 +49,7 @@ class BuildScenarioBuilderV3StateAction
             ],
             'builder' => $builder,
             'catalogs' => [
-                'channels' => $this->channelsCatalog(),
+                'channels' => $this->channelsCatalog($user),
                 'module_types' => ['start_condition', 'message', 'buttons'],
             ],
             'permissions' => [
@@ -598,11 +598,12 @@ class BuildScenarioBuilderV3StateAction
     /**
      * @return list<array<string, mixed>>
      */
-    private function channelsCatalog(): array
+    private function channelsCatalog(?User $user = null): array
     {
         return Channel::query()
             ->orderBy('id')
             ->get()
+            ->filter(fn (Channel $channel): bool => ! ($user instanceof User) || $user->can('update', $channel))
             ->map(fn (Channel $channel): array => [
                 'id' => (int) $channel->id,
                 'name' => (string) $channel->name,
