@@ -5,9 +5,6 @@
     $environment = app()->environment();
     $normalizedVersion = AppVersion::resolve();
     $version = AppVersion::displayFromVersion($normalizedVersion);
-    $style = $centered
-        ? 'position: fixed; left: 50%; top: 2rem; transform: translate(-50%, -50%); z-index: 60; pointer-events: none;'
-        : null;
 
     if ($environment !== 'staging' && blank($version)) {
         return;
@@ -20,11 +17,10 @@
         data-app-version="{{ $normalizedVersion }}"
     @endif
     @class([
+        'ac-env-indicator',
+        'ac-env-indicator--topbar' => $centered,
         'inline-flex items-center gap-2',
     ])
-    @if (filled($style))
-        style="{{ $style }}"
-    @endif
 >
     @if ($environment === 'staging')
         <span class="inline-flex items-center rounded-md border border-black bg-amber-300 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.22em] text-black shadow-sm">

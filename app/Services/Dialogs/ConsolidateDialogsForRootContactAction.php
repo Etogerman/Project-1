@@ -20,6 +20,7 @@ class ConsolidateDialogsForRootContactAction
         private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
         private readonly MessageChronology $messageChronology,
         private readonly ResolveDialogStageAction $resolveDialogStageAction,
+        private readonly BuildDialogMessageSnapshotPayloadAction $buildDialogMessageSnapshotPayloadAction,
     ) {}
 
     /**
@@ -313,6 +314,10 @@ class ConsolidateDialogsForRootContactAction
             'last_outbound_at' => $this->resolveLastOutboundAt($dialogs, $messages),
             'pending_auto_reply_source_message_id' => $this->resolveLatestPendingAutoReplySourceMessage($dialogs, $messages)?->id,
         ];
+        $payload = array_merge(
+            $payload,
+            $this->buildDialogMessageSnapshotPayloadAction->fromMessages($messages),
+        );
 
         $routeSourceMessage = $this->resolveLatestInboundRouteSourceMessage($messages, $channel);
 

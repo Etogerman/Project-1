@@ -14,6 +14,7 @@ class SyncMessageDialogMetadataAction
     public function __construct(
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly MessageChronology $messageChronology,
+        private readonly BuildDialogMessageSnapshotPayloadAction $buildDialogMessageSnapshotPayloadAction,
     ) {}
 
     public function handle(
@@ -32,7 +33,7 @@ class SyncMessageDialogMetadataAction
 
         $this->touchDialog(
             $dialog,
-            $message->direction,
+            $message,
             $messageSortAt,
             $contactIdentity,
             $externalChatId,
@@ -54,7 +55,7 @@ class SyncMessageDialogMetadataAction
 
     private function touchDialog(
         Dialog $dialog,
-        string $direction,
+        Message $message,
         mixed $messageAt,
         ?ContactIdentity $contactIdentity,
         ?string $externalChatId,
@@ -63,7 +64,9 @@ class SyncMessageDialogMetadataAction
             'last_message_at' => $this->maxDateTimeValue($dialog->last_message_at, $messageAt),
         ];
 
-        if ($direction === Message::DIRECTION_INBOUND) {
+        $payload = array_merge($payload, $this->resolveMessageSnapshotPayload($dialog, $message, $messageAt));
+
+        if ($message->direction === Message::DIRECTION_INBOUND) {
             $payload['last_inbound_at'] = $this->maxDateTimeValue($dialog->last_inbound_at, $messageAt);
 
             if ($this->shouldRefreshInboundRouteSource($dialog, $messageAt)) {
@@ -72,7 +75,7 @@ class SyncMessageDialogMetadataAction
                     $this->resolveInboundRouteSourcePayload($dialog, $contactIdentity, $externalChatId),
                 );
             }
-        } elseif ($direction === Message::DIRECTION_OUTBOUND) {
+        } elseif ($message->direction === Message::DIRECTION_OUTBOUND) {
             $payload['last_outbound_at'] = $this->maxDateTimeValue($dialog->last_outbound_at, $messageAt);
 
             if ($dialog->current_contact_identity_id === null && $contactIdentity instanceof ContactIdentity) {
@@ -89,6 +92,72 @@ class SyncMessageDialogMetadataAction
         }
 
         $dialog->forceFill($payload)->save();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveMessageSnapshotPayload(Dialog $dialog, Message $message, mixed $messageAt): array
+    {
+        $payload = [];
+
+        if (
+            $this->buildDialogMessageSnapshotPayloadAction->isVisibleDialogMessage($message)
+            && $this->shouldRefreshMessageSnapshot($dialog, 'last_message_id', $message, $messageAt)
+        ) {
+            $payload['last_message_id'] = $message->id;
+            $payload['last_message_preview'] = $this->buildDialogMessageSnapshotPayloadAction->previewText($message);
+        }
+
+        if (
+            $this->buildDialogMessageSnapshotPayloadAction->isInboundMessage($message)
+            && $this->shouldRefreshMessageSnapshot($dialog, 'last_inbound_message_id', $message, $messageAt)
+        ) {
+            $payload['last_inbound_message_id'] = $message->id;
+            $payload['last_inbound_message_preview'] = $this->buildDialogMessageSnapshotPayloadAction->previewText($message);
+        }
+
+        if (
+            $this->buildDialogMessageSnapshotPayloadAction->isOutboundClientMessage($message)
+            && $this->shouldRefreshMessageSnapshot($dialog, 'last_outbound_message_id', $message, $messageAt)
+        ) {
+            $payload['last_outbound_message_id'] = $message->id;
+            $payload['last_outbound_message_preview'] = $this->buildDialogMessageSnapshotPayloadAction->previewText($message);
+        }
+
+        return $payload;
+    }
+
+    private function shouldRefreshMessageSnapshot(
+        Dialog $dialog,
+        string $messageIdColumn,
+        Message $candidateMessage,
+        mixed $candidateSortAt,
+    ): bool {
+        $currentMessageId = $dialog->getAttribute($messageIdColumn);
+
+        if (! filled($currentMessageId)) {
+            return true;
+        }
+
+        if ((int) $currentMessageId === $candidateMessage->id) {
+            return true;
+        }
+
+        $currentMessage = Message::query()
+            ->select(['id', 'received_at', 'created_at'])
+            ->find((int) $currentMessageId);
+
+        if (! $currentMessage instanceof Message) {
+            return true;
+        }
+
+        return $this->messageChronology->compareSortTuple(
+            $candidateSortAt,
+            $candidateMessage->id,
+            $this->messageChronology->resolveSortAt($currentMessage),
+            $currentMessage->id,
+        ) >= 0;
     }
 
     /**

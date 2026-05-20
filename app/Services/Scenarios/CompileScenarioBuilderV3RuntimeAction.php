@@ -289,6 +289,9 @@ class CompileScenarioBuilderV3RuntimeAction
                     'contact_phone_condition' => $this->normalizeContactPhoneCondition(
                         data_get($start, 'payload.contact_phone_condition', ''),
                     ),
+                    'dialog_phone_condition' => $this->normalizeContactPhoneCondition(
+                        data_get($start, 'payload.dialog_phone_condition', ''),
+                    ),
                     'priority' => (int) data_get($start, 'payload.priority', 10),
                 ];
             })
@@ -361,6 +364,9 @@ class CompileScenarioBuilderV3RuntimeAction
             'label' => (string) ($conditionPayload['label'] ?? ''),
             'contact_phone_condition' => $this->normalizeContactPhoneCondition(
                 $conditionPayload['contact_phone_condition'] ?? '',
+            ),
+            'dialog_phone_condition' => $this->normalizeContactPhoneCondition(
+                $conditionPayload['dialog_phone_condition'] ?? '',
             ),
             'field_condition' => $this->compileEdgeFieldCondition($conditionPayload),
             'match' => $this->compileEdgeMatch($conditionPayload),

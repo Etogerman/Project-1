@@ -326,6 +326,7 @@ class BuildScenarioBuilderV3StateAction
                     'variable' => '',
                     'exclude' => '',
                     'contact_phone_condition' => '',
+                    'dialog_phone_condition' => '',
                     'priority' => 10,
                     'once' => false,
                     'channels' => [

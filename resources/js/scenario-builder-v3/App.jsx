@@ -78,6 +78,8 @@ const PANEL_WIDTH_STORAGE_KEY = 'scenario-builder-v3-panel-width';
 const PANEL_WIDTH_DEFAULT = 420;
 const PANEL_WIDTH_MIN = 320;
 const PANEL_WIDTH_MAX = 620;
+const DIALOG_FIELD_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const DIALOG_FIELD_KEY_SUGGESTION_LIMIT = 12;
 const DIAGNOSTICS_REFRESH_INTERVAL_MS = 10000;
 const LOG_STATUS_FILTERS = [
     ['all', 'Все'],
@@ -89,8 +91,8 @@ const LOG_ACTIVE_STATUSES = ['scheduled', 'processing'];
 const LOG_ATTENTION_STATUSES = ['cancelled', 'failed', 'limit_reached'];
 const PHONE_CONDITION_OPTIONS = [
     ['', 'Неважно'],
-    ['has_phone', 'Телефон заполнен'],
-    ['missing_phone', 'Телефон не заполнен'],
+    ['has_phone', 'Заполнен'],
+    ['missing_phone', 'Не заполнен'],
 ];
 const BUTTON_TYPE_TEXT = 'text';
 const BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
@@ -273,6 +275,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const serverTimezoneLabel = serverClock?.timezone_abbr || serverClock?.utc_offset || '';
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
+    const dialogFieldKeys = useMemo(() => dialogFieldKeysFromEdges(edges), [edges]);
     const canSave = state?.permissions?.can_update === true && status === 'ready' && ! isSaving && ! isPublishing;
     const canPublish = state?.permissions?.can_publish === true && status === 'ready' && ! isSaving && ! isPublishing && Boolean(publishUrl);
     const canvasBounds = useMemo(() => graphBounds(blocks), [blocks]);
@@ -1354,6 +1357,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                 onRefreshDiagnostics={refreshBuilderDiagnostics}
                                 timezone={serverTimezone}
                                 timezoneLabel={serverTimezoneLabel}
+                                dialogFieldKeys={dialogFieldKeys}
                             />
                         ) : (
                             <BlockPanel
@@ -2746,10 +2750,19 @@ function StartConditionFields({
                 </label>
             ) : null}
             <label>
-                Условие по телефону
+                Телефон контакта
                 <select
                     value={start?.payload?.contact_phone_condition ?? ''}
                     onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { contact_phone_condition: event.target.value })}
+                >
+                    {PHONE_CONDITION_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+            </label>
+            <label>
+                Телефон мессенджера
+                <select
+                    value={start?.payload?.dialog_phone_condition ?? ''}
+                    onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { dialog_phone_condition: event.target.value })}
                 >
                     {PHONE_CONDITION_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
@@ -2964,11 +2977,93 @@ function edgeMatchInputLabel(matchType) {
     return 'Текст условия';
 }
 
+function normalizeDialogFieldKey(value) {
+    return String(value ?? '').trim();
+}
+
+function isValidDialogFieldKey(value) {
+    return DIALOG_FIELD_KEY_PATTERN.test(normalizeDialogFieldKey(value));
+}
+
+function dialogFieldKeysFromEdges(edges) {
+    const keys = new Set();
+
+    edges.forEach((edge) => {
+        const payload = edge.condition_payload ?? {};
+        const capture = payload.input_capture ?? {};
+        const fieldCondition = payload.field_condition ?? {};
+
+        if (capture.enabled === true && (capture.field_scope ?? 'dialog') === 'dialog' && isValidDialogFieldKey(capture.field_key)) {
+            keys.add(normalizeDialogFieldKey(capture.field_key));
+        }
+
+        if (fieldCondition.enabled === true && (fieldCondition.field_scope ?? 'dialog') === 'dialog' && isValidDialogFieldKey(fieldCondition.field_key)) {
+            keys.add(normalizeDialogFieldKey(fieldCondition.field_key));
+        }
+    });
+
+    return Array.from(keys).sort((left, right) => left.localeCompare(right, 'ru'));
+}
+
+function DialogFieldKeyInput({ value, onChange, placeholder, suggestions = [], purpose }) {
+    const fieldKey = String(value ?? '');
+    const normalizedFieldKey = normalizeDialogFieldKey(fieldKey);
+    const isInvalid = normalizedFieldKey !== '' && ! isValidDialogFieldKey(normalizedFieldKey);
+    const visibleSuggestions = suggestions
+        .filter((suggestion) => suggestion !== normalizedFieldKey)
+        .slice(0, DIALOG_FIELD_KEY_SUGGESTION_LIMIT);
+
+    return (
+        <div className="ac-v3-builder__dialog-field-key">
+            <input
+                data-role="scenario-edge-dialog-field-key-input"
+                data-field-key-purpose={purpose}
+                aria-invalid={isInvalid ? 'true' : 'false'}
+                value={fieldKey}
+                placeholder={placeholder}
+                onChange={(event) => onChange(event.target.value)}
+            />
+            {visibleSuggestions.length > 0 ? (
+                <div
+                    className="ac-v3-builder__dialog-field-suggestions"
+                    data-role="scenario-edge-dialog-field-key-suggestions"
+                    data-field-key-purpose={purpose}
+                >
+                    {visibleSuggestions.map((suggestion) => (
+                        <button
+                            key={suggestion}
+                            type="button"
+                            data-role="scenario-edge-dialog-field-key-option"
+                            data-field-key={suggestion}
+                            onClick={() => onChange(suggestion)}
+                        >
+                            {suggestion}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+            {isInvalid ? (
+                <p
+                    className="ac-v3-builder__field-error"
+                    data-role="scenario-edge-dialog-field-key-error"
+                    data-validation-status="invalid"
+                >
+                    Латиница, цифры и _, начинается с буквы.
+                </p>
+            ) : (
+                <p className="ac-v3-builder__field-hint">
+                    Латиница, цифры и _, начинается с буквы. Например: client_phone
+                </p>
+            )}
+        </div>
+    );
+}
+
 function contactCaptureField(fieldKey) {
     return EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === fieldKey) ?? EDGE_CONTACT_FIELD_OPTIONS[0];
 }
 
-function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel }) {
+function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel, dialogFieldKeys }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isButton = isButtonEdge(edge);
@@ -3104,10 +3199,21 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                     </div>
                 )}
                 <label className="ac-v3-builder__field-row">
-                    <span>Условие по телефону</span>
+                    <span>Телефон контакта</span>
                     <select
                         value={payload.contact_phone_condition ?? ''}
                         onChange={(event) => updatePayload({ contact_phone_condition: event.target.value })}
+                    >
+                        {PHONE_CONDITION_OPTIONS.map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                        ))}
+                    </select>
+                </label>
+                <label className="ac-v3-builder__field-row">
+                    <span>Телефон мессенджера</span>
+                    <select
+                        value={payload.dialog_phone_condition ?? ''}
+                        onChange={(event) => updatePayload({ dialog_phone_condition: event.target.value })}
                     >
                         {PHONE_CONDITION_OPTIONS.map(([value, label]) => (
                             <option key={value} value={value}>{label}</option>
@@ -3162,10 +3268,12 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         ) : (
                             <label>
                                 <span>Поле диалога</span>
-                                <input
+                                <DialogFieldKeyInput
                                     value={fieldCondition.field_key ?? ''}
+                                    onChange={(fieldKey) => updateFieldCondition({ field_scope: 'dialog', field_key: fieldKey })}
                                     placeholder="lead_status"
-                                    onChange={(event) => updateFieldCondition({ field_scope: 'dialog', field_key: event.target.value })}
+                                    suggestions={dialogFieldKeys}
+                                    purpose="condition"
                                 />
                             </label>
                         )}
@@ -3317,10 +3425,12 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                     <>
                                         <label>
                                             <span>Поле диалога</span>
-                                            <input
+                                            <DialogFieldKeyInput
                                                 value={capture.field_key ?? ''}
                                                 placeholder="client_phone"
-                                                onChange={(event) => updateCapture({ field_scope: 'dialog', field_key: event.target.value })}
+                                                onChange={(fieldKey) => updateCapture({ field_scope: 'dialog', field_key: fieldKey })}
+                                                suggestions={dialogFieldKeys}
+                                                purpose="capture"
                                             />
                                         </label>
                                         <label>
@@ -3784,6 +3894,7 @@ function moduleTemplate(type, channels) {
                 variable: '',
                 exclude: '',
                 contact_phone_condition: '',
+                dialog_phone_condition: '',
                 priority: 10,
                 once: false,
                 channels: { mode: 'selected', ids: channels.map((channel) => channel.id) },
@@ -4043,6 +4154,7 @@ function edgePayload(outputId, label) {
         priority: 10,
         transition_limit: 0,
         contact_phone_condition: '',
+        dialog_phone_condition: '',
         field_condition: {
             enabled: false,
             field_scope: 'dialog',

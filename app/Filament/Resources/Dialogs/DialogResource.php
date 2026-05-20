@@ -89,7 +89,6 @@ class DialogResource extends Resource
     {
         $query = parent::getEloquentQuery()
             ->addSelect([
-                'preview_message_id' => static::buildPreviewMessageSubquery(),
                 'latest_inbound_user_message_id' => static::buildLatestMessageIdSubquery(
                     fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
                 ),
@@ -108,8 +107,8 @@ class DialogResource extends Resource
                 'currentContactIdentity',
                 'contact.assignedUser',
                 'contact.primaryIdentity',
-                'previewMessage.channel',
-                'previewMessage.sentByUser',
+                'lastMessage.channel',
+                'lastMessage.sentByUser',
             ]);
 
         if ($excludeMerged) {
@@ -257,7 +256,10 @@ class DialogResource extends Resource
                     ->query(fn (Builder $query): Builder => $query->whereRouteProblem()),
             ])
             ->defaultSort('last_message_at', 'desc')
-            ->recordUrl(fn (Dialog $record): string => static::getUrl('view', ['record' => $record]))
+            ->recordUrl(fn (Dialog $record): string => static::getUrl('view', [
+                'record' => $record,
+                'back_to' => static::getUrl('index'),
+            ]))
             ->emptyStateHeading('Диалогов ещё нет')
             ->emptyStateDescription('Диалоги появятся после первых входящих сообщений от внешней аудитории.')
             ->columnManager()
@@ -291,27 +293,18 @@ class DialogResource extends Resource
             || str_starts_with($url, static::getUrl('kanban'));
     }
 
-    protected static function buildPreviewMessageSubquery(): Builder
-    {
-        return Message::query()
-            ->select('id')
-            ->whereColumn('dialog_id', 'dialogs.id')
-            ->where(function (Builder $query): Builder {
-                return $query
-                    ->whereNull('message_kind')
-                    ->orWhere('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE);
-            })
-            ->tap(fn (Builder $query): Builder => app(MessageChronology::class)->applyLatestOrder($query))
-            ->limit(1);
-    }
-
     protected static function resolvePreviewMessage(Dialog $record): ?Message
     {
+        if ($record->relationLoaded('lastMessage')) {
+            return $record->lastMessage;
+        }
+
         if ($record->relationLoaded('previewMessage')) {
             return $record->previewMessage;
         }
 
-        $previewMessageId = $record->getAttribute('preview_message_id');
+        $previewMessageId = $record->getAttribute('last_message_id')
+            ?: $record->getAttribute('preview_message_id');
 
         if (! filled($previewMessageId)) {
             return null;
@@ -347,6 +340,10 @@ class DialogResource extends Resource
 
     protected static function resolvePreviewText(Dialog $record): string
     {
+        if (filled($record->last_message_preview)) {
+            return (string) $record->last_message_preview;
+        }
+
         $previewFeed = static::resolvePreviewFeed($record);
 
         if (is_array($previewFeed) && filled($previewFeed['display_text'] ?? null)) {

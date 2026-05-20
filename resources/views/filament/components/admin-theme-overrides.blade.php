@@ -166,12 +166,121 @@
     }
 
     .fi-page:has([data-role="dialog-page"]) .fi-header.fi-header-has-breadcrumbs {
-        align-items: center;
-        padding-block: 1.05rem 0.52rem;
+        display: none;
     }
 
-    .fi-page:has([data-role="dialog-page"]) .fi-header.fi-header-has-breadcrumbs .fi-breadcrumbs-list {
-        margin-bottom: 0;
+    .ac-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+
+    .ac-dialog-top-crumbs {
+        position: fixed;
+        inset-block-start: 0;
+        inset-inline-start: 13.1rem;
+        inset-inline-end: 15.5rem;
+        z-index: 70;
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        height: 4rem;
+        gap: 0.5rem;
+        color: #9a9893;
+        font-size: 0.78rem;
+        pointer-events: none;
+    }
+
+    .ac-dialog-top-crumbs__back,
+    .ac-dialog-top-crumbs__link {
+        pointer-events: auto;
+    }
+
+    .ac-dialog-top-crumbs__back {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: center;
+        width: 1.65rem;
+        height: 1.65rem;
+        border: 1px solid #e7e5e0;
+        border-radius: 0.45rem;
+        background: #ffffff;
+        color: #6b6a66;
+        text-decoration: none;
+        transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+    }
+
+    .ac-dialog-top-crumbs__back:hover {
+        border-color: #d6d3cc;
+        background: #f5f5f3;
+        color: #18181a;
+    }
+
+    .ac-dialog-top-crumbs__list {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        list-style: none;
+    }
+
+    .ac-dialog-top-crumbs__item {
+        display: inline-flex;
+        align-items: center;
+        min-width: 0;
+        gap: 0.35rem;
+        flex: 0 1 auto;
+    }
+
+    .ac-dialog-top-crumbs__separator {
+        flex: none;
+        color: #9a9893;
+        opacity: 0.65;
+    }
+
+    .ac-dialog-top-crumbs__link {
+        min-width: 0;
+        max-width: 14rem;
+        overflow: hidden;
+        border-radius: 0.3rem;
+        color: #9a9893;
+        text-decoration: none;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        transition: background 140ms ease, color 140ms ease;
+    }
+
+    .ac-dialog-top-crumbs__link:not(.is-current) {
+        padding: 0.15rem 0.25rem;
+    }
+
+    .ac-dialog-top-crumbs__link:not(.is-current):hover {
+        background: #f5f5f3;
+        color: #18181a;
+    }
+
+    .ac-dialog-top-crumbs__link.is-current {
+        color: #18181a;
+        font-weight: 600;
+    }
+
+    .ac-env-indicator--topbar {
+        position: fixed;
+        inset-block-start: 2rem;
+        inset-inline-end: 4.75rem;
+        z-index: 70;
+        transform: translateY(-50%);
+        pointer-events: none;
     }
 
     .fi-page-sub-navigation-tabs,
@@ -2543,6 +2652,22 @@
         gap: 1.25rem;
     }
 
+    body:has([data-role="dialog-page"]) .fi-main {
+        background: #f5f5f3;
+    }
+
+    body:has([data-role="dialog-page"]) .fi-page {
+        gap: 0.5rem;
+    }
+
+    body:has([data-role="dialog-page"]) .fi-page-header-main-ctn {
+        padding-top: 1.1rem;
+    }
+
+    [data-role="dialog-page"].ac-panel-stack--relaxed {
+        gap: 0.55rem;
+    }
+
     .ac-dialog-overview,
     .ac-dialog-workspace {
         display: grid;
@@ -2559,7 +2684,87 @@
     }
 
     .ac-dialog-workspace {
-        grid-template-columns: minmax(0, 1.45fr) minmax(22rem, 1fr);
+        grid-template-columns: minmax(0, 1fr) minmax(20rem, 24rem);
+        align-items: stretch;
+        gap: 1rem;
+    }
+
+    .ac-dialog-main-column,
+    .ac-dialog-side-column {
+        display: grid;
+        min-width: 0;
+        gap: 0.9rem;
+    }
+
+    .ac-dialog-main-column {
+        align-content: stretch;
+    }
+
+    .ac-dialog-side-column {
+        align-content: start;
+    }
+
+    .ac-dialog-chat-panel .ac-thread {
+        flex: 1 1 auto;
+        height: calc(var(--ac-dialog-chat-panel-height, 44rem) - 12.25rem);
+        min-height: 0;
+        max-height: none;
+        border: 0;
+        border-radius: 0;
+        background: color-mix(in srgb, var(--ac-surface-muted) 46%, var(--ac-surface));
+        box-shadow: none;
+    }
+
+    .ac-dialog-chat-panel > .ac-surface__header {
+        flex: 0 0 auto;
+        padding: 0.62rem 0.85rem;
+        border-bottom: 1px solid #eadfb4;
+        background: #fff8df;
+    }
+
+    .ac-dialog-chat-panel > .ac-surface__header .ac-surface__title {
+        font-size: 1rem;
+        line-height: 1.2;
+    }
+
+    .ac-dialog-side-list {
+        display: grid;
+        gap: 0;
+    }
+
+    .ac-dialog-side-list .ac-meta {
+        display: grid;
+        grid-template-columns: minmax(6.8rem, 0.72fr) minmax(0, 1fr);
+        align-items: baseline;
+        gap: 0.7rem;
+        padding: 0.45rem 0;
+        border-bottom: 1px dashed var(--ac-border);
+    }
+
+    .ac-dialog-side-list .ac-meta:last-child {
+        border-bottom: 0;
+        padding-bottom: 0;
+    }
+
+    .ac-dialog-side-list .ac-meta:first-child {
+        padding-top: 0;
+    }
+
+    .ac-dialog-side-list .ac-meta__label {
+        margin: 0;
+        line-height: 1.35;
+    }
+
+    .ac-dialog-side-list .ac-meta__value {
+        text-align: right;
+        overflow-wrap: anywhere;
+    }
+
+    .ac-dialog-side-list .ac-select {
+        justify-self: end;
+        max-width: 100%;
+        min-height: 2.5rem;
+        padding: 0.55rem 0.75rem;
     }
 
     .ac-surface {
@@ -2580,6 +2785,38 @@
         background:
             radial-gradient(circle at top right, color-mix(in srgb, var(--ac-primary-soft) 72%, transparent) 0%, transparent 42%),
             linear-gradient(180deg, var(--ac-surface-strong) 0%, color-mix(in srgb, var(--ac-primary-soft) 32%, var(--ac-surface)) 100%);
+    }
+
+    [data-role="dialog-page"] .ac-surface--hero.ac-dialog-summary {
+        border-color: var(--ac-border);
+        border-radius: 0.85rem;
+        background: var(--ac-surface);
+        box-shadow: none;
+        padding: 0.62rem 0.85rem;
+    }
+
+    [data-role="dialog-page"] .ac-surface__title--hero {
+        font-size: 1.34rem;
+    }
+
+    .ac-surface.ac-dialog-chat-panel {
+        --ac-dialog-chat-panel-height: clamp(34rem, calc(100dvh - 17rem), 62rem);
+        display: flex;
+        flex-direction: column;
+        min-height: var(--ac-dialog-chat-panel-height);
+        height: auto;
+        gap: 0;
+        overflow: hidden;
+        padding: 0;
+        background: var(--ac-surface);
+        box-shadow: none;
+    }
+
+    .ac-surface.ac-dialog-side-card {
+        border-radius: 0.85rem;
+        background: var(--ac-surface);
+        box-shadow: none;
+        padding: 0.95rem 1rem;
     }
 
     .ac-surface--secondary {
@@ -2614,8 +2851,8 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 3.25rem;
-        height: 3.25rem;
+        width: 2.75rem;
+        height: 2.75rem;
         border-radius: 9999px;
         overflow: hidden;
         flex-shrink: 0;
@@ -2653,7 +2890,7 @@
         min-width: 0;
         align-items: center;
         justify-content: space-between;
-        gap: 1rem;
+        gap: 0.75rem;
         flex-wrap: wrap;
     }
 
@@ -2661,7 +2898,7 @@
         display: flex;
         min-width: min(100%, 28rem);
         align-items: center;
-        gap: 0.9rem;
+        gap: 0.75rem;
     }
 
     .ac-dialog-summary__title-row {
@@ -2681,7 +2918,7 @@
     }
 
     .ac-dialog-summary__stage {
-        margin-top: 0.9rem;
+        margin-top: 0.55rem;
     }
 
     .ac-dialog-summary__sections {
@@ -2761,7 +2998,7 @@
         display: flex;
         min-width: 0;
         overflow-x: auto;
-        gap: 0.9rem;
+        gap: 0.65rem;
         padding-right: 0.8rem;
         padding-bottom: 0.1rem;
         scrollbar-width: thin;
@@ -2784,14 +3021,14 @@
         display: inline-flex;
         flex: 1 0 9.75rem;
         min-width: 9.75rem;
-        min-height: 2.75rem;
+        min-height: 2.2rem;
         align-items: center;
         justify-content: center;
         isolation: isolate;
         margin: 0;
         border: 0;
         border-radius: 0;
-        padding: 0.55rem 0.95rem 0.55rem 1.1rem;
+        padding: 0.34rem 0.74rem 0.34rem 0.9rem;
         background: transparent;
         color: #4a5870;
         font-size: 0.82rem;
@@ -2946,6 +3183,47 @@
 
     .ac-meta-grid--dialog-summary {
         grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+    }
+
+    .ac-dialog-fields-list {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .ac-dialog-field-row {
+        display: grid;
+        align-items: start;
+        gap: 0.75rem;
+        grid-template-columns: minmax(0, 1fr) auto;
+        border: 1px solid var(--ac-border);
+        border-radius: 0.65rem;
+        background: color-mix(in oklch, var(--ac-surface-muted) 58%, transparent);
+        padding: 0.75rem;
+    }
+
+    .ac-dialog-field-row__content {
+        min-width: 0;
+    }
+
+    .ac-dialog-field-row__content .ac-meta__value {
+        overflow-wrap: anywhere;
+    }
+
+    .ac-dialog-field-row__copy {
+        border: 1px solid var(--ac-border);
+        border-radius: 0.55rem;
+        background: var(--ac-surface);
+        color: var(--ac-text);
+        cursor: pointer;
+        font-size: 0.75rem;
+        font-weight: 700;
+        line-height: 1;
+        padding: 0.45rem 0.65rem;
+    }
+
+    .ac-dialog-field-row__copy:hover {
+        border-color: var(--ac-border-strong);
+        background: color-mix(in oklch, var(--ac-primary) 8%, var(--ac-surface));
     }
 
     .ac-card-grid {
@@ -3762,9 +4040,293 @@
         justify-content: flex-end;
     }
 
+    body:has([data-role="dialog-kanban-page"]) .fi-header {
+        display: none;
+    }
+
+    body:has([data-role="dialog-kanban-page"]) .fi-page {
+        gap: 0;
+    }
+
+    body:has([data-role="dialog-kanban-page"]) .fi-main {
+        background: #f5f5f3;
+    }
+
+    .ac-kanban-hero {
+        display: block;
+        padding: 0.25rem 0 0.1rem;
+    }
+
+    .ac-kanban-hero__top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1.25rem;
+        flex-wrap: wrap;
+    }
+
+    .ac-kanban-hero__title {
+        margin: 0;
+        color: #171717;
+        font-size: 1.85rem;
+        font-weight: 800;
+        letter-spacing: -0.035em;
+        line-height: 1.1;
+    }
+
+    .ac-kanban-hero__actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .ac-kanban-hero__actions > .ac-button {
+        min-height: 2.3rem;
+        border-color: #e5e3df;
+        border-radius: 0.6rem;
+        background: #ffffff;
+        color: #343434;
+        font-size: 0.84rem;
+        font-weight: 700;
+        box-shadow: none;
+    }
+
+    .ac-kanban-hero__actions > .ac-button:hover:not(:disabled) {
+        border-color: #d6d2cb;
+        background: #ffffff;
+    }
+
+    .ac-kanban-hero__actions > .ac-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.58;
+    }
+
+    .ac-kanban-hero__badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.25rem;
+        min-height: 1.25rem;
+        margin-left: 0.35rem;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-warning) 18%, var(--ac-surface-strong));
+        color: var(--ac-warning);
+        font-size: 0.72rem;
+        font-weight: 800;
+        line-height: 1;
+    }
+
+    .ac-kanban-toolbar {
+        display: grid;
+        grid-template-columns: minmax(18rem, 1fr);
+        gap: 0.85rem;
+        align-items: end;
+    }
+
+    .ac-kanban-toolbar__search,
+    .ac-kanban-toolbar__summary {
+        min-width: 0;
+    }
+
+    .ac-kanban-toolbar__search .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+        padding: 0;
+    }
+
+    .ac-kanban-hero__actions .ac-kanban-toolbar__search {
+        width: min(18rem, 32vw);
+    }
+
+    .ac-kanban-toolbar__summary {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+        margin-top: 0.65rem;
+        padding-bottom: 0.1rem;
+    }
+
+    .ac-kanban-toolbar__summary--start {
+        justify-content: flex-start;
+    }
+
+    .ac-kanban-view-switch {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.15rem;
+        min-height: 2.3rem;
+        border: 1px solid #e5e3df;
+        border-radius: 0.6rem;
+        background: #ffffff;
+        padding: 0.18rem;
+        box-shadow: none;
+    }
+
+    .ac-kanban-view-switch__item {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 1.82rem;
+        border-radius: 0.45rem;
+        padding: 0.28rem 0.62rem;
+        color: #7a7a7a;
+        font-size: 0.82rem;
+        font-weight: 700;
+        line-height: 1;
+        text-decoration: none;
+        white-space: nowrap;
+    }
+
+    .ac-kanban-view-switch__item.is-active {
+        background: #edf3ff;
+        color: #4f6fdc;
+        box-shadow: none;
+    }
+
+    .ac-kanban-gear-wrap {
+        position: relative;
+        display: inline-flex;
+    }
+
+    .ac-kanban-gear-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.3rem;
+        height: 2.3rem;
+        border: 1px solid #e5e3df;
+        border-radius: 0.6rem;
+        background: #ffffff;
+        color: #777;
+        cursor: pointer;
+        opacity: 1;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    }
+
+    .ac-kanban-gear-button:hover,
+    .ac-kanban-gear-button.is-open {
+        border-color: #b9c7f8;
+        background: #edf3ff;
+        color: #4f6fdc;
+    }
+
+    [data-role="dialog-kanban-page"] [x-cloak],
+    .ac-kanban-fields-popover[hidden] {
+        display: none !important;
+    }
+
+    .ac-kanban-fields-popover {
+        position: absolute;
+        top: calc(100% + 0.45rem);
+        right: 0;
+        z-index: 40;
+        width: 17rem;
+        overflow: hidden;
+        border: 1px solid #e5e3df;
+        border-radius: 0.7rem;
+        background: #ffffff;
+        box-shadow: 0 18px 40px rgba(15, 18, 25, 0.12);
+    }
+
+    .ac-kanban-fields-popover__head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        border-bottom: 1px solid #eceae6;
+        padding: 0.72rem 0.85rem;
+        color: #2d2d2d;
+        font-size: 0.82rem;
+        font-weight: 800;
+    }
+
+    .ac-kanban-fields-popover__head button {
+        border: 0;
+        background: transparent;
+        color: #4f6fdc;
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.73rem;
+        font-weight: 800;
+        padding: 0;
+    }
+
+    .ac-kanban-fields-popover__head button:hover {
+        text-decoration: underline;
+        text-underline-offset: 0.16rem;
+    }
+
+    .ac-kanban-fields-popover__list {
+        display: grid;
+        gap: 0.05rem;
+        padding: 0.35rem;
+    }
+
+    .ac-kanban-fields-popover__row {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        border-radius: 0.45rem;
+        color: #343434;
+        cursor: pointer;
+        font-size: 0.82rem;
+        font-weight: 700;
+        line-height: 1.2;
+        padding: 0.52rem 0.55rem;
+        user-select: none;
+    }
+
+    .ac-kanban-fields-popover__row:hover {
+        background: #f6f6f4;
+    }
+
+    .ac-kanban-fields-popover__row input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .ac-kanban-fields-popover__box {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1rem;
+        height: 1rem;
+        flex: none;
+        border: 1.5px solid #c9c4bc;
+        border-radius: 0.25rem;
+        background: #ffffff;
+    }
+
+    .ac-kanban-fields-popover__row input:checked + .ac-kanban-fields-popover__box {
+        border-color: #4f6fdc;
+        background: #4f6fdc;
+    }
+
+    .ac-kanban-fields-popover__row input:checked + .ac-kanban-fields-popover__box::after {
+        content: "";
+        width: 0.42rem;
+        height: 0.24rem;
+        border-bottom: 2px solid #ffffff;
+        border-left: 2px solid #ffffff;
+        transform: rotate(-45deg) translate(0.02rem, -0.02rem);
+    }
+
     .ac-kanban-filters-panel {
         display: grid;
         gap: 0.85rem;
+        border-radius: 0.8rem;
     }
 
     .ac-kanban-search-control {
@@ -3776,21 +4338,27 @@
 
     .ac-kanban-board {
         display: flex;
-        gap: 1rem;
+        gap: 0.9rem;
         align-items: start;
         overflow-x: auto;
-        padding-bottom: 0.35rem;
+        padding: 0.35rem 0 0.6rem;
         scrollbar-width: thin;
     }
 
     .ac-kanban-column {
-        --ac-kanban-column-width: min(22rem, calc(100vw - 2rem));
+        --ac-kanban-column-width: min(18.75rem, calc(100vw - 2rem));
         flex: 0 0 var(--ac-kanban-column-width);
         width: var(--ac-kanban-column-width);
         display: flex;
         flex-direction: column;
         min-height: 20rem;
         min-width: 0;
+        gap: 0.65rem;
+        border: 1px solid #e7e5e0;
+        border-radius: 0.8rem;
+        background: #ffffff;
+        padding: 0.75rem;
+        box-shadow: none;
         transition:
             opacity 150ms ease,
             box-shadow 150ms ease,
@@ -3800,17 +4368,74 @@
     }
 
     .ac-kanban-column--empty {
-        --ac-kanban-column-width: 10.75rem;
+        --ac-kanban-column-width: min(12rem, calc(100vw - 2rem));
     }
 
     .ac-kanban-column--empty:hover,
     .ac-kanban-column--empty.ac-kanban-column--drop-target {
-        --ac-kanban-column-width: 13rem;
+        --ac-kanban-column-width: min(18.75rem, calc(100vw - 2rem));
     }
 
-    .ac-kanban-column--empty .ac-surface__title {
-        font-size: 0.95rem;
-        line-height: 1.35;
+    .ac-kanban-column__header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 0;
+        padding-bottom: 0.6rem;
+        border-bottom: 1px solid #eceae6;
+    }
+
+    .ac-kanban-column__bullet {
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 999px;
+        flex: none;
+        background: #9ca3af;
+    }
+
+    .ac-kanban-column__bullet[data-tone="info"],
+    .ac-kanban-column__bullet[data-tone="primary"] {
+        background: #60a5fa;
+    }
+
+    .ac-kanban-column__bullet[data-tone="success"] {
+        background: #61b36b;
+    }
+
+    .ac-kanban-column__bullet[data-tone="warning"] {
+        background: #c7a052;
+    }
+
+    .ac-kanban-column__bullet[data-tone="danger"] {
+        background: #f87171;
+    }
+
+    .ac-kanban-column__title {
+        min-width: 0;
+        flex: 1;
+        margin: 0;
+        overflow: hidden;
+        color: #2d2d2d;
+        font-size: 0.88rem;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+        line-height: 1.25;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .ac-kanban-column__count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.9rem;
+        height: 1.1rem;
+        border-radius: 999px;
+        background: #f3f2ef;
+        color: #9a9690;
+        font-size: 0.75rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
     }
 
     .ac-kanban-column--drop-target {
@@ -3823,9 +4448,10 @@
     }
 
     .ac-kanban-column__cards {
-        margin-top: 1rem;
         display: grid;
-        gap: 0.75rem;
+        gap: 0.55rem;
+        align-content: start;
+        align-items: start;
         flex: 1;
     }
 
@@ -3834,40 +4460,69 @@
     }
 
     .ac-kanban-card {
-        border: 1px solid color-mix(in srgb, var(--ac-border) 82%, transparent);
-        border-radius: var(--ac-radius-lg);
-        background: linear-gradient(180deg, color-mix(in srgb, var(--ac-surface-strong) 92%, var(--ac-page-bg-alt)) 0%, color-mix(in srgb, var(--ac-surface-muted) 86%, var(--ac-surface-strong)) 100%);
-        padding: 1rem;
+        border: 1px solid #ebe8e3;
+        border-radius: 0.65rem;
+        background: #ffffff;
+        padding: 0.72rem 0.8rem;
         min-width: 0;
         overflow: hidden;
-        box-shadow: var(--ac-shadow-sm);
+        box-shadow: none;
         transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
     }
 
     .ac-kanban-card:hover {
-        border-color: color-mix(in srgb, var(--ac-warning) 26%, var(--ac-border));
+        border-color: #d8d4cd;
         transform: translateY(-1px);
-        box-shadow: var(--ac-shadow-md);
+        box-shadow: 0 5px 14px rgba(15, 18, 25, 0.06);
     }
 
     .ac-kanban-card__header {
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
-        gap: 0.75rem;
+        gap: 0.65rem;
+    }
+
+    .ac-kanban-card__header .ac-pill {
+        min-height: 1.35rem;
+        max-width: 7.4rem;
+        border-radius: 0.45rem;
+        padding: 0.18rem 0.44rem;
+        font-size: 0.7rem;
+        font-weight: 800;
+        line-height: 1.05;
+        text-align: center;
+        white-space: normal;
     }
 
     .ac-kanban-card__title-group {
         min-width: 0;
         display: grid;
-        gap: 0.3rem;
+        gap: 0.22rem;
+    }
+
+    .ac-kanban-card__title-row {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        min-width: 0;
+    }
+
+    .ac-kanban-card__id {
+        flex: none;
+        color: #99958f;
+        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+        font-size: 0.73rem;
+        font-weight: 800;
+        line-height: 1;
     }
 
     .ac-kanban-card__title {
         display: block;
-        font-size: 1rem;
-        font-weight: 700;
-        color: var(--ac-text);
+        min-width: 0;
+        font-size: 0.92rem;
+        font-weight: 800;
+        color: #262626;
         text-decoration: none;
         white-space: nowrap;
         overflow: hidden;
@@ -3875,101 +4530,114 @@
     }
 
     .ac-kanban-card__title:hover {
-        color: var(--ac-warning);
+        color: #4f6fdc;
     }
 
     .ac-kanban-card__channel {
         margin: 0;
-        font-size: 0.9rem;
-        line-height: 1.45;
-        color: var(--ac-text-soft);
+        font-size: 0.78rem;
+        line-height: 1.25;
+        color: #8b8780;
         overflow-wrap: anywhere;
     }
 
     .ac-kanban-card__body {
-        margin-top: 0.85rem;
+        margin-top: 0.52rem;
         display: grid;
-        gap: 0.75rem;
+        gap: 0.5rem;
     }
 
     .ac-kanban-card__preview {
         margin: 0;
-        font-size: 0.88rem;
-        line-height: 1.5;
-        color: var(--ac-text);
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        padding: 0;
+        font-size: 0.82rem;
+        line-height: 1.38;
+        color: #6f6b65;
         display: -webkit-box;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
         overflow: hidden;
     }
 
-    .ac-kanban-card__facts {
-        display: grid;
-        gap: 0.55rem;
-    }
-
-    .ac-kanban-card__fact {
+    .ac-kanban-card__meta {
         display: flex;
+        flex-wrap: wrap;
+        gap: 0.28rem;
+    }
+
+    .ac-kanban-card__chip {
+        display: inline-flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 0.6rem;
-        min-width: 0;
-    }
-
-    .ac-kanban-card__fact--route {
-        align-items: flex-start;
-    }
-
-    .ac-kanban-card__fact-label {
-        margin: 0;
-        flex-shrink: 0;
-        font-size: 0.68rem;
+        max-width: 100%;
+        min-height: 1.2rem;
+        border-radius: 0.3rem;
+        background: #f4f3f1;
+        color: #74706a;
+        padding: 0.13rem 0.38rem;
+        font-size: 0.7rem;
         font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--ac-text-soft);
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
-    .ac-kanban-card__fact-value {
-        margin: 0;
-        min-width: 0;
-        text-align: right;
-        font-size: 0.84rem;
-        line-height: 1.4;
-        color: var(--ac-text);
-        overflow-wrap: anywhere;
-    }
-
-    .ac-kanban-card__route-status {
-        margin: 0;
-        min-width: 0;
-        text-align: right;
-        font-size: 0.84rem;
-        font-weight: 700;
-        line-height: 1.4;
-    }
-
-    .ac-kanban-card__route-status[data-tone="success"] {
+    .ac-kanban-card__chip--route[data-tone="success"] {
         color: var(--ac-success);
     }
 
-    .ac-kanban-card__route-status[data-tone="warning"] {
+    .ac-kanban-card__chip--route[data-tone="warning"] {
         color: var(--ac-warning);
     }
 
-    .ac-kanban-card__route-status[data-tone="danger"] {
+    .ac-kanban-card__chip--route[data-tone="danger"] {
         color: var(--ac-danger);
     }
 
-    .ac-kanban-card__route-status[data-tone="info"],
-    .ac-kanban-card__route-status[data-tone="primary"] {
+    .ac-kanban-card__chip--route[data-tone="info"],
+    .ac-kanban-card__chip--route[data-tone="primary"] {
         color: var(--ac-primary);
     }
 
     .ac-kanban-card__footer {
         display: flex;
-        justify-content: flex-start;
-        margin-top: 0.15rem;
+        justify-content: flex-end;
+        margin-top: 0.1rem;
+    }
+
+    .ac-kanban-card__open-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.32rem;
+        color: #5b72d6;
+        font-size: 0.78rem;
+        font-weight: 800;
+        line-height: 1.2;
+        text-decoration: none;
+    }
+
+    .ac-kanban-card__open-link:hover {
+        color: #4059b8;
+        text-decoration: underline;
+        text-underline-offset: 0.16rem;
+    }
+
+    .ac-kanban-hide-id .ac-kanban-card__id,
+    .ac-kanban-hide-channel .ac-kanban-card__channel,
+    .ac-kanban-hide-status .ac-kanban-card__header > .ac-pill,
+    .ac-kanban-hide-preview .ac-kanban-card__preview,
+    .ac-kanban-hide-route .ac-kanban-card__chip--route,
+    .ac-kanban-hide-responsible .ac-kanban-card__chip--responsible,
+    .ac-kanban-hide-activity .ac-kanban-card__chip--activity,
+    .ac-kanban-hide-open-link .ac-kanban-card__footer {
+        display: none !important;
+    }
+
+    .ac-kanban-hide-route.ac-kanban-hide-responsible.ac-kanban-hide-activity .ac-kanban-card__meta {
+        display: none !important;
     }
 
     .ac-button.ac-button--compact {
@@ -3988,16 +4656,17 @@
         flex: 1;
         align-items: center;
         justify-content: center;
-        min-height: 9rem;
-        border-radius: var(--ac-radius-lg);
-        border: 1px dashed color-mix(in srgb, var(--ac-border) 88%, transparent);
-        background: color-mix(in srgb, var(--ac-surface-muted) 82%, transparent);
+        min-height: 4.8rem;
+        border-radius: 0.55rem;
+        border: 1px dashed #e7e2da;
+        background: #ffffff;
         padding: 1rem;
-        font-size: 0.9rem;
+        font-size: 0.83rem;
         line-height: 1.6;
         text-align: center;
-        color: var(--ac-text-soft);
+        color: #9a958e;
         overflow-wrap: anywhere;
+        font-style: italic;
     }
 
     .ac-kanban-column--empty .ac-kanban-empty-column {
@@ -4009,6 +4678,14 @@
     }
 
     @media (max-width: 760px) {
+        .ac-kanban-toolbar {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .ac-kanban-toolbar__summary {
+            justify-content: flex-start;
+        }
+
         .ac-kanban-search-control {
             grid-template-columns: minmax(0, 1fr);
         }
@@ -4818,6 +5495,83 @@
         top: 1rem;
     }
 
+    .ac-composer .ac-inline-split {
+        align-items: center;
+    }
+
+    .ac-composer__format-toggle {
+        flex: 1 1 12rem;
+        justify-content: center;
+    }
+
+    .ac-composer--dialog-inline {
+        position: static;
+        top: auto;
+        border: 0;
+        border-top: 1px solid color-mix(in srgb, var(--ac-warning) 24%, var(--ac-border));
+        border-radius: 0;
+        background: #fff8df;
+        box-shadow: none;
+        padding: 0.55rem 0.85rem 0.62rem;
+    }
+
+    .ac-composer--dialog-inline .ac-inline-split {
+        gap: 0.65rem;
+    }
+
+    .ac-composer--dialog-inline .ac-surface__title {
+        font-size: 1rem;
+        line-height: 1.2;
+    }
+
+    .ac-composer--dialog-inline .ac-note {
+        font-size: 0.78rem;
+        line-height: 1.35;
+    }
+
+    .ac-composer--dialog-inline .ac-composer__format-toggle {
+        flex: 0 0 auto;
+        gap: 0.35rem;
+    }
+
+    .ac-composer--dialog-inline .ac-composer__format-toggle .ac-button {
+        min-height: 1.8rem;
+        border-radius: 10px;
+        padding: 0.34rem 0.68rem;
+        font-size: 0.76rem;
+        line-height: 1.1;
+    }
+
+    .ac-composer--dialog-inline .ac-surface__divider {
+        margin-top: 0.45rem;
+        padding-top: 0.45rem;
+    }
+
+    .ac-composer--dialog-inline .ac-note-stack {
+        gap: 0.42rem;
+    }
+
+    .ac-composer--dialog-inline .ac-actions {
+        margin-top: 0.36rem;
+    }
+
+    .ac-composer--dialog-inline .ac-actions .ac-button {
+        min-height: 2rem;
+        border-radius: 10px;
+        padding: 0.38rem 0.76rem;
+        font-size: 0.78rem;
+        line-height: 1.1;
+    }
+
+    .ac-composer--dialog-inline .ac-textarea--composer {
+        box-sizing: border-box;
+        height: 2.75rem;
+        min-height: 2.75rem;
+        max-height: 10rem;
+        overflow-y: hidden;
+        resize: vertical;
+    }
+
     .ac-textarea--composer {
         min-height: 11rem;
     }
@@ -5553,6 +6307,31 @@
 
         .ac-dialog-summary__sections {
             grid-template-columns: minmax(0, 1fr);
+        }
+
+        .ac-surface.ac-dialog-chat-panel {
+            --ac-dialog-chat-panel-height: auto;
+            min-height: 0;
+            height: auto;
+        }
+
+        .ac-dialog-chat-panel .ac-thread {
+            height: auto;
+            min-height: 18rem;
+            max-height: 32rem;
+        }
+
+        .ac-dialog-side-list .ac-meta {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 0.25rem;
+        }
+
+        .ac-dialog-side-list .ac-meta__value {
+            text-align: left;
+        }
+
+        .ac-dialog-side-list .ac-select {
+            justify-self: stretch;
         }
 
         .ac-composer {
