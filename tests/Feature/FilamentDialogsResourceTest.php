@@ -87,12 +87,66 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Поля диалога')
+            ->assertSee('data-role="dialog-fields-section"', false)
+            ->assertSee('data-role="dialog-field-row"', false)
+            ->assertSee('data-field-key="client_city"', false)
+            ->assertSee('data-field-value-type="scalar"', false)
+            ->assertSee('data-role="dialog-field-copy-key"', false)
             ->assertSee('client_city')
             ->assertSee('Москва')
             ->assertSee('test1')
             ->assertSee('1')
+            ->assertDontSee('data-field-key="_v3"', false)
             ->assertDontSee('_v3')
             ->assertDontSee('transition_counts');
+    }
+
+    public function test_dialog_view_renders_empty_dialog_fields_state(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $dialog->forceFill([
+            'fields_payload' => [
+                '_v3' => [
+                    'transition_counts' => [
+                        'published_1:edge_test' => 1,
+                    ],
+                ],
+            ],
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('Поля диалога')
+            ->assertSee('data-role="dialog-fields-empty"', false)
+            ->assertSee('Поля диалога пока не заполнены')
+            ->assertDontSee('data-role="dialog-field-row"', false)
+            ->assertDontSee('_v3')
+            ->assertDontSee('transition_counts');
+    }
+
+    public function test_dialog_view_escapes_legacy_dialog_field_keys_and_values(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $dialog->forceFill([
+            'fields_payload' => [
+                'legacy"field' => '<script>alert(1)</script>',
+            ],
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-field-key="legacy&quot;field"', false)
+            ->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', false)
+            ->assertDontSee('data-field-key="legacy"field"', false)
+            ->assertDontSee('<script>alert(1)</script>', false);
     }
 
     public function test_active_admin_can_open_dialogs_inbox_page(): void

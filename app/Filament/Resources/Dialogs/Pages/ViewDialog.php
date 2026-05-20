@@ -577,7 +577,7 @@ class ViewDialog extends ViewRecord
     /**
      * @return array{
      *     is_visible: bool,
-     *     fields: list<array{key: string, value: string}>
+     *     fields: list<array{key: string, value: string, value_type: string, is_truncated: bool}>
      * }
      */
     protected function getDialogFieldsViewData(): array
@@ -586,7 +586,7 @@ class ViewDialog extends ViewRecord
 
         if (! is_array($fieldsPayload)) {
             return [
-                'is_visible' => false,
+                'is_visible' => true,
                 'fields' => [],
             ];
         }
@@ -594,37 +594,72 @@ class ViewDialog extends ViewRecord
         $fields = collect($fieldsPayload)
             ->filter(fn (mixed $value, mixed $key): bool => is_string($key)
                 && ! str_starts_with($key, '_'))
-            ->map(fn (mixed $value, string $key): array => [
-                'key' => $key,
-                'value' => $this->formatDialogFieldValue($value),
-            ])
+            ->map(function (mixed $value, string $key): array {
+                $formattedValue = $this->formatDialogFieldValue($value);
+
+                return [
+                    'key' => $key,
+                    'value' => $formattedValue['value'],
+                    'value_type' => $formattedValue['type'],
+                    'is_truncated' => $formattedValue['is_truncated'],
+                ];
+            })
             ->sortBy('key', SORT_NATURAL)
             ->values()
             ->all();
 
         return [
-            'is_visible' => $fields !== [],
+            'is_visible' => true,
             'fields' => $fields,
         ];
     }
 
-    protected function formatDialogFieldValue(mixed $value): string
+    /**
+     * @return array{value: string, type: string, is_truncated: bool}
+     */
+    protected function formatDialogFieldValue(mixed $value): array
     {
         if ($value === null || $value === '') {
-            return '—';
+            return [
+                'value' => '—',
+                'type' => 'empty',
+                'is_truncated' => false,
+            ];
         }
 
         if (is_bool($value)) {
-            return $value ? 'Да' : 'Нет';
+            return [
+                'value' => $value ? 'Да' : 'Нет',
+                'type' => 'scalar',
+                'is_truncated' => false,
+            ];
         }
 
         if (is_scalar($value)) {
-            return (string) $value;
+            return $this->truncateDialogFieldValue((string) $value, 'scalar');
         }
 
         $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-        return $encoded !== false ? $encoded : '—';
+        return $this->truncateDialogFieldValue(
+            $encoded !== false ? $encoded : 'Неподдерживаемое значение',
+            'json',
+        );
+    }
+
+    /**
+     * @return array{value: string, type: string, is_truncated: bool}
+     */
+    protected function truncateDialogFieldValue(string $value, string $type): array
+    {
+        $limit = 500;
+        $isTruncated = mb_strlen($value) > $limit;
+
+        return [
+            'value' => $isTruncated ? mb_substr($value, 0, $limit).'…' : $value,
+            'type' => $type,
+            'is_truncated' => $isTruncated,
+        ];
     }
 
     protected function appendOutboundMessageToConversation(Message $message): void

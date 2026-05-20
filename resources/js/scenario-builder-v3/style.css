@@ -2261,6 +2261,57 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     white-space: nowrap;
 }
 
+.ac-v3-builder__dialog-field-key {
+    display: grid;
+    gap: 7px;
+}
+
+.ac-v3-builder__dialog-field-key input[aria-invalid="true"] {
+    border-color: var(--danger);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--danger) 14%, transparent);
+}
+
+.ac-v3-builder__dialog-field-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ac-v3-builder__dialog-field-suggestions button {
+    max-width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface-muted);
+    color: var(--text-2);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    overflow: hidden;
+    padding: 4px 7px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ac-v3-builder__dialog-field-suggestions button:hover {
+    border-color: color-mix(in oklch, var(--accent) 38%, var(--border));
+    color: var(--text-1);
+}
+
+.ac-v3-builder__field-error,
+.ac-v3-builder__field-hint {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.ac-v3-builder__field-error {
+    color: var(--danger);
+}
+
+.ac-v3-builder__field-hint {
+    color: var(--text-3);
+}
+
 .ac-v3-builder__channels {
     display: grid;
     align-items: start;

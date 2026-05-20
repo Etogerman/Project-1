@@ -2948,6 +2948,47 @@
         grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
     }
 
+    .ac-dialog-fields-list {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .ac-dialog-field-row {
+        display: grid;
+        align-items: start;
+        gap: 0.75rem;
+        grid-template-columns: minmax(0, 1fr) auto;
+        border: 1px solid var(--ac-border);
+        border-radius: 0.65rem;
+        background: color-mix(in oklch, var(--ac-surface-muted) 58%, transparent);
+        padding: 0.75rem;
+    }
+
+    .ac-dialog-field-row__content {
+        min-width: 0;
+    }
+
+    .ac-dialog-field-row__content .ac-meta__value {
+        overflow-wrap: anywhere;
+    }
+
+    .ac-dialog-field-row__copy {
+        border: 1px solid var(--ac-border);
+        border-radius: 0.55rem;
+        background: var(--ac-surface);
+        color: var(--ac-text);
+        cursor: pointer;
+        font-size: 0.75rem;
+        font-weight: 700;
+        line-height: 1;
+        padding: 0.45rem 0.65rem;
+    }
+
+    .ac-dialog-field-row__copy:hover {
+        border-color: var(--ac-border-strong);
+        background: color-mix(in oklch, var(--ac-primary) 8%, var(--ac-surface));
+    }
+
     .ac-card-grid {
         display: grid;
         gap: 0.85rem;

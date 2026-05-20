@@ -196,20 +196,56 @@
                 </div>
 
                 @if ($dialogFields['is_visible'])
-                    <div class="ac-dialog-summary__section ac-surface__divider">
+                    <div
+                        class="ac-dialog-summary__section ac-surface__divider"
+                        data-role="dialog-fields-section"
+                        data-dialog-id="{{ $record->id }}"
+                        x-data="{
+                            copyFieldKey(event) {
+                                const fieldKey = event.currentTarget?.dataset?.fieldKey ?? '';
+
+                                if (fieldKey && navigator.clipboard?.writeText) {
+                                    navigator.clipboard.writeText(fieldKey);
+                                }
+                            },
+                        }"
+                    >
                         <p class="ac-dialog-summary__section-title">Поля диалога</p>
-                        <div class="ac-meta-grid ac-meta-grid--compact" data-role="dialog-fields">
-                            @foreach ($dialogFields['fields'] as $field)
-                                <div class="ac-meta" data-role="dialog-field">
-                                    <p class="ac-meta__label">
-                                        {{ $field['key'] }}
-                                    </p>
-                                    <p class="ac-meta__value">
-                                        {{ $field['value'] }}
-                                    </p>
-                                </div>
-                            @endforeach
-                        </div>
+                        @if ($dialogFields['fields'] === [])
+                            <p class="ac-empty-state ac-empty-state--compact" data-role="dialog-fields-empty">
+                                Поля диалога пока не заполнены
+                            </p>
+                        @else
+                            <div class="ac-dialog-fields-list">
+                                @foreach ($dialogFields['fields'] as $field)
+                                    <div
+                                        class="ac-dialog-field-row"
+                                        data-role="dialog-field-row"
+                                        data-field-key="{{ $field['key'] }}"
+                                        data-field-value-type="{{ $field['value_type'] }}"
+                                    >
+                                        <div class="ac-dialog-field-row__content">
+                                            <p class="ac-meta__label" data-role="dialog-field-key">
+                                                {{ $field['key'] }}
+                                            </p>
+                                            <p class="ac-meta__value" data-role="dialog-field-value">
+                                                {{ $field['value'] }}
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            class="ac-dialog-field-row__copy"
+                                            data-role="dialog-field-copy-key"
+                                            data-field-key="{{ $field['key'] }}"
+                                            title="Скопировать ключ поля"
+                                            x-on:click="copyFieldKey($event)"
+                                        >
+                                            Копировать ключ
+                                        </button>
+                                    </div>
+                                @endforeach
+                            </div>
+                        @endif
                     </div>
                 @endif
 
