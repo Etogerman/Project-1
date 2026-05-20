@@ -3879,6 +3879,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 systemCode: $this->systemCode(),
                 routeDialog: $sendResult->dialog,
                 content: $content,
+                rawPayloadMetadata: $this->v3OutboundRawPayloadMetadata($replyButtonRows, $buttonPlacement),
             );
 
             $channel->markReplySent();
@@ -3894,6 +3895,46 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'sent_message' => $outboundMessage,
             'delivery_accepted' => true,
             'error' => null,
+        ];
+    }
+
+    /**
+     * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     * @return array<string, mixed>
+     */
+    private function v3OutboundRawPayloadMetadata(?array $replyButtonRows, string $buttonPlacement): array
+    {
+        if ($replyButtonRows === null || $replyButtonRows === []) {
+            return [];
+        }
+
+        $rows = collect($replyButtonRows)
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (array $button): bool => filled($button['text'] ?? null))
+                ->map(fn (array $button): array => array_filter([
+                    'text' => (string) $button['text'],
+                    'type' => (string) ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT),
+                    'url' => ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
+                        ? (string) ($button['url'] ?? '')
+                        : null,
+                ], static fn (mixed $value): bool => $value !== null && $value !== ''))
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+
+        if ($rows === []) {
+            return [];
+        }
+
+        return [
+            'v3' => [
+                'buttons' => [
+                    'placement' => $buttonPlacement,
+                    'rows' => $rows,
+                ],
+            ],
         ];
     }
 

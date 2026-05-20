@@ -111,7 +111,10 @@ class BuildBitrix24OpenLinesMessagePayloadAction
                 $text,
             ),
             Message::KIND_OUTBOUND_AUTO_REPLY => $this->prefixLegacyFallbackText('ℹ️ [Автоответ]', $text),
-            Message::KIND_OUTBOUND_SCENARIO_MESSAGE => $this->prefixLegacyFallbackText('ℹ️ [Автоответ]', $text),
+            Message::KIND_OUTBOUND_SCENARIO_MESSAGE => $this->appendV3ButtonSummary(
+                $this->prefixLegacyFallbackText('ℹ️ [Автоответ]', $text),
+                $message,
+            ),
             default => $text,
         };
     }
@@ -137,6 +140,61 @@ class BuildBitrix24OpenLinesMessagePayloadAction
         return $text === ''
             ? $prefix
             : $prefix.' '.$text;
+    }
+
+    private function appendV3ButtonSummary(string $text, Message $message): string
+    {
+        $rows = data_get($message->raw_payload, 'v3.buttons.rows');
+
+        if (! is_array($rows)) {
+            return $text;
+        }
+
+        $lines = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            foreach ($row as $button) {
+                if (! is_array($button)) {
+                    continue;
+                }
+
+                $line = $this->v3ButtonSummaryLine($button, count($lines) + 1);
+
+                if ($line !== null) {
+                    $lines[] = $line;
+                }
+            }
+        }
+
+        if ($lines === []) {
+            return $text;
+        }
+
+        return $text."\n\nКнопки:\n".implode("\n", $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $button
+     */
+    private function v3ButtonSummaryLine(array $button, int $number): ?string
+    {
+        $label = $this->nullableString($button['text'] ?? null);
+
+        if ($label === null) {
+            return null;
+        }
+
+        $suffix = match ($button['type'] ?? null) {
+            'request_phone' => ' (запрос телефона)',
+            'link' => ' (ссылка)',
+            default => '',
+        };
+
+        return $number.'. '.$label.$suffix;
     }
 
     private function isTelegramBotStartedMessage(Message $message, Channel $channel): bool

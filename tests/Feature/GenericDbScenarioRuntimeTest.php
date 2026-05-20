@@ -198,6 +198,14 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('waiting_input', data_get($run->state_payload, 'v3.status'));
         $this->assertSame(['btn_catalog'], data_get($run->state_payload, 'v3.waiting_output_ids'));
 
+        $startOutbound = Message::query()
+            ->where('reply_to_message_id', $startMessage->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_SCENARIO_MESSAGE)
+            ->firstOrFail();
+
+        $this->assertSame('Получить каталог', data_get($startOutbound->raw_payload, 'v3.buttons.rows.0.0.text'));
+        $this->assertSame('text', data_get($startOutbound->raw_payload, 'v3.buttons.rows.0.0.type'));
+
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Выберите действие'
