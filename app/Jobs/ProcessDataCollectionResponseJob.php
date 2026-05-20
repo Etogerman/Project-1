@@ -48,7 +48,9 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         public int $inboundMessageId,
         public ?int $contactId = null,
         public ?string $expectedField = null,
-    ) {}
+    ) {
+        $this->onQueue(ProcessAutoReplyJob::queueName());
+    }
 
     /**
      * @return list<int>
