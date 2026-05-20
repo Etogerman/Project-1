@@ -398,12 +398,27 @@
                         applyFields(root);
                     });
                 };
+                const scheduleKanbanCardFieldsInit = () => {
+                    window.requestAnimationFrame(initKanbanCardFields);
+                };
 
-                document.addEventListener('DOMContentLoaded', initKanbanCardFields);
-                document.addEventListener('livewire:navigated', initKanbanCardFields);
+                document.addEventListener('DOMContentLoaded', scheduleKanbanCardFieldsInit);
+                document.addEventListener('livewire:navigated', scheduleKanbanCardFieldsInit);
 
                 if (window.__acKanbanCardFieldsBound !== true) {
                     window.__acKanbanCardFieldsBound = true;
+
+                    const registerLivewireMorphHook = () => {
+                        if (window.__acKanbanCardFieldsLivewireHooked === true || ! window.Livewire?.hook) {
+                            return;
+                        }
+
+                        window.__acKanbanCardFieldsLivewireHooked = true;
+                        window.Livewire.hook('morphed', scheduleKanbanCardFieldsInit);
+                    };
+
+                    document.addEventListener('livewire:initialized', registerLivewireMorphHook);
+                    registerLivewireMorphHook();
 
                     document.addEventListener('click', (event) => {
                         const toggle = event.target.closest('[data-role="dialog-kanban-card-fields-toggle"]');
