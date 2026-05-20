@@ -7,6 +7,12 @@ use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Filament\Resources\Contacts\Pages\ViewContact;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Jobs\ProcessDataCollectionQuestionJob;
+use App\Models\BotConstructorArrow;
+use App\Models\BotConstructorArrowRun;
+use App\Models\BotConstructorBlock;
+use App\Models\BotConstructorDialogState;
+use App\Models\BotConstructorExecution;
+use App\Models\BotConstructorExecutionBlockRun;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\Contact;
@@ -2377,6 +2383,141 @@ class FilamentContactsResourceTest extends TestCase
         ]);
         $this->assertDatabaseMissing('messages', [
             'id' => $message->id,
+        ]);
+    }
+
+    public function test_contact_delete_removes_bot_constructor_runtime_for_dialogs(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-delete-runtime-1',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'external_chat_id' => 'chat-delete-runtime-1',
+            'external_message_id' => 'msg-delete-runtime-1',
+        ]);
+        $sourceBlock = BotConstructorBlock::factory()->create();
+        $targetBlock = BotConstructorBlock::factory()->create();
+        $arrow = BotConstructorArrow::factory()->create([
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+        ]);
+        $execution = BotConstructorExecution::factory()->create([
+            'root_inbound_message_id' => $message->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'trigger_type' => BotConstructorExecution::TRIGGER_INBOUND,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        $arrowRun = BotConstructorArrowRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_arrow_id' => $arrow->id,
+            'dialog_id' => $dialog->id,
+            'source_block_id' => $sourceBlock->id,
+            'target_block_id' => $targetBlock->id,
+            'inbound_message_id' => $message->id,
+            'status' => BotConstructorArrowRun::STATUS_PROCESSING,
+        ]);
+        $sourceBlockRun = BotConstructorExecutionBlockRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $sourceBlock->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+            'status' => BotConstructorExecutionBlockRun::STATUS_SENT,
+        ]);
+        $targetBlockRun = BotConstructorExecutionBlockRun::factory()->create([
+            'bot_constructor_execution_id' => $execution->id,
+            'bot_constructor_block_id' => $targetBlock->id,
+            'bot_constructor_arrow_run_id' => $arrowRun->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 2,
+            'status' => BotConstructorExecutionBlockRun::STATUS_PROCESSING,
+        ]);
+        $arrowRun->update([
+            'source_execution_block_run_id' => $sourceBlockRun->id,
+        ]);
+        $childExecution = BotConstructorExecution::factory()->create([
+            'parent_execution_id' => $execution->id,
+            'started_by_arrow_run_id' => $arrowRun->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'trigger_type' => BotConstructorExecution::TRIGGER_SCHEDULED_ARROW,
+            'status' => BotConstructorExecution::STATUS_RUNNING,
+        ]);
+        $childBlockRun = BotConstructorExecutionBlockRun::factory()->create([
+            'bot_constructor_execution_id' => $childExecution->id,
+            'bot_constructor_block_id' => $targetBlock->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'sequence_number' => 1,
+            'status' => BotConstructorExecutionBlockRun::STATUS_PROCESSING,
+        ]);
+        $dialogState = BotConstructorDialogState::factory()->create([
+            'dialog_id' => $dialog->id,
+            'current_block_id' => $targetBlock->id,
+            'last_execution_id' => $childExecution->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->call('openDeleteContactDialog')
+            ->call('deleteMountedContact')
+            ->assertRedirect(ContactResource::getUrl('index'));
+
+        $this->assertDatabaseMissing('contacts', [
+            'id' => $contact->id,
+        ]);
+        $this->assertDatabaseMissing('dialogs', [
+            'id' => $dialog->id,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_dialog_states', [
+            'id' => $dialogState->id,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_execution_block_runs', [
+            'id' => $sourceBlockRun->id,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_execution_block_runs', [
+            'id' => $targetBlockRun->id,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_execution_block_runs', [
+            'id' => $childBlockRun->id,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_arrow_runs', [
+            'id' => $arrowRun->id,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_executions', [
+            'id' => $childExecution->id,
+        ]);
+        $this->assertDatabaseMissing('bot_constructor_executions', [
+            'id' => $execution->id,
+        ]);
+        $this->assertDatabaseHas('bot_constructor_arrows', [
+            'id' => $arrow->id,
+        ]);
+        $this->assertDatabaseHas('bot_constructor_blocks', [
+            'id' => $sourceBlock->id,
+        ]);
+        $this->assertDatabaseHas('bot_constructor_blocks', [
+            'id' => $targetBlock->id,
         ]);
     }
 
