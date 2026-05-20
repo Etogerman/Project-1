@@ -21,7 +21,7 @@ class BuildDialogMessageSnapshotPayloadAction
      */
     public function fromMessages(Collection $messages): array
     {
-        return array_filter([
+        return [
             ...$this->snapshotPayload(
                 $this->latestMessage($messages->filter(fn (Message $message): bool => $this->isVisibleDialogMessage($message))),
                 'last_message',
@@ -34,7 +34,7 @@ class BuildDialogMessageSnapshotPayloadAction
                 $this->latestMessage($messages->filter(fn (Message $message): bool => $this->isOutboundClientMessage($message))),
                 'last_outbound_message',
             ),
-        ], fn (mixed $value): bool => $value !== null);
+        ];
     }
 
     public function previewText(Message $message): string
@@ -86,7 +86,10 @@ class BuildDialogMessageSnapshotPayloadAction
     private function snapshotPayload(?Message $message, string $prefix): array
     {
         if (! $message instanceof Message) {
-            return [];
+            return [
+                $prefix.'_id' => null,
+                $prefix.'_preview' => null,
+            ];
         }
 
         return [

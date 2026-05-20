@@ -8,9 +8,11 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\SyncDialogConfirmedPhoneAction;
 use App\Services\Dialogs\SyncMessageDialogMetadataAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -427,6 +429,49 @@ class DialogMetadataSyncTest extends TestCase
         $this->assertSame('Ответ клиенту', $dialog->last_outbound_message_preview);
         $this->assertSame('2026-03-31 13:05:00', $dialog->last_message_at?->format('Y-m-d H:i:s'));
         $this->assertSame('2026-03-31 13:05:00', $dialog->last_outbound_at?->format('Y-m-d H:i:s'));
+    }
+
+    public function test_full_snapshot_recompute_clears_missing_message_snapshots(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Старый текст',
+            'received_at' => Carbon::parse('2026-03-31 13:10:00'),
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'last_message_id' => $message->id,
+            'last_inbound_message_id' => $message->id,
+            'last_outbound_message_id' => $message->id,
+            'last_message_preview' => 'Старый текст',
+            'last_inbound_message_preview' => 'Старый текст',
+            'last_outbound_message_preview' => 'Старый ответ',
+        ]);
+
+        $dialog->forceFill(app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(new Collection()))->save();
+        $dialog->refresh();
+
+        $this->assertNull($dialog->last_message_id);
+        $this->assertNull($dialog->last_inbound_message_id);
+        $this->assertNull($dialog->last_outbound_message_id);
+        $this->assertNull($dialog->last_message_preview);
+        $this->assertNull($dialog->last_inbound_message_preview);
+        $this->assertNull($dialog->last_outbound_message_preview);
     }
 
     public function test_older_phone_capture_does_not_downgrade_confirmed_phone(): void
