@@ -17,6 +17,7 @@ class BackfillDialogsForRootContactAction
         private readonly InferHistoricalMessageSenderAction $inferHistoricalMessageSenderAction,
         private readonly ResolveDialogRoutePayloadAction $resolveDialogRoutePayloadAction,
         private readonly MessageChronology $messageChronology,
+        private readonly BuildDialogMessageSnapshotPayloadAction $buildDialogMessageSnapshotPayloadAction,
     ) {}
 
     /**
@@ -192,7 +193,11 @@ class BackfillDialogsForRootContactAction
             'last_inbound_at' => $this->maxDateTimeValue($dialog->last_inbound_at, $computedLastInboundAt),
             'last_outbound_at' => $this->maxDateTimeValue($dialog->last_outbound_at, $computedLastOutboundAt),
         ];
-        $payload = array_merge($payload, $routePayload);
+        $payload = array_merge(
+            $payload,
+            $this->buildDialogMessageSnapshotPayloadAction->fromMessages($channelMessages),
+            $routePayload,
+        );
 
         $hasDialogChanges = $this->dialogNeedsUpdate($dialog, $payload);
 

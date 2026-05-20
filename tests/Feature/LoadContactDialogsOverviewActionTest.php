@@ -8,6 +8,7 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -54,6 +55,7 @@ class LoadContactDialogsOverviewActionTest extends TestCase
             'source_text' => '<b>HTML preview</b>',
             'received_at' => now(),
         ]);
+        $this->syncDialogSnapshots($dialog);
 
         $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
 
@@ -97,6 +99,7 @@ class LoadContactDialogsOverviewActionTest extends TestCase
             'text' => null,
             'received_at' => now(),
         ]);
+        $this->syncDialogSnapshots($dialog);
 
         $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
 
@@ -140,6 +143,7 @@ class LoadContactDialogsOverviewActionTest extends TestCase
             'text' => 'Ответ из Bitrix24',
             'received_at' => now(),
         ]);
+        $this->syncDialogSnapshots($dialog);
 
         $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
 
@@ -191,6 +195,7 @@ class LoadContactDialogsOverviewActionTest extends TestCase
             'text' => 'Оператор изменил статус диалога',
             'received_at' => now(),
         ]);
+        $this->syncDialogSnapshots($dialog);
 
         $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
 
@@ -251,6 +256,7 @@ class LoadContactDialogsOverviewActionTest extends TestCase
             'text' => 'Оператор изменил статус диалога',
             'received_at' => now(),
         ]);
+        $this->syncDialogSnapshots($dialog);
 
         $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
 
@@ -293,6 +299,7 @@ class LoadContactDialogsOverviewActionTest extends TestCase
             ],
             'received_at' => now(),
         ]);
+        $this->syncDialogSnapshots($dialog);
 
         $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
 
@@ -301,5 +308,14 @@ class LoadContactDialogsOverviewActionTest extends TestCase
         $this->assertSame([
             ['label' => 'Ожидает загрузки', 'tone' => 'gray'],
         ], $overview[0]['preview_media_state_badges']);
+    }
+
+    protected function syncDialogSnapshots(Dialog $dialog): void
+    {
+        $dialog->forceFill(app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(
+            Message::query()
+                ->where('dialog_id', $dialog->id)
+                ->get(),
+        ))->save();
     }
 }

@@ -6,12 +6,14 @@ use App\Data\Dialogs\DialogInboxStatusData;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Dialogs\Pages\DialogKanban;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
+use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -159,8 +161,51 @@ class DialogKanbanLocalContourTest extends TestCase
                 'back_to' => $backTo,
             ]))
             ->assertOk()
-            ->assertSee('Вернуться в канбан')
+            ->assertSee('Вернуться в диалоги')
             ->assertSee($backTo);
+    }
+
+    public function test_dialog_view_uses_dialog_breadcrumbs_when_opened_from_dialogs_list(): void
+    {
+        $admin = $this->createAdmin();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Возврат в диалоги',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+        ]);
+        $backTo = DialogResource::getUrl('index');
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]).'?'.http_build_query([
+                'back_to' => $backTo,
+            ]))
+            ->assertOk()
+            ->assertSee('data-entry-point="dialogs"', false)
+            ->assertSee('Вернуться в диалоги')
+            ->assertSee('Диалог #'.$dialog->id);
+    }
+
+    public function test_dialog_breadcrumbs_keep_dialog_entry_point_after_live_refresh(): void
+    {
+        $admin = $this->createAdmin();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Не перепрыгивает в контакт',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+        ]);
+        $backTo = DialogResource::getUrl('kanban');
+
+        Livewire::withQueryParams([
+            'back_to' => $backTo,
+        ])
+            ->actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-entry-point="dialogs"', false)
+            ->assertSee('Вернуться в диалоги')
+            ->call('refreshDialogViewData')
+            ->assertSee('data-entry-point="dialogs"', false)
+            ->assertSee('Вернуться в диалоги')
+            ->assertSee('Диалог #'.$dialog->id)
+            ->assertDontSee('Вернуться к контакту')
+            ->assertDontSee('data-entry-point="contact"', false);
     }
 
     public function test_dialog_resource_navigation_url_remembers_last_kanban_slice(): void
@@ -565,14 +610,20 @@ class DialogKanbanLocalContourTest extends TestCase
                 'external_chat_id' => 'kanban-chat-'.$contact->id,
                 'received_at' => $lastMessageAt,
             ]);
+
+            $dialog->forceFill(app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(
+                Message::query()
+                    ->where('dialog_id', $dialog->id)
+                    ->get(),
+            ))->save();
         }
 
         return $dialog->fresh([
             'channel',
             'contact.assignedUser',
             'currentContactIdentity',
-            'previewMessage.channel',
-            'previewMessage.sentByUser',
+            'lastMessage.channel',
+            'lastMessage.sentByUser',
         ]);
     }
 }

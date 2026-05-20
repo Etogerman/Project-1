@@ -16,6 +16,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
+use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -443,13 +444,8 @@ class FilamentDialogsResourceTest extends TestCase
             'last_message_at' => now(),
             'last_inbound_at' => now(),
         ]);
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $contact->id,
+        $this->createDialogMessage($dialog, [
             'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
             'external_chat_id' => $dialog->external_chat_id,
             'external_message_id' => 'tg-account-placeholder-message-1',
             'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-placeholder-message-1',
@@ -1315,11 +1311,7 @@ class FilamentDialogsResourceTest extends TestCase
             'contactName' => 'Диалог с Bitrix24',
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
@@ -1346,11 +1338,7 @@ class FilamentDialogsResourceTest extends TestCase
             'contactName' => 'Диалог со статусом',
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
             'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
@@ -1377,33 +1365,21 @@ class FilamentDialogsResourceTest extends TestCase
             'contactName' => 'Диалог с legacy preview',
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
             'text' => 'Старое обычное сообщение',
             'received_at' => now()->subMinutes(2),
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => null,
             'text' => 'Последнее legacy сообщение',
             'received_at' => now()->subMinute(),
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
             'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
@@ -2830,6 +2806,11 @@ class FilamentDialogsResourceTest extends TestCase
             'last_message_at' => $receivedAt,
             'last_inbound_at' => $message->direction === Message::DIRECTION_INBOUND ? $receivedAt : $dialog->last_inbound_at,
             'last_outbound_at' => $message->direction === Message::DIRECTION_OUTBOUND ? $receivedAt : $dialog->last_outbound_at,
+            ...app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(
+                Message::query()
+                    ->where('dialog_id', $dialog->id)
+                    ->get(),
+            ),
         ])->save();
 
         return $message;
