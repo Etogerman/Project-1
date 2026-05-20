@@ -26,6 +26,7 @@ use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
+use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Filament\Schemas\Components\Section;
@@ -3413,6 +3414,8 @@ class FilamentContactsResourceTest extends TestCase
             'raw_payload' => ['provider' => 'max'],
             'received_at' => now()->subHour(),
         ]);
+        $this->refreshDialogMessageSnapshots($telegramDialog);
+        $this->refreshDialogMessageSnapshots($maxDialog);
 
         $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
         $dialogsBuilder->setAccessible(true);
@@ -3484,6 +3487,7 @@ class FilamentContactsResourceTest extends TestCase
             ],
             'received_at' => now(),
         ]);
+        $this->refreshDialogMessageSnapshots($maxDialog);
 
         $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
         $dialogsBuilder->setAccessible(true);
@@ -3532,6 +3536,7 @@ class FilamentContactsResourceTest extends TestCase
             ],
             'received_at' => now(),
         ]);
+        $this->refreshDialogMessageSnapshots($dialog);
 
         $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
         $dialogsBuilder->setAccessible(true);
@@ -3579,6 +3584,7 @@ class FilamentContactsResourceTest extends TestCase
             'raw_payload' => ['message' => ['text' => '/start TEXT_1']],
             'received_at' => now(),
         ]);
+        $this->refreshDialogMessageSnapshots($telegramDialog);
 
         $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
         $dialogsBuilder->setAccessible(true);
@@ -3646,7 +3652,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('Нет токена', $dialogsHtml);
     }
 
-    public function test_contact_dialogs_overview_uses_batched_preview_query_without_contact_history_query(): void
+    public function test_contact_dialogs_overview_uses_dialog_snapshots_without_contact_history_query(): void
     {
         $contact = Contact::factory()->create();
 
@@ -3682,6 +3688,7 @@ class FilamentContactsResourceTest extends TestCase
                 'raw_payload' => ['provider' => 'telegram'],
                 'received_at' => now()->subMinutes($index),
             ]);
+            $this->refreshDialogMessageSnapshots($dialog);
         }
 
         $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
@@ -3697,7 +3704,7 @@ class FilamentContactsResourceTest extends TestCase
             ->filter(fn (string $query): bool => str_contains($query, 'from "messages"'));
 
         $this->assertStringContainsString('Preview 1', $dialogsHtml);
-        $this->assertCount(1, $messageQueries->filter(
+        $this->assertCount(0, $messageQueries->filter(
             fn (string $query): bool => str_contains($query, 'distinct on (dialog_id)')
         ));
         $this->assertFalse($messageQueries->contains(
@@ -4360,5 +4367,16 @@ class FilamentContactsResourceTest extends TestCase
 
             $position = $nextPosition;
         }
+    }
+
+    private function refreshDialogMessageSnapshots(Dialog $dialog): Dialog
+    {
+        $dialog->forceFill(app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(
+            Message::query()
+                ->where('dialog_id', $dialog->id)
+                ->get(),
+        ))->save();
+
+        return $dialog->refresh();
     }
 }
