@@ -1121,6 +1121,70 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Телефона нет');
     }
 
+    public function test_v3_wait_reply_skips_edge_when_dialog_phone_condition_does_not_match(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9273]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9274]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_wait_reply_dialog_phone_condition', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_has_dialog_phone',
+                targetBlockId: 'has_phone',
+                priority: 20,
+                dialogPhoneCondition: AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'has_phone' => 'Телефон мессенджера есть',
+            'fallback' => 'Телефона мессенджера нет',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('fallback', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Телефона мессенджера нет');
+    }
+
     public function test_v3_wait_reply_skips_edge_when_dialog_field_condition_does_not_match(): void
     {
         Http::fake([
@@ -1625,7 +1689,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Телефон принят');
     }
 
-    public function test_v3_wait_reply_contact_phone_capture_from_text_saves_contact_and_dialog_phone(): void
+    public function test_v3_wait_reply_contact_phone_capture_from_text_saves_contact_without_confirming_dialog_phone(): void
     {
         Queue::fake();
         Http::fake([
@@ -1683,7 +1747,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_contact_phone';
 
         $this->assertSame('accepted', $run->current_step);
-        $this->assertSame('+79263527111', $dialog->confirmed_phone_normalized);
+        $this->assertNull($dialog->confirmed_phone_raw);
+        $this->assertNull($dialog->confirmed_phone_normalized);
         $this->assertNull(data_get($dialog->fields_payload, 'phone'));
         $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
         $this->assertDatabaseHas('contact_phone_numbers', [
@@ -3065,6 +3130,61 @@ class GenericDbScenarioRuntimeTest extends TestCase
         ContactPhoneNumber::factory()->create([
             'contact_id' => $contact->id,
         ]);
+
+        $messageWithPhone = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+            'message_parameter' => null,
+        ]);
+
+        $this->assertTrue($runtime->shouldStart($messageWithPhone));
+    }
+
+    public function test_v3_start_condition_respects_dialog_phone_condition(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id);
+
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.dialog_phone_condition', AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE);
+
+        $scenario = $this->createPublishedScenario('v3_dialog_phone_condition_start', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $messageWithoutPhone = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+            'message_parameter' => null,
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertFalse($runtime->shouldStart($messageWithoutPhone));
+
+        $dialog->forceFill([
+            'confirmed_phone_raw' => '+7 926 352 71 11',
+            'confirmed_phone_normalized' => '+79263527111',
+        ])->save();
 
         $messageWithPhone = Message::factory()->create([
             'contact_id' => $contact->id,
@@ -6709,6 +6829,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         int $transitionLimit = 0,
         array $inputCapture = [],
         string $contactPhoneCondition = '',
+        string $dialogPhoneCondition = '',
         array $fieldCondition = [],
     ): array {
         return [
@@ -6718,6 +6839,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'priority' => $priority,
             'transition_limit' => $transitionLimit,
             'contact_phone_condition' => $contactPhoneCondition,
+            'dialog_phone_condition' => $dialogPhoneCondition,
             'field_condition' => array_merge([
                 'enabled' => false,
                 'field_scope' => 'dialog',

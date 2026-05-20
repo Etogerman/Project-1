@@ -32,6 +32,12 @@ class DialogSchemaTest extends TestCase
             'last_message_at',
             'last_inbound_at',
             'last_outbound_at',
+            'last_message_id',
+            'last_inbound_message_id',
+            'last_outbound_message_id',
+            'last_message_preview',
+            'last_inbound_message_preview',
+            'last_outbound_message_preview',
         ]));
 
         $this->assertTrue(Schema::hasColumns('messages', [
@@ -77,11 +83,18 @@ class DialogSchemaTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $identity->channel_id,
         ]);
+        $dialog->forceFill([
+            'last_message_id' => $message->id,
+            'last_inbound_message_id' => $message->id,
+        ])->save();
+        $dialog->refresh();
 
         $this->assertTrue($dialog->contact->is($identity->contact));
         $this->assertTrue($dialog->channel->is($identity->channel));
         $this->assertTrue($dialog->currentContactIdentity->is($identity));
         $this->assertTrue($dialog->messages->contains($message));
+        $this->assertTrue($dialog->lastMessage->is($message));
+        $this->assertTrue($dialog->lastInboundMessage->is($message));
 
         $this->assertTrue($identity->contact->dialogs->contains($dialog));
         $this->assertTrue($identity->channel->dialogs->contains($dialog));

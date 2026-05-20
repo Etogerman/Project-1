@@ -7,14 +7,12 @@ use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 class LoadContactDialogsOverviewAction
 {
     public function __construct(
         protected BuildConversationFeedViewDataAction $buildConversationFeedViewDataAction,
-        protected MessageChronology $messageChronology,
         protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
     ) {}
 
@@ -41,22 +39,30 @@ class LoadContactDialogsOverviewAction
     public function handle(Contact $contact): Collection
     {
         $dialogs = $contact->dialogs()
-            ->with(['channel', 'currentContactIdentity'])
+            ->with([
+                'channel',
+                'currentContactIdentity',
+                'lastMessage.channel',
+                'lastMessage.dialog.channel',
+                'lastMessage.sentByUser',
+            ])
             ->get();
 
         if ($dialogs->isEmpty()) {
             return collect();
         }
 
-        $previewMessages = $this->loadPreviewMessages($dialogs)
-            ->keyBy('dialog_id');
+        $previewMessages = $dialogs
+            ->pluck('lastMessage')
+            ->filter(fn (mixed $message): bool => $message instanceof Message)
+            ->values();
         $previewFeedByMessageId = collect(
             $this->buildConversationFeedViewDataAction->handle($previewMessages->values())
         )->keyBy('id');
 
         return $dialogs
-            ->map(function (Dialog $dialog) use ($previewMessages, $previewFeedByMessageId): array {
-                $previewMessage = $previewMessages->get($dialog->id);
+            ->map(function (Dialog $dialog) use ($previewFeedByMessageId): array {
+                $previewMessage = $dialog->lastMessage;
                 $previewFeed = $previewMessage instanceof Message
                     ? $previewFeedByMessageId->get($previewMessage->id)
                     : null;
@@ -79,7 +85,9 @@ class LoadContactDialogsOverviewAction
                     'last_message_label' => $this->formatDialogTimestamp($sortAt),
                     'last_inbound_label' => $this->formatDialogTimestamp($dialog->last_inbound_at),
                     'last_outbound_label' => $this->formatDialogTimestamp($dialog->last_outbound_at),
-                    'preview_text' => is_array($previewFeed) ? (string) ($previewFeed['display_text'] ?? 'Сообщений ещё не было.') : 'Сообщений ещё не было.',
+                    'preview_text' => filled($dialog->last_message_preview)
+                        ? (string) $dialog->last_message_preview
+                        : (is_array($previewFeed) ? (string) ($previewFeed['display_text'] ?? 'Сообщений ещё не было.') : 'Сообщений ещё не было.'),
                     'preview_sender_label' => $this->resolvePreviewSenderLabel($previewMessage, $previewFeed),
                     'preview_sender_tone' => $this->resolvePreviewSenderTone($previewMessage, $previewFeed),
                     'preview_media_state_badges' => $this->resolvePreviewMediaStateBadges($previewFeed),
@@ -112,36 +120,6 @@ class LoadContactDialogsOverviewAction
                 return $dialog;
             })
             ->values();
-    }
-
-    /**
-     * @param  Collection<int, Dialog>  $dialogs
-     * @return Collection<int, Message>
-     */
-    protected function loadPreviewMessages(Collection $dialogs): Collection
-    {
-        $dialogIds = $dialogs->pluck('id')
-            ->filter(fn (mixed $id): bool => is_int($id) || ctype_digit((string) $id))
-            ->map(fn (mixed $id): int => (int) $id)
-            ->values();
-
-        if ($dialogIds->isEmpty()) {
-            return collect();
-        }
-
-        return Message::query()
-            ->selectRaw('distinct on (dialog_id) messages.*')
-            ->whereIn('dialog_id', $dialogIds->all())
-            ->where(function (Builder $query): Builder {
-                return $query
-                    ->whereNull('message_kind')
-                    ->orWhere('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE);
-            })
-            ->with(['channel', 'dialog.channel', 'sentByUser'])
-            ->orderBy('dialog_id')
-            ->orderByRaw($this->messageChronology->sqlSortAt('messages').' desc')
-            ->orderByDesc('id')
-            ->get();
     }
 
     protected function resolvePreviewSenderLabel(?Message $previewMessage, mixed $previewFeed): ?string

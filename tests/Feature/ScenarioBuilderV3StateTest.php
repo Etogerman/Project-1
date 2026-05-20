@@ -331,6 +331,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         $parameterPayload = $this->edgePayload(null, 'Параметр');
         $parameterPayload['match'] = ['type' => 'exact_parameter', 'text' => "payload_1\npayload_2"];
         $parameterPayload['contact_phone_condition'] = 'has_phone';
+        $parameterPayload['dialog_phone_condition'] = 'missing_phone';
         $textOrParameterPayload = $this->edgePayload(null, 'Текст или параметр');
         $textOrParameterPayload['match'] = ['type' => 'exact_text_or_parameter', 'text' => 'mixed_1'];
         $callbackPayload = $this->edgePayload(null, 'Callback');
@@ -371,6 +372,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertOk()
             ->assertJsonPath('builder.edges.0.condition_payload.match.type', 'exact_parameter')
             ->assertJsonPath('builder.edges.0.condition_payload.contact_phone_condition', 'has_phone')
+            ->assertJsonPath('builder.edges.0.condition_payload.dialog_phone_condition', 'missing_phone')
             ->assertJsonPath('builder.edges.1.condition_payload.match.type', 'exact_text_or_parameter')
             ->assertJsonPath('builder.edges.2.condition_payload.match.type', 'exact_callback')
             ->assertJsonPath('builder.edges.2.condition_payload.field_condition.field_key', 'lead_status')
@@ -395,6 +397,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
         $this->assertSame(['payload_1', 'payload_2'], data_get($edgesByMatchType->get('exact_parameter'), 'match.variants'));
         $this->assertSame('has_phone', data_get($edgesByMatchType->get('exact_parameter'), 'contact_phone_condition'));
+        $this->assertSame('missing_phone', data_get($edgesByMatchType->get('exact_parameter'), 'dialog_phone_condition'));
         $this->assertSame('lead_status', data_get($edgesByMatchType->get('exact_callback'), 'field_condition.field_key'));
         $this->assertSame('hot', data_get($edgesByMatchType->get('exact_callback'), 'field_condition.value'));
     }
@@ -1665,6 +1668,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame([$channel->id], $runtime['entrypoints'][0]['channel_ids'] ?? null);
         $this->assertSame(['/start'], $runtime['entrypoints'][0]['values'] ?? null);
         $this->assertSame('has_phone', $runtime['entrypoints'][0]['contact_phone_condition'] ?? null);
+        $this->assertSame('', $runtime['entrypoints'][0]['dialog_phone_condition'] ?? null);
         $this->assertSame('Выберите действие', data_get($runtime, "blocks.$startBlockId.message.text"));
         $this->assertSame('state', data_get($runtime, "blocks.$startBlockId.kind"));
         $this->assertSame('non_state', data_get($runtime, "blocks.$catalogBlockId.kind"));
@@ -2321,6 +2325,7 @@ class ScenarioBuilderV3StateTest extends TestCase
                         'variable' => '',
                         'exclude' => '',
                         'contact_phone_condition' => $contactPhoneCondition,
+                        'dialog_phone_condition' => '',
                         'priority' => 10,
                         'once' => false,
                         'channels' => ['mode' => 'selected', 'ids' => $channelIds],
@@ -2374,6 +2379,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             'priority' => 10,
             'transition_limit' => 0,
             'contact_phone_condition' => '',
+            'dialog_phone_condition' => '',
             'field_condition' => [
                 'enabled' => false,
                 'field_scope' => 'dialog',

@@ -52,6 +52,7 @@ class BackfillDialogsCommandTest extends TestCase
             'contact_identity_id' => $identity->id,
             'channel_id' => $identity->channel_id,
             'external_chat_id' => 'chat-new',
+            'text' => 'Последнее входящее',
             'received_at' => now(),
         ]);
 
@@ -64,6 +65,10 @@ class BackfillDialogsCommandTest extends TestCase
         $this->assertSame('chat-new', $dialog->external_chat_id);
         $this->assertSame($latestInbound->received_at?->format('Y-m-d H:i:s'), $dialog->last_message_at?->format('Y-m-d H:i:s'));
         $this->assertSame($latestInbound->received_at?->format('Y-m-d H:i:s'), $dialog->last_inbound_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($latestInbound->id, $dialog->last_message_id);
+        $this->assertSame($latestInbound->id, $dialog->last_inbound_message_id);
+        $this->assertSame('Последнее входящее', $dialog->last_message_preview);
+        $this->assertSame('Последнее входящее', $dialog->last_inbound_message_preview);
 
         $this->assertSame(1, Dialog::query()
             ->where('contact_id', $identity->contact_id)

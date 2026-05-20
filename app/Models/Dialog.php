@@ -96,6 +96,12 @@ class Dialog extends Model
         'last_message_at',
         'last_inbound_at',
         'last_outbound_at',
+        'last_message_id',
+        'last_inbound_message_id',
+        'last_outbound_message_id',
+        'last_message_preview',
+        'last_inbound_message_preview',
+        'last_outbound_message_preview',
     ];
 
     /**
@@ -293,9 +299,24 @@ class Dialog extends Model
         return $this->hasMany(Message::class);
     }
 
+    public function lastMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'last_message_id');
+    }
+
+    public function lastInboundMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'last_inbound_message_id');
+    }
+
+    public function lastOutboundMessage(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'last_outbound_message_id');
+    }
+
     public function previewMessage(): BelongsTo
     {
-        return $this->belongsTo(Message::class, 'preview_message_id');
+        return $this->belongsTo(Message::class, 'last_message_id');
     }
 
     public function hasCompleteStageHistoryRouteContext(): bool

@@ -16,6 +16,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
+use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -87,12 +88,66 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Поля диалога')
+            ->assertSee('data-role="dialog-fields-section"', false)
+            ->assertSee('data-role="dialog-field-row"', false)
+            ->assertSee('data-field-key="client_city"', false)
+            ->assertSee('data-field-value-type="scalar"', false)
+            ->assertSee('data-role="dialog-field-copy-key"', false)
             ->assertSee('client_city')
             ->assertSee('Москва')
             ->assertSee('test1')
             ->assertSee('1')
+            ->assertDontSee('data-field-key="_v3"', false)
             ->assertDontSee('_v3')
             ->assertDontSee('transition_counts');
+    }
+
+    public function test_dialog_view_renders_empty_dialog_fields_state(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $dialog->forceFill([
+            'fields_payload' => [
+                '_v3' => [
+                    'transition_counts' => [
+                        'published_1:edge_test' => 1,
+                    ],
+                ],
+            ],
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('Поля диалога')
+            ->assertSee('data-role="dialog-fields-empty"', false)
+            ->assertSee('Поля диалога пока не заполнены')
+            ->assertDontSee('data-role="dialog-field-row"', false)
+            ->assertDontSee('_v3')
+            ->assertDontSee('transition_counts');
+    }
+
+    public function test_dialog_view_escapes_legacy_dialog_field_keys_and_values(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $dialog->forceFill([
+            'fields_payload' => [
+                'legacy"field' => '<script>alert(1)</script>',
+            ],
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-field-key="legacy&quot;field"', false)
+            ->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', false)
+            ->assertDontSee('data-field-key="legacy"field"', false)
+            ->assertDontSee('<script>alert(1)</script>', false);
     }
 
     public function test_active_admin_can_open_dialogs_inbox_page(): void
@@ -108,6 +163,23 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('Диалоги')
             ->assertSee($dialog->contact->display_name);
+    }
+
+    public function test_dialogs_inbox_record_link_contains_back_to_dialogs_list(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $expectedUrl = DialogResource::getUrl('view', ['record' => $dialog]).'?'.http_build_query([
+            'back_to' => DialogResource::getUrl('index'),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee($expectedUrl, false);
     }
 
     public function test_dialogs_inbox_page_enables_live_polling(): void
@@ -389,13 +461,8 @@ class FilamentDialogsResourceTest extends TestCase
             'last_message_at' => now(),
             'last_inbound_at' => now(),
         ]);
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $contact->id,
+        $this->createDialogMessage($dialog, [
             'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
             'external_chat_id' => $dialog->external_chat_id,
             'external_message_id' => 'tg-account-placeholder-message-1',
             'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-placeholder-message-1',
@@ -1261,11 +1328,7 @@ class FilamentDialogsResourceTest extends TestCase
             'contactName' => 'Диалог с Bitrix24',
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
             'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
@@ -1292,11 +1355,7 @@ class FilamentDialogsResourceTest extends TestCase
             'contactName' => 'Диалог со статусом',
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
             'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
@@ -1323,33 +1382,21 @@ class FilamentDialogsResourceTest extends TestCase
             'contactName' => 'Диалог с legacy preview',
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
             'text' => 'Старое обычное сообщение',
             'received_at' => now()->subMinutes(2),
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => null,
             'text' => 'Последнее legacy сообщение',
             'received_at' => now()->subMinute(),
         ]);
 
-        Message::factory()->create([
-            'dialog_id' => $dialog->id,
-            'contact_id' => $dialog->contact_id,
-            'contact_identity_id' => $dialog->current_contact_identity_id,
-            'channel_id' => $dialog->channel_id,
+        $this->createDialogMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
             'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
@@ -2776,6 +2823,11 @@ class FilamentDialogsResourceTest extends TestCase
             'last_message_at' => $receivedAt,
             'last_inbound_at' => $message->direction === Message::DIRECTION_INBOUND ? $receivedAt : $dialog->last_inbound_at,
             'last_outbound_at' => $message->direction === Message::DIRECTION_OUTBOUND ? $receivedAt : $dialog->last_outbound_at,
+            ...app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(
+                Message::query()
+                    ->where('dialog_id', $dialog->id)
+                    ->get(),
+            ),
         ])->save();
 
         return $message;
