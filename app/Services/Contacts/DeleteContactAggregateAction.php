@@ -2,13 +2,18 @@
 
 namespace App\Services\Contacts;
 
+use App\Models\BotConstructorArrowRun;
+use App\Models\BotConstructorDialogState;
+use App\Models\BotConstructorExecution;
+use App\Models\BotConstructorExecutionBlockRun;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactMergeLog;
-use Throwable;
+use App\Models\Dialog;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Throwable;
 
 class DeleteContactAggregateAction
 {
@@ -76,6 +81,15 @@ class DeleteContactAggregateAction
                     $resolvedAggregate->aggregateContactIds,
                 );
 
+                $dialogIds = Dialog::query()
+                    ->whereIn('contact_id', $resolvedAggregate->aggregateContactIds)
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->pluck('id')
+                    ->all();
+
+                $this->deleteBotConstructorRuntimeForDialogs($dialogIds);
+
                 ContactMergeLog::query()
                     ->where(function ($query) use ($resolvedAggregate): void {
                         $query
@@ -120,6 +134,70 @@ class DeleteContactAggregateAction
             ));
 
             throw $exception;
+        }
+    }
+
+    /**
+     * @param  list<int>  $dialogIds
+     */
+    private function deleteBotConstructorRuntimeForDialogs(array $dialogIds): void
+    {
+        if ($dialogIds === []) {
+            return;
+        }
+
+        $executionIds = BotConstructorExecution::query()
+            ->whereIn('dialog_id', $dialogIds)
+            ->orderByDesc('id')
+            ->pluck('id')
+            ->all();
+
+        BotConstructorDialogState::query()
+            ->whereIn('dialog_id', $dialogIds)
+            ->delete();
+
+        BotConstructorExecutionBlockRun::query()
+            ->where(function ($query) use ($dialogIds, $executionIds): void {
+                $query->whereIn('dialog_id', $dialogIds);
+
+                if ($executionIds !== []) {
+                    $query->orWhereIn('bot_constructor_execution_id', $executionIds);
+                }
+            })
+            ->delete();
+
+        BotConstructorArrowRun::query()
+            ->where(function ($query) use ($dialogIds, $executionIds): void {
+                $query->whereIn('dialog_id', $dialogIds);
+
+                if ($executionIds !== []) {
+                    $query->orWhereIn('bot_constructor_execution_id', $executionIds);
+                }
+            })
+            ->delete();
+
+        while ($executionIds !== []) {
+            $deletableExecutionIds = BotConstructorExecution::query()
+                ->whereIn('id', $executionIds)
+                ->whereNotExists(function ($query) use ($executionIds): void {
+                    $query
+                        ->selectRaw('1')
+                        ->from('bot_constructor_executions as child_executions')
+                        ->whereColumn('child_executions.parent_execution_id', 'bot_constructor_executions.id')
+                        ->whereIn('child_executions.id', $executionIds);
+                })
+                ->pluck('id')
+                ->all();
+
+            if ($deletableExecutionIds === []) {
+                throw new RuntimeException('Unable to delete bot constructor executions for contact dialogs.');
+            }
+
+            BotConstructorExecution::query()
+                ->whereIn('id', $deletableExecutionIds)
+                ->delete();
+
+            $executionIds = array_values(array_diff($executionIds, $deletableExecutionIds));
         }
     }
 
