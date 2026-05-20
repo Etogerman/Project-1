@@ -14,6 +14,7 @@ use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioVersion;
 use App\Models\User;
+use App\Services\Bots\CheckChannelConnectionAction;
 use App\Services\Scenarios\CreateScenarioAction;
 use App\Services\Scenarios\PublishScenarioVersionAction;
 use App\Services\Scenarios\WarmupScenario;
@@ -601,6 +602,54 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertMountedActionModalSee('Не поддерживается')
             ->assertMountedActionModalSee('Webhook')
             ->assertMountedActionModalSee('Проверка подключения для этого типа канала пока не поддерживается');
+    }
+
+    public function test_stale_successful_connection_is_displayed_as_warning_in_table_and_modal(): void
+    {
+        config()->set('app.url', 'https://connector.example');
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Stale Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'bot_token_present' => true,
+            'is_active' => true,
+        ]);
+        $webhookUrl = sprintf('https://connector.example/webhooks/telegram/%d', $channel->id);
+
+        $channel->forceFill([
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now()->subMinutes(3),
+            'connection_error_message' => null,
+            'expected_webhook_url' => $webhookUrl,
+            'provider_webhook_url' => $webhookUrl,
+        ])->saveQuietly();
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableColumnStateSet('health_status', 'Проверка устарела', $channel)
+            ->assertTableColumnStateSet('webhook_secret_status', 'Проверка устарела', $channel)
+            ->assertTableColumnStateSet('connection_error_message', Channel::CONNECTION_ERROR_STALE, $channel)
+            ->mountTableAction('view', $channel)
+            ->assertMountedActionModalSee('Проверка устарела')
+            ->assertMountedActionModalSee(Channel::CONNECTION_ERROR_STALE);
+
+        $connectionState = app(CheckChannelConnectionAction::class)
+            ->resolveEffectiveState($channel->fresh());
+        $statusColorResolver = new ReflectionMethod(ChannelResource::class, 'resolveConnectionStatusColor');
+        $statusColorResolver->setAccessible(true);
+        $webhookColorResolver = new ReflectionMethod(ChannelResource::class, 'resolveLiveWebhookStatusColor');
+        $webhookColorResolver->setAccessible(true);
+
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $connectionState['connection_status']);
+        $this->assertSame('warning', $statusColorResolver->invoke(null, $channel, $connectionState));
+        $this->assertSame('warning', $webhookColorResolver->invoke(null, $channel, $connectionState));
     }
 
     public function test_account_channel_hides_bot_only_edit_and_manage_scenarios_actions(): void

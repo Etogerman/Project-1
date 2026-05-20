@@ -415,13 +415,15 @@ class ChannelResource extends Resource
                     ->toggleable(),
                 TextColumn::make('health_status')
                     ->label('Состояние')
-                    ->state(fn (Channel $record): string => $record->getConnectionStatusLabel(
-                        static::resolveConnectionState($record)['connection_status'],
+                    ->state(fn (Channel $record): string => static::resolveConnectionStatusLabel(
+                        $record,
+                        static::resolveConnectionState($record),
                     ))
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->color(fn (Channel $record): string => $record->getConnectionStatusColor(
-                        static::resolveConnectionState($record)['connection_status'],
+                    ->color(fn (Channel $record): string => static::resolveConnectionStatusColor(
+                        $record,
+                        static::resolveConnectionState($record),
                     ))
                     ->toggleable(),
                 TextColumn::make('platform')
@@ -479,13 +481,15 @@ class ChannelResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('webhook_secret_status')
                     ->label('Webhook')
-                    ->state(fn (Channel $record): string => $record->getLiveWebhookStatusLabel(
-                        static::resolveConnectionState($record)['webhook_status'],
+                    ->state(fn (Channel $record): string => static::resolveLiveWebhookStatusLabel(
+                        $record,
+                        static::resolveConnectionState($record),
                     ))
                     ->badge()
                     ->extraAttributes(['class' => 'ac-channel-table-badge'])
-                    ->color(fn (Channel $record): string => $record->getLiveWebhookStatusColor(
-                        static::resolveConnectionState($record)['webhook_status'],
+                    ->color(fn (Channel $record): string => static::resolveLiveWebhookStatusColor(
+                        $record,
+                        static::resolveConnectionState($record),
                     ))
                     ->toggleable(),
                 TextColumn::make('connection_checked_at')
@@ -1202,6 +1206,63 @@ class ChannelResource extends Resource
     }
 
     /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function resolveConnectionStatusLabel(Channel $record, array $connectionState): string
+    {
+        if (static::isStaleConnectionState($connectionState)) {
+            return 'Проверка устарела';
+        }
+
+        return $record->getConnectionStatusLabel($connectionState['connection_status']);
+    }
+
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function resolveConnectionStatusColor(Channel $record, array $connectionState): string
+    {
+        if (static::isStaleConnectionState($connectionState)) {
+            return 'warning';
+        }
+
+        return $record->getConnectionStatusColor($connectionState['connection_status']);
+    }
+
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function resolveLiveWebhookStatusLabel(Channel $record, array $connectionState): string
+    {
+        if (static::isStaleConnectionState($connectionState)) {
+            return 'Проверка устарела';
+        }
+
+        return $record->getLiveWebhookStatusLabel($connectionState['webhook_status']);
+    }
+
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function resolveLiveWebhookStatusColor(Channel $record, array $connectionState): string
+    {
+        if (static::isStaleConnectionState($connectionState)) {
+            return 'warning';
+        }
+
+        return $record->getLiveWebhookStatusColor($connectionState['webhook_status']);
+    }
+
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function isStaleConnectionState(array $connectionState): bool
+    {
+        return ($connectionState['connection_status'] ?? null) === Channel::CONNECTION_STATUS_CONNECTED
+            && ($connectionState['connection_error_message'] ?? null) === Channel::CONNECTION_ERROR_STALE;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public static function buildChannelViewModalData(Channel $record): array
@@ -1236,7 +1297,7 @@ class ChannelResource extends Resource
                 ],
                 [
                     ['label' => 'Название', 'value' => $formatText($record->name)],
-                    ['label' => 'Состояние', 'value' => $record->getConnectionStatusLabel($connectionState['connection_status']), 'tone' => $record->getConnectionStatusColor($connectionState['connection_status'])],
+                    ['label' => 'Состояние', 'value' => static::resolveConnectionStatusLabel($record, $connectionState), 'tone' => static::resolveConnectionStatusColor($record, $connectionState)],
                     ['label' => 'Включён', 'value' => $record->is_active ? 'Да' : 'Нет', 'tone' => $record->is_active ? 'success' : 'gray'],
                     ['label' => 'Последняя проверка', 'value' => $formatDate($connectionState['connection_checked_at'])],
                     ['label' => 'Ошибка подключения', 'value' => $formatText($connectionState['connection_error_message'], 'Ошибок не было')],
@@ -1245,7 +1306,7 @@ class ChannelResource extends Resource
                 [
                     ['label' => 'Платформа', 'value' => Channel::platformOptions()[$record->platform] ?? $record->platform, 'tone' => 'info'],
                     ['label' => 'Имя бота', 'value' => $record->isBotConnection() ? $formatText($record->bot_name, 'Не загружено') : '—'],
-                    ['label' => 'Webhook', 'value' => $record->getLiveWebhookStatusLabel($connectionState['webhook_status']), 'tone' => $record->getLiveWebhookStatusColor($connectionState['webhook_status'])],
+                    ['label' => 'Webhook', 'value' => static::resolveLiveWebhookStatusLabel($record, $connectionState), 'tone' => static::resolveLiveWebhookStatusColor($record, $connectionState)],
                     ['label' => 'Ожидаемый URL', 'value' => $formatText($connectionState['expected_webhook_url'])],
                 ],
                 [
