@@ -22,7 +22,7 @@ const CANVAS_MIN_WIDTH = 1800;
 const CANVAS_MIN_HEIGHT = 1100;
 const CANVAS_EXPAND_PADDING = 720;
 const DEFAULT_OUTPUT = { id: null, label: 'Дальше', kind: 'default', caption: 'Авто' };
-const MODULE_ORDER = ['start_condition', 'message', 'buttons'];
+const MODULE_ORDER = ['start_condition', 'message', 'buttons', 'ai', 'action'];
 const MATCH_OPTIONS = [
     ['exact_keyword', 'Точный текст'],
     ['contains_text', 'Содержит текст'],
@@ -64,6 +64,54 @@ const EDGE_CONTACT_FIELD_OPTIONS = [
     ['gender', 'Пол', 'any_text'],
     ['age_years', 'Возраст', 'number'],
     ['age_range', 'Возрастной диапазон', 'any_text'],
+];
+const EDGE_CONTACT_CONDITION_FIELD_OPTIONS = [
+    ...EDGE_CONTACT_FIELD_OPTIONS,
+    ['first_name_source', 'Откуда знаем имя', 'any_text'],
+];
+const ACTION_TYPE_WRITE_CONTACT_FIELD = 'write_contact_field';
+const ACTION_TYPE_CHECK_DATA = 'check_data';
+const ACTION_TYPE_EDIT_MESSAGE = 'edit_message';
+const ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS = 'remove_buttons';
+const ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS = 'last_current_run_outbound_with_inline_buttons';
+const ACTION_TARGET_SCOPE_OPTIONS = [
+    ['contact', 'Контакт'],
+    ['dialog', 'Диалог'],
+];
+const ACTION_VALUE_SOURCE_OPTIONS = [
+    ['static_value', 'Заданное значение'],
+    ['ai_data', 'Переменная или результат ИИ'],
+];
+const ACTION_FIELD_VALUE_OPTIONS = {
+    contact: {
+        gender: [
+            ['male', 'Мужской'],
+            ['female', 'Женский'],
+            ['unknown', 'Непонятно'],
+        ],
+        age_range: [
+            ['under_18', 'До 18 лет'],
+            ['18_23', '18 - 23 года'],
+            ['24_29', '24 - 29 лет'],
+            ['30_39', '30 - 39 лет'],
+            ['over_40', 'Больше 40 лет'],
+        ],
+    },
+};
+const ACTION_CHECK_DATA_OUTPUTS = [
+    { id: 'data_found', label: 'Найдено', source: 'action', action_result_id: 'data_found' },
+    { id: 'data_not_found', label: 'Не найдено', source: 'action', action_result_id: 'data_not_found' },
+];
+const ACTION_CHECK_SOURCE_OPTIONS = [
+    ['current_inbound_message', 'Последний ответ клиента'],
+];
+const ACTION_DICTIONARY_OPTIONS = [
+    ['names', 'Имена'],
+];
+const FIRST_NAME_SOURCE_CONDITION_OPTIONS = [
+    ['auto', 'Авто'],
+    ['contact_confirmed', 'Клиент назвал'],
+    ['manual', 'Оператор'],
 ];
 const EDGE_DELAY_UNIT_OPTIONS = [
     ['sec', 'секунды'],
@@ -117,17 +165,134 @@ const BUTTON_COLOR_OPTIONS = [
     ['red', 'Красный', '#ef3d3d'],
     ['green', 'Зелёный', '#43a047'],
 ];
+const DEFAULT_AI_PROMPT = 'Проанализируй данные:\n{{input.client_messages}}\nВыбери ID одного варианта результата.';
+const DEFAULT_AI_RETRY_DELAY_SECONDS = 10;
+const DEFAULT_AI_VARIANTS = [
+    { id: '1', label: 'Имя найдено', delay_seconds: 0 },
+    { id: '2', label: 'Имя не найдено', delay_seconds: DEFAULT_AI_RETRY_DELAY_SECONDS },
+];
+const AI_EXTRACT_FIELD_TYPE_OPTIONS = [
+    ['text', 'Текст'],
+    ['number', 'Число'],
+];
+const DEFAULT_AI_EXTRACT_FIELDS = [
+    {
+        key: 'first_name',
+        label: 'Имя клиента',
+        type: 'text',
+    },
+];
+const AI_PROMPT_VARIABLE_GROUPS = [
+    {
+        title: 'Входящие сообщения',
+        items: [
+            {
+                token: '{{input.current_message}}',
+                label: 'Последнее сообщение клиента',
+                source: 'Сообщение, которое запустило блок ИИ.',
+                type: 'Текст',
+            },
+            {
+                token: '{{input.client_messages}}',
+                label: 'Пакет сообщений клиента',
+                source: 'Все сообщения клиента после предыдущего сообщения бота.',
+                type: 'Текст, несколько строк',
+            },
+        ],
+    },
+    {
+        title: 'Карточка контакта',
+        items: [
+            {
+                token: '{{contact.gender|unknown}}',
+                label: 'Пол',
+                source: 'Поле “Пол” в карточке контакта.',
+                type: 'male / female / unknown',
+            },
+            {
+                token: '{{contact.first_name}}',
+                label: 'Имя',
+                source: 'Поле “Имя” в карточке контакта.',
+                type: 'Текст',
+            },
+            {
+                token: '{{contact.first_name_source}}',
+                label: 'Откуда знаем имя',
+                source: 'Поле “Откуда знаем имя” в карточке контакта.',
+                type: 'auto / contact_confirmed / manual',
+            },
+            {
+                token: '{{contact.phone}}',
+                label: 'Телефон',
+                source: 'Основной телефон из карточки контакта.',
+                type: 'Текст',
+            },
+            {
+                token: '{{contact.last_name}}',
+                label: 'Фамилия',
+                source: 'Поле “Фамилия” в карточке контакта.',
+                type: 'Текст',
+            },
+            {
+                token: '{{contact.country}}',
+                label: 'Страна',
+                source: 'Поле “Страна” в карточке контакта.',
+                type: 'Текст',
+            },
+            {
+                token: '{{contact.city}}',
+                label: 'Город',
+                source: 'Поле “Город” в карточке контакта.',
+                type: 'Текст',
+            },
+            {
+                token: '{{contact.age_years}}',
+                label: 'Возраст',
+                source: 'Поле “Возраст” в карточке контакта.',
+                type: 'Число',
+            },
+            {
+                token: '{{contact.age_range}}',
+                label: 'Возрастной диапазон',
+                source: 'Поле “Возрастной диапазон” в карточке контакта.',
+                type: 'under_18 / 18_23 / 24_29 / 30_39 / over_40',
+            },
+        ],
+    },
+    {
+        title: 'Карточка диалога',
+        items: [
+            {
+                token: '{{dialog.selected_gender}}',
+                label: 'Поле диалога',
+                source: 'Любое поле, которое было записано в карточку диалога действием.',
+                type: 'Текст',
+            },
+        ],
+    },
+    {
+        title: 'Переменные сценария',
+        items: [
+            {
+                token: '{{variables.first_name}}',
+                label: 'Переменная сценария',
+                source: 'Данные, которые записал предыдущий блок проверки данных или ИИ.',
+                type: 'Текст или число',
+            },
+        ],
+    },
+];
 
 const MODULE_META = {
     start_condition: { label: 'Старт', short: 'ST', className: 'is-start' },
     message: { label: 'Сообщение', short: 'MSG', className: 'is-message' },
     buttons: { label: 'Кнопки', short: 'BTN', className: 'is-buttons' },
+    ai: { label: 'ИИ-анализ', short: 'AI', className: 'is-ai' },
+    action: { label: 'Действие', short: 'ACT', className: 'is-action' },
 };
 
 const FUTURE_MODULE_META = [
     { type: 'attachment', label: 'Вложение' },
-    { type: 'ai', label: 'AI' },
-    { type: 'bot', label: 'Бот' },
     { type: 'code', label: 'Код' },
     { type: 'cloud', label: 'Интеграция' },
     { type: 'analytics', label: 'Аналитика' },
@@ -163,6 +328,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const [pendingButtonFocus, setPendingButtonFocus] = useState(null);
     const [pendingConnection, setPendingConnection] = useState(null);
     const [pendingPublishWarning, setPendingPublishWarning] = useState(null);
+    const [rewireTargetKey, setRewireTargetKey] = useState(null);
     const [anchors, setAnchors] = useState({ ports: {} });
     const [panelWidth, setPanelWidth] = useState(() => storedPanelWidth());
 
@@ -360,13 +526,23 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         setSelectedBlockKey(clientKey);
         setSelectedEdgeKey(null);
         setIsPanelCollapsed(false);
+        setRewireTargetKey(null);
         cancelConnection();
+    }
+
+    function selectEdge(clientKey, { openPanel = false } = {}) {
+        setSelectedEdgeKey(clientKey);
+        setSelectedBlockKey(null);
+        setIsPanelCollapsed(! openPanel);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
     }
 
     function closePanelSelection() {
         setSelectedBlockKey(null);
         setSelectedEdgeKey(null);
         setIsPanelCollapsed(false);
+        setRewireTargetKey(null);
     }
 
     function collapsePanel() {
@@ -403,8 +579,42 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             block.settings_payload = buttonsSettingsPayload();
         }
 
+        if (kind === 'ai') {
+            block.title = `ИИ-анализ ${index}`;
+            block.settings_payload = aiSettingsPayload();
+        }
+
         updateBlocks([...blocks, block]);
         selectBlock(clientKey);
+    }
+
+    function duplicateBlock(clientKey) {
+        const sourceBlock = blocks.find((block) => block.client_key === clientKey);
+
+        if (! sourceBlock) {
+            return;
+        }
+
+        const index = blocks.length + 1;
+        const duplicateKey = `tmp_block_${Date.now().toString(36)}_${index}`;
+        const sourcePosition = blockPosition(sourceBlock);
+        const settingsPayload = cloneBlockSettingsForCopy(sourceBlock.settings_payload);
+        const duplicate = {
+            ...sourceBlock,
+            id: null,
+            display_id: null,
+            client_key: duplicateKey,
+            title: `${sourceBlock.title || `Блок ${index}`} копия`,
+            position: {
+                x: snap(sourcePosition.x + 42),
+                y: snap(sourcePosition.y + 42),
+            },
+            settings_payload: settingsPayload,
+        };
+
+        updateBlocks([...blocks, duplicate]);
+        selectBlock(duplicateKey);
+        setNotice('Блок скопирован');
     }
 
     function updateBlock(clientKey, patch) {
@@ -428,6 +638,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         setSelectedEdgeKey(null);
         setIsPanelCollapsed(false);
         cancelConnection();
+        setNotice('Блок удалён');
     }
 
     function startBlockDrag(event, clientKey) {
@@ -469,7 +680,30 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         setSelectedBlockKey(null);
         setSelectedEdgeKey(null);
         setIsPanelCollapsed(false);
+        setRewireTargetKey(null);
 
+        window.addEventListener('pointermove', handleGlobalPointerMove);
+        window.addEventListener('pointerup', stopGlobalDrag, { once: true });
+    }
+
+    function startEdgeRewire(event, edgeKey, endpoint) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const edge = edges.find((item) => item.client_key === edgeKey);
+
+        if (! edge) {
+            return;
+        }
+
+        dragRef.current = {
+            type: 'edge-rewire',
+            edgeKey,
+            endpoint,
+        };
+
+        selectEdge(edgeKey);
+        setNotice(null);
         window.addEventListener('pointermove', handleGlobalPointerMove);
         window.addEventListener('pointerup', stopGlobalDrag, { once: true });
     }
@@ -535,6 +769,15 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             return;
         }
 
+        if (drag.type === 'edge-rewire') {
+            const targetBlock = blockAtPointer(event);
+
+            setRewireTargetKey(targetBlock?.client_key ?? null);
+            event.preventDefault();
+
+            return;
+        }
+
         updateView({
             ...drag.origin,
             tx: Math.round(drag.origin.tx + event.clientX - drag.start.x),
@@ -542,10 +785,123 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         });
     }
 
-    function stopGlobalDrag() {
+    function stopGlobalDrag(event) {
+        const drag = dragRef.current;
+
+        if (drag?.type === 'edge-rewire') {
+            finishEdgeRewire(drag, event);
+        }
+
         dragRef.current = null;
+        setRewireTargetKey(null);
         window.removeEventListener('pointermove', handleGlobalPointerMove);
         document.body.classList.remove('ac-v3-builder-is-resizing-panel');
+    }
+
+    function worldPointFromEvent(event) {
+        const rect = canvasRef.current?.getBoundingClientRect();
+
+        if (! rect) {
+            return null;
+        }
+
+        return {
+            x: (event.clientX - rect.left - view.tx) / view.zoom,
+            y: (event.clientY - rect.top - view.ty) / view.zoom,
+        };
+    }
+
+    function blockAtPointer(event) {
+        const point = worldPointFromEvent(event);
+
+        if (! point) {
+            return null;
+        }
+
+        const hit = blocks.find((block) => {
+            const rect = anchors.nodes?.[block.client_key];
+
+            if (rect) {
+                return point.x >= rect.x
+                    && point.x <= rect.x + rect.width
+                    && point.y >= rect.y
+                    && point.y <= rect.y + rect.height;
+            }
+
+            const position = blockPosition(block);
+
+            return point.x >= position.x
+                && point.x <= position.x + NODE_WIDTH
+                && point.y >= position.y
+                && point.y <= position.y + 220;
+        });
+
+        return hit ?? null;
+    }
+
+    function finishEdgeRewire(drag, event) {
+        const edge = edges.find((item) => item.client_key === drag.edgeKey);
+        const block = blockAtPointer(event);
+
+        if (! edge || ! block) {
+            return;
+        }
+
+        if (drag.endpoint === 'target') {
+            if (block.client_key === edge.source?.client_key) {
+                setNotice('Конец стрелки нельзя привязать к её начальному блоку.');
+
+                return;
+            }
+
+            updateEdges((currentEdges) => currentEdges.map((item) => (
+                item.client_key === edge.client_key
+                    ? {
+                        ...item,
+                        target: {
+                            block_id: block.id,
+                            client_key: block.client_key,
+                        },
+                    }
+                    : item
+            )));
+            selectEdge(edge.client_key);
+
+            return;
+        }
+
+        if (block.client_key === edge.target?.client_key) {
+            setNotice('Начало стрелки нельзя привязать к её конечному блоку.');
+
+            return;
+        }
+
+        const outputId = edge.source?.output_id ?? null;
+
+        if (outputId !== null && ! blockOutputs(block).some((output) => output.id === outputId)) {
+            setNotice('У выбранного блока нет такого выхода. Перенесите начало стрелки на подходящий вариант.');
+
+            return;
+        }
+
+        const source = {
+            block_id: block.id,
+            client_key: block.client_key,
+            output_id: outputId,
+        };
+
+        updateEdges((currentEdges) => currentEdges
+            .filter((item) => (
+                item.client_key === edge.client_key
+                || outputId === null
+                || ! sameSource(item.source, source)
+            ))
+            .map((item) => (
+                item.client_key === edge.client_key
+                    ? { ...item, source }
+                    : item
+            )));
+        selectEdge(edge.client_key);
     }
 
     function handleWheel(event) {
@@ -648,7 +1004,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             client_key: `tmp_edge_${Date.now().toString(36)}`,
             source,
             target,
-            condition_payload: edgePayload(connection.outputId, connection.label),
+            condition_payload: edgePayload(connection.outputId, connection.label, connection.kind),
         };
 
         updateEdges((currentEdges) => [
@@ -694,7 +1050,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             let modules = modulesFrom(settings);
 
             if (enabled && ! modules.some((module) => module.type === type)) {
-                modules = [...modules, moduleTemplate(type, channels)];
+                modules = [...modules, moduleTemplate(type, channels, blocks, clientKey)];
             }
 
             if (! enabled) {
@@ -717,23 +1073,86 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 next = syncOutputs(next);
             }
 
+            if (type === 'ai' || type === 'action') {
+                next = syncOutputs(next);
+            }
+
             return next;
         });
 
         if (type === 'buttons' && ! enabled) {
             updateEdges(edges.filter((edge) => ! edge.source?.output_id || edge.source?.client_key !== clientKey));
         }
+
+        if (type === 'ai' && ! enabled) {
+            const currentBlock = blocks.find((block) => block.client_key === clientKey);
+            const currentAi = findModule(currentBlock?.settings_payload, 'ai');
+            const aiOutputIds = new Set(aiVariantDefinitions(currentAi).map((output) => output.id));
+
+            updateEdges(edges.filter((edge) => (
+                edge.source?.client_key !== clientKey
+                || ! aiOutputIds.has(edge.source?.output_id)
+            )));
+        }
+
+        if (type === 'action' && ! enabled) {
+            const actionOutputIds = new Set(ACTION_CHECK_DATA_OUTPUTS.map((output) => output.id));
+
+            updateEdges(edges.filter((edge) => (
+                edge.source?.client_key !== clientKey
+                || ! actionOutputIds.has(edge.source?.output_id)
+            )));
+        }
     }
 
     function updateModulePayload(clientKey, type, patch) {
-        updateBlockSettings(clientKey, (settings) => ({
-            ...settings,
-            modules: sortModules(modulesFrom(settings).map((module) => (
-                module.type === type
-                    ? { ...module, payload: { ...module.payload, ...patch } }
-                    : module
-            ))),
-        }));
+        updateBlockSettings(clientKey, (settings) => {
+            const next = {
+                ...settings,
+                modules: sortModules(modulesFrom(settings).map((module) => (
+                    module.type === type
+                        ? { ...module, payload: { ...module.payload, ...patch } }
+                        : module
+                ))),
+            };
+
+            return (type === 'ai' || type === 'action') ? syncOutputs(next) : next;
+        });
+
+        if (type === 'ai' && Array.isArray(patch.variants)) {
+            updateEdges(edges.map((edge) => {
+                if (edge.source?.client_key !== clientKey || ! edge.source?.output_id) {
+                    return edge;
+                }
+
+                const variant = patch.variants.find((item) => item.id === edge.source.output_id);
+
+                if (! variant) {
+                    return edge;
+                }
+
+                return {
+                    ...edge,
+                    condition_payload: {
+                        ...edge.condition_payload,
+                        label: variant.label,
+                    },
+                };
+            }));
+        }
+
+        if (type === 'action' && Array.isArray(patch.actions)) {
+            const hasCheckData = patch.actions.some((item) => item?.type === ACTION_TYPE_CHECK_DATA);
+            const actionOutputIds = new Set(ACTION_CHECK_DATA_OUTPUTS.map((output) => output.id));
+
+            if (! hasCheckData) {
+                updateEdges(edges.filter((edge) => (
+                    edge.source?.client_key !== clientKey
+                    || ! actionOutputIds.has(edge.source?.output_id)
+                )));
+            }
+        }
+
     }
 
     function addButton(clientKey, rowIndex = null) {
@@ -876,6 +1295,34 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }));
 
         updateEdges(edges.filter((edge) => edge.source?.client_key !== clientKey || edge.source?.output_id !== buttonId));
+    }
+
+    function removeAiVariant(clientKey, variantId) {
+        updateBlockSettings(clientKey, (settings) => {
+            const ai = findModule(settings, 'ai');
+            const variants = aiVariantDefinitions(ai);
+
+            if (variants.length <= 1) {
+                return settings;
+            }
+
+            return syncOutputs({
+                ...settings,
+                modules: sortModules(modulesFrom(settings).map((module) => (
+                    module.type === 'ai'
+                        ? {
+                            ...module,
+                            payload: {
+                                ...module.payload,
+                                variants: variants.filter((variant) => variant.id !== variantId),
+                            },
+                        }
+                        : module
+                ))),
+            });
+        });
+
+        updateEdges(edges.filter((edge) => edge.source?.client_key !== clientKey || edge.source?.output_id !== variantId));
     }
 
     function updateStartChannels(clientKey, channelId, checked) {
@@ -1280,6 +1727,9 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                     <marker id="ac-v3-arrow-auto" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                                         <path d="M 0 0 L 10 5 L 0 10 z" />
                                     </marker>
+                                    <marker id="ac-v3-arrow-ai" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M 0 0 L 10 5 L 0 10 z" />
+                                    </marker>
                                     <marker id="ac-v3-arrow-selected" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                                         <path d="M 0 0 L 10 5 L 0 10 z" />
                                     </marker>
@@ -1291,12 +1741,9 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                         blocks={blocks}
                                         anchors={anchors}
                                         selected={edge.client_key === selectedEdgeKey}
-                                        onSelect={() => {
-                                            setSelectedEdgeKey(edge.client_key);
-                                            setSelectedBlockKey(null);
-                                            setIsPanelCollapsed(false);
-                                            setPendingConnection(null);
-                                        }}
+                                        onSelect={() => selectEdge(edge.client_key)}
+                                        onOpenSettings={() => selectEdge(edge.client_key, { openPanel: true })}
+                                        onStartRewire={(event, endpoint) => startEdgeRewire(event, edge.client_key, endpoint)}
                                     />
                                 ))}
                             </svg>
@@ -1312,11 +1759,14 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                     block={block}
                                     selected={block.client_key === selectedBlockKey}
                                     pendingTarget={pendingConnection !== null && block.client_key !== pendingConnection.sourceKey}
+                                    rewireTarget={rewireTargetKey === block.client_key}
                                     connectedOutputIds={connectedOutputIds(block, edges)}
                                     onSelect={() => completeConnection(block)}
                                     onDragStart={(event) => startBlockDrag(event, block.client_key)}
                                     onStartConnection={startConnection}
                                     onStartDefaultConnection={() => startPanelConnection(block, DEFAULT_OUTPUT)}
+                                    onDuplicate={() => duplicateBlock(block.client_key)}
+                                    onRemove={() => removeBlock(block.client_key)}
                                 />
                             ))}
                         </div>
@@ -1374,6 +1824,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                                 onUpdateButton={updateButton}
                                 onReorderButtons={reorderButtons}
                                 onRemoveButton={removeButton}
+                                onRemoveAiVariant={removeAiVariant}
                                 onUpdateStartChannels={updateStartChannels}
                                 validationIssue={validationIssue}
                                 pendingButtonFocus={pendingButtonFocus}
@@ -1613,6 +2064,9 @@ function ToolRail({ tool, onTool, onAddBlock }) {
             <button type="button" title="Создать блок с кнопками" onClick={() => onAddBlock('buttons')}>
                 <ButtonIcon />
             </button>
+            <button type="button" title="Создать ИИ-анализ" onClick={() => onAddBlock('ai')}>
+                <SparkleIcon />
+            </button>
         </aside>
     );
 }
@@ -1621,16 +2075,21 @@ function ScenarioNode({
     block,
     selected,
     pendingTarget,
+    rewireTarget,
     connectedOutputIds,
     onSelect,
     onDragStart,
     onStartConnection,
     onStartDefaultConnection,
+    onDuplicate,
+    onRemove,
 }) {
     const visibleOutputs = visibleBlockOutputs(block);
     const start = findModule(block.settings_payload, 'start_condition');
     const message = findModule(block.settings_payload, 'message');
     const buttons = findModule(block.settings_payload, 'buttons');
+    const ai = findModule(block.settings_payload, 'ai');
+    const action = findModule(block.settings_payload, 'action');
     const position = blockPosition(block);
     const modules = modulesFrom(block.settings_payload);
     const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
@@ -1643,6 +2102,7 @@ function ScenarioNode({
                 'ac-v3-builder__node',
                 selected ? 'is-selected' : '',
                 pendingTarget ? 'is-targetable' : '',
+                rewireTarget ? 'is-rewire-target' : '',
                 start ? 'has-start' : '',
                 blockKind === 'non_state' ? 'is-non-state' : 'is-state',
             ].filter(Boolean).join(' ')}
@@ -1662,6 +2122,29 @@ function ScenarioNode({
                     >
                         <LinkIcon />
                         <span>Связать</span>
+                    </button>
+                    <button
+                        type="button"
+                        title="Копировать блок"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onDuplicate();
+                        }}
+                    >
+                        <CopyIcon />
+                        <span>Копировать</span>
+                    </button>
+                    <button
+                        type="button"
+                        className="is-danger"
+                        title="Удалить блок"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onRemove();
+                        }}
+                    >
+                        <TrashIcon />
+                        <span>Удалить</span>
                     </button>
                 </div>
             ) : null}
@@ -1695,6 +2178,12 @@ function ScenarioNode({
                 {buttons ? (
                     <ModulePreview type="buttons" label="Кнопки" value={`${flatButtons(buttons).length} шт.`} />
                 ) : null}
+                {ai ? (
+                    <ModulePreview type="ai" label="ИИ" value={aiSummary(ai)} />
+                ) : null}
+                {action ? (
+                    <ModulePreview type="action" label="Действие" value={actionSummary(action)} />
+                ) : null}
             </div>
 
             {visibleOutputs.length > 0 ? (
@@ -1707,15 +2196,18 @@ function ScenarioNode({
                                 connectedOutputIds.has(output.id ?? 'default') ? 'is-connected' : '',
                                 output.kind === 'default' ? 'is-default-output' : 'is-button-output',
                             ].filter(Boolean).join(' ')}
-                            title={output.kind === 'default' ? 'Связать автопереход с блоком' : 'Связать кнопку с блоком'}
+                            title={output.kind === 'default'
+                                ? 'Связать автопереход с блоком'
+                                : (output.kind === 'ai' ? 'Связать результат ИИ с блоком' : 'Связать кнопку с блоком')}
                             onPointerDown={(event) => onStartConnection(event, block, output)}
                             onClick={(event) => event.stopPropagation()}
                         >
+                            <i className="is-left" data-port-key={portAnchorKey(block.client_key, output.id, 'left')} />
                             <span>
                                 <strong>{output.label}</strong>
                                 {output.caption ? <em>{output.caption}</em> : null}
                             </span>
-                            <i data-port-key={portAnchorKey(block.client_key, output.id)} />
+                            <i className="is-right" data-port-key={portAnchorKey(block.client_key, output.id, 'right')} />
                         </button>
                     ))}
                 </div>
@@ -1733,7 +2225,7 @@ function ModulePreview({ type, label, value }) {
     );
 }
 
-function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
+function EdgePath({ edge, blocks, anchors, selected, onSelect, onOpenSettings, onStartRewire }) {
     const sourceBlock = blocks.find((block) => block.client_key === edge.source?.client_key);
     const targetBlock = blocks.find((block) => block.client_key === edge.target?.client_key);
 
@@ -1761,11 +2253,42 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect }) {
             <path data-edge-action d={d} className="ac-v3-builder__edge-hit" onClick={onSelect} />
             {selected ? <path d={d} className="ac-v3-builder__edge-selection" /> : null}
             <path d={d} className="ac-v3-builder__edge" markerEnd={`url(#${markerId})`} />
-            {! isButton ? (
+            {selected ? (
+                <>
+                    <circle
+                        data-edge-action
+                        cx={source.x}
+                        cy={source.y}
+                        r="8"
+                        className="ac-v3-builder__edge-endpoint is-source"
+                        onPointerDown={(event) => onStartRewire(event, 'source')}
+                    />
+                    <circle
+                        data-edge-action
+                        cx={target.x}
+                        cy={target.y}
+                        r="8"
+                        className="ac-v3-builder__edge-endpoint is-target"
+                        onPointerDown={(event) => onStartRewire(event, 'target')}
+                    />
+                    <g
+                        data-edge-action
+                        className="ac-v3-builder__edge-gear"
+                        transform={`translate(${labelPoint.x} ${labelPoint.y})`}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onOpenSettings();
+                        }}
+                    >
+                        <circle r="14" />
+                        <text textAnchor="middle" dominantBaseline="central">⚙</text>
+                    </g>
+                </>
+            ) : ! isButton ? (
                 <circle
                     cx={source.x}
                     cy={source.y}
-                    r={selected ? 5 : 4}
+                    r="4"
                     className="ac-v3-builder__edge-source-dot"
                 />
             ) : null}
@@ -1791,13 +2314,14 @@ function edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors) {
         return nearestBlockSideAnchor(sourceBlock, blockCenter(targetBlock, anchors), anchors);
     }
 
-    const portAnchor = anchors.ports[portAnchorKey(sourceBlock.client_key, outputId)];
+    const side = blockCenter(targetBlock, anchors).x < blockCenter(sourceBlock, anchors).x ? 'left' : 'right';
+    const portAnchor = anchors.ports[portAnchorKey(sourceBlock.client_key, outputId, side)];
 
     if (portAnchor) {
-        return { ...portAnchor, side: 'right' };
+        return { ...portAnchor, side };
     }
 
-    return outputAnchor(sourceBlock, outputId);
+    return outputAnchor(sourceBlock, outputId, side);
 }
 
 function edgeTargetAnchor(targetBlock, source, anchors) {
@@ -1873,7 +2397,17 @@ function shiftAnchorOutside(anchor, distance) {
 }
 
 function isButtonEdge(edge) {
-    return Boolean(edge?.source?.output_id ?? edge?.condition_payload?.from_output_id);
+    return Boolean(edge?.source?.output_id ?? edge?.condition_payload?.from_output_id)
+        && ! isAiEdge(edge)
+        && ! isActionResultEdge(edge);
+}
+
+function isAiEdge(edge) {
+    return edge?.condition_payload?.mode === 'ai_analysis';
+}
+
+function isActionResultEdge(edge) {
+    return edge?.condition_payload?.mode === 'action_result';
 }
 
 function isDefaultEdge(edge) {
@@ -1881,6 +2415,10 @@ function isDefaultEdge(edge) {
 }
 
 function edgeVisualKind(edge) {
+    if (isAiEdge(edge)) {
+        return 'ai';
+    }
+
     if (isButtonEdge(edge)) {
         return 'button';
     }
@@ -1891,6 +2429,10 @@ function edgeVisualKind(edge) {
 function edgeVisualTitle(kind) {
     if (kind === 'button') {
         return 'Связь от кнопки';
+    }
+
+    if (kind === 'ai') {
+        return 'Связь от ИИ-анализа';
     }
 
     if (kind === 'auto') {
@@ -2087,6 +2629,26 @@ function blockDisplayId(block) {
     return String(block?.display_id ?? block?.settings_payload?.ui?.card_id ?? '').trim();
 }
 
+function cloneBlockSettingsForCopy(settingsPayload) {
+    const payload = clonePlainObject(settingsPayload ?? {});
+    const ui = payload.ui && typeof payload.ui === 'object' ? payload.ui : {};
+
+    payload.ui = {
+        ...ui,
+        card_id: '',
+    };
+
+    return payload;
+}
+
+function clonePlainObject(value) {
+    if (typeof structuredClone === 'function') {
+        return structuredClone(value);
+    }
+
+    return JSON.parse(JSON.stringify(value));
+}
+
 async function copyTextToClipboard(text) {
     if (window.navigator?.clipboard?.writeText) {
         try {
@@ -2131,6 +2693,7 @@ function BlockPanel({
     onUpdateButton,
     onReorderButtons,
     onRemoveButton,
+    onRemoveAiVariant,
     onUpdateStartChannels,
     validationIssue,
     pendingButtonFocus,
@@ -2162,6 +2725,8 @@ function BlockPanel({
     const start = findModule(block.settings_payload, 'start_condition');
     const message = findModule(block.settings_payload, 'message');
     const buttons = findModule(block.settings_payload, 'buttons');
+    const ai = findModule(block.settings_payload, 'ai');
+    const action = findModule(block.settings_payload, 'action');
     const startChannels = start?.payload?.channels?.ids ?? [];
     const buttonsSummary = buttons ? buttonSummary(buttons) : '';
     const activeModules = modulesFrom(block.settings_payload).length;
@@ -2268,6 +2833,16 @@ function BlockPanel({
                         checked={Boolean(buttons)}
                         onChange={(checked) => onToggleModule(block.client_key, 'buttons', checked)}
                     />
+                    <ModuleSwitch
+                        type="ai"
+                        checked={Boolean(ai)}
+                        onChange={(checked) => onToggleModule(block.client_key, 'ai', checked)}
+                    />
+                    <ModuleSwitch
+                        type="action"
+                        checked={Boolean(action)}
+                        onChange={(checked) => onToggleModule(block.client_key, 'action', checked)}
+                    />
                     {FUTURE_MODULE_META.map((module) => (
                         <FutureModuleSlot key={module.type} type={module.type} label={module.label} />
                     ))}
@@ -2299,9 +2874,10 @@ function BlockPanel({
                                     />
                                 ) : null}
                                 {type === 'message' ? (
-                                    <AutoGrowTextarea
-                                        value={message?.payload?.text ?? ''}
-                                        onChange={(event) => onUpdateModulePayload(block.client_key, 'message', { text: event.target.value })}
+                                    <MessageFields
+                                        message={message}
+                                        blockKey={block.client_key}
+                                        onUpdateModulePayload={onUpdateModulePayload}
                                     />
                                 ) : null}
                                 {type === 'buttons' ? (
@@ -2316,6 +2892,21 @@ function BlockPanel({
                                         invalidButtonId={validationIssue?.blockKey === block.client_key ? validationIssue.buttonId : null}
                                         focusButtonId={pendingButtonFocus?.blockKey === block.client_key ? pendingButtonFocus.buttonId : null}
                                         onButtonFocused={onButtonFocused}
+                                    />
+                                ) : null}
+                                {type === 'ai' ? (
+                                    <AiFields
+                                        ai={ai}
+                                        blockKey={block.client_key}
+                                        onUpdateModulePayload={onUpdateModulePayload}
+                                        onRemoveAiVariant={onRemoveAiVariant}
+                                    />
+                                ) : null}
+                                {type === 'action' ? (
+                                    <ActionFields
+                                        action={action}
+                                        blockKey={block.client_key}
+                                        onUpdateModulePayload={onUpdateModulePayload}
                                     />
                                 ) : null}
                             </ModuleConfigCard>
@@ -2564,30 +3155,35 @@ function ButtonsFields({
 
 function ButtonEditDialog({ button, onClose, onSave }) {
     const inputRef = useRef(null);
+    const onCloseRef = useRef(onClose);
     const [text, setText] = useState(button.text ?? '');
     const [type, setType] = useState(BUTTON_TYPE_OPTIONS.some(([value]) => value === button.type) ? button.type : BUTTON_TYPE_TEXT);
     const [url, setUrl] = useState(button.url ?? '');
     const [color, setColor] = useState(button.color ?? null);
 
     useEffect(() => {
-        const input = inputRef.current;
+        onCloseRef.current = onClose;
+    }, [onClose]);
 
-        function focusAndSelectInput() {
+    useEffect(() => {
+        function focusInput() {
             if (! inputRef.current) {
                 return;
             }
 
             const input = inputRef.current;
+            const cursorPosition = input.value.length;
+
             input.focus();
-            input.select();
+            input.setSelectionRange(cursorPosition, cursorPosition);
         }
 
-        focusAndSelectInput();
-        const focusTimer = window.setTimeout(focusAndSelectInput, 0);
+        focusInput();
+        const focusTimer = window.setTimeout(focusInput, 0);
 
         function handleKeyDown(event) {
             if (event.key === 'Escape') {
-                onClose();
+                onCloseRef.current();
             }
         }
 
@@ -2597,7 +3193,7 @@ function ButtonEditDialog({ button, onClose, onSave }) {
             window.clearTimeout(focusTimer);
             document.removeEventListener('keydown', handleKeyDown);
         };
-    }, [onClose]);
+    }, []);
 
     return (
         <div className="ac-v3-builder__dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -2714,6 +3310,526 @@ function pluralRows(count) {
     }
 
     return 'рядов';
+}
+
+function AiFields({ ai, blockKey, onUpdateModulePayload, onRemoveAiVariant }) {
+    const prompt = typeof ai?.payload?.prompt === 'string' ? ai.payload.prompt : DEFAULT_AI_PROMPT;
+    const variants = aiVariantDefinitions(ai);
+    const extractFields = aiExtractFieldDefinitions(ai);
+    const [isVariableHelpOpen, setIsVariableHelpOpen] = useState(false);
+
+    function updateVariant(variantId, patch) {
+        onUpdateModulePayload(blockKey, 'ai', {
+            variants: variants.map((variant) => (
+                variant.id === variantId ? { ...variant, ...patch } : variant
+            )),
+        });
+    }
+
+    function addVariant() {
+        onUpdateModulePayload(blockKey, 'ai', {
+            variants: [
+                ...variants,
+                { id: nextAiVariantId(variants), label: 'Новый вариант' },
+            ],
+        });
+    }
+
+    function removeVariant(variantId) {
+        if (variants.length <= 1) {
+            return;
+        }
+
+        onRemoveAiVariant(blockKey, variantId);
+    }
+
+    function updateExtractField(fieldKey, patch) {
+        onUpdateModulePayload(blockKey, 'ai', {
+            extract_fields: extractFields.map((field) => (
+                field.key === fieldKey ? { ...field, ...patch } : field
+            )),
+        });
+    }
+
+    function addExtractField() {
+        onUpdateModulePayload(blockKey, 'ai', {
+            extract_fields: [
+                ...extractFields,
+                { key: nextAiExtractFieldKey(extractFields), label: 'Новые данные', type: 'text' },
+            ],
+        });
+    }
+
+    function removeExtractField(fieldKey) {
+        onUpdateModulePayload(blockKey, 'ai', {
+            extract_fields: extractFields.filter((field) => field.key !== fieldKey),
+        });
+    }
+
+    return (
+        <>
+            <div className="ac-v3-builder__field">
+                <span className="ac-v3-builder__label-row">
+                    <span>Промт</span>
+                    <button
+                        type="button"
+                        className="ac-v3-builder__inline-help-button"
+                        onClick={() => setIsVariableHelpOpen((value) => ! value)}
+                    >
+                        Переменные
+                    </button>
+                </span>
+                <AutoGrowTextarea
+                    value={prompt}
+                    maxHeight={220}
+                    onChange={(event) => onUpdateModulePayload(blockKey, 'ai', { prompt: event.target.value })}
+                />
+                <p className="ac-v3-builder__field-hint">
+                    Можно подставлять переменные: {'{{contact.gender|unknown}}'}, {'{{input.client_messages}}'}.
+                </p>
+                {isVariableHelpOpen ? (
+                    <div className="ac-v3-builder__ai-variable-popover" aria-label="Переменные промпта ИИ">
+                        <div className="ac-v3-builder__ai-variable-popover-head">
+                            <strong>Переменные промпта</strong>
+                            <button
+                                type="button"
+                                aria-label="Закрыть переменные"
+                                onClick={() => setIsVariableHelpOpen(false)}
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <div className="ac-v3-builder__ai-variable-popover-body">
+                            {AI_PROMPT_VARIABLE_GROUPS.map((group) => (
+                                <div key={group.title} className="ac-v3-builder__ai-variable-group">
+                                    <strong>{group.title}</strong>
+                                    {group.items.map((item) => (
+                                        <div key={item.token} className="ac-v3-builder__ai-variable-row">
+                                            <code>{item.token}</code>
+                                            <span>{item.label}</span>
+                                            <p>{item.source}</p>
+                                            <small>Тип: {item.type}</small>
+                                        </div>
+                                    ))}
+                                </div>
+                            ))}
+                        </div>
+                        <p className="ac-v3-builder__field-hint">
+                            Значение после вертикальной черты используется, если поле пустое: {'{{contact.gender|unknown}}'}.
+                        </p>
+                    </div>
+                ) : null}
+            </div>
+            <div className="ac-v3-builder__ai-outputs">
+                <div className="ac-v3-builder__ai-outputs-head">
+                    <span>Варианты результата</span>
+                    <button type="button" onClick={addVariant}>Добавить</button>
+                </div>
+                {variants.map((variant, index) => (
+                    <div key={variant.id} className="ac-v3-builder__ai-output-row">
+                        <span className="ac-v3-builder__ai-output-id">ID {index + 1}</span>
+                        <input
+                            value={variant.label}
+                            onChange={(event) => updateVariant(variant.id, { label: event.target.value })}
+                        />
+                        <input
+                            type="number"
+                            min="0"
+                            max="300"
+                            title="Сколько секунд ждать перед применением этого результата"
+                            value={Math.max(0, Math.min(300, Math.floor(Number(variant.delay_seconds) || 0)))}
+                            onChange={(event) => updateVariant(variant.id, {
+                                delay_seconds: Math.max(0, Math.min(300, Math.floor(Number(event.target.value) || 0))),
+                            })}
+                        />
+                        <button
+                            type="button"
+                            title="Удалить вариант"
+                            disabled={variants.length <= 1}
+                            onClick={() => removeVariant(variant.id)}
+                        >
+                            ×
+                        </button>
+                    </div>
+                ))}
+            </div>
+            <div className="ac-v3-builder__ai-extract-fields">
+                <div className="ac-v3-builder__ai-outputs-head">
+                    <span>Переменные результата</span>
+                    <button type="button" onClick={addExtractField}>Добавить</button>
+                </div>
+                {extractFields.map((field) => (
+                    <div key={field.key} className="ac-v3-builder__ai-extract-row">
+                        <input
+                            value={field.label}
+                            placeholder="Название"
+                            onChange={(event) => updateExtractField(field.key, { label: event.target.value })}
+                        />
+                        <input
+                            value={field.key}
+                            placeholder="variable_name"
+                            onChange={(event) => updateExtractField(field.key, { key: normalizeAiExtractFieldKey(event.target.value) })}
+                        />
+                        <select
+                            value={field.type}
+                            onChange={(event) => updateExtractField(field.key, { type: event.target.value })}
+                        >
+                            {AI_EXTRACT_FIELD_TYPE_OPTIONS.map(([value, label]) => (
+                                <option key={value} value={value}>{label}</option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            title="Удалить данные"
+                            onClick={() => removeExtractField(field.key)}
+                        >
+                            ×
+                        </button>
+                    </div>
+                ))}
+            </div>
+        </>
+    );
+}
+
+function VariableHelpPopover({ title, ariaLabel, onClose, onInsert = null }) {
+    return (
+        <div className="ac-v3-builder__ai-variable-popover" aria-label={ariaLabel}>
+            <div className="ac-v3-builder__ai-variable-popover-head">
+                <strong>{title}</strong>
+                <button
+                    type="button"
+                    aria-label="Закрыть переменные"
+                    onClick={onClose}
+                >
+                    ×
+                </button>
+            </div>
+            <div className="ac-v3-builder__ai-variable-popover-body">
+                {AI_PROMPT_VARIABLE_GROUPS.map((group) => (
+                    <div key={group.title} className="ac-v3-builder__ai-variable-group">
+                        <strong>{group.title}</strong>
+                        {group.items.map((item) => (
+                            <div key={item.token} className="ac-v3-builder__ai-variable-row">
+                                <code>{item.token}</code>
+                                <span>{item.label}</span>
+                                <p>{item.source}</p>
+                                <small>Тип: {item.type}</small>
+                                {onInsert ? (
+                                    <button
+                                        type="button"
+                                        className="ac-v3-builder__variable-insert-button"
+                                        onClick={() => onInsert(item.token)}
+                                    >
+                                        Вставить
+                                    </button>
+                                ) : null}
+                            </div>
+                        ))}
+                    </div>
+                ))}
+            </div>
+            <p className="ac-v3-builder__field-hint">
+                Значение после вертикальной черты используется, если поле пустое: {'{{contact.gender|unknown}}'}.
+            </p>
+        </div>
+    );
+}
+
+function MessageFields({ message, blockKey, onUpdateModulePayload }) {
+    const [isVariableHelpOpen, setIsVariableHelpOpen] = useState(false);
+    const textareaRef = useRef(null);
+    const text = message?.payload?.text ?? '';
+
+    function updateText(value) {
+        onUpdateModulePayload(blockKey, 'message', { text: value });
+    }
+
+    function insertToken(token) {
+        const input = textareaRef.current;
+        const start = input?.selectionStart ?? text.length;
+        const end = input?.selectionEnd ?? text.length;
+        const nextText = `${text.slice(0, start)}${token}${text.slice(end)}`;
+
+        updateText(nextText);
+
+        requestAnimationFrame(() => {
+            const nextInput = textareaRef.current;
+            const cursorPosition = start + token.length;
+
+            if (! nextInput) {
+                return;
+            }
+
+            nextInput.focus();
+            nextInput.setSelectionRange(cursorPosition, cursorPosition);
+        });
+    }
+
+    return (
+        <div className="ac-v3-builder__field">
+            <span className="ac-v3-builder__label-row">
+                <span>Текст сообщения</span>
+                <button
+                    type="button"
+                    className="ac-v3-builder__inline-help-button"
+                    onClick={() => setIsVariableHelpOpen((value) => ! value)}
+                >
+                    Переменные
+                </button>
+            </span>
+            <AutoGrowTextarea
+                textareaRef={textareaRef}
+                value={text}
+                onChange={(event) => updateText(event.target.value)}
+            />
+            {isVariableHelpOpen ? (
+                <VariableHelpPopover
+                    title="Переменные сообщения"
+                    ariaLabel="Переменные сообщения"
+                    onClose={() => setIsVariableHelpOpen(false)}
+                    onInsert={insertToken}
+                />
+            ) : null}
+        </div>
+    );
+}
+
+function ActionFields({ action, blockKey, onUpdateModulePayload }) {
+    const items = actionItems(action);
+
+    function updateItem(index, patch) {
+        onUpdateModulePayload(blockKey, 'action', {
+            actions: items.map((item, itemIndex) => (
+                itemIndex === index ? { ...item, ...patch } : item
+            )),
+        });
+    }
+
+    function updateChangeDataItem(index, patch) {
+        updateItem(index, normalizeActionItemForType({
+            ...items[index],
+            ...patch,
+        }));
+    }
+
+    function addItem() {
+        onUpdateModulePayload(blockKey, 'action', {
+            actions: [...items, defaultActionItem()],
+        });
+    }
+
+    function removeItem(index) {
+        if (items.length <= 1) {
+            return;
+        }
+
+        onUpdateModulePayload(blockKey, 'action', {
+            actions: items.filter((_, itemIndex) => itemIndex !== index),
+        });
+    }
+
+    return (
+        <div className="ac-v3-builder__action-list">
+            <div className="ac-v3-builder__ai-outputs-head">
+                <span>Что сделать</span>
+                <button type="button" onClick={addItem}>Добавить</button>
+            </div>
+            {items.map((item, index) => (
+                <div key={index} className="ac-v3-builder__action-row">
+                    <label>
+                        <span>Действие</span>
+                        <select
+                            value={item.type}
+                            onChange={(event) => updateItem(index, normalizeActionItemForType({ ...item, type: event.target.value }))}
+                        >
+                            <option value="write_contact_field">Изменить данные</option>
+                            <option value="check_data">Проверить данные</option>
+                            <option value="edit_message">Изменить сообщение</option>
+                        </select>
+                    </label>
+                    {item.type === ACTION_TYPE_EDIT_MESSAGE ? (
+                        <>
+                            <label>
+                                <span>Что изменить</span>
+                                <select
+                                    value={item.target}
+                                    onChange={(event) => updateItem(index, normalizeActionItemForType({
+                                        ...item,
+                                        target: event.target.value,
+                                    }))}
+                                >
+                                    <option value={ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS}>
+                                        Последнее сообщение сценария с кнопками
+                                    </option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>Как изменить</span>
+                                <select
+                                    value={item.operation}
+                                    onChange={(event) => updateItem(index, normalizeActionItemForType({
+                                        ...item,
+                                        operation: event.target.value,
+                                    }))}
+                                >
+                                    <option value={ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS}>Убрать кнопки</option>
+                                </select>
+                            </label>
+                        </>
+                    ) : item.type === ACTION_TYPE_CHECK_DATA ? (
+                        <>
+                            <label>
+                                <span>Что проверяем</span>
+                                <select
+                                    value={item.check_source}
+                                    onChange={(event) => updateItem(index, { check_source: event.target.value })}
+                                >
+                                    {ACTION_CHECK_SOURCE_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label>
+                                <span>Где проверяем</span>
+                                <select
+                                    value={item.dictionary_key}
+                                    onChange={(event) => updateItem(index, { dictionary_key: event.target.value })}
+                                >
+                                    {ACTION_DICTIONARY_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>Справочник: {label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label>
+                                <span>Ищем в поле</span>
+                                <input value="Вариант от клиента" readOnly />
+                            </label>
+                            <label>
+                                <span>Если нашли, взять поле</span>
+                                <input value="Полное имя" readOnly />
+                            </label>
+                            <label>
+                                <span>Записать в переменную</span>
+                                <input
+                                    value={item.target_variable_key}
+                                    placeholder="first_name"
+                                    onChange={(event) => updateItem(index, {
+                                        target_variable_key: normalizeAiExtractFieldKey(event.target.value),
+                                    })}
+                                />
+                            </label>
+                        </>
+                    ) : (
+                        <>
+                            <label>
+                                <span>Где изменить</span>
+                                <select
+                                    value={item.target_scope}
+                                    onChange={(event) => updateChangeDataItem(index, { target_scope: event.target.value })}
+                                >
+                                    {ACTION_TARGET_SCOPE_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            {item.target_scope === 'contact' ? (
+                                <label>
+                                    <span>Поле контакта</span>
+                                    <select
+                                        value={item.target_field}
+                                        onChange={(event) => updateChangeDataItem(index, { target_field: event.target.value })}
+                                    >
+                                        {EDGE_CONTACT_FIELD_OPTIONS.map(([value, label]) => (
+                                            <option key={value} value={value}>{label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                            ) : (
+                                <label>
+                                    <span>Поле диалога</span>
+                                    <input
+                                        value={item.target_field}
+                                        placeholder="name_attempts"
+                                        onChange={(event) => updateChangeDataItem(index, {
+                                            target_field: normalizeDialogFieldKey(event.target.value),
+                                        })}
+                                    />
+                                </label>
+                            )}
+                            <label>
+                                <span>Что записать</span>
+                                <select
+                                    value={item.source_type}
+                                    onChange={(event) => updateChangeDataItem(index, { source_type: event.target.value })}
+                                >
+                                    {ACTION_VALUE_SOURCE_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            {item.source_type === 'static_value' ? (
+                                <ActionStaticValueField
+                                    item={item}
+                                    onChange={(value) => updateChangeDataItem(index, { static_value: value })}
+                                />
+                            ) : (
+                                <label>
+                                    <span>Данные из переменной</span>
+                                    <input
+                                        value={item.source_field_key}
+                                        placeholder="first_name"
+                                        onChange={(event) => updateChangeDataItem(index, {
+                                            source_type: 'ai_data',
+                                            source_block_client_key: '',
+                                            source_block_id: '',
+                                            source_field_key: normalizeAiExtractFieldKey(event.target.value),
+                                        })}
+                                    />
+                                </label>
+                            )}
+                        </>
+                    )}
+                    <button
+                        type="button"
+                        title="Удалить действие"
+                        disabled={items.length <= 1}
+                        onClick={() => removeItem(index)}
+                    >
+                        ×
+                    </button>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function ActionStaticValueField({ item, onChange }) {
+    const options = actionStaticValueOptions(item);
+
+    if (options.length > 0) {
+        return (
+            <label>
+                <span>Значение</span>
+                <select value={item.static_value} onChange={(event) => onChange(event.target.value)}>
+                    {options.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+        );
+    }
+
+    return (
+        <label>
+            <span>Значение</span>
+            <input
+                value={item.static_value}
+                placeholder="Текст"
+                onChange={(event) => onChange(event.target.value)}
+            />
+        </label>
+    );
 }
 
 function StartConditionFields({
@@ -2859,8 +3975,17 @@ function ChevronIcon({ collapsed }) {
     );
 }
 
-function AutoGrowTextarea({ value, maxHeight = 180, className = '', ...props }) {
+function AutoGrowTextarea({ value, maxHeight = 180, className = '', textareaRef = null, ...props }) {
     const ref = useRef(null);
+    const setRef = useCallback((element) => {
+        ref.current = element;
+
+        if (typeof textareaRef === 'function') {
+            textareaRef(element);
+        } else if (textareaRef) {
+            textareaRef.current = element;
+        }
+    }, [textareaRef]);
 
     useLayoutEffect(() => {
         const element = ref.current;
@@ -2877,7 +4002,7 @@ function AutoGrowTextarea({ value, maxHeight = 180, className = '', ...props }) 
     return (
         <textarea
             {...props}
-            ref={ref}
+            ref={setRef}
             rows={1}
             value={value}
             className={['ac-v3-builder__textarea-auto', className].filter(Boolean).join(' ')}
@@ -2942,7 +4067,7 @@ function ModuleIcon({ type }) {
         return <SparkleIcon />;
     }
 
-    if (type === 'bot') {
+    if (type === 'action') {
         return <BotIcon />;
     }
 
@@ -3063,12 +4188,18 @@ function contactCaptureField(fieldKey) {
     return EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === fieldKey) ?? EDGE_CONTACT_FIELD_OPTIONS[0];
 }
 
+function contactConditionField(fieldKey) {
+    return EDGE_CONTACT_CONDITION_FIELD_OPTIONS.find(([value]) => value === fieldKey) ?? EDGE_CONTACT_CONDITION_FIELD_OPTIONS[0];
+}
+
 function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel, dialogFieldKeys }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
+    const isAi = isAiEdge(edge);
+    const isActionResult = isActionResultEdge(edge);
     const isButton = isButtonEdge(edge);
     const payload = edge.condition_payload ?? {};
-    const edgeMode = isButton ? 'button' : (payload.mode === 'automatic' ? 'automatic' : 'wait_reply');
+    const edgeMode = isAi ? 'ai_analysis' : (isActionResult ? 'action_result' : (isButton ? 'button' : (payload.mode === 'automatic' ? 'automatic' : 'wait_reply')));
     const match = payload.match ?? {};
     const capture = payload.input_capture ?? {};
     const fieldCondition = payload.field_condition ?? {};
@@ -3078,7 +4209,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const selectedContactField = contactCaptureField(capture.field_key);
     const fieldConditionEnabled = fieldCondition.enabled === true;
     const fieldConditionScope = fieldCondition.field_scope === 'contact' ? 'contact' : 'dialog';
-    const selectedFieldConditionContactField = contactCaptureField(fieldCondition.field_key);
+    const selectedFieldConditionContactField = contactConditionField(fieldCondition.field_key);
     const fieldConditionOperator = EDGE_FIELD_CONDITION_OPERATOR_OPTIONS.some(([value]) => value === fieldCondition.operator)
         ? fieldCondition.operator
         : 'filled';
@@ -3169,7 +4300,9 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
             </div>
             <section className="ac-v3-builder__module-section">
                 <span>Режим</span>
-                {isButton ? (
+                {isAi ? (
+                    <p className="ac-v3-builder__readonly">Переход по результату ИИ-анализа</p>
+                ) : isButton ? (
                     <p className="ac-v3-builder__readonly">Переход по кнопке</p>
                 ) : (
                     <div className="ac-v3-builder__edge-mode" role="group" aria-label="Режим связи">
@@ -3258,9 +4391,22 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                 <span>Поле контакта</span>
                                 <select
                                     value={selectedFieldConditionContactField[0]}
-                                    onChange={(event) => updateFieldCondition({ field_scope: 'contact', field_key: event.target.value })}
+                                    onChange={(event) => {
+                                        const fieldKey = event.target.value;
+                                        const patch = { field_scope: 'contact', field_key: fieldKey };
+
+                                        if (
+                                            fieldKey === 'first_name_source'
+                                            && ['equals', 'not_equals'].includes(fieldConditionOperator)
+                                            && ! FIRST_NAME_SOURCE_CONDITION_OPTIONS.some(([value]) => value === fieldCondition.value)
+                                        ) {
+                                            patch.value = FIRST_NAME_SOURCE_CONDITION_OPTIONS[0][0];
+                                        }
+
+                                        updateFieldCondition(patch);
+                                    }}
                                 >
-                                    {EDGE_CONTACT_FIELD_OPTIONS.map(([value, label]) => (
+                                    {EDGE_CONTACT_CONDITION_FIELD_OPTIONS.map(([value, label]) => (
                                         <option key={value} value={value}>{label}</option>
                                     ))}
                                 </select>
@@ -3281,14 +4427,42 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                             <span>Проверка</span>
                             <select
                                 value={fieldConditionOperator}
-                                onChange={(event) => updateFieldCondition({ operator: event.target.value })}
+                                onChange={(event) => {
+                                    const operator = event.target.value;
+                                    const patch = { operator };
+
+                                    if (
+                                        fieldConditionScope === 'contact'
+                                        && selectedFieldConditionContactField[0] === 'first_name_source'
+                                        && ['equals', 'not_equals'].includes(operator)
+                                        && ! FIRST_NAME_SOURCE_CONDITION_OPTIONS.some(([value]) => value === fieldCondition.value)
+                                    ) {
+                                        patch.value = FIRST_NAME_SOURCE_CONDITION_OPTIONS[0][0];
+                                    }
+
+                                    updateFieldCondition(patch);
+                                }}
                             >
                                 {EDGE_FIELD_CONDITION_OPERATOR_OPTIONS.map(([value, label]) => (
                                     <option key={value} value={value}>{label}</option>
                                 ))}
                             </select>
                         </label>
-                        {['equals', 'not_equals'].includes(fieldConditionOperator) ? (
+                        {['equals', 'not_equals'].includes(fieldConditionOperator) && fieldConditionScope === 'contact' && selectedFieldConditionContactField[0] === 'first_name_source' ? (
+                            <label>
+                                <span>Значение</span>
+                                <select
+                                    value={FIRST_NAME_SOURCE_CONDITION_OPTIONS.some(([value]) => value === fieldCondition.value)
+                                        ? fieldCondition.value
+                                        : FIRST_NAME_SOURCE_CONDITION_OPTIONS[0][0]}
+                                    onChange={(event) => updateFieldCondition({ value: event.target.value })}
+                                >
+                                    {FIRST_NAME_SOURCE_CONDITION_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        ) : ['equals', 'not_equals'].includes(fieldConditionOperator) ? (
                             <label>
                                 <span>Значение</span>
                                 <input
@@ -3299,7 +4473,20 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         ) : null}
                     </>
                 ) : null}
-                {isButton ? (
+                {isAi ? (
+                    <>
+                        <span>Результат ИИ</span>
+                        <p className="ac-v3-builder__readonly">{edgeLabel(edge, false)}</p>
+                        <label className="ac-v3-builder__field-row">
+                            <span>Приоритет</span>
+                            <input
+                                type="number"
+                                value={payload.priority ?? 10}
+                                onChange={(event) => updatePayload({ priority: Number(event.target.value) })}
+                            />
+                        </label>
+                    </>
+                ) : isButton ? (
                     <>
                         <span>Кнопка</span>
                         <p className="ac-v3-builder__readonly">{edgeLabel(edge, isButton)}</p>
@@ -3674,6 +4861,7 @@ function blockOutputs(block) {
             id: output.id,
             label: output.label || output.id,
             kind: output.source || 'button',
+            caption: output.source === 'ai' ? 'ИИ' : (output.source === 'action' ? 'Действие' : null),
         }));
     }
 
@@ -3695,7 +4883,7 @@ function visibleBlockOutputs(block) {
     return blockOutputs(block).filter((output) => output.id !== null && output.kind !== 'default');
 }
 
-function outputAnchor(block, outputId) {
+function outputAnchor(block, outputId, side = 'right') {
     if (outputId === null) {
         return blockSideAnchor(block, 'right');
     }
@@ -3705,9 +4893,9 @@ function outputAnchor(block, outputId) {
     const index = Math.max(0, outputs.findIndex((output) => output.id === outputId));
 
     return {
-        x: position.x + PORT_DOT_CENTER_X,
+        x: side === 'left' ? position.x - 2 : position.x + PORT_DOT_CENTER_X,
         y: position.y + portsTopOffset(block) + (index * (PORT_ROW_HEIGHT + PORT_ROW_GAP)) + (PORT_ROW_HEIGHT / 2),
-        side: 'right',
+        side,
     };
 }
 
@@ -3881,7 +5069,7 @@ function findModule(settingsPayload, type) {
     return modulesFrom(settingsPayload).find((module) => module.type === type) ?? null;
 }
 
-function moduleTemplate(type, channels) {
+function moduleTemplate(type, channels, blocks = [], currentBlockKey = null) {
     if (type === 'start_condition') {
         return {
             id: 'mod_start',
@@ -3910,6 +5098,31 @@ function moduleTemplate(type, channels) {
             payload: {
                 placement: 'auto',
                 rows: [[{ id: 'btn_1', text: '', type: BUTTON_TYPE_TEXT, fn: 'default', url: null, color: null }]],
+            },
+        };
+    }
+
+    if (type === 'ai') {
+        return {
+            id: 'mod_ai',
+            type,
+            enabled: true,
+            payload: {
+                prompt: DEFAULT_AI_PROMPT,
+                source: 'current_inbound_message',
+                variants: DEFAULT_AI_VARIANTS,
+                extract_fields: DEFAULT_AI_EXTRACT_FIELDS,
+            },
+        };
+    }
+
+    if (type === 'action') {
+        return {
+            id: 'mod_action',
+            type,
+            enabled: true,
+            payload: {
+                actions: [defaultActionItem()],
             },
         };
     }
@@ -3969,6 +5182,13 @@ function buttonsSettingsPayload() {
     });
 }
 
+function aiSettingsPayload() {
+    return syncOutputs({
+        ...messageSettingsPayload(''),
+        modules: [moduleTemplate('ai', [])],
+    });
+}
+
 function sortModules(modules) {
     return [...modules].sort((left, right) => MODULE_ORDER.indexOf(left.type) - MODULE_ORDER.indexOf(right.type));
 }
@@ -3984,6 +5204,38 @@ function buttonSummary(buttonsModule) {
     const total = rows.reduce((sum, row) => sum + row.length, 0);
 
     return total > 0 ? `(${total} / 100 · ${rows.length} ${pluralRows(rows.length)})` : '(0 / 100)';
+}
+
+function actionSummary(actionModule) {
+    const items = actionItems(actionModule, []);
+    const editMessage = items.find((item) => item.type === ACTION_TYPE_EDIT_MESSAGE);
+
+    if (editMessage) {
+        return 'Сообщение → убрать кнопки';
+    }
+
+    const checkData = items.find((item) => item.type === ACTION_TYPE_CHECK_DATA);
+
+    if (checkData) {
+        const dictionary = ACTION_DICTIONARY_OPTIONS.find(([value]) => value === checkData.dictionary_key)?.[1] ?? 'справочник';
+
+        return `${dictionary} → ${checkData.target_variable_key || 'переменная'}`;
+    }
+
+    const changeData = items.find((item) => item.type === ACTION_TYPE_WRITE_CONTACT_FIELD);
+
+    if (changeData) {
+        const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === changeData.target_scope)?.[1] ?? 'Данные';
+        const field = changeData.target_scope === 'contact'
+            ? (EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === changeData.target_field)?.[1] ?? changeData.target_field)
+            : changeData.target_field;
+
+        return `${scope} → ${field}`;
+    }
+
+    const count = items.length;
+
+    return `${count} ${count === 1 ? 'действие' : 'действия'}`;
 }
 
 function normalizeButtonRows(rows) {
@@ -4044,9 +5296,203 @@ function flatButtons(buttonsModule) {
     return buttonRows(buttonsModule).flat();
 }
 
+function aiSummary(aiModule) {
+    const variantsCount = aiVariantDefinitions(aiModule).length;
+
+    return `${variantsCount} ${pluralVariants(variantsCount)}`;
+}
+
+function aiVariantDefinitions(aiModule) {
+    if (! aiModule) {
+        return [];
+    }
+
+    const variants = Array.isArray(aiModule?.payload?.variants) ? aiModule.payload.variants : [];
+    const normalizedVariants = variants
+        .filter((variant) => variant && typeof variant === 'object')
+        .map((variant) => ({
+            id: String(variant.id ?? '').trim(),
+            label: String(variant.label ?? ''),
+            delay_seconds: Math.max(0, Math.min(300, Math.floor(Number(variant.delay_seconds) || 0))),
+        }))
+        .filter((variant) => variant.id !== '');
+
+    return normalizedVariants.length > 0 ? normalizedVariants : DEFAULT_AI_VARIANTS;
+}
+
+function aiExtractFieldDefinitions(aiModule) {
+    if (! aiModule) {
+        return [];
+    }
+
+    const fields = Array.isArray(aiModule?.payload?.extract_fields) ? aiModule.payload.extract_fields : [];
+    const normalizedFields = fields
+        .filter((field) => field && typeof field === 'object')
+        .map((field) => {
+            const type = AI_EXTRACT_FIELD_TYPE_OPTIONS.some(([value]) => value === field.type)
+                ? field.type
+                : 'text';
+
+            return {
+                key: normalizeAiExtractFieldKey(field.key),
+                label: String(field.label ?? ''),
+                type,
+            };
+        })
+        .filter((field) => field.key !== '');
+
+    return normalizedFields.length > 0 ? normalizedFields : DEFAULT_AI_EXTRACT_FIELDS;
+}
+
+function actionItems(actionModule) {
+    const rawItems = Array.isArray(actionModule?.payload?.actions) ? actionModule.payload.actions : [];
+    const normalizedItems = rawItems
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => normalizeActionItemForType(item))
+        .filter((item) => (
+            item.type === ACTION_TYPE_CHECK_DATA
+            || item.type === ACTION_TYPE_EDIT_MESSAGE
+            || item.target_field !== ''
+        ));
+
+    return normalizedItems.length > 0 ? normalizedItems : [defaultActionItem()];
+}
+
+function normalizeActionItemForType(item) {
+    const type = item.type === ACTION_TYPE_CHECK_DATA
+        ? ACTION_TYPE_CHECK_DATA
+        : (item.type === ACTION_TYPE_EDIT_MESSAGE ? ACTION_TYPE_EDIT_MESSAGE : ACTION_TYPE_WRITE_CONTACT_FIELD);
+
+    if (type === ACTION_TYPE_EDIT_MESSAGE) {
+        return {
+            type,
+            operation: item.operation === ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS
+                ? item.operation
+                : ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS,
+            target: item.target === ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS
+                ? item.target
+                : ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS,
+        };
+    }
+
+    if (type === ACTION_TYPE_CHECK_DATA) {
+        const dictionaryKey = ACTION_DICTIONARY_OPTIONS.some(([value]) => value === item.dictionary_key)
+            ? item.dictionary_key
+            : 'names';
+        const checkSource = ACTION_CHECK_SOURCE_OPTIONS.some(([value]) => value === item.check_source)
+            ? item.check_source
+            : 'current_inbound_message';
+
+        return {
+            type,
+            source_type: 'inbound_message',
+            check_source: checkSource,
+            dictionary_key: dictionaryKey,
+            lookup_field: 'lookup_value',
+            result_field: 'result_value',
+            target_variable_key: normalizeAiExtractFieldKey(item.target_variable_key || item.source_field_key || 'first_name'),
+        };
+    }
+
+    const targetScope = ACTION_TARGET_SCOPE_OPTIONS.some(([value]) => value === item.target_scope)
+        ? item.target_scope
+        : 'contact';
+    const targetField = targetScope === 'contact'
+        ? (EDGE_CONTACT_FIELD_OPTIONS.some(([value]) => value === item.target_field) ? item.target_field : 'first_name')
+        : normalizeDialogFieldKey(item.target_field || 'field');
+    const sourceType = ACTION_VALUE_SOURCE_OPTIONS.some(([value]) => value === item.source_type)
+        ? item.source_type
+        : 'ai_data';
+    const normalized = {
+        type,
+        target_scope: targetScope,
+        target_field: targetField,
+        source_type: sourceType,
+        source_block_client_key: String(item.source_block_client_key ?? ''),
+        source_block_id: String(item.source_block_id ?? ''),
+        source_field_key: normalizeAiExtractFieldKey(item.source_field_key ?? item.target_variable_key ?? ''),
+        static_value: String(item.static_value ?? ''),
+    };
+
+    if (sourceType === 'static_value') {
+        const options = actionStaticValueOptions(normalized);
+
+        if (options.length > 0 && ! options.some(([value]) => value === normalized.static_value)) {
+            normalized.static_value = options[0][0];
+        }
+    }
+
+    return normalized;
+}
+
+function defaultActionItem() {
+    return {
+        type: ACTION_TYPE_WRITE_CONTACT_FIELD,
+        target_scope: 'contact',
+        target_field: 'first_name',
+        source_type: 'static_value',
+        source_block_client_key: '',
+        source_block_id: '',
+        source_field_key: '',
+        static_value: '',
+    };
+}
+
+function actionStaticValueOptions(item) {
+    return ACTION_FIELD_VALUE_OPTIONS[item.target_scope]?.[item.target_field] ?? [];
+}
+
+function nextAiVariantId(variants) {
+    const ids = new Set(variants.map((variant) => variant.id));
+    let index = variants.length + 1;
+    let id = String(index);
+
+    while (ids.has(id)) {
+        index += 1;
+        id = String(index);
+    }
+
+    return id;
+}
+
+function normalizeAiExtractFieldKey(value) {
+    const key = String(value ?? '')
+        .trim()
+        .replace(/[^A-Za-z0-9_]/g, '_')
+        .replace(/^[^A-Za-z]+/, '')
+        .slice(0, 64);
+
+    return key;
+}
+
+function nextAiExtractFieldKey(fields) {
+    const keys = new Set(fields.map((field) => field.key));
+    let index = fields.length + 1;
+    let key = `field_${index}`;
+
+    while (keys.has(key)) {
+        index += 1;
+        key = `field_${index}`;
+    }
+
+    return key;
+}
+
+function pluralVariants(count) {
+    if (count === 1) {
+        return 'вариант';
+    }
+
+    if (count >= 2 && count <= 4) {
+        return 'варианта';
+    }
+
+    return 'вариантов';
+}
+
 function syncOutputs(settingsPayload) {
     const buttons = findModule(settingsPayload, 'buttons');
-    const outputs = buttons
+    const buttonOutputs = buttons
         ? flatButtons(buttons)
             .filter((button) => button.type !== BUTTON_TYPE_LINK)
             .map((button) => ({
@@ -4058,10 +5504,27 @@ function syncOutputs(settingsPayload) {
                 button_type: button.type === BUTTON_TYPE_REQUEST_PHONE ? BUTTON_TYPE_REQUEST_PHONE : BUTTON_TYPE_TEXT,
             }))
         : [];
+    const ai = findModule(settingsPayload, 'ai');
+    const aiOutputs = aiVariantDefinitions(ai)
+        .map((output, index) => ({
+            id: output.id,
+            label: output.label,
+            source: 'ai',
+            module_id: ai?.id ?? 'mod_ai',
+            ai_variant_id: output.id,
+            ai_choice_id: String(index + 1),
+        }));
+    const action = findModule(settingsPayload, 'action');
+    const actionOutputs = actionItems(action).some((item) => item.type === ACTION_TYPE_CHECK_DATA)
+        ? ACTION_CHECK_DATA_OUTPUTS.map((output) => ({
+            ...output,
+            module_id: action?.id ?? 'mod_action',
+        }))
+        : [];
 
     return {
         ...settingsPayload,
-        outputs,
+        outputs: [...buttonOutputs, ...aiOutputs, ...actionOutputs],
     };
 }
 
@@ -4141,8 +5604,10 @@ function scheduledIsoFromLocalInput(value) {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-function edgePayload(outputId, label) {
+function edgePayload(outputId, label, kind = null) {
     const isButton = outputId !== null;
+    const isAi = kind === 'ai';
+    const isAction = kind === 'action';
 
     return {
         schema_version: 3,
@@ -4150,7 +5615,7 @@ function edgePayload(outputId, label) {
         edge_key: null,
         from_output_id: outputId,
         label,
-        mode: isButton ? 'button' : 'wait_reply',
+        mode: isAi ? 'ai_analysis' : (isAction ? 'action_result' : (isButton ? 'button' : 'wait_reply')),
         priority: 10,
         transition_limit: 0,
         contact_phone_condition: '',
@@ -4191,8 +5656,8 @@ function sameSource(left, right) {
     return left?.client_key === right?.client_key && (left?.output_id ?? null) === (right?.output_id ?? null);
 }
 
-function portAnchorKey(blockKey, outputId) {
-    return `${blockKey}:${outputId ?? 'default'}`;
+function portAnchorKey(blockKey, outputId, side = 'right') {
+    return `${blockKey}:${outputId ?? 'default'}:${side}`;
 }
 
 function connectedOutputIds(block, edges) {
@@ -4340,6 +5805,14 @@ function CopyIcon() {
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <rect x="5.2" y="4.2" width="6.6" height="7.6" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
             <path d="M4 9.8H3.2C2.5 9.8 2 9.3 2 8.6V3.2C2 2.5 2.5 2 3.2 2h5.2c.7 0 1.2.5 1.2 1.2V4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+    );
+}
+
+function TrashIcon() {
+    return (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3.2 4.5h9.6M6.2 4.5V3.3c0-.5.4-.9.9-.9h1.8c.5 0 .9.4.9.9v1.2M5 6.2l.4 6.1c0 .7.6 1.2 1.3 1.2h2.6c.7 0 1.3-.5 1.3-1.2l.4-6.1" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     );
 }

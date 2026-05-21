@@ -13,17 +13,22 @@ class GeminiApiService
      * @param  array<string, mixed>  $responseJsonSchema
      * @return array<string, mixed>
      */
-    public function generateStructured(string $systemPrompt, string $userPrompt, array $responseJsonSchema): array
-    {
-        $apiKey = $this->apiKey();
-        $model = $this->model();
+    public function generateStructured(
+        string $systemPrompt,
+        string $userPrompt,
+        array $responseJsonSchema,
+        ?array $settings = null,
+    ): array {
+        $apiKey = $this->apiKey($settings);
+        $model = $this->model($settings);
         $url = sprintf(
             '%s/models/%s:generateContent',
-            rtrim((string) config('bots.gemini.base_url', 'https://generativelanguage.googleapis.com/v1beta'), '/'),
+            rtrim($this->baseUrl($settings), '/'),
             $model,
         );
 
         $response = Http::asJson()
+            ->timeout($this->timeoutSeconds($settings))
             ->withHeaders([
                 'x-goog-api-key' => $apiKey,
             ])
@@ -42,10 +47,10 @@ class GeminiApiService
                     ],
                 ],
                 'generationConfig' => [
-                    'temperature' => (float) config('bots.gemini.temperature', 0.2),
-                    'maxOutputTokens' => (int) config('bots.gemini.max_output_tokens', 512),
+                    'temperature' => $this->temperature($settings),
+                    'maxOutputTokens' => $this->maxOutputTokens($settings),
                     'thinkingConfig' => [
-                        'thinkingBudget' => (int) config('bots.gemini.thinking_budget', 0),
+                        'thinkingBudget' => $this->thinkingBudget($settings),
                     ],
                     'responseMimeType' => 'application/json',
                     'responseJsonSchema' => $responseJsonSchema,
@@ -121,9 +126,12 @@ class GeminiApiService
         return $decoded;
     }
 
-    protected function apiKey(): string
+    /**
+     * @param  array<string, mixed>|null  $settings
+     */
+    protected function apiKey(?array $settings = null): string
     {
-        $apiKey = (string) config('bots.gemini.api_key', '');
+        $apiKey = trim((string) data_get($settings, 'api_key', config('bots.gemini.api_key', '')));
 
         if ($apiKey === '') {
             throw new InvalidArgumentException('Gemini API key is not configured.');
@@ -132,15 +140,60 @@ class GeminiApiService
         return $apiKey;
     }
 
-    protected function model(): string
+    /**
+     * @param  array<string, mixed>|null  $settings
+     */
+    protected function model(?array $settings = null): string
     {
-        $model = trim((string) config('bots.gemini.model', 'gemini-2.5-flash'));
+        $model = trim((string) data_get($settings, 'model', config('bots.gemini.model', 'gemini-2.5-flash')));
 
         if ($model === '') {
             throw new InvalidArgumentException('Gemini model is not configured.');
         }
 
         return $model;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $settings
+     */
+    protected function baseUrl(?array $settings = null): string
+    {
+        $baseUrl = trim((string) data_get($settings, 'base_url', config('bots.gemini.base_url', 'https://generativelanguage.googleapis.com/v1beta')));
+
+        return $baseUrl !== '' ? $baseUrl : 'https://generativelanguage.googleapis.com/v1beta';
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $settings
+     */
+    protected function temperature(?array $settings = null): float
+    {
+        return (float) data_get($settings, 'temperature', config('bots.gemini.temperature', 0.2));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $settings
+     */
+    protected function maxOutputTokens(?array $settings = null): int
+    {
+        return max(1, (int) data_get($settings, 'max_output_tokens', config('bots.gemini.max_output_tokens', 512)));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $settings
+     */
+    protected function thinkingBudget(?array $settings = null): int
+    {
+        return (int) data_get($settings, 'thinking_budget', config('bots.gemini.thinking_budget', 0));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $settings
+     */
+    protected function timeoutSeconds(?array $settings = null): int
+    {
+        return max(1, (int) data_get($settings, 'timeout_seconds', 30));
     }
 
     protected function logStructuredFailure(

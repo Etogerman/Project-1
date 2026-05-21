@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Resources\DataDictionaryEntries\DataDictionaryEntryResource;
 use App\Http\Middleware\TrackAdminUserActivity;
 use App\Models\User;
 use Filament\Actions\Action;
@@ -11,6 +12,7 @@ use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use Filament\Navigation\NavigationItem;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
@@ -61,6 +63,14 @@ class AdminPanelProvider extends PanelProvider
                 'Интеграции',
                 'Команда',
                 'Настройки',
+            ])
+            ->navigationItems([
+                NavigationItem::make('Справочники')
+                    ->group('Настройки')
+                    ->icon(Heroicon::OutlinedSquares2x2)
+                    ->url(fn (): string => DataDictionaryEntryResource::getUrl())
+                    ->isActiveWhen(fn (): bool => request()->routeIs('filament.admin.resources.data-dictionary-entries.*'))
+                    ->sort(18),
             ])
             ->userMenuItems([
                 'profile' => fn (Action $action): Action => $action->sort(-2),

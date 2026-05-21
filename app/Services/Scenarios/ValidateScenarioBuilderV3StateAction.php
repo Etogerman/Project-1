@@ -15,7 +15,7 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_EDGES = 200;
 
-    private const MAX_MODULES_PER_BLOCK = 3;
+    private const MAX_MODULES_PER_BLOCK = 5;
 
     private const MAX_BUTTONS_PER_BLOCK = 20;
 
@@ -23,7 +23,34 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_PAYLOAD_BYTES = 1048576;
 
-    private const MODULE_TYPES = ['start_condition', 'message', 'buttons'];
+    private const MODULE_TYPES = ['start_condition', 'message', 'buttons', 'ai', 'action'];
+
+    private const AI_SOURCES = [
+        'current_inbound_message',
+        'inbound_messages_after_previous_bot_message',
+    ];
+
+    private const MAX_AI_VARIANTS = 20;
+
+    private const MAX_AI_EXTRACT_FIELDS = 20;
+
+    private const AI_EXTRACT_FIELD_TYPES = ['text', 'number'];
+
+    private const MAX_AI_VARIANT_DELAY_SECONDS = 300;
+
+    private const MAX_ACTIONS_PER_BLOCK = 20;
+
+    private const ACTION_TYPES = ['write_contact_field', 'check_data', 'edit_message'];
+
+    private const ACTION_SOURCE_TYPES = ['ai_data', 'inbound_message', 'static_value'];
+
+    private const ACTION_CHECK_SOURCES = ['current_inbound_message'];
+
+    private const ACTION_DICTIONARIES = ['names'];
+
+    private const ACTION_EDIT_MESSAGE_OPERATIONS = ['remove_buttons'];
+
+    private const ACTION_EDIT_MESSAGE_TARGETS = ['last_current_run_outbound_with_inline_buttons'];
 
     private const BLOCK_KINDS = ['state', 'non_state'];
 
@@ -52,7 +79,7 @@ class ValidateScenarioBuilderV3StateAction
 
     private const BUTTON_PLACEMENTS = ['auto', 'reply_keyboard', 'inline_message'];
 
-    private const EDGE_MODES = ['wait_reply', 'automatic', 'button'];
+    private const EDGE_MODES = ['wait_reply', 'automatic', 'button', 'ai_analysis', 'action_result'];
 
     private const EDGE_MATCH_TYPES = [
         'any_inbound',
@@ -78,6 +105,18 @@ class ValidateScenarioBuilderV3StateAction
         'gender' => 'any_text',
         'age_years' => 'number',
         'age_range' => 'any_text',
+    ];
+
+    private const EDGE_CONTACT_FIELD_CONDITION_DATA_TYPES = [
+        'phone' => 'phone',
+        'first_name' => 'any_text',
+        'last_name' => 'any_text',
+        'country' => 'any_text',
+        'city' => 'any_text',
+        'gender' => 'any_text',
+        'age_years' => 'number',
+        'age_range' => 'any_text',
+        'first_name_source' => 'any_text',
     ];
 
     private const MAX_TRANSITION_LIMIT = 100000;
@@ -252,6 +291,8 @@ class ValidateScenarioBuilderV3StateAction
             'start_condition' => $this->normalizeStartConditionPayload($payload, $blockIndex, $moduleIndex),
             'message' => $this->normalizeMessagePayload($payload, $blockIndex, $moduleIndex),
             'buttons' => $this->normalizeButtonsPayload($payload, $blockIndex, $moduleIndex),
+            'ai' => $this->normalizeAiPayload($payload, $blockIndex, $moduleIndex),
+            'action' => $this->normalizeActionPayload($payload, $blockIndex, $moduleIndex),
         };
     }
 
@@ -433,6 +474,291 @@ class ValidateScenarioBuilderV3StateAction
         ];
     }
 
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function normalizeAiPayload(array $payload, int $blockIndex, int $moduleIndex): array
+    {
+        $prompt = (string) ($payload['prompt'] ?? '');
+        $source = trim((string) ($payload['source'] ?? 'current_inbound_message'));
+        $variants = $this->normalizeAiVariants($payload['variants'] ?? [], $blockIndex, $moduleIndex);
+        $extractFields = $this->normalizeAiExtractFields($payload['extract_fields'] ?? [], $blockIndex, $moduleIndex);
+
+        if (trim($prompt) === '') {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.prompt", 'AI prompt cannot be empty.');
+        }
+
+        if (mb_strlen($prompt) > self::MAX_MESSAGE_LENGTH) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.prompt", 'AI prompt is too long.');
+        }
+
+        if (! in_array($source, self::AI_SOURCES, true)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.source", 'Unknown AI data source.');
+        }
+
+        return [
+            'prompt' => $prompt,
+            'source' => $source,
+            'variants' => $variants,
+            'extract_fields' => $extractFields,
+        ];
+    }
+
+    private function normalizeAiVariantDelaySeconds(mixed $value, int $blockIndex, int $moduleIndex, int $variantIndex): int
+    {
+        if (! is_numeric($value)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants.$variantIndex.delay_seconds", 'AI variant delay seconds must be numeric.');
+        }
+
+        $seconds = (int) $value;
+
+        if ($seconds < 0 || $seconds > self::MAX_AI_VARIANT_DELAY_SECONDS) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants.$variantIndex.delay_seconds", 'AI variant delay seconds is out of range.');
+        }
+
+        return $seconds;
+    }
+
+    /**
+     * @return list<array{id: string, label: string}>
+     */
+    private function normalizeAiVariants(mixed $variants, int $blockIndex, int $moduleIndex): array
+    {
+        if (! is_array($variants) || ! array_is_list($variants)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants", 'AI variants must be a list.');
+        }
+
+        if ($variants === []) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants", 'AI needs at least one result variant.');
+        }
+
+        if (count($variants) > self::MAX_AI_VARIANTS) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants", 'Too many AI result variants.');
+        }
+
+        $ids = [];
+        $normalized = [];
+
+        foreach ($variants as $variantIndex => $variant) {
+            $variant = $this->arrayValue($variant, "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants.$variantIndex");
+            $id = $this->stringValue($variant['id'] ?? null, "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants.$variantIndex.id");
+            $label = trim((string) ($variant['label'] ?? ''));
+
+            if (strlen($id) > 64 || ! preg_match('/^[A-Za-z0-9_-]+$/', $id)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants.$variantIndex.id", 'Invalid AI variant id.');
+            }
+
+            if (isset($ids[$id])) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants.$variantIndex.id", 'AI variant id must be unique.');
+            }
+
+            if ($label === '') {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants.$variantIndex.label", 'AI variant label cannot be empty.');
+            }
+
+            if (mb_strlen($label) > 255) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variants.$variantIndex.label", 'AI variant label is too long.');
+            }
+
+            $ids[$id] = true;
+            $normalized[] = [
+                'id' => $id,
+                'label' => $label,
+                'delay_seconds' => $this->normalizeAiVariantDelaySeconds(
+                    $variant['delay_seconds'] ?? 0,
+                    $blockIndex,
+                    $moduleIndex,
+                    $variantIndex,
+                ),
+            ];
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return list<array{key: string, label: string, type: string}>
+     */
+    private function normalizeAiExtractFields(mixed $fields, int $blockIndex, int $moduleIndex): array
+    {
+        if ($fields === null) {
+            return [];
+        }
+
+        if (! is_array($fields) || ! array_is_list($fields)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields", 'AI extract fields must be a list.');
+        }
+
+        if (count($fields) > self::MAX_AI_EXTRACT_FIELDS) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields", 'Too many AI extract fields.');
+        }
+
+        $keys = [];
+        $normalized = [];
+
+        foreach ($fields as $fieldIndex => $field) {
+            $field = $this->arrayValue($field, "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields.$fieldIndex");
+            $key = $this->stringValue($field['key'] ?? null, "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields.$fieldIndex.key");
+            $label = trim((string) ($field['label'] ?? ''));
+            $type = trim((string) ($field['type'] ?? 'text'));
+
+            if (strlen($key) > 64 || ! preg_match('/^[A-Za-z][A-Za-z0-9_]*$/', $key)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields.$fieldIndex.key", 'Invalid AI extract field key.');
+            }
+
+            if (isset($keys[$key])) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields.$fieldIndex.key", 'AI extract field key must be unique.');
+            }
+
+            if ($label === '') {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields.$fieldIndex.label", 'AI extract field label cannot be empty.');
+            }
+
+            if (mb_strlen($label) > 255) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields.$fieldIndex.label", 'AI extract field label is too long.');
+            }
+
+            if (! in_array($type, self::AI_EXTRACT_FIELD_TYPES, true)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.extract_fields.$fieldIndex.type", 'Unknown AI extract field type.');
+            }
+
+            $keys[$key] = true;
+            $normalized[] = [
+                'key' => $key,
+                'label' => $label,
+                'type' => $type,
+            ];
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{actions: list<array<string, mixed>>}
+     */
+    private function normalizeActionPayload(array $payload, int $blockIndex, int $moduleIndex): array
+    {
+        $actions = $payload['actions'] ?? [];
+
+        if (! is_array($actions) || ! array_is_list($actions)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions", 'Actions must be a list.');
+        }
+
+        if (count($actions) > self::MAX_ACTIONS_PER_BLOCK) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions", 'Too many actions in block.');
+        }
+
+        $normalized = [];
+
+        foreach ($actions as $actionIndex => $action) {
+            $action = $this->arrayValue($action, "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex");
+            $type = trim((string) ($action['type'] ?? 'write_contact_field'));
+            $sourceType = trim((string) ($action['source_type'] ?? 'ai_data'));
+            $sourceBlockClientKey = trim((string) ($action['source_block_client_key'] ?? ''));
+            $sourceBlockId = trim((string) ($action['source_block_id'] ?? ''));
+            $sourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
+            $staticValue = trim((string) ($action['static_value'] ?? ''));
+            $targetScope = trim((string) ($action['target_scope'] ?? 'contact'));
+            $targetField = trim((string) ($action['target_field'] ?? ''));
+            $checkSource = trim((string) ($action['check_source'] ?? 'current_inbound_message'));
+            $dictionaryKey = trim((string) ($action['dictionary_key'] ?? 'names'));
+            $targetVariableKey = trim((string) ($action['target_variable_key'] ?? ''));
+            $operation = trim((string) ($action['operation'] ?? 'remove_buttons'));
+            $target = trim((string) ($action['target'] ?? 'last_current_run_outbound_with_inline_buttons'));
+
+            if (! in_array($type, self::ACTION_TYPES, true)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.type", 'Unknown action type.');
+            }
+
+            if ($type === 'edit_message') {
+                if (! in_array($operation, self::ACTION_EDIT_MESSAGE_OPERATIONS, true)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.operation", 'Unknown message edit operation.');
+                }
+
+                if (! in_array($target, self::ACTION_EDIT_MESSAGE_TARGETS, true)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target", 'Unknown message edit target.');
+                }
+
+                $normalized[] = [
+                    'type' => $type,
+                    'operation' => $operation,
+                    'target' => $target,
+                ];
+
+                continue;
+            }
+
+            if ($type === 'check_data') {
+                if (! in_array($checkSource, self::ACTION_CHECK_SOURCES, true)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.check_source", 'Unknown data check source.');
+                }
+
+                if (! in_array($dictionaryKey, self::ACTION_DICTIONARIES, true)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.dictionary_key", 'Unknown dictionary.');
+                }
+
+                if ($targetVariableKey === '' || ! preg_match('/^[A-Za-z][A-Za-z0-9_]*$/', $targetVariableKey)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_variable_key", 'Invalid target variable.');
+                }
+
+                $normalized[] = [
+                    'type' => $type,
+                    'source_type' => 'inbound_message',
+                    'check_source' => $checkSource,
+                    'dictionary_key' => $dictionaryKey,
+                    'lookup_field' => 'lookup_value',
+                    'result_field' => 'result_value',
+                    'target_variable_key' => $targetVariableKey,
+                ];
+
+                continue;
+            }
+
+            if (! in_array($sourceType, self::ACTION_SOURCE_TYPES, true)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_type", 'Unknown action source.');
+            }
+
+            if (! in_array($targetScope, self::EDGE_CAPTURE_FIELD_SCOPES, true)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_scope", 'Unknown action target.');
+            }
+
+            if (! in_array($sourceType, ['ai_data', 'static_value'], true)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_type", 'Unknown action source.');
+            }
+
+            if ($sourceType === 'ai_data' && ($sourceFieldKey === '' || ! preg_match('/^[A-Za-z][A-Za-z0-9_]*$/', $sourceFieldKey))) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_field_key", 'Invalid action source field.');
+            }
+
+            if ($sourceType === 'static_value' && ($staticValue === '' || mb_strlen($staticValue) > 2000)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.static_value", 'Action value is required.');
+            }
+
+            if ($targetScope === 'contact' && ! array_key_exists($targetField, self::EDGE_CONTACT_CAPTURE_DATA_TYPES)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Unknown contact field.');
+            }
+
+            if ($targetScope === 'dialog' && ! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $targetField)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Invalid dialog field.');
+            }
+
+            $normalized[] = [
+                'type' => $type,
+                'source_type' => $sourceType,
+                'source_block_client_key' => $sourceBlockClientKey,
+                'source_block_id' => $sourceBlockId,
+                'source_field_key' => $sourceFieldKey,
+                'static_value' => $staticValue,
+                'target_scope' => $targetScope,
+                'target_field' => $targetField,
+            ];
+        }
+
+        return ['actions' => $normalized];
+    }
+
     private function normalizeButtonPlacement(mixed $placement, int $blockIndex, int $moduleIndex): string
     {
         $placement = trim((string) ($placement ?: 'auto'));
@@ -520,6 +846,8 @@ class ValidateScenarioBuilderV3StateAction
                 'button_type' => in_array(($output['button_type'] ?? null), self::BUTTON_TYPES, true)
                     ? (string) $output['button_type']
                     : 'text',
+                'ai_variant_id' => (string) ($output['ai_variant_id'] ?? ''),
+                'ai_choice_id' => filled($output['ai_choice_id'] ?? null) ? (string) $output['ai_choice_id'] : null,
             ];
         }
 
@@ -815,7 +1143,7 @@ class ValidateScenarioBuilderV3StateAction
             $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.field_key", 'Invalid dialog field key.');
         }
 
-        if ($fieldScope === 'contact' && ! array_key_exists($fieldKey, self::EDGE_CONTACT_CAPTURE_DATA_TYPES)) {
+        if ($fieldScope === 'contact' && ! array_key_exists($fieldKey, self::EDGE_CONTACT_FIELD_CONDITION_DATA_TYPES)) {
             $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.field_key", 'Unknown contact field key.');
         }
 

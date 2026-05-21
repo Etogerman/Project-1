@@ -169,6 +169,28 @@
         display: none;
     }
 
+    .fi-resource-data-dictionary-entries .fi-header {
+        align-items: center;
+        flex-wrap: nowrap;
+        padding: 0.8rem 1rem;
+        border-radius: 18px;
+    }
+
+    .fi-resource-data-dictionary-entries .fi-breadcrumbs {
+        display: none;
+    }
+
+    .fi-resource-data-dictionary-entries .fi-header-heading {
+        font-size: 1.55rem;
+        line-height: 1.1;
+    }
+
+    .fi-resource-data-dictionary-entries .fi-header-actions-ctn {
+        margin-left: auto;
+        margin-top: 0;
+        flex-wrap: nowrap;
+    }
+
     .ac-sr-only {
         position: absolute;
         width: 1px;
@@ -5565,11 +5587,14 @@
 
     .ac-composer--dialog-inline .ac-textarea--composer {
         box-sizing: border-box;
-        height: 2.75rem;
-        min-height: 2.75rem;
-        max-height: 10rem;
-        overflow-y: hidden;
-        resize: vertical;
+        height: 2.5rem;
+        min-height: 2.5rem;
+        max-height: none;
+        padding-top: 0.52rem;
+        padding-bottom: 0.52rem;
+        line-height: 1.35;
+        overflow-y: auto;
+        resize: vertical !important;
     }
 
     .ac-textarea--composer {

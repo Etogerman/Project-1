@@ -402,6 +402,387 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame('hot', data_get($edgesByMatchType->get('exact_callback'), 'field_condition.value'));
     }
 
+    public function test_put_state_allows_first_name_source_contact_field_condition(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_first_name_source_condition',
+            'name' => 'V3 First Name Source Condition',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Имя уже известно'),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Имя подтверждено');
+        $edgePayload['field_condition'] = [
+            'enabled' => true,
+            'field_scope' => 'contact',
+            'field_key' => 'first_name_source',
+            'operator' => 'equals',
+            'value' => 'contact_confirmed',
+        ];
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.edges.0.condition_payload.field_condition.field_scope', 'contact')
+            ->assertJsonPath('builder.edges.0.condition_payload.field_condition.field_key', 'first_name_source')
+            ->assertJsonPath('builder.edges.0.condition_payload.field_condition.value', 'contact_confirmed')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $sourceBlockId = (string) $saved['id_map']['blocks']['tmp_source'];
+
+        $this->assertSame(
+            'first_name_source',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$sourceBlockId.wait_reply_edges.0.field_condition.field_key"),
+        );
+    }
+
+    public function test_publish_keeps_ai_first_name_analysis_outputs_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram AI']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_ai_first_name_analysis',
+            'name' => 'V3 AI First Name Analysis',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_ai',
+                'type' => 'state',
+                'title' => 'ИИ проверяет имя',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->aiAnalysisSettings(),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_action',
+                'type' => 'state',
+                'title' => 'Записать имя',
+                'position' => ['x' => 840, 'y' => 120],
+                'settings_payload' => $this->actionSettings('first_name', 'first_name'),
+            ],
+        ];
+        $waitPayload = $this->edgePayload(null, 'Ответ клиента');
+        $aiPayload = $this->edgePayload('name_accepted', 'Имя найдено');
+        $aiPayload['mode'] = 'ai_analysis';
+        $aiPayload['match'] = ['type' => 'any_inbound', 'text' => ''];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_wait',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_ai'],
+                'condition_payload' => $waitPayload,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_ai_found',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_ai', 'output_id' => 'name_accepted'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
+                'condition_payload' => $aiPayload,
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.type', 'ai')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.0.id', 'name_accepted')
+            ->assertJsonPath('builder.edges.1.condition_payload.mode', 'ai_analysis')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $aiBlockId = (string) $saved['id_map']['blocks']['tmp_ai'];
+        $actionBlockId = (string) $saved['id_map']['blocks']['tmp_action'];
+
+        $this->assertSame(
+            'Определи, есть ли в ответе клиента имя.',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.prompt"),
+        );
+        $this->assertSame(
+            'name_accepted',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.0.id"),
+        );
+        $this->assertSame(
+            10,
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.1.delay_seconds"),
+        );
+        $this->assertSame(
+            'first_name',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.extract_fields.0.key"),
+        );
+        $this->assertSame(
+            'ai_analysis',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.0.edge.mode"),
+        );
+        $this->assertSame(
+            '',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$actionBlockId.actions.0.source_block_id"),
+        );
+        $this->assertSame(
+            'first_name',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$actionBlockId.actions.0.source_field_key"),
+        );
+        $this->assertSame(
+            'first_name',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$actionBlockId.actions.0.target_field"),
+        );
+    }
+
+    public function test_publish_keeps_check_data_action_outputs_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Data Check']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_check_data_action',
+            'name' => 'V3 Check Data Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_check',
+                'type' => 'state',
+                'title' => 'Проверить имя',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->checkDataActionSettings('first_name'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_found',
+                'type' => 'state',
+                'title' => 'Имя найдено',
+                'position' => ['x' => 840, 'y' => 120],
+                'settings_payload' => $this->messageSettings('Имя найдено'),
+            ],
+        ];
+        $startPayload = $this->edgePayload(null, 'Дальше');
+        $foundPayload = $this->edgePayload('data_found', 'Найдено');
+        $foundPayload['mode'] = 'action_result';
+        $foundPayload['match'] = ['type' => 'any_inbound', 'text' => ''];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_check'],
+                'condition_payload' => $startPayload,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_found_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_check', 'output_id' => 'data_found'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_found'],
+                'condition_payload' => $foundPayload,
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.0.id', 'data_found')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.1.id', 'data_not_found')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $checkBlockId = (string) $saved['id_map']['blocks']['tmp_check'];
+
+        $this->assertSame(
+            'check_data',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$checkBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'first_name',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$checkBlockId.actions.0.target_variable_key"),
+        );
+        $this->assertSame(
+            'action_result',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$checkBlockId.action_result_edges.0.mode"),
+        );
+        $this->assertSame(
+            'data_found',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$checkBlockId.action_result_edges.0.from_output_id"),
+        );
+    }
+
+    public function test_publish_keeps_edit_message_action_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Edit Message']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_edit_message_action',
+            'name' => 'V3 Edit Message Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_edit',
+                'type' => 'state',
+                'title' => 'Убрать кнопки',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->editMessageActionSettings(),
+            ],
+        ];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_edit'],
+                'condition_payload' => $this->edgePayload(null, 'Дальше'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'edit_message')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $editBlockId = (string) $saved['id_map']['blocks']['tmp_edit'];
+
+        $this->assertSame(
+            'edit_message',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$editBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'remove_buttons',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$editBlockId.actions.0.operation"),
+        );
+        $this->assertSame(
+            'last_current_run_outbound_with_inline_buttons',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$editBlockId.actions.0.target"),
+        );
+    }
+
+    public function test_put_state_rejects_first_name_source_contact_input_capture(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_first_name_source_capture_rejected',
+            'name' => 'V3 First Name Source Capture Rejected',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Напишите ответ'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Дальше'),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['input_capture'] = [
+            'enabled' => true,
+            'field_scope' => 'contact',
+            'field_key' => 'first_name_source',
+            'data_type' => 'any_text',
+        ];
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['builder.edges.0.condition_payload.input_capture.field_key']);
+    }
+
     public function test_put_state_normalizes_disabled_edge_input_capture_without_requiring_fields(): void
     {
         $admin = $this->adminUser();
@@ -2261,6 +2642,166 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'type' => 'message',
                     'enabled' => true,
                     'payload' => ['text' => $text, 'text_format' => 'plain_text'],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function aiAnalysisSettings(): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_ai',
+                    'type' => 'ai',
+                    'enabled' => true,
+                    'payload' => [
+                        'prompt' => 'Определи, есть ли в ответе клиента имя.',
+                        'source' => 'current_inbound_message',
+                        'variants' => [
+                            ['id' => 'name_accepted', 'label' => 'Имя найдено', 'delay_seconds' => 0],
+                            ['id' => 'name_retry', 'label' => 'Имя не найдено', 'delay_seconds' => 10],
+                        ],
+                        'extract_fields' => [
+                            [
+                                'key' => 'first_name',
+                                'label' => 'Имя клиента',
+                                'type' => 'text',
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [
+                [
+                    'id' => 'name_accepted',
+                    'label' => 'Имя найдено',
+                    'source' => 'ai',
+                    'module_id' => 'mod_ai',
+                    'ai_variant_id' => 'name_accepted',
+                ],
+                [
+                    'id' => 'name_retry',
+                    'label' => 'Имя не найдено',
+                    'source' => 'ai',
+                    'module_id' => 'mod_ai',
+                    'ai_variant_id' => 'name_retry',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function actionSettings(string $sourceFieldKey, string $targetField): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'write_contact_field',
+                                'source_type' => 'ai_data',
+                                'source_block_client_key' => '',
+                                'source_block_id' => '',
+                                'source_field_key' => $sourceFieldKey,
+                                'target_scope' => 'contact',
+                                'target_field' => $targetField,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function checkDataActionSettings(string $targetVariableKey): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'check_data',
+                                'source_type' => 'inbound_message',
+                                'check_source' => 'current_inbound_message',
+                                'dictionary_key' => 'names',
+                                'lookup_field' => 'lookup_value',
+                                'result_field' => 'result_value',
+                                'target_variable_key' => $targetVariableKey,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [
+                [
+                    'id' => 'data_found',
+                    'label' => 'Найдено',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'data_found',
+                ],
+                [
+                    'id' => 'data_not_found',
+                    'label' => 'Не найдено',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'data_not_found',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function editMessageActionSettings(): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'edit_message',
+                                'operation' => 'remove_buttons',
+                                'target' => 'last_current_run_outbound_with_inline_buttons',
+                            ],
+                        ],
+                    ],
                 ],
             ],
             'outputs' => [],

@@ -178,6 +178,17 @@
 
                             this.thread.scrollTop = this.thread.scrollHeight;
                         },
+                        hasActiveReplyComposer() {
+                            const textarea = this.$root.querySelector('[data-role=conversation-reply-textarea]');
+
+                            if (! textarea) {
+                                return false;
+                            }
+
+                            return document.activeElement === textarea
+                                || textarea.value.trim() !== ''
+                                || textarea.dataset.manualResized === '1';
+                        },
                         rememberPositionBeforePrepend() {
                             this.captureThread();
 
@@ -205,7 +216,7 @@
                             }
 
                             this.refreshIntervalId = window.setInterval(() => {
-                                if (document.visibilityState !== 'visible' || this.isRefreshing) {
+                                if (document.visibilityState !== 'visible' || this.isRefreshing || this.hasActiveReplyComposer()) {
                                     return;
                                 }
 

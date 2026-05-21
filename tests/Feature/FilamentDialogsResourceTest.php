@@ -571,6 +571,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('data-poll-interval-ms="5000"', escape: false)
             ->assertSee('refreshDialogViewData', escape: false)
+            ->assertSee('hasActiveReplyComposer()', escape: false)
+            ->assertSee("textarea.dataset.manualResized === '1'", escape: false)
             ->assertSee("querySelector('[data-role=conversation-thread]')", escape: false)
             ->assertSee('window.requestAnimationFrame(() => this.scrollToBottom())', escape: false)
             ->assertDontSee('[data-role=\\"conversation-thread\\"]', escape: false);
@@ -2278,6 +2280,9 @@ class FilamentDialogsResourceTest extends TestCase
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Ответ')
             ->assertSee('Отправить')
+            ->assertSee('rows="1"', false)
+            ->assertSee('conversation-reply-textarea-height', false)
+            ->assertSee('reply-textarea-manual-resized', false)
             ->assertSee('onkeydown="if (event.key === \'Enter\'', false)
             ->assertSee('querySelector(\'[data-role=conversation-reply-submit]\').click()', false);
     }

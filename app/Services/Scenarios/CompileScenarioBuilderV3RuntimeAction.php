@@ -20,6 +20,10 @@ class CompileScenarioBuilderV3RuntimeAction
 
     private const EDGE_MODE_AUTOMATIC = 'automatic';
 
+    private const EDGE_MODE_AI_ANALYSIS = 'ai_analysis';
+
+    private const EDGE_MODE_ACTION_RESULT = 'action_result';
+
     private const EDGE_MATCH_EXACT_CALLBACK = 'exact_callback';
 
     /**
@@ -47,6 +51,11 @@ class CompileScenarioBuilderV3RuntimeAction
                 (int) $block->id => $this->runtimeBlockId($block),
             ])
             ->all();
+        $runtimeBlockIdsByClientKey = $blocks
+            ->mapWithKeys(fn (ScenarioBuilderBlock $block): array => [
+                (string) $block->client_key => $this->runtimeBlockId($block),
+            ])
+            ->all();
 
         $this->guardUniqueRuntimeBlockIds($runtimeBlockIdsByDbId);
 
@@ -61,6 +70,7 @@ class CompileScenarioBuilderV3RuntimeAction
                 $runtimeBlockId,
                 $edgesBySource->get((int) $block->id, collect()),
                 $runtimeBlockIdsByDbId,
+                $runtimeBlockIdsByClientKey,
             );
         }
 
@@ -93,10 +103,13 @@ class CompileScenarioBuilderV3RuntimeAction
         string $runtimeBlockId,
         Collection $outgoingEdges,
         array $runtimeBlockIdsByDbId,
+        array $runtimeBlockIdsByClientKey,
     ): array {
         $settings = $this->settingsPayload($block);
         $message = $this->module($settings, 'message');
         $buttons = $this->module($settings, 'buttons');
+        $ai = $this->module($settings, 'ai');
+        $action = $this->module($settings, 'action');
         $automaticEdges = $this->compileAutomaticEdges($outgoingEdges, $runtimeBlockIdsByDbId);
 
         $compiled = [
@@ -109,6 +122,15 @@ class CompileScenarioBuilderV3RuntimeAction
                 'text' => (string) data_get($message, 'payload.text', ''),
                 'text_format' => (string) data_get($message, 'payload.text_format', 'plain_text'),
             ] : null,
+            'ai_analysis' => $ai !== null
+                ? $this->compileAiAnalysis($ai, $outgoingEdges, $runtimeBlockIdsByDbId)
+                : null,
+            'actions' => $action !== null
+                ? $this->compileActions($action, $runtimeBlockIdsByClientKey)
+                : [],
+            'action_result_edges' => $action !== null
+                ? $this->compileActionResultEdges($outgoingEdges, $runtimeBlockIdsByDbId)
+                : [],
             'buttons' => null,
             'wait_reply_edges' => $this->compileWaitReplyEdges($outgoingEdges, $runtimeBlockIdsByDbId),
             'automatic_edges' => $automaticEdges,
@@ -124,6 +146,9 @@ class CompileScenarioBuilderV3RuntimeAction
 
         if (
             $compiled['message'] === null
+            && $compiled['ai_analysis'] === null
+            && $compiled['actions'] === []
+            && $compiled['action_result_edges'] === []
             && $compiled['buttons'] === null
             && $compiled['wait_reply_edges'] === []
             && $compiled['automatic_edges'] === []
@@ -163,6 +188,135 @@ class CompileScenarioBuilderV3RuntimeAction
                 && $this->edgeMode($edge) === self::EDGE_MODE_AUTOMATIC)
             ->map(fn (ScenarioBuilderEdge $edge): array => $this->compileEdge($edge, $runtimeBlockIdsByDbId))
             ->sort(fn (array $left, array $right): int => $this->comparePriorityEdges($left, $right))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $ai
+     * @param  Collection<int, ScenarioBuilderEdge>  $outgoingEdges
+     * @param  array<int, string>  $runtimeBlockIdsByDbId
+     * @return array<string, mixed>
+     */
+    private function compileAiAnalysis(array $ai, Collection $outgoingEdges, array $runtimeBlockIdsByDbId): array
+    {
+        $outputs = collect(data_get($ai, 'payload.variants', []))
+            ->filter(fn (mixed $output): bool => is_array($output))
+            ->map(function (array $output, int $index) use ($outgoingEdges, $runtimeBlockIdsByDbId): array {
+                $outputId = (string) ($output['id'] ?? '');
+                $edge = $outgoingEdges->first(
+                    fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === $outputId
+                        && $this->edgeMode($edge) === self::EDGE_MODE_AI_ANALYSIS,
+                );
+                $compiledEdge = $edge instanceof ScenarioBuilderEdge
+                    ? $this->compileEdge($edge, $runtimeBlockIdsByDbId)
+                    : null;
+
+                return [
+                    'id' => $outputId,
+                    'label' => (string) ($output['label'] ?? $outputId),
+                    'variant_id' => (string) ($output['ai_variant_id'] ?? $outputId),
+                    'choice_id' => (string) ($output['ai_choice_id'] ?? ($index + 1)),
+                    'delay_seconds' => max(0, min(300, (int) ($output['delay_seconds'] ?? 0))),
+                    'target_block_id' => $compiledEdge['target_block_id'] ?? null,
+                    'edge' => $compiledEdge,
+                ];
+            })
+            ->filter(fn (array $output): bool => $output['id'] !== '')
+            ->values()
+            ->all();
+
+        return [
+            'prompt' => (string) data_get($ai, 'payload.prompt', ''),
+            'source' => (string) data_get($ai, 'payload.source', 'current_inbound_message'),
+            'outputs' => $outputs,
+            'extract_fields' => collect(data_get($ai, 'payload.extract_fields', []))
+                ->filter(fn (mixed $field): bool => is_array($field))
+                ->map(fn (array $field): array => [
+                    'key' => (string) ($field['key'] ?? ''),
+                    'label' => (string) ($field['label'] ?? ''),
+                    'type' => (string) ($field['type'] ?? 'text'),
+                ])
+                ->filter(fn (array $field): bool => $field['key'] !== '' && $field['label'] !== '')
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, string>  $runtimeBlockIdsByClientKey
+     * @return list<array<string, mixed>>
+     */
+    private function compileActions(array $action, array $runtimeBlockIdsByClientKey): array
+    {
+        return collect(data_get($action, 'payload.actions', []))
+            ->filter(fn (mixed $item): bool => is_array($item))
+            ->map(function (array $item) use ($runtimeBlockIdsByClientKey): array {
+                $type = (string) ($item['type'] ?? 'write_contact_field');
+                $sourceBlockClientKey = trim((string) ($item['source_block_client_key'] ?? ''));
+
+                if ($type === 'check_data') {
+                    return [
+                        'type' => 'check_data',
+                        'source_type' => 'inbound_message',
+                        'check_source' => (string) ($item['check_source'] ?? 'current_inbound_message'),
+                        'dictionary_key' => (string) ($item['dictionary_key'] ?? 'names'),
+                        'lookup_field' => 'lookup_value',
+                        'result_field' => 'result_value',
+                        'target_variable_key' => (string) ($item['target_variable_key'] ?? ''),
+                    ];
+                }
+
+                if ($type === 'edit_message') {
+                    return [
+                        'type' => 'edit_message',
+                        'operation' => (string) ($item['operation'] ?? 'remove_buttons'),
+                        'target' => (string) ($item['target'] ?? 'last_current_run_outbound_with_inline_buttons'),
+                    ];
+                }
+
+                return [
+                    'type' => $type,
+                    'source_type' => (string) ($item['source_type'] ?? 'ai_data'),
+                    'source_block_id' => $sourceBlockClientKey !== ''
+                        ? ($runtimeBlockIdsByClientKey[$sourceBlockClientKey] ?? '')
+                        : '',
+                    'source_field_key' => (string) ($item['source_field_key'] ?? ''),
+                    'static_value' => (string) ($item['static_value'] ?? ''),
+                    'target_scope' => (string) ($item['target_scope'] ?? 'contact'),
+                    'target_field' => (string) ($item['target_field'] ?? ''),
+                ];
+            })
+            ->filter(fn (array $item): bool => match ($item['type']) {
+                'check_data' => ($item['target_variable_key'] ?? '') !== '',
+                'edit_message' => ($item['operation'] ?? '') === 'remove_buttons'
+                    && ($item['target'] ?? '') === 'last_current_run_outbound_with_inline_buttons',
+                default => (($item['target_field'] ?? '') !== ''
+                    && (($item['source_type'] ?? '') === 'static_value'
+                        ? trim((string) ($item['static_value'] ?? '')) !== ''
+                        : ($item['source_field_key'] ?? '') !== '')),
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  Collection<int, ScenarioBuilderEdge>  $outgoingEdges
+     * @param  array<int, string>  $runtimeBlockIdsByDbId
+     * @return list<array<string, mixed>>
+     */
+    private function compileActionResultEdges(Collection $outgoingEdges, array $runtimeBlockIdsByDbId): array
+    {
+        return $outgoingEdges
+            ->filter(fn (ScenarioBuilderEdge $edge): bool => $this->edgeMode($edge) === self::EDGE_MODE_ACTION_RESULT
+                || $this->edgeOutputId($edge) !== null)
+            ->map(function (ScenarioBuilderEdge $edge) use ($runtimeBlockIdsByDbId): array {
+                $compiled = $this->compileEdge($edge, $runtimeBlockIdsByDbId);
+                $compiled['mode'] = self::EDGE_MODE_ACTION_RESULT;
+
+                return $compiled;
+            })
             ->values()
             ->all();
     }
