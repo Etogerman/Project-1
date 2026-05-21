@@ -4,7 +4,6 @@ namespace App\Filament\Resources\DataDictionaryEntries\Pages;
 
 use App\Filament\Resources\DataDictionaryEntries\DataDictionaryEntryResource;
 use App\Filament\Resources\Pages\ManageRecords;
-use App\Models\DataDictionaryEntry;
 use App\Services\DataDictionaries\ExportDataDictionaryEntriesCsvAction;
 use App\Services\DataDictionaries\ImportDataDictionaryEntriesCsvAction;
 use Filament\Actions\Action;
@@ -28,8 +27,7 @@ class ManageDataDictionaryEntries extends ManageRecords
                 ->label('Экспорт CSV')
                 ->icon(Heroicon::OutlinedArrowDownTray)
                 ->action(function () {
-                    $csv = app(ExportDataDictionaryEntriesCsvAction::class)
-                        ->handle(DataDictionaryEntry::DICTIONARY_NAMES);
+                    $csv = app(ExportDataDictionaryEntriesCsvAction::class)->handle();
 
                     return response()->streamDownload(
                         function () use ($csv): void {
@@ -43,7 +41,7 @@ class ManageDataDictionaryEntries extends ManageRecords
                 ->label('Импорт CSV')
                 ->icon(Heroicon::OutlinedArrowUpTray)
                 ->modalWidth(Width::Large)
-                ->modalDescription('Загрузите CSV с колонками: Вариант от клиента, Полное имя, Пол, Авто, Активно, Комментарий. ID можно оставить пустым.')
+                ->modalDescription('Загрузите CSV с колонками: Вариант, Полное имя, Пол, Язык, Тип варианта, Авто, Активно, Комментарий. Импорт выполняется целиком: если в файле есть ошибка, база не меняется.')
                 ->form([
                     FileUpload::make('csv')
                         ->label('CSV-файл')
@@ -69,7 +67,7 @@ class ManageDataDictionaryEntries extends ManageRecords
 
                     try {
                         $summary = app(ImportDataDictionaryEntriesCsvAction::class)
-                            ->handle($disk->path($relativePath), DataDictionaryEntry::DICTIONARY_NAMES);
+                            ->handle($disk->path($relativePath));
                     } catch (ValidationException $exception) {
                         Notification::make()
                             ->title('Импорт не выполнен')
@@ -99,11 +97,6 @@ class ManageDataDictionaryEntries extends ManageRecords
                 ->label('Добавить имя')
                 ->modalWidth(Width::ThreeExtraLarge)
                 ->modalFooterActionsAlignment(Alignment::End)
-                ->mutateDataUsing(function (array $data): array {
-                    $data['dictionary_key'] = DataDictionaryEntry::DICTIONARY_NAMES;
-
-                    return $data;
-                })
                 ->createAnother(false),
         ];
     }

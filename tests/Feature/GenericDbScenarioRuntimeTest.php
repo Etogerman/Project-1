@@ -660,8 +660,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
         DataDictionaryEntry::query()->create([
             'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
             'lookup_value' => 'Вася',
-            'lookup_normalized' => 'вася',
             'result_value' => 'Василий',
+            'gender' => DataDictionaryEntry::GENDER_MALE,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
             'auto_apply' => true,
             'is_active' => true,
         ]);
@@ -729,8 +730,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
         DataDictionaryEntry::query()->create([
             'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
             'lookup_value' => 'Вася',
-            'lookup_normalized' => 'вася',
             'result_value' => 'Василий',
+            'gender' => DataDictionaryEntry::GENDER_MALE,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
             'auto_apply' => true,
             'is_active' => true,
         ]);
@@ -891,8 +893,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
         DataDictionaryEntry::query()->create([
             'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
             'lookup_value' => 'Клава',
-            'lookup_normalized' => 'клава',
             'result_value' => 'Клавдия',
+            'gender' => DataDictionaryEntry::GENDER_FEMALE,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
             'auto_apply' => true,
             'is_active' => true,
         ]);

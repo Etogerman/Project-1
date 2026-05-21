@@ -20,6 +20,7 @@ use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
@@ -56,7 +57,7 @@ class DataDictionaryEntryResource extends Resource
         return $schema
             ->components([
                 Section::make('Имя')
-                    ->description('Справочник используется в конструкторе: действие «Проверить данные» ищет вариант клиента и возвращает полное имя.')
+                    ->description('Одна строка справочника: как клиент написал имя и какое полное имя нужно записать в контакт.')
                     ->schema([
                         Hidden::make('dictionary_key')
                             ->default(DataDictionaryEntry::DICTIONARY_NAMES),
@@ -66,12 +67,13 @@ class DataDictionaryEntryResource extends Resource
                             ->required()
                             ->maxLength(255)
                             ->rules(['regex:/^[\p{L}][\p{L}-]{0,63}$/u'])
-                            ->helperText('Одно слово без пробелов. Например: Вася, Ваня, Иван.'),
+                            ->helperText('Одно слово без пробелов. Например: Вася, Тема, Kolya.'),
                         TextInput::make('result_value')
                             ->label('Полное имя')
                             ->placeholder('Василий')
                             ->required()
                             ->maxLength(255)
+                            ->rules(['regex:/^[\p{L}][\p{L}-]{0,63}$/u'])
                             ->helperText('Это значение попадёт в переменную, например first_name.'),
                         Select::make('gender')
                             ->label('Пол')
@@ -79,11 +81,23 @@ class DataDictionaryEntryResource extends Resource
                             ->default(DataDictionaryEntry::GENDER_UNKNOWN)
                             ->required()
                             ->native(false),
+                        Select::make('language')
+                            ->label('Язык')
+                            ->options(DataDictionaryEntry::languageOptions())
+                            ->default(DataDictionaryEntry::LANGUAGE_RU)
+                            ->required()
+                            ->native(false),
+                        Select::make('variant_type')
+                            ->label('Тип варианта')
+                            ->options(DataDictionaryEntry::variantTypeOptions())
+                            ->default(DataDictionaryEntry::VARIANT_TYPE_SHORT)
+                            ->required()
+                            ->native(false),
                         Toggle::make('auto_apply')
                             ->label('Автоматически применять')
                             ->default(true)
                             ->inline(false)
-                            ->helperText('Если выключено, действие «Проверить данные» не будет считать строку уверенным совпадением.'),
+                            ->helperText('Если выключено, действие «Проверить данные» вернёт «требует уточнения».'),
                         Toggle::make('is_active')
                             ->label('Активно')
                             ->default(true)
@@ -109,7 +123,7 @@ class DataDictionaryEntryResource extends Resource
                     ->copyable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('lookup_value')
-                    ->label('Вариант от клиента')
+                    ->label('Вариант')
                     ->searchable()
                     ->sortable()
                     ->toggleable(),
@@ -123,10 +137,16 @@ class DataDictionaryEntryResource extends Resource
                     ->formatStateUsing(fn (?string $state): string => DataDictionaryEntry::genderLabel($state))
                     ->sortable()
                     ->toggleable(),
-                TextColumn::make('lookup_normalized')
-                    ->label('Ключ поиска')
-                    ->copyable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('language')
+                    ->label('Язык')
+                    ->formatStateUsing(fn (?string $state): string => DataDictionaryEntry::languageLabel($state))
+                    ->sortable()
+                    ->toggleable(),
+                TextColumn::make('variant_type')
+                    ->label('Тип')
+                    ->formatStateUsing(fn (?string $state): string => DataDictionaryEntry::variantTypeLabel($state))
+                    ->sortable()
+                    ->toggleable(),
                 IconColumn::make('auto_apply')
                     ->label('Авто')
                     ->boolean()
@@ -149,6 +169,15 @@ class DataDictionaryEntryResource extends Resource
                     ->toggleable(),
             ])
             ->filters([
+                SelectFilter::make('gender')
+                    ->label('Пол')
+                    ->options(DataDictionaryEntry::genderOptions()),
+                SelectFilter::make('language')
+                    ->label('Язык')
+                    ->options(DataDictionaryEntry::languageOptions()),
+                SelectFilter::make('variant_type')
+                    ->label('Тип')
+                    ->options(DataDictionaryEntry::variantTypeOptions()),
                 TernaryFilter::make('auto_apply')
                     ->label('Автоматически применять')
                     ->placeholder('Все')

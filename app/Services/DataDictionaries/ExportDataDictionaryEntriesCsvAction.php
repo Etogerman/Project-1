@@ -7,28 +7,33 @@ use League\Csv\Writer;
 
 class ExportDataDictionaryEntriesCsvAction
 {
-    public function handle(string $dictionaryKey = DataDictionaryEntry::DICTIONARY_NAMES): string
+    public function handle(): string
     {
         $csv = Writer::fromString('');
         $csv->insertOne([
             'ID',
-            'Вариант от клиента',
+            'Вариант',
             'Полное имя',
             'Пол',
+            'Язык',
+            'Тип варианта',
             'Авто',
             'Активно',
             'Комментарий',
         ]);
 
         DataDictionaryEntry::query()
-            ->where('dictionary_key', $dictionaryKey)
+            ->where('dictionary_key', DataDictionaryEntry::DICTIONARY_NAMES)
             ->orderBy('lookup_value')
+            ->orderBy('result_value')
             ->each(function (DataDictionaryEntry $entry) use ($csv): void {
                 $csv->insertOne([
                     $entry->id,
                     $entry->lookup_value,
                     $entry->result_value,
                     DataDictionaryEntry::genderLabel($entry->gender),
+                    DataDictionaryEntry::languageLabel($entry->language),
+                    DataDictionaryEntry::variantTypeLabel($entry->variant_type),
                     $entry->auto_apply ? 'да' : 'нет',
                     $entry->is_active ? 'да' : 'нет',
                     $entry->comment,

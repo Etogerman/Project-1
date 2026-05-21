@@ -2688,6 +2688,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $lookup = app(LookupScenarioDataDictionaryAction::class)->handle(
             $dictionaryKey,
             (string) ($message->text ?? ''),
+            $message->contact instanceof Contact
+                ? $this->resolveRootContactAction->handle($message->contact)->gender
+                : null,
         );
 
         if ($lookup['matched'] === true && trim((string) $lookup['value']) !== '') {
