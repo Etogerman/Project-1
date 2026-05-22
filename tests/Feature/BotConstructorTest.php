@@ -144,6 +144,7 @@ class BotConstructorTest extends TestCase
             'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
             'runtime_payload' => [
                 'gateway_capabilities' => [
                     'outgoing_replies' => true,
@@ -3592,6 +3593,7 @@ class BotConstructorTest extends TestCase
             'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
             'runtime_payload' => [
                 'gateway_capabilities' => [
                     'outgoing_replies' => true,

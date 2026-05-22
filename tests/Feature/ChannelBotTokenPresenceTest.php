@@ -82,6 +82,7 @@ class ChannelBotTokenPresenceTest extends TestCase
             'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
             'runtime_payload' => [
                 'gateway_capabilities' => [
                     'outgoing_replies' => true,
@@ -94,6 +95,78 @@ class ChannelBotTokenPresenceTest extends TestCase
         $this->assertSame('Работает', $channel->getHealthStatusLabel());
         $this->assertSame('success', $channel->getHealthStatusColor());
         $this->assertTrue($channel->isReadyForConstructorAutoReplies());
+    }
+
+    public function test_stale_account_gateway_heartbeat_is_not_ready_for_constructor_auto_replies(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now()->subMinutes(Channel::GATEWAY_HEARTBEAT_FRESH_FOR_MINUTES + 1),
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => true,
+                ],
+            ],
+        ]);
+
+        $channel = $channel->fresh('runtimeState');
+
+        $this->assertSame(Channel::CONNECTION_ERROR_GATEWAY_STALE, $channel->getHealthStatusLabel());
+        $this->assertSame('danger', $channel->getHealthStatusColor());
+        $this->assertFalse($channel->isReadyForConstructorAutoReplies());
+    }
+
+    public function test_bot_channel_with_old_reply_but_failed_connection_check_is_not_ready_for_constructor_auto_replies(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'webhook-secret',
+            ],
+            'connection_status' => Channel::CONNECTION_STATUS_NOT_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_NOT_INSTALLED,
+            'connection_checked_at' => now(),
+            'connection_error_message' => 'Webhook установлен не на эту админку',
+            'last_reply_sent_at' => now()->subMinute(),
+        ]);
+
+        $channel = $channel->fresh();
+
+        $this->assertSame('Не подключен', $channel->getHealthStatusLabel());
+        $this->assertSame('danger', $channel->getHealthStatusColor());
+        $this->assertFalse($channel->isReadyForConstructorAutoReplies());
+    }
+
+    public function test_bot_channel_with_webhook_from_previous_app_url_is_not_ready_for_constructor_auto_replies(): void
+    {
+        config()->set('app.url', 'https://current-admin.example');
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'webhook-secret',
+            ],
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now(),
+            'expected_webhook_url' => 'https://previous-admin.example/webhooks/telegram/999',
+            'provider_webhook_url' => 'https://previous-admin.example/webhooks/telegram/999',
+            'last_reply_sent_at' => now()->subMinute(),
+        ]);
+
+        $channel = $channel->fresh();
+
+        $this->assertSame('Не подключен', $channel->getHealthStatusLabel());
+        $this->assertFalse($channel->isReadyForConstructorAutoReplies());
     }
 
     public function test_account_channel_without_gateway_outgoing_replies_is_not_ready_for_constructor_auto_replies(): void
