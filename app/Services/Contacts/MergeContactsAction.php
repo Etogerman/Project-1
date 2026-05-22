@@ -12,8 +12,8 @@ use App\Models\ContactPhoneNumber;
 use App\Models\ContactTimelineEvent;
 use App\Models\Message;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
-use App\Services\Dialogs\ConsolidateDialogsForRootContactAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
+use App\Services\Dialogs\ConsolidateDialogsForRootContactAction;
 use App\Services\Geo\ResolveRussianLocalityGeocodeQueryAction;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
@@ -309,7 +309,9 @@ class MergeContactsAction
 
                 if ($field === 'first_name') {
                     $payload['first_name_source'] = $secondary->first_name_source;
+                    $payload['first_name_resolution_method'] = $secondary->first_name_resolution_method;
                     $fieldsCopied['first_name_source'] = $this->serializeValue($secondary->first_name_source);
+                    $fieldsCopied['first_name_resolution_method'] = $this->serializeValue($secondary->first_name_resolution_method);
                 }
 
                 continue;
@@ -368,6 +370,7 @@ class MergeContactsAction
                 'merged_contact_id' => $secondary->id,
                 'merged_first_name' => $secondary->first_name,
                 'merged_first_name_source' => $secondary->first_name_source,
+                'merged_first_name_resolution_method' => $secondary->first_name_resolution_method,
             ],
             'occurred_at' => now(),
         ]);

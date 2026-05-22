@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Carbon;
 
 class Contact extends Model
 {
@@ -43,6 +44,16 @@ class Contact extends Model
     public const FIRST_NAME_SOURCE_CONTACT_CONFIRMED = 'contact_confirmed';
 
     public const FIRST_NAME_SOURCE_MANUAL = 'manual';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE = 'messenger_profile';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP = 'dictionary_lookup';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS = 'ai_analysis';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT = 'scenario_direct';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL = 'operator_manual';
 
     public const REGION_STATUS_RESOLVED = 'resolved';
 
@@ -105,6 +116,7 @@ class Contact extends Model
         'name',
         'first_name',
         'first_name_source',
+        'first_name_resolution_method',
         'last_name',
         'gender',
         'age_years',
@@ -272,6 +284,39 @@ class Contact extends Model
         return self::firstNameSourceBadgeOptions()[$value]['tone'] ?? null;
     }
 
+    /**
+     * @return list<string>
+     */
+    public static function allowedFirstNameResolutionMethods(): array
+    {
+        return [
+            self::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE,
+            self::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
+            self::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS,
+            self::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+            self::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL,
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function firstNameResolutionMethodOptions(): array
+    {
+        return [
+            self::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE => 'Профиль мессенджера',
+            self::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP => 'Справочник имён',
+            self::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS => 'ИИ-анализ',
+            self::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT => 'Сценарий без обработки',
+            self::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL => 'Оператор',
+        ];
+    }
+
+    public static function formatFirstNameResolutionMethod(?string $value): ?string
+    {
+        return self::firstNameResolutionMethodOptions()[$value] ?? null;
+    }
+
     public static function formatFirstNameSourceTimelineLabel(?string $value): ?string
     {
         return match ($value) {
@@ -431,6 +476,7 @@ class Contact extends Model
             ->orderByDesc('assigned_at')
             ->orderByDesc('id');
     }
+
     public function tags(): BelongsToMany
     {
         return $this->belongsToMany(Tag::class)
@@ -557,7 +603,7 @@ class Contact extends Model
     {
         return Attribute::make(
             get: function (): ?int {
-                if ($this->birth_date instanceof \Illuminate\Support\Carbon) {
+                if ($this->birth_date instanceof Carbon) {
                     if ($this->birth_date->isFuture()) {
                         return null;
                     }

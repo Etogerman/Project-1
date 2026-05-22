@@ -33,8 +33,7 @@ class PublishScenarioBuilderV3Action
         string $baseRevision,
         User $user,
         string $scheduledTransitionPolicy = self::SCHEDULED_TRANSITIONS_KEEP,
-    ): array
-    {
+    ): array {
         [$publishedVersion, $draftVersion, $cancelledScheduledTransitions] = DB::transaction(function () use (
             $scenario,
             $draftVersionId,
@@ -69,7 +68,7 @@ class PublishScenarioBuilderV3Action
             $currentRevision = $this->buildScenarioBuilderV3StateAction->revisionFor($version);
 
             if ($baseRevision !== $currentRevision) {
-                throw new HttpException(409, 'Scenario builder state was changed. Save or reload state before publishing.');
+                throw new HttpException(409, 'Схема конструктора изменилась после последнего сохранения. Сохраните изменения или обновите страницу перед публикацией.');
             }
 
             $runtime = $this->compileScenarioBuilderV3RuntimeAction->handle($version, $currentRevision);

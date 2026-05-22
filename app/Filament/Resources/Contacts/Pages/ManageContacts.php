@@ -6,30 +6,31 @@ use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Pages\ManageRecords;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
+use App\Models\ContactPhoneNumber;
 use App\Models\Tag;
 use App\Models\User;
-use App\Services\Contacts\AssignContactTagAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
+use App\Services\Contacts\AssignContactTagAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\DismissCrossChannelIdentityAmbiguityReviewAction;
-use App\Services\Contacts\RemoveContactTagAction;
-use App\Services\Contacts\ResolveCrossChannelIdentityAmbiguityReviewAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
+use App\Services\Contacts\RemoveContactTagAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
+use App\Services\Contacts\ResolveCrossChannelIdentityAmbiguityReviewAction;
 use App\Services\Contacts\ResolveRootContactAction;
-use App\Services\Contacts\SetContactAutoReplyEnabledAction;
 use App\Services\Contacts\SetContactAssigneeAction;
-use App\Services\Contacts\UpdateContactProfileAction;
+use App\Services\Contacts\SetContactAutoReplyEnabledAction;
 use App\Services\Contacts\UpdateContactPhoneAction;
+use App\Services\Contacts\UpdateContactProfileAction;
 use App\Services\DataCollection\ResumeContactDataCollectionAction;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Model;
-use RuntimeException;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use RuntimeException;
 use Throwable;
 
 class ManageContacts extends ManageRecords
@@ -37,32 +38,59 @@ class ManageContacts extends ManageRecords
     protected static string $resource = ContactResource::class;
 
     public bool $showAssignContactDialog = false;
+
     public string $selectedAssigneeId = '';
+
     public bool $showAddTagDialog = false;
+
     public string $selectedTagId = '';
+
     public bool $showEditPhoneDialog = false;
+
     public string $editingPhoneId = '';
+
     public string $editingPhoneRaw = '';
+
     public bool $showEditProfileDialog = false;
+
     public string $editingFirstName = '';
+
     public string $editingLastName = '';
+
     public string $editingGender = '';
+
     public string $editingAgeYears = '';
+
     public string $editingAgeRange = '';
+
     public string $editingBirthDate = '';
+
     public string $editingCountry = '';
+
     public string $editingCity = '';
+
     public string $editingRegion = '';
+
     public bool $showDeletePhoneDialog = false;
+
     public string $deletingPhoneId = '';
+
     public string $deletingPhoneLabel = '';
+
     public bool $showDeleteContactDialog = false;
+
     public string $deletingContactLabel = '';
+
     public bool $deletingContactHasMergeHistory = false;
+
     public bool $showResolveCrossChannelIdentityReviewDialog = false;
+
     public string $resolvingCrossChannelIdentityReviewId = '';
+
     public string $resolvingCrossChannelIdentityIdentityKey = '';
+
     public string $resolvingCrossChannelIdentityAnchorLabel = '';
+
     public string $selectedResolvedRoutedContactId = '';
 
     /**
@@ -99,7 +127,7 @@ class ManageContacts extends ManageRecords
         ];
     }
 
-    protected function resolveTableRecord(?string $key): Model | array | null
+    protected function resolveTableRecord(?string $key): Model|array|null
     {
         if ($key === null) {
             return null;
@@ -473,6 +501,7 @@ class ManageContacts extends ManageRecords
                     $firstName,
                     Contact::FIRST_NAME_SOURCE_MANUAL,
                     ApplyContactFirstNameAction::REASON_MANUAL_EDIT,
+                    Contact::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL,
                 );
                 $contact = $applyResult->changed ? $contact->fresh() : $contact;
             }
@@ -867,7 +896,7 @@ class ManageContacts extends ManageRecords
         $employee = auth()->user();
 
         if (! $employee instanceof User) {
-            throw new \RuntimeException('Не удалось определить текущего сотрудника.');
+            throw new RuntimeException('Не удалось определить текущего сотрудника.');
         }
 
         return $employee;
@@ -925,7 +954,7 @@ class ManageContacts extends ManageRecords
         };
     }
 
-    protected function resolveMountedContactPhoneNumber(int|string $phoneId): \App\Models\ContactPhoneNumber
+    protected function resolveMountedContactPhoneNumber(int|string $phoneId): ContactPhoneNumber
     {
         $record = $this->getMountedTableActionRecord();
 
@@ -937,7 +966,7 @@ class ManageContacts extends ManageRecords
             ->whereKey((int) $phoneId)
             ->first();
 
-        if (! $phoneNumber instanceof \App\Models\ContactPhoneNumber) {
+        if (! $phoneNumber instanceof ContactPhoneNumber) {
             throw new RuntimeException('Не удалось определить выбранный номер телефона.');
         }
 

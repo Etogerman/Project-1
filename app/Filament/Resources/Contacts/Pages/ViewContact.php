@@ -297,6 +297,7 @@ class ViewContact extends ViewRecord
         return [
             $this->makeRow('Имя', 'first_name', $record->first_name ?? '—', $profileAction),
             $this->makeRow('Откуда знаем имя?', 'first_name_source', $this->resolveFirstNameSourceValue($record)),
+            $this->makeRow('Как обработали имя?', 'first_name_resolution_method', $this->resolveFirstNameResolutionMethodValue($record)),
             $this->makeRow('Фамилия', 'last_name', $record->last_name ?? '—', $profileAction),
             $this->makeRow('Пол', 'gender', Contact::formatGender($record->gender), $profileAction),
             $this->makeRow('Возраст', 'effective_age_years', $record->effective_age_years !== null ? (string) $record->effective_age_years : '—'),
@@ -497,8 +498,7 @@ class ViewContact extends ViewRecord
         string $value,
         ?array $action = null,
         array $items = [],
-    ): array
-    {
+    ): array {
         return [
             'label' => $label,
             'key' => $key,
@@ -581,6 +581,21 @@ class ViewContact extends ViewRecord
 
         if ($label === null) {
             return 'Источник не определён';
+        }
+
+        return $label;
+    }
+
+    protected function resolveFirstNameResolutionMethodValue(Contact $record): string
+    {
+        if (! filled($record->first_name)) {
+            return '—';
+        }
+
+        $label = Contact::formatFirstNameResolutionMethod($record->first_name_resolution_method);
+
+        if ($label === null) {
+            return 'Не указано';
         }
 
         return $label;

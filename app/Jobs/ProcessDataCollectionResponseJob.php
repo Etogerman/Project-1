@@ -2,10 +2,18 @@
 
 namespace App\Jobs;
 
-use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactIdentity;
 use App\Models\Message;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
+use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
+use App\Services\Bots\TelegramBotApiService;
+use App\Services\Contacts\ApplyContactFirstNameAction;
+use App\Services\Contacts\SyncContactRussianRegionAction;
 use App\Services\DataCollection\DataCollectionFallbackTransitionResolver;
 use App\Services\DataCollection\DataCollectionPromptHelper;
 use App\Services\DataCollection\ExtractCityAction;
@@ -13,14 +21,6 @@ use App\Services\DataCollection\ExtractCountryAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
-use App\Services\Bots\ChannelActivityLogger;
-use App\Services\Bots\MaxBotApiService;
-use App\Services\Bots\SendBotDialogTextAction;
-use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
-use App\Services\Contacts\ApplyContactFirstNameAction;
-use App\Services\Contacts\SyncContactRussianRegionAction;
-use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
-use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -28,7 +28,6 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
-use InvalidArgumentException;
 use Throwable;
 
 class ProcessDataCollectionResponseJob implements ShouldQueue
@@ -162,6 +161,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
             );
+
             return;
         }
 
@@ -191,6 +191,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
             );
+
             return;
         }
 
@@ -364,6 +365,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             $firstName,
             Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+            is_string($extraction['resolution_method'] ?? null) ? $extraction['resolution_method'] : null,
         );
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
@@ -392,13 +394,13 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $dialogIdentity = $message->dialog?->currentContactIdentity;
 
-        if ($dialogIdentity instanceof \App\Models\ContactIdentity && filled($dialogIdentity->display_name)) {
+        if ($dialogIdentity instanceof ContactIdentity && filled($dialogIdentity->display_name)) {
             return trim((string) $dialogIdentity->display_name);
         }
 
         $messageIdentity = $message->contactIdentity;
 
-        if ($messageIdentity instanceof \App\Models\ContactIdentity && filled($messageIdentity->display_name)) {
+        if ($messageIdentity instanceof ContactIdentity && filled($messageIdentity->display_name)) {
             return trim((string) $messageIdentity->display_name);
         }
 
@@ -409,7 +411,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             ->value('current_contact_identity_id');
 
         if ($latestDialogIdentityId !== null) {
-            $displayName = \App\Models\ContactIdentity::query()
+            $displayName = ContactIdentity::query()
                 ->whereKey($latestDialogIdentityId)
                 ->value('display_name');
 
@@ -1550,9 +1552,6 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
     }
 
-    /**
-     * @param  mixed  $default
-     */
     protected function fieldConfig(?string $field, string $key, mixed $default = null): mixed
     {
         return $this->promptHelper()->fieldConfig($field, $key, $default);
@@ -1767,7 +1766,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
     /**
      * @return string|'skip'|null
      */
-    protected function resolveRussianRegionConfirmInput(Contact $contact, string $replyText): string|null
+    protected function resolveRussianRegionConfirmInput(Contact $contact, string $replyText): ?string
     {
         return $this->promptHelper()->resolveRussianRegionConfirmInput($contact, $replyText);
     }

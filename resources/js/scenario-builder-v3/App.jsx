@@ -100,6 +100,12 @@ const ACTION_FIELD_VALUE_OPTIONS = {
 };
 const ACTION_CHECK_DATA_OUTPUTS = [
     { id: 'data_found', label: 'Найдено', source: 'action', action_result_id: 'data_found' },
+    {
+        id: 'data_manual_required',
+        label: 'Требует уточнения',
+        source: 'action',
+        action_result_id: 'data_manual_required',
+    },
     { id: 'data_not_found', label: 'Не найдено', source: 'action', action_result_id: 'data_not_found' },
 ];
 const ACTION_CHECK_SOURCE_OPTIONS = [
@@ -632,8 +638,20 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     }
 
     function removeBlock(clientKey) {
-        updateBlocks(blocks.filter((block) => block.client_key !== clientKey));
-        updateEdges(edges.filter((edge) => edge.source?.client_key !== clientKey && edge.target?.client_key !== clientKey));
+        setState((current) => {
+            const currentBlocks = current.builder?.blocks ?? [];
+            const currentEdges = current.builder?.edges ?? [];
+            const nextBlocks = currentBlocks.filter((block) => block.client_key !== clientKey);
+
+            return {
+                ...current,
+                builder: {
+                    ...current.builder,
+                    blocks: nextBlocks,
+                    edges: filterEdgesForBlocks(currentEdges, nextBlocks),
+                },
+            };
+        });
         setSelectedBlockKey((current) => (current === clientKey ? null : current));
         setSelectedEdgeKey(null);
         setIsPanelCollapsed(false);
@@ -770,9 +788,11 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }
 
         if (drag.type === 'edge-rewire') {
-            const targetBlock = blockAtPointer(event);
+            const target = drag.endpoint === 'source'
+                ? sourceDropAtPointer(event)
+                : blockAtPointer(event);
 
-            setRewireTargetKey(targetBlock?.client_key ?? null);
+            setRewireTargetKey(target?.client_key ?? target?.block?.client_key ?? null);
             event.preventDefault();
 
             return;
@@ -839,15 +859,127 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         return hit ?? null;
     }
 
-    function finishEdgeRewire(drag, event) {
-        const edge = edges.find((item) => item.client_key === drag.edgeKey);
+    function sourceDropAtPointer(event) {
+        const point = worldPointFromEvent(event);
+
+        if (! point) {
+            return null;
+        }
+
+        const portHit = sourcePortAtPoint(point);
+
+        if (portHit) {
+            return portHit;
+        }
+
         const block = blockAtPointer(event);
 
-        if (! edge || ! block) {
+        if (! block) {
+            return null;
+        }
+
+        return {
+            block,
+            output: outputAtPoint(block, point) ?? DEFAULT_OUTPUT,
+        };
+    }
+
+    function sourcePortAtPoint(point) {
+        const maxDistance = 22 / view.zoom;
+        let hit = null;
+
+        Object.entries(anchors.ports ?? {}).forEach(([key, anchor]) => {
+            const parsed = parsePortAnchorKey(key);
+
+            if (! parsed) {
+                return;
+            }
+
+            const distance = Math.hypot(point.x - anchor.x, point.y - anchor.y);
+
+            if (distance > maxDistance || (hit && distance >= hit.distance)) {
+                return;
+            }
+
+            const block = blocks.find((item) => item.client_key === parsed.blockKey);
+
+            if (! block) {
+                return;
+            }
+
+            const output = blockOutputById(block, parsed.outputId);
+
+            if (! output) {
+                return;
+            }
+
+            hit = {
+                block,
+                output,
+                distance,
+            };
+        });
+
+        return hit ? { block: hit.block, output: hit.output } : null;
+    }
+
+    function outputAtPoint(block, point) {
+        const rect = blockRect(block, anchors);
+
+        if (
+            point.x < rect.x - 28
+            || point.x > rect.x + rect.width + 28
+            || point.y < rect.y
+            || point.y > rect.y + rect.height
+        ) {
+            return null;
+        }
+
+        const outputs = visibleBlockOutputs(block);
+
+        if (outputs.length === 0) {
+            return null;
+        }
+
+        const rowStep = PORT_ROW_HEIGHT + PORT_ROW_GAP;
+        const top = rect.y + portsTopOffset(block);
+        const index = Math.floor((point.y - top) / rowStep);
+        const rowStart = top + (index * rowStep);
+
+        if (
+            index < 0
+            || index >= outputs.length
+            || point.y < rowStart
+            || point.y > rowStart + PORT_ROW_HEIGHT
+        ) {
+            return null;
+        }
+
+        return outputs[index] ?? null;
+    }
+
+    function blockOutputById(block, outputId) {
+        if (outputId === null) {
+            return DEFAULT_OUTPUT;
+        }
+
+        return blockOutputs(block).find((output) => output.id === outputId) ?? null;
+    }
+
+    function finishEdgeRewire(drag, event) {
+        const edge = edges.find((item) => item.client_key === drag.edgeKey);
+
+        if (! edge) {
             return;
         }
 
         if (drag.endpoint === 'target') {
+            const block = blockAtPointer(event);
+
+            if (! block) {
+                return;
+            }
+
             if (block.client_key === edge.source?.client_key) {
                 setNotice('Конец стрелки нельзя привязать к её начальному блоку.');
 
@@ -870,19 +1002,21 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             return;
         }
 
+        const drop = sourceDropAtPointer(event);
+
+        if (! drop) {
+            return;
+        }
+
+        const { block, output } = drop;
+
         if (block.client_key === edge.target?.client_key) {
             setNotice('Начало стрелки нельзя привязать к её конечному блоку.');
 
             return;
         }
 
-        const outputId = edge.source?.output_id ?? null;
-
-        if (outputId !== null && ! blockOutputs(block).some((output) => output.id === outputId)) {
-            setNotice('У выбранного блока нет такого выхода. Перенесите начало стрелки на подходящий вариант.');
-
-            return;
-        }
+        const outputId = output.id ?? null;
 
         const source = {
             block_id: block.id,
@@ -898,7 +1032,11 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             ))
             .map((item) => (
                 item.client_key === edge.client_key
-                    ? { ...item, source }
+                    ? {
+                        ...item,
+                        source,
+                        condition_payload: rewiredEdgePayload(edge.condition_payload ?? {}, output),
+                    }
                     : item
             )));
         selectEdge(edge.client_key);
@@ -1294,7 +1432,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             })),
         }));
 
-        updateEdges(edges.filter((edge) => edge.source?.client_key !== clientKey || edge.source?.output_id !== buttonId));
+        updateEdges((currentEdges) => currentEdges.filter((edge) => edge.source?.client_key !== clientKey || edge.source?.output_id !== buttonId));
     }
 
     function removeAiVariant(clientKey, variantId) {
@@ -1322,7 +1460,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             });
         });
 
-        updateEdges(edges.filter((edge) => edge.source?.client_key !== clientKey || edge.source?.output_id !== variantId));
+        updateEdges((currentEdges) => currentEdges.filter((edge) => edge.source?.client_key !== clientKey || edge.source?.output_id !== variantId));
     }
 
     function updateStartChannels(clientKey, channelId, checked) {
@@ -1342,6 +1480,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             ...block,
             settings_payload: syncOutputs(normalizeSettings(block.settings_payload)),
         }));
+        const edgesForSave = filterEdgesForBlocks(edges, blocksForSave);
 
         return {
             draft_version_id: state.scenario.draft_version_id,
@@ -1351,7 +1490,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                 active_sheet_id: state.builder.active_sheet_id || 'main',
                 sheets: state.builder.sheets?.length ? state.builder.sheets : [MAIN_SHEET],
                 blocks: blocksForSave,
-                edges,
+                edges: edgesForSave,
                 visible_scope: state.builder.visible_scope || { block_ids: [], edge_ids: [] },
             },
         };
@@ -5652,12 +5791,57 @@ function edgePayload(outputId, label, kind = null) {
     };
 }
 
+function rewiredEdgePayload(payload, output) {
+    const outputId = output.id ?? null;
+    const kind = output.kind ?? (outputId === null ? 'default' : 'button');
+    const base = edgePayload(outputId, output.label, kind);
+    const mode = outputId === null && ['automatic', 'wait_reply'].includes(payload.mode)
+        ? payload.mode
+        : base.mode;
+    const next = {
+        ...base,
+        ...payload,
+        from_output_id: outputId,
+        label: output.label,
+        mode,
+    };
+
+    if (outputId !== null || mode === 'automatic') {
+        next.match = base.match;
+    }
+
+    return next;
+}
+
 function sameSource(left, right) {
     return left?.client_key === right?.client_key && (left?.output_id ?? null) === (right?.output_id ?? null);
 }
 
+function filterEdgesForBlocks(edges, blocks) {
+    const blockKeys = new Set(blocks.map((block) => block.client_key));
+
+    return edges.filter((edge) => (
+        blockKeys.has(edge?.source?.client_key)
+        && blockKeys.has(edge?.target?.client_key)
+    ));
+}
+
 function portAnchorKey(blockKey, outputId, side = 'right') {
     return `${blockKey}:${outputId ?? 'default'}:${side}`;
+}
+
+function parsePortAnchorKey(key) {
+    const parts = String(key ?? '').split(':');
+
+    if (parts.length !== 3) {
+        return null;
+    }
+
+    return {
+        blockKey: parts[0],
+        outputId: parts[1] === 'default' ? null : parts[1],
+        side: parts[2],
+    };
 }
 
 function connectedOutputIds(block, edges) {

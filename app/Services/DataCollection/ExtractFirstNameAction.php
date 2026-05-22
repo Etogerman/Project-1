@@ -2,10 +2,11 @@
 
 namespace App\Services\DataCollection;
 
+use App\Models\Contact;
 use App\Services\AI\GeminiApiService;
+use Illuminate\Support\Str;
 use Locale;
 use ResourceBundle;
-use Illuminate\Support\Str;
 use RuntimeException;
 
 class ExtractFirstNameAction
@@ -19,7 +20,7 @@ class ExtractFirstNameAction
     ) {}
 
     /**
-     * @return array{decision: string, first_name: ?string}
+     * @return array{decision: string, first_name: ?string, resolution_method: ?string}
      */
     public function handle(string $userReply, ?string $messengerName = null): array
     {
@@ -29,6 +30,7 @@ class ExtractFirstNameAction
             return [
                 'decision' => self::DECISION_ACCEPT,
                 'first_name' => $directFirstName,
+                'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
             ];
         }
 
@@ -38,6 +40,7 @@ class ExtractFirstNameAction
             return [
                 'decision' => self::DECISION_ACCEPT,
                 'first_name' => $phraseFirstName,
+                'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
             ];
         }
 
@@ -47,6 +50,7 @@ class ExtractFirstNameAction
             return [
                 'decision' => self::DECISION_ACCEPT,
                 'first_name' => $shortMultiTokenFirstName,
+                'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
             ];
         }
 
@@ -66,6 +70,7 @@ class ExtractFirstNameAction
             return [
                 'decision' => self::DECISION_RETRY,
                 'first_name' => null,
+                'resolution_method' => null,
             ];
         }
 
@@ -78,6 +83,7 @@ class ExtractFirstNameAction
         return [
             'decision' => self::DECISION_ACCEPT,
             'first_name' => $firstName,
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS,
         ];
     }
 
@@ -513,7 +519,7 @@ TEXT;
 
         foreach (['ru', 'en'] as $locale) {
             $bundle = ResourceBundle::create($locale, 'ICUDATA-region');
-            $countries = $bundle instanceof ResourceBundle ? ($bundle['Countries'] ?? null) : null;
+            $countries = $bundle instanceof ResourceBundle ? $bundle->get('Countries') : null;
 
             if (! $countries instanceof ResourceBundle) {
                 continue;
@@ -540,6 +546,30 @@ TEXT;
             }
         }
 
+        foreach ($this->countryAliases() as $canonicalName => $aliases) {
+            foreach ($aliases as $alias) {
+                $normalizedName = $this->normalizeLookupKey($alias);
+
+                if ($normalizedName !== null) {
+                    $lookup[$normalizedName] = $canonicalName;
+                }
+            }
+        }
+
         return $lookup;
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    protected function countryAliases(): array
+    {
+        return [
+            'Венгрия' => ['Венгрия'],
+            'Казахстан' => ['Казахстан'],
+            'Кения' => ['Кения'],
+            'Мозамбик' => ['Мозамбик'],
+            'Россия' => ['Россия', 'Российская Федерация', 'РФ'],
+        ];
     }
 }

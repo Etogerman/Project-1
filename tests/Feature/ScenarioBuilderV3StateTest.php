@@ -8,6 +8,7 @@ use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
+use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
@@ -638,7 +639,8 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
             ->assertOk()
             ->assertJsonPath('builder.blocks.1.settings_payload.outputs.0.id', 'data_found')
-            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.1.id', 'data_not_found')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.1.id', 'data_manual_required')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.2.id', 'data_not_found')
             ->json();
 
         $this->actingAs($admin)
@@ -1799,6 +1801,73 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertUnprocessable();
     }
 
+    public function test_put_state_can_delete_block_while_preserving_rewired_existing_edge(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_delete_block_rewire_edge',
+            'name' => 'V3 Delete Block Rewire Edge',
+        ]);
+        $draft = $scenario->draftVersion()->firstOrFail();
+        $source = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $draft->id,
+            'type' => 'state',
+            'title' => 'Удаляемый блок',
+            'position_x' => 64,
+            'position_y' => 64,
+            'settings_payload' => $this->messageSettings('Удалить'),
+        ]);
+        $replacement = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $draft->id,
+            'type' => 'state',
+            'title' => 'Новый источник',
+            'position_x' => 380,
+            'position_y' => 64,
+            'settings_payload' => $this->messageSettings('Источник'),
+        ]);
+        $target = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $draft->id,
+            'type' => 'state',
+            'title' => 'Цель',
+            'position_x' => 700,
+            'position_y' => 64,
+            'settings_payload' => $this->messageSettings('Цель'),
+        ]);
+        $edge = ScenarioBuilderEdge::query()->create([
+            'scenario_version_id' => $draft->id,
+            'from_scenario_builder_block_id' => $source->id,
+            'to_scenario_builder_block_id' => $target->id,
+            'condition_payload' => $this->edgePayload(null, 'Дальше'),
+            'sort_order' => 1,
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = collect($state['builder']['blocks'])
+            ->reject(fn (array $block): bool => (int) $block['id'] === (int) $source->id)
+            ->values()
+            ->all();
+        $rewiredEdge = $state['builder']['edges'][0];
+        $rewiredEdge['source'] = [
+            'block_id' => (int) $replacement->id,
+            'client_key' => 'block_'.$replacement->id,
+            'output_id' => null,
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [$rewiredEdge]))
+            ->assertOk()
+            ->assertJsonPath('builder.edges.0.id', $edge->id)
+            ->assertJsonPath('builder.edges.0.source.block_id', $replacement->id);
+
+        $this->assertDatabaseMissing('scenario_builder_blocks', [
+            'id' => $source->id,
+        ]);
+        $this->assertDatabaseHas('scenario_builder_edges', [
+            'id' => $edge->id,
+            'from_scenario_builder_block_id' => $replacement->id,
+            'to_scenario_builder_block_id' => $target->id,
+        ]);
+    }
+
     public function test_put_state_preserves_existing_start_condition_db_type(): void
     {
         $admin = $this->adminUser();
@@ -2767,6 +2836,13 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'source' => 'action',
                     'module_id' => 'mod_action',
                     'action_result_id' => 'data_found',
+                ],
+                [
+                    'id' => 'data_manual_required',
+                    'label' => 'Требует уточнения',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'data_manual_required',
                 ],
                 [
                     'id' => 'data_not_found',

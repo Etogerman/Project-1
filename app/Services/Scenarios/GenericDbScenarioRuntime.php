@@ -77,8 +77,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_PENDING_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY = 'v3.pending_remove_telegram_keyboard';
 
-    private const V3_TELEGRAM_KEYBOARD_REMOVAL_TEXT = "\u{2060}";
-
     private const V3_DIALOG_FIELDS_MAX_BYTES = 65536;
 
     private const V3_DIALOG_USER_FIELDS_MAX = 50;
@@ -1090,13 +1088,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $firstName,
                 Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
                 ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+                is_string($extraction['resolution_method'] ?? null) ? $extraction['resolution_method'] : null,
             );
 
             if (! $result->changed) {
                 return;
             }
 
-            $this->queueBitrix24ContactSyncAction->handle($contact);
+            if ($result->bitrix24RelevantChanged) {
+                $this->queueBitrix24ContactSyncAction->handle($contact);
+            }
 
             if (
                 $result->newSource === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED
@@ -1467,10 +1468,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     );
                 }
 
-                if (
-                    $message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE
-                    && $message->channel?->platform === Channel::PLATFORM_TELEGRAM
-                ) {
+                if ($this->v3ShouldRemoveTelegramReplyKeyboardAfterInbound($message, $block)) {
                     $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
                 }
 
@@ -1979,7 +1977,13 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         return match ($fieldKey) {
             'phone' => $this->applyV3ContactPhoneCapture($message, $lockedContact, $capturedValue),
-            'first_name' => $this->applyV3ContactFirstNameCapture($lockedContact, $value),
+            'first_name' => $this->applyV3ContactFirstNameCapture(
+                $lockedContact,
+                $value,
+                is_string($capture['first_name_resolution_method'] ?? null)
+                    ? $capture['first_name_resolution_method']
+                    : Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+            ),
             'last_name', 'country', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
             'gender' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions()),
             'age_range' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::ageRangeOptions()),
@@ -2018,16 +2022,20 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return true;
     }
 
-    private function applyV3ContactFirstNameCapture(Contact $contact, string $value): bool
-    {
+    private function applyV3ContactFirstNameCapture(
+        Contact $contact,
+        string $value,
+        ?string $resolutionMethod = Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+    ): bool {
         $result = $this->applyContactFirstNameAction->handle(
             $contact,
             $value,
             Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+            $resolutionMethod,
         );
 
-        if ($result->changed) {
+        if ($result->bitrix24RelevantChanged) {
             $this->queueBitrix24ContactSyncAction->handle($contact);
         }
 
@@ -2193,8 +2201,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     $removeTelegramKeyboard = true;
                     $clearPendingTelegramKeyboardRemoval = true;
                 } elseif ($replyMarkupKind === 'inline_message') {
-                    $removeTelegramKeyboardBeforeMessage = true;
-                    $clearPendingTelegramKeyboardRemoval = true;
+                    // Telegram cannot remove a reply keyboard and show inline buttons in the same message.
+                    // Keep the cleanup pending instead of sending a temporary cleanup message.
+                    $clearPendingTelegramKeyboardRemoval = false;
                 } elseif ($replyMarkupKind === 'reply_keyboard') {
                     $clearPendingTelegramKeyboardRemoval = true;
                 }
@@ -2695,8 +2704,20 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         if ($lookup['matched'] === true && trim((string) $lookup['value']) !== '') {
             data_set($statePayload, "v3.variables.$targetVariableKey", trim((string) $lookup['value']));
+            data_set(
+                $statePayload,
+                "v3.variable_meta.$targetVariableKey.first_name_resolution_method",
+                Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
+            );
 
             return ['state_payload' => $statePayload, 'output_id' => 'data_found'];
+        }
+
+        if (in_array($lookup['status'] ?? null, [
+            LookupScenarioDataDictionaryAction::STATUS_AMBIGUOUS,
+            LookupScenarioDataDictionaryAction::STATUS_MANUAL_REQUIRED,
+        ], true)) {
+            return ['state_payload' => $statePayload, 'output_id' => 'data_manual_required'];
         }
 
         return ['state_payload' => $statePayload, 'output_id' => 'data_not_found'];
@@ -2798,6 +2819,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $stringValue = trim((string) $value);
+        $firstNameResolutionMethod = $targetField === 'first_name'
+            ? ($sourceType === 'static_value'
+                ? Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT
+                : $this->v3ActionFirstNameResolutionMethod($statePayload, $sourceBlockId, $sourceFieldKey))
+            : null;
 
         if ($targetScope === 'dialog') {
             return $this->applyV3WriteDialogFieldAction($message, $targetField, $stringValue);
@@ -2812,6 +2838,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return $this->applyV3TransitionCaptureToContact($message, [
             'field_key' => $targetField,
             'data_type' => $dataType,
+            'first_name_resolution_method' => $firstNameResolutionMethod,
         ], [
             'valid' => true,
             'value' => $stringValue,
@@ -2896,6 +2923,55 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $latest = $candidates->first();
 
         return is_array($latest) ? data_get($latest, "data.$sourceFieldKey") : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3ActionFirstNameResolutionMethod(array $statePayload, string $sourceBlockId, string $sourceFieldKey): ?string
+    {
+        if ($sourceFieldKey === '') {
+            return null;
+        }
+
+        if (
+            $sourceBlockId !== ''
+            && trim((string) data_get($statePayload, "v3.ai_analysis.$sourceBlockId.data.$sourceFieldKey", '')) !== ''
+        ) {
+            return Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS;
+        }
+
+        $variableMethod = $this->normalizeV3FirstNameResolutionMethod(
+            data_get($statePayload, "v3.variable_meta.$sourceFieldKey.first_name_resolution_method"),
+        );
+
+        if ($variableMethod !== null) {
+            return $variableMethod;
+        }
+
+        $analyses = data_get($statePayload, 'v3.ai_analysis', []);
+
+        if (! is_array($analyses)) {
+            return null;
+        }
+
+        $hasAiData = collect($analyses)
+            ->contains(fn (mixed $analysis): bool => is_array($analysis)
+                && is_array($analysis['data'] ?? null)
+                && trim((string) data_get($analysis, "data.$sourceFieldKey", '')) !== '');
+
+        return $hasAiData ? Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS : null;
+    }
+
+    private function normalizeV3FirstNameResolutionMethod(mixed $method): ?string
+    {
+        if (! is_string($method) || trim($method) === '') {
+            return null;
+        }
+
+        $method = trim($method);
+
+        return in_array($method, Contact::allowedFirstNameResolutionMethods(), true) ? $method : null;
     }
 
     /**
@@ -5407,66 +5483,6 @@ TEXT;
         return $delivery['sent_message'] instanceof Message;
     }
 
-    private function removeV3TelegramReplyKeyboardBeforeMessage(Message $message, Channel $channel): void
-    {
-        if ($channel->platform !== Channel::PLATFORM_TELEGRAM) {
-            return;
-        }
-
-        $dialog = $message->dialog instanceof Dialog
-            ? $message->dialog->loadMissing('currentContactIdentity')
-            : ($message->dialog_id !== null
-                ? Dialog::query()->with('currentContactIdentity')->find($message->dialog_id)
-                : null);
-
-        if (! $dialog instanceof Dialog || ! filled($dialog->external_chat_id)) {
-            return;
-        }
-
-        try {
-            $delivery = $this->telegramBotApiService->sendTextMessage(
-                $channel,
-                $dialog->external_chat_id,
-                $dialog->currentContactIdentity?->external_user_id,
-                self::V3_TELEGRAM_KEYBOARD_REMOVAL_TEXT,
-                ['remove_keyboard' => true],
-                Message::TEXT_FORMAT_PLAIN_TEXT,
-                disableNotification: true,
-            );
-        } catch (Throwable $throwable) {
-            Log::warning('scenario.v3_telegram_remove_keyboard_before_message_failed', [
-                'scenario_code' => $this->code(),
-                'dialog_id' => $dialog->id,
-                'message_id' => $message->id,
-                'exception' => get_class($throwable),
-                'error_message' => $this->safeV3TelegramApiErrorMessage($throwable->getMessage(), $channel),
-            ]);
-
-            return;
-        }
-
-        if (! filled($delivery->externalMessageId)) {
-            return;
-        }
-
-        try {
-            $this->telegramBotApiService->deleteMessage(
-                $channel,
-                $dialog->external_chat_id,
-                (string) $delivery->externalMessageId,
-            );
-        } catch (Throwable $throwable) {
-            Log::warning('scenario.v3_telegram_remove_keyboard_cleanup_delete_failed', [
-                'scenario_code' => $this->code(),
-                'dialog_id' => $dialog->id,
-                'message_id' => $message->id,
-                'cleanup_message_id' => $delivery->externalMessageId,
-                'exception' => get_class($throwable),
-                'error_message' => $this->safeV3TelegramApiErrorMessage($throwable->getMessage(), $channel),
-            ]);
-        }
-    }
-
     /**
      * @template T
      *
@@ -5531,10 +5547,6 @@ TEXT;
         }
 
         $content = $this->prepareMessageContentAction->handle($text, $textFormat);
-
-        if ($removeTelegramKeyboardBeforeMessage) {
-            $this->removeV3TelegramReplyKeyboardBeforeMessage($message, $channel);
-        }
 
         $sendResult = $this->sendBotDialogTextAction->handleMessage(
             $message,
@@ -5793,6 +5805,28 @@ TEXT;
     private function v3PendingTelegramKeyboardRemoval(array $statePayload): bool
     {
         return (bool) data_get($statePayload, self::V3_PENDING_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY, false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3ShouldRemoveTelegramReplyKeyboardAfterInbound(Message $message, array $block): bool
+    {
+        if ($message->channel?->platform !== Channel::PLATFORM_TELEGRAM) {
+            return false;
+        }
+
+        if ($message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
+            return true;
+        }
+
+        $buttonRows = $this->v3WaitingButtonRows($block, $message->channel);
+
+        if ($buttonRows === []) {
+            return false;
+        }
+
+        return $this->v3TelegramReplyMarkupKind(false, $buttonRows, $this->v3ButtonPlacement($block)) === 'reply_keyboard';
     }
 
     /**

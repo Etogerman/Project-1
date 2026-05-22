@@ -7,12 +7,12 @@ use App\Models\ContactDuplicateReview;
 use App\Models\ContactPhoneNumber;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\AssignContactTagAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\DismissCrossChannelIdentityAmbiguityReviewAction;
-use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
 use App\Services\Contacts\RemoveContactTagAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
@@ -426,6 +426,7 @@ trait InteractsWithContactWorkspace
                     $firstName,
                     Contact::FIRST_NAME_SOURCE_MANUAL,
                     ApplyContactFirstNameAction::REASON_MANUAL_EDIT,
+                    Contact::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL,
                 );
                 $contact = $applyResult->changed ? $contact->fresh() : $contact;
             }

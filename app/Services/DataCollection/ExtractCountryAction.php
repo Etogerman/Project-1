@@ -3,9 +3,9 @@
 namespace App\Services\DataCollection;
 
 use App\Services\AI\GeminiApiService;
+use Illuminate\Support\Str;
 use Locale;
 use ResourceBundle;
-use Illuminate\Support\Str;
 use RuntimeException;
 
 class ExtractCountryAction
@@ -174,7 +174,7 @@ TEXT;
 
         foreach (['ru', 'en'] as $locale) {
             $bundle = ResourceBundle::create($locale, 'ICUDATA-region');
-            $countries = $bundle instanceof ResourceBundle ? ($bundle['Countries'] ?? null) : null;
+            $countries = $bundle instanceof ResourceBundle ? $bundle->get('Countries') : null;
 
             if (! $countries instanceof ResourceBundle) {
                 continue;
@@ -201,6 +201,30 @@ TEXT;
             }
         }
 
+        foreach ($this->countryAliases() as $canonicalName => $aliases) {
+            foreach ($aliases as $alias) {
+                $normalizedName = $this->normalizeLookupKey($alias);
+
+                if ($normalizedName !== null) {
+                    $lookup[$normalizedName] = $canonicalName;
+                }
+            }
+        }
+
         return $lookup;
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    protected function countryAliases(): array
+    {
+        return [
+            'Венгрия' => ['Венгрия'],
+            'Казахстан' => ['Казахстан'],
+            'Кения' => ['Кения'],
+            'Мозамбик' => ['Мозамбик'],
+            'Россия' => ['Россия', 'Российская Федерация', 'РФ'],
+        ];
     }
 }

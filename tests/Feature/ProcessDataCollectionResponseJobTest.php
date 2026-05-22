@@ -48,6 +48,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
 
         $this->assertSame('Николай', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT, $contact->first_name_resolution_method);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_last_prompted_field);
@@ -93,6 +94,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
 
         $this->assertSame('Николай', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT, $contact->first_name_resolution_method);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);
@@ -177,6 +179,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
 
         $this->assertSame('Герман', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT, $contact->first_name_resolution_method);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY, $contact->data_collection_current_field);
         $this->assertSame(0, $contact->data_collection_attempts_count);

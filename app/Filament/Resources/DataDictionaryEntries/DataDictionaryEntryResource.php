@@ -6,6 +6,7 @@ use App\Filament\Resources\DataDictionaryEntries\Pages\ManageDataDictionaryEntri
 use App\Models\DataDictionaryEntry;
 use BackedEnum;
 use Filament\Actions\DeleteAction;
+use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
@@ -206,6 +207,10 @@ class DataDictionaryEntryResource extends Resource
                     ->icon(Heroicon::OutlinedTrash)
                     ->iconButton()
                     ->tooltip('Удалить'),
+            ])
+            ->toolbarActions([
+                DeleteBulkAction::make()
+                    ->label('Удалить выбранные'),
             ]);
     }
 

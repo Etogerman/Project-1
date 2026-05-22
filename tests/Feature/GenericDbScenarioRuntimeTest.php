@@ -621,6 +621,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $contact->refresh();
         $this->assertSame('Вася', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, $contact->first_name_resolution_method);
 
         $sentTexts = Http::recorded()
             ->map(fn (array $record): string => (string) $record[0]['text'])
@@ -717,6 +718,87 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $contact->refresh();
         $this->assertSame('Василий', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP, $contact->first_name_resolution_method);
+    }
+
+    public function test_v3_check_data_action_routes_manual_required_name(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9311]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9312]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini->shouldReceive('generateStructured')->never();
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        DataDictionaryEntry::query()->create([
+            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
+            'lookup_value' => 'Сашенька',
+            'result_value' => 'Александр',
+            'gender' => DataDictionaryEntry::GENDER_MALE,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SPOKEN,
+            'auto_apply' => false,
+            'is_active' => true,
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill(['gender' => DataDictionaryEntry::GENDER_MALE])->save();
+        $scenario = $this->createPublishedScenario('v3_check_data_manual_required_name', $this->v3CheckDataNameRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Сашенька',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('manual_required', $run->current_step);
+        $this->assertNull(data_get($run->state_payload, 'v3.variables.first_name'));
+
+        $contact->refresh();
+        $this->assertNull($contact->first_name);
+
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Как вас зовут?', 'Нужно уточнить'], $sentTexts);
     }
 
     public function test_v3_message_text_substitutes_contact_dialog_and_scenario_variables(): void
@@ -880,6 +962,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $contact->refresh();
         $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, $contact->first_name_resolution_method);
     }
 
     public function test_v3_ai_analysis_normalizes_first_name_with_dictionary_before_contact_write(): void
@@ -962,6 +1045,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $contact->refresh();
         $this->assertSame('Клавдия', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, $contact->first_name_resolution_method);
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Записали твое имя Клавдия');
@@ -1126,15 +1210,13 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
     }
 
-    public function test_v3_edit_message_action_removes_reply_keyboard_before_next_inline_buttons(): void
+    public function test_v3_edit_message_action_keeps_reply_keyboard_cleanup_pending_before_next_inline_buttons(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
                 ->push(['ok' => true, 'result' => ['message_id' => 9611]])
                 ->push(['ok' => true, 'result' => true])
-                ->push(['ok' => true, 'result' => ['message_id' => 9612]])
-                ->push(['ok' => true, 'result' => true])
-                ->push(['ok' => true, 'result' => ['message_id' => 9613]]),
+                ->push(['ok' => true, 'result' => ['message_id' => 9612]]),
         ]);
 
         $channel = $this->createTelegramChannel();
@@ -1170,14 +1252,13 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $run->refresh();
 
-        $this->assertFalse((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
+        $this->assertTrue((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
 
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+        Http::assertSentCount(3);
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage');
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true
-            && $request['disable_notification'] === true);
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
-            && $request['chat_id'] === $dialog->external_chat_id
-            && $request['message_id'] === '9612');
+            && ($request['disable_notification'] ?? false) === true);
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Выберите следующий шаг'
@@ -4236,14 +4317,12 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
     }
 
-    public function test_v3_request_phone_share_removes_reply_keyboard_before_next_inline_buttons(): void
+    public function test_v3_request_phone_share_keeps_reply_keyboard_cleanup_pending_before_next_inline_buttons(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
                 ->push(['ok' => true, 'result' => ['message_id' => 9411]])
-                ->push(['ok' => true, 'result' => ['message_id' => 9412]])
-                ->push(['ok' => true, 'result' => true])
-                ->push(['ok' => true, 'result' => ['message_id' => 9413]]),
+                ->push(['ok' => true, 'result' => ['message_id' => 9412]]),
         ]);
 
         $channel = $this->createTelegramChannel();
@@ -4303,17 +4382,15 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->handle(app(ScenarioRegistry::class));
 
         $run->refresh();
-        $this->assertFalse((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
+        $this->assertTrue((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
 
-        Http::assertSentCount(4);
+        Http::assertSentCount(2);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.keyboard.0.0.request_contact') === true);
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true
-            && $request['disable_notification'] === true);
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
-            && $request['chat_id'] === $dialog->external_chat_id
-            && $request['message_id'] === '9412');
+            && ($request['disable_notification'] ?? false) === true);
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage');
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Спасибо, телефон получен'
             && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Мужской'
@@ -7514,6 +7591,28 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 'data_type' => 'any_text',
             ],
         ];
+        $manualRequiredEdge = [
+            'id' => '25',
+            'edge_key' => 'edge_data_manual_required',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'check_name',
+            'target_block_id' => 'manual_required',
+            'from_output_id' => 'data_manual_required',
+            'label' => 'Требует уточнения',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
         $notFoundEdge = [
             'id' => '30',
             'edge_key' => 'edge_data_not_found',
@@ -7581,7 +7680,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
                                 'target_variable_key' => 'first_name',
                             ],
                         ],
-                        'action_result_edges' => [$notFoundEdge],
+                        'action_result_edges' => [$foundEdge, $manualRequiredEdge, $notFoundEdge],
                         'message' => null,
                         'buttons' => null,
                         'wait_reply_edges' => [],
@@ -7626,8 +7725,22 @@ class GenericDbScenarioRuntimeTest extends TestCase
                         'automatic_edges' => [],
                         'default_target_block_id' => null,
                     ],
+                    'manual_required' => [
+                        'id' => 'manual_required',
+                        'db_id' => 5,
+                        'kind' => 'state',
+                        'title' => 'Нужно уточнить',
+                        'message' => [
+                            'text' => 'Нужно уточнить',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
                 ],
-                'edges' => [$waitEdge, $foundEdge, $notFoundEdge],
+                'edges' => [$waitEdge, $foundEdge, $manualRequiredEdge, $notFoundEdge],
             ],
         ];
     }

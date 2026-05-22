@@ -164,11 +164,11 @@ class ValidateScenarioBuilderV3StateAction
     private function normalizeBlocks(mixed $blocks): array
     {
         if (! is_array($blocks) || ! array_is_list($blocks)) {
-            $this->fail('builder.blocks', 'Builder blocks must be a list.');
+            $this->fail('builder.blocks', 'Список блоков конструктора должен быть списком.');
         }
 
         if (count($blocks) > self::MAX_BLOCKS) {
-            $this->fail('builder.blocks', 'Builder blocks limit exceeded.');
+            $this->fail('builder.blocks', 'Превышен лимит блоков конструктора.');
         }
 
         $clientKeys = [];
@@ -796,17 +796,17 @@ class ValidateScenarioBuilderV3StateAction
         $url = trim((string) $url);
 
         if ($url === '') {
-            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'Link button URL is required.');
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'Для кнопки-ссылки нужно указать URL.');
         }
 
         if (mb_strlen($url) > 2000 || filter_var($url, FILTER_VALIDATE_URL) === false) {
-            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'Invalid link button URL.');
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'Некорректный URL кнопки-ссылки.');
         }
 
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
 
         if (! in_array($scheme, ['http', 'https'], true)) {
-            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'Link button URL must use http or https.');
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.url", 'URL кнопки-ссылки должен начинаться с http или https.');
         }
 
         return $url;
@@ -861,11 +861,11 @@ class ValidateScenarioBuilderV3StateAction
     private function normalizeEdges(mixed $edges, array $blocks): array
     {
         if (! is_array($edges) || ! array_is_list($edges)) {
-            $this->fail('builder.edges', 'Builder edges must be a list.');
+            $this->fail('builder.edges', 'Список связей конструктора должен быть списком.');
         }
 
         if (count($edges) > self::MAX_EDGES) {
-            $this->fail('builder.edges', 'Builder edges limit exceeded.');
+            $this->fail('builder.edges', 'Превышен лимит связей конструктора.');
         }
 
         $blockKeys = collect($blocks)->keyBy('client_key');
@@ -882,7 +882,7 @@ class ValidateScenarioBuilderV3StateAction
             $clientKey = $this->stringValue($edge['client_key'] ?? null, "builder.edges.$index.client_key");
 
             if (isset($clientKeys[$clientKey])) {
-                $this->fail("builder.edges.$index.client_key", 'Edge client_key must be unique.');
+                $this->fail("builder.edges.$index.client_key", 'Внутренний ключ связи должен быть уникальным.');
             }
 
             $clientKeys[$clientKey] = true;
@@ -895,18 +895,18 @@ class ValidateScenarioBuilderV3StateAction
                 $sourceKey = $source['client_key'].'|'.$sourceOutputId;
 
                 if (isset($sourceOutputs[$sourceKey])) {
-                    $this->fail("builder.edges.$index.source.output_id", 'Only one edge is allowed from one source output.');
+                    $this->fail("builder.edges.$index.source.output_id", 'От одного выхода блока может идти только одна связь.');
                 }
 
                 $sourceOutputs[$sourceKey] = true;
             }
 
             if ($sourceOutputId !== null && ! $this->blockHasOutput($source['client_key'], $sourceOutputId, $blockKeys)) {
-                $this->fail("builder.edges.$index.source.output_id", 'Source output does not exist.');
+                $this->fail("builder.edges.$index.source.output_id", 'Выход, от которого начинается связь, не найден.');
             }
 
             if ($sourceOutputId !== null && $this->blockOutputButtonType($source['client_key'], $sourceOutputId, $blockKeys) === 'link') {
-                $this->fail("builder.edges.$index.source.output_id", 'Link button cannot be used as transition source.');
+                $this->fail("builder.edges.$index.source.output_id", 'Кнопку-ссылку нельзя использовать как переход сценария.');
             }
 
             $conditionPayload = $this->normalizeConditionPayload(
@@ -919,7 +919,7 @@ class ValidateScenarioBuilderV3StateAction
 
             if (is_string($edgeKey) && $edgeKey !== '') {
                 if (isset($edgeKeys[$edgeKey])) {
-                    $this->fail("builder.edges.$index.condition_payload.edge_key", 'Edge key must be unique.');
+                    $this->fail("builder.edges.$index.condition_payload.edge_key", 'Внутренний ключ связи должен быть уникальным.');
                 }
 
                 $edgeKeys[$edgeKey] = true;

@@ -46,14 +46,14 @@ class SaveScenarioBuilderV3StateAction
 
             if (! $version instanceof ScenarioVersion) {
                 throw ValidationException::withMessages([
-                    'draft_version_id' => 'Editable scenario version was not found.',
+                    'draft_version_id' => 'Черновик сценария не найден. Обновите страницу конструктора.',
                 ]);
             }
 
             $currentRevision = $this->buildScenarioBuilderV3StateAction->revisionFor($version);
 
             if ($validated['base_revision'] !== $currentRevision) {
-                throw new HttpException(409, 'Scenario builder state was changed. Reload state before saving.');
+                throw new HttpException(409, 'Схема конструктора изменилась в другой вкладке или после предыдущего сохранения. Обновите страницу перед сохранением.');
             }
 
             $serverVisibleScope = $this->serverVisibleScope($version);
@@ -89,7 +89,7 @@ class SaveScenarioBuilderV3StateAction
 
         if ($unknownBlockIds !== [] || $unknownEdgeIds !== []) {
             throw ValidationException::withMessages([
-                'visible_scope' => 'Client visible_scope cannot contain ids that were not shown by backend.',
+                'visible_scope' => 'Список видимых элементов конструктора устарел. Обновите страницу и повторите действие.',
             ]);
         }
     }
@@ -159,7 +159,7 @@ class SaveScenarioBuilderV3StateAction
             if ($blockId !== null) {
                 if (! in_array($blockId, $serverVisibleScope['block_ids'], true)) {
                     throw ValidationException::withMessages([
-                        'builder.blocks' => 'Block does not belong to visible builder scope.',
+                        'builder.blocks' => 'Блок не относится к текущей видимой схеме конструктора. Обновите страницу и повторите действие.',
                     ]);
                 }
 
@@ -167,7 +167,7 @@ class SaveScenarioBuilderV3StateAction
 
                 if (! $model instanceof ScenarioBuilderBlock) {
                     throw ValidationException::withMessages([
-                        'builder.blocks' => 'Builder block was not found in editable version.',
+                        'builder.blocks' => 'Блок не найден в текущем черновике сценария. Обновите страницу конструктора.',
                     ]);
                 }
 
@@ -239,6 +239,7 @@ class SaveScenarioBuilderV3StateAction
                         ->whereIn('from_scenario_builder_block_id', $deletedBlockIds)
                         ->orWhereIn('to_scenario_builder_block_id', $deletedBlockIds);
                 })
+                ->whereNotIn('id', $incomingExistingEdgeIds === [] ? [0] : $incomingExistingEdgeIds)
                 ->delete();
         }
     }
@@ -263,7 +264,7 @@ class SaveScenarioBuilderV3StateAction
             if ($edgeId !== null) {
                 if (! in_array($edgeId, $serverVisibleScope['edge_ids'], true)) {
                     throw ValidationException::withMessages([
-                        'builder.edges' => 'Edge does not belong to visible builder scope.',
+                        'builder.edges' => 'Связь не относится к текущей видимой схеме конструктора. Обновите страницу и повторите действие.',
                     ]);
                 }
 
@@ -271,7 +272,7 @@ class SaveScenarioBuilderV3StateAction
 
                 if (! $model instanceof ScenarioBuilderEdge) {
                     throw ValidationException::withMessages([
-                        'builder.edges' => 'Builder edge was not found in editable version.',
+                        'builder.edges' => 'Связь не найдена в текущем черновике сценария. Обновите страницу конструктора и повторите действие.',
                     ]);
                 }
             } else {
@@ -285,7 +286,7 @@ class SaveScenarioBuilderV3StateAction
 
             if ($fromBlockId === null || $toBlockId === null) {
                 throw ValidationException::withMessages([
-                    'builder.edges' => 'Edge endpoint cannot be resolved.',
+                    'builder.edges' => 'Не удалось определить начало или конец связи. Обновите страницу конструктора и повторите действие.',
                 ]);
             }
 
@@ -330,7 +331,7 @@ class SaveScenarioBuilderV3StateAction
 
         if (isset($usedEdgeKeys[$edgeKey])) {
             throw ValidationException::withMessages([
-                'builder.edges' => 'Edge key must be unique.',
+                'builder.edges' => 'Внутренний ключ связи должен быть уникальным. Обновите страницу конструктора и повторите действие.',
             ]);
         }
 

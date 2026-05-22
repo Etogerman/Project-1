@@ -367,13 +367,20 @@ class BuildContactHistoryTimelineAction
         $payload = is_array($timelineEvent->payload) ? $timelineEvent->payload : [];
         $previousValue = $this->normalizeTimelineValue($payload['previous_value'] ?? null) ?? '—';
         $newValue = $this->normalizeTimelineValue($payload['new_value'] ?? null);
+        $newMethodLabel = $this->formatTimelineResolutionMethodLabel($payload['new_resolution_method'] ?? null);
 
         if ($newValue !== null) {
+            $body = 'Источник: '.$this->formatTimelineSourceLabel($payload['new_source'] ?? null);
+
+            if ($newMethodLabel !== '—') {
+                $body .= "\n".'Как обработали: '.$newMethodLabel;
+            }
+
             return $this->makeItem(
                 type: ContactTimelineEvent::EVENT_FIRST_NAME_CHANGED,
                 title: 'Имя изменено',
                 description: sprintf('«%s» → «%s»', $previousValue, $newValue),
-                body: 'Источник: '.$this->formatTimelineSourceLabel($payload['new_source'] ?? null),
+                body: $body,
                 timestamp: $timelineEvent->occurred_at,
                 sortPriority: 80,
                 sortId: (int) $timelineEvent->id,
@@ -409,6 +416,12 @@ class BuildContactHistoryTimelineAction
         $payload = is_array($timelineEvent->payload) ? $timelineEvent->payload : [];
         $mergedContactId = (int) ($payload['merged_contact_id'] ?? 0);
         $mergedFirstName = $this->normalizeTimelineValue($payload['merged_first_name'] ?? null) ?? '—';
+        $body = 'Источник: '.$this->formatTimelineSourceLabel($payload['merged_first_name_source'] ?? null);
+        $methodLabel = $this->formatTimelineResolutionMethodLabel($payload['merged_first_name_resolution_method'] ?? null);
+
+        if ($methodLabel !== '—') {
+            $body .= "\n".'Как обработали: '.$methodLabel;
+        }
 
         return $this->makeItem(
             type: ContactTimelineEvent::EVENT_MERGE_NAME_CONFLICT,
@@ -416,7 +429,7 @@ class BuildContactHistoryTimelineAction
             description: $mergedContactId > 0
                 ? sprintf('При объединении с контактом #%d найдено другое имя: «%s»', $mergedContactId, $mergedFirstName)
                 : sprintf('При объединении найдено другое имя: «%s»', $mergedFirstName),
-            body: 'Источник: '.$this->formatTimelineSourceLabel($payload['merged_first_name_source'] ?? null),
+            body: $body,
             timestamp: $timelineEvent->occurred_at,
             sortPriority: 70,
             sortId: (int) $timelineEvent->id,
@@ -426,6 +439,11 @@ class BuildContactHistoryTimelineAction
     private function formatTimelineSourceLabel(mixed $source): string
     {
         return Contact::formatFirstNameSourceTimelineLabel(is_string($source) ? $source : null) ?? '—';
+    }
+
+    private function formatTimelineResolutionMethodLabel(mixed $method): string
+    {
+        return Contact::formatFirstNameResolutionMethod(is_string($method) ? $method : null) ?? '—';
     }
 
     private function normalizeTimelineValue(mixed $value): ?string

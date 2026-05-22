@@ -116,6 +116,7 @@ class StoreInboundMessageAction
                     $message->contactName,
                     Contact::FIRST_NAME_SOURCE_AUTO,
                     ApplyContactFirstNameAction::REASON_AUTO_INBOUND,
+                    Contact::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE,
                 );
             }
 

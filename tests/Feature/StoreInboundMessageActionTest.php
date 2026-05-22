@@ -326,6 +326,7 @@ class StoreInboundMessageActionTest extends TestCase
 
         $this->assertSame('Новое имя профиля', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE, $contact->first_name_resolution_method);
         $this->assertNull($contact->name);
         $this->assertSame('Новое имя профиля', $identity->display_name);
     }
@@ -369,6 +370,7 @@ class StoreInboundMessageActionTest extends TestCase
 
         $this->assertSame('Новое имя профиля', $contact->fresh()->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->fresh()->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE, $contact->fresh()->first_name_resolution_method);
         $this->assertSame('Новое имя профиля', $identity->fresh()->display_name);
     }
 
@@ -433,6 +435,7 @@ class StoreInboundMessageActionTest extends TestCase
 
         $this->assertSame('Более новое имя', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE, $contact->first_name_resolution_method);
         $this->assertSame('Более новое имя', $identity->display_name);
         $this->assertSame('newer_username', $identity->external_username);
         $this->assertDatabaseCount('messages', 2);
