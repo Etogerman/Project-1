@@ -93,14 +93,22 @@ class TelegramBotApiService
 
     public function registerWebhook(Channel $channel, string $url, string $secret): void
     {
+        $payload = [
+            'url' => $url,
+            'secret_token' => $secret,
+            'allowed_updates' => (array) config('bots.telegram.allowed_updates', ['message']),
+        ];
+
+        $webhookIpAddress = trim((string) config('bots.telegram.webhook_ip_address', ''));
+
+        if ($webhookIpAddress !== '') {
+            $payload['ip_address'] = $webhookIpAddress;
+        }
+
         Http::asJson()
             ->post(
                 sprintf('https://api.telegram.org/bot%s/setWebhook', $this->token($channel)),
-                [
-                    'url' => $url,
-                    'secret_token' => $secret,
-                    'allowed_updates' => (array) config('bots.telegram.allowed_updates', ['message']),
-                ],
+                $payload,
             )
             ->throw();
     }
