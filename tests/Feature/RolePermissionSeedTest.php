@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\User;
-use App\Support\RolePermissionCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -55,6 +54,8 @@ class RolePermissionSeedTest extends TestCase
             ->all();
 
         $this->assertSame([
+            'analytics.debug' => true,
+            'analytics.view' => true,
             'auto_reply_rules.delete' => true,
             'auto_reply_rules.edit' => true,
             'auto_reply_rules.view' => true,
@@ -82,6 +83,8 @@ class RolePermissionSeedTest extends TestCase
         ], $adminMatrix);
 
         $this->assertSame([
+            'analytics.debug' => false,
+            'analytics.view' => false,
             'auto_reply_rules.delete' => false,
             'auto_reply_rules.edit' => false,
             'auto_reply_rules.view' => false,
@@ -115,6 +118,8 @@ class RolePermissionSeedTest extends TestCase
     private function expectedDatabasePermissionKeys(): array
     {
         return [
+            'analytics.debug',
+            'analytics.view',
             'auto_reply_rules.delete',
             'auto_reply_rules.edit',
             'auto_reply_rules.view',

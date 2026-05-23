@@ -2,10 +2,11 @@
 
 namespace App\Services\AI;
 
+use App\Data\AI\AiProviderStructuredResult;
+use App\Models\AiProcessor;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
-use RuntimeException;
 
 class GeminiApiService
 {
@@ -19,6 +20,23 @@ class GeminiApiService
         array $responseJsonSchema,
         ?array $settings = null,
     ): array {
+        return $this->generateStructuredWithMetadata(
+            $systemPrompt,
+            $userPrompt,
+            $responseJsonSchema,
+            $settings,
+        )->parsedPayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseJsonSchema
+     */
+    public function generateStructuredWithMetadata(
+        string $systemPrompt,
+        string $userPrompt,
+        array $responseJsonSchema,
+        ?array $settings = null,
+    ): AiProviderStructuredResult {
         $apiKey = $this->apiKey($settings);
         $model = $this->model($settings);
         $url = sprintf(
@@ -26,36 +44,15 @@ class GeminiApiService
             rtrim($this->baseUrl($settings), '/'),
             $model,
         );
+        $requestBody = $this->structuredRequestBody($systemPrompt, $userPrompt, $responseJsonSchema, $settings);
+        $requestBodyRaw = $this->encodeBody($requestBody);
 
         $response = Http::asJson()
             ->timeout($this->timeoutSeconds($settings))
             ->withHeaders([
                 'x-goog-api-key' => $apiKey,
             ])
-            ->post($url, [
-                'systemInstruction' => [
-                    'parts' => [
-                        ['text' => $systemPrompt],
-                    ],
-                ],
-                'contents' => [
-                    [
-                        'role' => 'user',
-                        'parts' => [
-                            ['text' => $userPrompt],
-                        ],
-                    ],
-                ],
-                'generationConfig' => [
-                    'temperature' => $this->temperature($settings),
-                    'maxOutputTokens' => $this->maxOutputTokens($settings),
-                    'thinkingConfig' => [
-                        'thinkingBudget' => $this->thinkingBudget($settings),
-                    ],
-                    'responseMimeType' => 'application/json',
-                    'responseJsonSchema' => $responseJsonSchema,
-                ],
-            ]);
+            ->post($url, $requestBody);
 
         $httpStatus = $response->status();
         $rawBody = $response->body();
@@ -70,11 +67,14 @@ class GeminiApiService
                 error: sprintf('Gemini API request failed [%d].', $httpStatus),
             );
 
-            throw new RuntimeException(sprintf(
-                'Gemini API request failed [%d]: %s',
+            throw new AiProviderRequestException(
+                sprintf('Gemini API request failed [%d]: %s', $httpStatus, trim($rawBody)),
+                AiProcessor::PROVIDER_GEMINI,
+                $model,
+                $requestBodyRaw,
+                $rawBody,
                 $httpStatus,
-                trim($rawBody)
-            ));
+            );
         }
 
         $payload = $response->json();
@@ -89,10 +89,21 @@ class GeminiApiService
                 error: 'Gemini API returned an invalid response payload.',
             );
 
-            throw new RuntimeException('Gemini API returned an invalid response payload.');
+            throw new AiProviderRequestException(
+                'Gemini API returned an invalid response payload.',
+                AiProcessor::PROVIDER_GEMINI,
+                $model,
+                $requestBodyRaw,
+                $rawBody,
+                $httpStatus,
+            );
         }
 
         $text = data_get($payload, 'candidates.0.content.parts.0.text');
+        $inputTokens = $this->nullableInt(data_get($payload, 'usageMetadata.promptTokenCount'));
+        $outputTokens = $this->nullableInt(data_get($payload, 'usageMetadata.candidatesTokenCount'));
+        $thinkingTokens = $this->nullableInt(data_get($payload, 'usageMetadata.thoughtsTokenCount'));
+        $totalTokens = $this->nullableInt(data_get($payload, 'usageMetadata.totalTokenCount'));
 
         if (! is_string($text) || trim($text) === '') {
             $this->logStructuredFailure(
@@ -104,7 +115,18 @@ class GeminiApiService
                 error: 'Gemini API returned an empty structured response.',
             );
 
-            throw new RuntimeException('Gemini API returned an empty structured response.');
+            throw new AiProviderRequestException(
+                'Gemini API returned an empty structured response.',
+                AiProcessor::PROVIDER_GEMINI,
+                $model,
+                $requestBodyRaw,
+                $rawBody,
+                $httpStatus,
+                $inputTokens,
+                $outputTokens,
+                $thinkingTokens,
+                $totalTokens,
+            );
         }
 
         $decoded = json_decode($text, true);
@@ -120,10 +142,32 @@ class GeminiApiService
                 text: $text,
             );
 
-            throw new RuntimeException(sprintf('Gemini API returned invalid JSON: %s', $text));
+            throw new AiProviderRequestException(
+                sprintf('Gemini API returned invalid JSON: %s', $text),
+                AiProcessor::PROVIDER_GEMINI,
+                $model,
+                $requestBodyRaw,
+                $rawBody,
+                $httpStatus,
+                $inputTokens,
+                $outputTokens,
+                $thinkingTokens,
+                $totalTokens,
+            );
         }
 
-        return $decoded;
+        return new AiProviderStructuredResult(
+            provider: AiProcessor::PROVIDER_GEMINI,
+            model: $model,
+            parsedPayload: $decoded,
+            requestBodyRaw: $requestBodyRaw,
+            responseBodyRaw: $rawBody,
+            httpStatus: $httpStatus,
+            inputTokens: $inputTokens,
+            outputTokens: $outputTokens,
+            thinkingTokens: $thinkingTokens,
+            totalTokens: $totalTokens,
+        );
     }
 
     /**
@@ -194,6 +238,58 @@ class GeminiApiService
     protected function timeoutSeconds(?array $settings = null): int
     {
         return max(1, (int) data_get($settings, 'timeout_seconds', 30));
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseJsonSchema
+     * @param  array<string, mixed>|null  $settings
+     * @return array<string, mixed>
+     */
+    protected function structuredRequestBody(
+        string $systemPrompt,
+        string $userPrompt,
+        array $responseJsonSchema,
+        ?array $settings = null,
+    ): array {
+        return [
+            'systemInstruction' => [
+                'parts' => [
+                    ['text' => $systemPrompt],
+                ],
+            ],
+            'contents' => [
+                [
+                    'role' => 'user',
+                    'parts' => [
+                        ['text' => $userPrompt],
+                    ],
+                ],
+            ],
+            'generationConfig' => [
+                'temperature' => $this->temperature($settings),
+                'maxOutputTokens' => $this->maxOutputTokens($settings),
+                'thinkingConfig' => [
+                    'thinkingBudget' => $this->thinkingBudget($settings),
+                ],
+                'responseMimeType' => 'application/json',
+                'responseJsonSchema' => $responseJsonSchema,
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $body
+     */
+    protected function encodeBody(array $body): string
+    {
+        $encoded = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return is_string($encoded) ? $encoded : '{}';
+    }
+
+    protected function nullableInt(mixed $value): ?int
+    {
+        return is_numeric($value) ? max(0, (int) $value) : null;
     }
 
     protected function logStructuredFailure(

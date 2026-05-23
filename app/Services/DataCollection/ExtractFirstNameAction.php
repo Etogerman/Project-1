@@ -2,7 +2,9 @@
 
 namespace App\Services\DataCollection;
 
+use App\Data\AI\AiGenerationContext;
 use App\Models\Contact;
+use App\Services\AI\AiStructuredGenerationService;
 use App\Services\AI\GeminiApiService;
 use Illuminate\Support\Str;
 use Locale;
@@ -17,12 +19,13 @@ class ExtractFirstNameAction
 
     public function __construct(
         protected GeminiApiService $geminiApiService,
+        protected AiStructuredGenerationService $aiStructuredGenerationService,
     ) {}
 
     /**
-     * @return array{decision: string, first_name: ?string, resolution_method: ?string}
+     * @return array{decision: string, first_name: ?string, resolution_method: ?string, ai_used?: bool, ai_request_id?: int|null}
      */
-    public function handle(string $userReply, ?string $messengerName = null): array
+    public function handle(string $userReply, ?string $messengerName = null, ?AiGenerationContext $aiContext = null): array
     {
         $directFirstName = $this->resolveDirectFirstNameMatch($userReply);
 
@@ -54,11 +57,26 @@ class ExtractFirstNameAction
             ];
         }
 
-        $response = $this->geminiApiService->generateStructured(
-            $this->systemPrompt($messengerName),
-            $this->userPrompt($userReply, $messengerName),
-            $this->schema(),
-        );
+        $aiRequestId = null;
+        $systemPrompt = $this->systemPrompt($messengerName);
+        $userPrompt = $this->userPrompt($userReply, $messengerName);
+
+        if ($aiContext instanceof AiGenerationContext) {
+            $generationResult = $this->aiStructuredGenerationService->generateStructuredWithAnalytics(
+                $systemPrompt,
+                $userPrompt,
+                $this->schema(),
+                $aiContext,
+            );
+            $response = $generationResult->data;
+            $aiRequestId = $generationResult->aiRequestId;
+        } else {
+            $response = $this->geminiApiService->generateStructured(
+                $systemPrompt,
+                $userPrompt,
+                $this->schema(),
+            );
+        }
 
         $decision = data_get($response, 'decision');
 
@@ -67,11 +85,18 @@ class ExtractFirstNameAction
         }
 
         if ($decision === self::DECISION_RETRY) {
-            return [
+            $result = [
                 'decision' => self::DECISION_RETRY,
                 'first_name' => null,
                 'resolution_method' => null,
             ];
+
+            if ($aiContext instanceof AiGenerationContext) {
+                $result['ai_used'] = true;
+                $result['ai_request_id'] = $aiRequestId;
+            }
+
+            return $result;
         }
 
         $firstName = $this->normalizeFirstName(data_get($response, 'first_name'));
@@ -80,11 +105,18 @@ class ExtractFirstNameAction
             throw new RuntimeException('Gemini first-name extraction accepted the value but did not return a name.');
         }
 
-        return [
+        $result = [
             'decision' => self::DECISION_ACCEPT,
             'first_name' => $firstName,
             'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS,
         ];
+
+        if ($aiContext instanceof AiGenerationContext) {
+            $result['ai_used'] = true;
+            $result['ai_request_id'] = $aiRequestId;
+        }
+
+        return $result;
     }
 
     protected function systemPrompt(?string $messengerName): string

@@ -2,14 +2,18 @@
 
 namespace App\Services\Scenarios;
 
+use App\Data\AI\AiGenerationContext;
+use App\Data\Contacts\FirstNameResolutionWriteContext;
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessScenarioV3AiAnalysisJob;
 use App\Jobs\ProcessScenarioV3OutboundMessageJob;
 use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
+use App\Models\AiTask;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactFirstNameResolutionEvent;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\DataDictionaryEntry;
@@ -23,7 +27,9 @@ use App\Models\ScenarioRun;
 use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
+use App\Services\AI\AiStructuredGenerationException;
 use App\Services\AI\AiStructuredGenerationService;
+use App\Services\Analytics\FirstNameResolutionAnalyticsService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
@@ -153,6 +159,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly TelegramBotApiService $telegramBotApiService,
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
         private readonly AiStructuredGenerationService $aiStructuredGenerationService,
+        private readonly FirstNameResolutionAnalyticsService $firstNameResolutionAnalyticsService,
         private readonly ExtractFirstNameAction $extractFirstNameAction,
         private readonly ApplyContactFirstNameAction $applyContactFirstNameAction,
         private readonly AddContactPhoneAction $addContactPhoneAction,
@@ -1983,6 +1990,14 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 is_string($capture['first_name_resolution_method'] ?? null)
                     ? $capture['first_name_resolution_method']
                     : Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+                ($capture['first_name_resolution_write_context'] ?? null) instanceof FirstNameResolutionWriteContext
+                    ? $capture['first_name_resolution_write_context']
+                    : new FirstNameResolutionWriteContext(
+                        dialogId: $message->dialog_id,
+                        channelId: $message->channel_id,
+                        scenarioId: $this->scenario->id,
+                        messageId: $message->id,
+                    ),
             ),
             'last_name', 'country', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
             'gender' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions()),
@@ -2026,6 +2041,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         Contact $contact,
         string $value,
         ?string $resolutionMethod = Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+        ?FirstNameResolutionWriteContext $writeContext = null,
     ): bool {
         $result = $this->applyContactFirstNameAction->handle(
             $contact,
@@ -2033,6 +2049,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
             $resolutionMethod,
+            $writeContext,
         );
 
         if ($result->bitrix24RelevantChanged) {
@@ -2409,6 +2426,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'data' => is_array($result['data'] ?? null) ? $result['data'] : [],
             'delay_seconds' => $delaySeconds,
             'message_id' => (int) $message->id,
+            'ai_request_id' => is_numeric($result['ai_request_id'] ?? null) ? (int) $result['ai_request_id'] : null,
+            'first_name_resolution_event_id' => is_numeric($result['first_name_resolution_event_id'] ?? null) ? (int) $result['first_name_resolution_event_id'] : null,
+            'first_name_resolution_correlation_id' => is_string($result['first_name_resolution_correlation_id'] ?? null)
+                ? $result['first_name_resolution_correlation_id']
+                : null,
         ]);
 
         $edge = $this->v3AiAnalysisEdge($analysis, $outputId);
@@ -2491,7 +2513,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
 
             if (($action['type'] ?? null) === 'check_data') {
-                return $this->applyV3CheckDataAction($message, $action, $statePayload);
+                return $this->applyV3CheckDataAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                );
             }
 
             if (($action['type'] ?? null) === 'edit_message') {
@@ -2681,7 +2708,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      * @param  array<string, mixed>  $statePayload
      * @return array{state_payload: array<string, mixed>, output_id: ?string}|null
      */
-    private function applyV3CheckDataAction(Message $message, array $action, array $statePayload): ?array
+    private function applyV3CheckDataAction(Message $message, array $action, array $statePayload, ?string $blockId): ?array
     {
         if (($action['source_type'] ?? null) !== 'inbound_message') {
             return null;
@@ -2694,13 +2721,33 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return null;
         }
 
+        $rootContact = $message->contact instanceof Contact
+            ? $this->resolveRootContactAction->handle($message->contact)
+            : null;
         $lookup = app(LookupScenarioDataDictionaryAction::class)->handle(
             $dictionaryKey,
             (string) ($message->text ?? ''),
-            $message->contact instanceof Contact
-                ? $this->resolveRootContactAction->handle($message->contact)->gender
-                : null,
+            $rootContact instanceof Contact ? $rootContact->gender : null,
         );
+        $correlationId = (string) Str::uuid();
+        $resolutionEvent = $rootContact instanceof Contact
+            ? $this->firstNameResolutionAnalyticsService->recordResolutionAttempt(
+                contact: $rootContact,
+                source: ContactFirstNameResolutionEvent::SOURCE_DICTIONARY,
+                result: $this->v3DictionaryLookupAnalyticsResult((string) ($lookup['status'] ?? '')),
+                clientText: (string) ($message->text ?? ''),
+                dialogId: $message->dialog_id,
+                channelId: $message->channel_id,
+                scenarioId: $this->scenario->id,
+                scenarioBlockId: $blockId,
+                messageId: $message->id,
+                matchedDictionaryEntryId: is_numeric($lookup['matched_entry_id'] ?? null) ? (int) $lookup['matched_entry_id'] : null,
+                foundFirstName: (string) ($message->text ?? ''),
+                resolvedFirstName: is_string($lookup['value'] ?? null) ? $lookup['value'] : null,
+                correlationId: $correlationId,
+                payload: ['status' => $lookup['status'] ?? null],
+            )
+            : null;
 
         if ($lookup['matched'] === true && trim((string) $lookup['value']) !== '') {
             data_set($statePayload, "v3.variables.$targetVariableKey", trim((string) $lookup['value']));
@@ -2709,6 +2756,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 "v3.variable_meta.$targetVariableKey.first_name_resolution_method",
                 Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
             );
+            data_set($statePayload, "v3.variable_meta.$targetVariableKey.first_name_resolution_correlation_id", $correlationId);
+            data_set($statePayload, "v3.variable_meta.$targetVariableKey.first_name_resolution_event_id", $resolutionEvent?->id);
 
             return ['state_payload' => $statePayload, 'output_id' => 'data_found'];
         }
@@ -2721,6 +2770,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return ['state_payload' => $statePayload, 'output_id' => 'data_not_found'];
+    }
+
+    private function v3DictionaryLookupAnalyticsResult(string $status): string
+    {
+        return match ($status) {
+            LookupScenarioDataDictionaryAction::STATUS_MATCHED => ContactFirstNameResolutionEvent::RESULT_MATCHED,
+            LookupScenarioDataDictionaryAction::STATUS_AMBIGUOUS => ContactFirstNameResolutionEvent::RESULT_AMBIGUOUS,
+            LookupScenarioDataDictionaryAction::STATUS_MANUAL_REQUIRED => ContactFirstNameResolutionEvent::RESULT_MANUAL_REQUIRED,
+            default => ContactFirstNameResolutionEvent::RESULT_NOT_FOUND,
+        };
     }
 
     /**
@@ -2839,6 +2898,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'field_key' => $targetField,
             'data_type' => $dataType,
             'first_name_resolution_method' => $firstNameResolutionMethod,
+            'first_name_resolution_write_context' => $targetField === 'first_name'
+                ? $this->v3ActionFirstNameResolutionWriteContext($message, $statePayload, $sourceBlockId, $sourceFieldKey)
+                : null,
         ], [
             'valid' => true,
             'value' => $stringValue,
@@ -2963,6 +3025,39 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return $hasAiData ? Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS : null;
     }
 
+    private function v3ActionFirstNameResolutionWriteContext(
+        Message $message,
+        array $statePayload,
+        string $sourceBlockId,
+        string $sourceFieldKey,
+    ): FirstNameResolutionWriteContext {
+        $correlationId = null;
+        $resolutionEventId = null;
+        $aiRequestId = null;
+
+        if ($sourceBlockId !== '') {
+            $correlationId = data_get($statePayload, "v3.ai_analysis.$sourceBlockId.first_name_resolution_correlation_id");
+            $resolutionEventId = data_get($statePayload, "v3.ai_analysis.$sourceBlockId.first_name_resolution_event_id");
+            $aiRequestId = data_get($statePayload, "v3.ai_analysis.$sourceBlockId.ai_request_id");
+        }
+
+        if ($sourceFieldKey !== '' && $correlationId === null) {
+            $correlationId = data_get($statePayload, "v3.variable_meta.$sourceFieldKey.first_name_resolution_correlation_id");
+            $resolutionEventId = data_get($statePayload, "v3.variable_meta.$sourceFieldKey.first_name_resolution_event_id");
+        }
+
+        return new FirstNameResolutionWriteContext(
+            correlationId: is_string($correlationId) && $correlationId !== '' ? $correlationId : null,
+            dialogId: $message->dialog_id,
+            channelId: $message->channel_id,
+            scenarioId: $this->scenario->id,
+            scenarioBlockId: $sourceBlockId !== '' ? $sourceBlockId : null,
+            messageId: $message->id,
+            resolutionAttemptEventId: is_numeric($resolutionEventId) ? (int) $resolutionEventId : null,
+            aiRequestId: is_numeric($aiRequestId) ? (int) $aiRequestId : null,
+        );
+    }
+
     private function normalizeV3FirstNameResolutionMethod(mixed $method): ?string
     {
         if (! is_string($method) || trim($method) === '') {
@@ -3059,9 +3154,19 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         try {
-            $response = $this->aiStructuredGenerationService->generateStructured(
-                $this->v3AiAnalysisSystemPrompt($message, $analysis, $outputs, $extractFields, $statePayload, $blockId),
-                $this->v3AiAnalysisUserPrompt($message, $analysis, $statePayload, $blockId),
+            $systemPrompt = $this->v3AiAnalysisSystemPrompt($message, $analysis, $outputs, $extractFields, $statePayload, $blockId);
+            $userPrompt = $this->v3AiAnalysisUserPrompt($message, $analysis, $statePayload, $blockId);
+            $aiResult = $this->v3AiAnalysisTracksNameResolution($message, $extractFields)
+                ? $this->aiStructuredGenerationService->generateStructuredWithAnalytics(
+                    $systemPrompt,
+                    $userPrompt,
+                    $this->v3AiAnalysisSchema($outputs, $extractFields),
+                    $this->v3NameResolutionAiContext($message, $blockId),
+                )
+                : null;
+            $response = $aiResult?->data ?? $this->aiStructuredGenerationService->generateStructured(
+                $systemPrompt,
+                $userPrompt,
                 $this->v3AiAnalysisSchema($outputs, $extractFields),
             );
         } catch (Throwable $throwable) {
@@ -3072,6 +3177,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'exception' => get_class($throwable),
                 'error_message' => 'Не удалось выполнить ИИ-анализ V3-сценария.',
             ]);
+
+            if ($throwable instanceof AiStructuredGenerationException) {
+                $this->recordV3AiNameResolutionError($message, $blockId, $throwable->aiRequestId);
+            }
 
             return ['output_id' => '', 'label' => '', 'delay_seconds' => 0, 'data' => []];
         }
@@ -3092,11 +3201,27 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return ['output_id' => '', 'label' => '', 'delay_seconds' => 0, 'data' => []];
         }
 
+        $data = $this->v3AiAnalysisData($response['data'] ?? [], $extractFields);
+        $resolutionEvent = null;
+
+        if (isset($aiResult) && $aiResult !== null) {
+            $resolutionEvent = $this->recordV3AiNameResolutionResult(
+                message: $message,
+                blockId: $blockId,
+                outputId: (string) $output['id'],
+                data: $data,
+                aiRequestId: $aiResult->aiRequestId,
+            );
+        }
+
         return [
             'output_id' => (string) $output['id'],
             'label' => (string) $output['label'],
             'delay_seconds' => max(0, min(300, (int) ($output['delay_seconds'] ?? 0))),
-            'data' => $this->v3AiAnalysisData($response['data'] ?? [], $extractFields),
+            'data' => $data,
+            'ai_request_id' => isset($aiResult) && $aiResult !== null ? $aiResult->aiRequestId : null,
+            'first_name_resolution_event_id' => $resolutionEvent?->id,
+            'first_name_resolution_correlation_id' => $resolutionEvent?->correlation_id,
         ];
     }
 
@@ -3199,6 +3324,91 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return $lookup['matched'] === true && filled($lookup['value'])
             ? trim((string) $lookup['value'])
             : $value;
+    }
+
+    /**
+     * @param  list<array{key: string, label: string, type: string}>  $extractFields
+     */
+    private function v3AiAnalysisTracksNameResolution(Message $message, array $extractFields): bool
+    {
+        return $message->contact instanceof Contact
+            && collect($extractFields)->contains(fn (array $field): bool => $field['key'] === 'first_name');
+    }
+
+    private function v3NameResolutionAiContext(Message $message, string $blockId): AiGenerationContext
+    {
+        $contact = $message->contact instanceof Contact
+            ? $this->resolveRootContactAction->handle($message->contact)
+            : null;
+
+        return new AiGenerationContext(
+            taskKey: AiTask::KEY_NAME_RESOLUTION,
+            contactId: (int) ($contact?->id ?? $message->contact_id),
+            dialogId: $message->dialog_id,
+            channelId: $message->channel_id,
+            scenarioId: $this->scenario->id,
+            scenarioBlockId: $blockId,
+            promptKey: 'scenario_v3_ai_analysis:first_name',
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function recordV3AiNameResolutionResult(
+        Message $message,
+        string $blockId,
+        string $outputId,
+        array $data,
+        ?int $aiRequestId,
+    ): ?ContactFirstNameResolutionEvent {
+        if (! $message->contact instanceof Contact) {
+            return null;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+        $firstName = trim((string) ($data['first_name'] ?? ''));
+        $correlationId = (string) Str::uuid();
+
+        return $this->firstNameResolutionAnalyticsService->recordResolutionAttempt(
+            contact: $contact,
+            source: ContactFirstNameResolutionEvent::SOURCE_AI,
+            result: $firstName !== ''
+                ? ContactFirstNameResolutionEvent::RESULT_ACCEPTED
+                : ContactFirstNameResolutionEvent::RESULT_REJECTED,
+            clientText: (string) ($message->text ?? ''),
+            dialogId: $message->dialog_id,
+            channelId: $message->channel_id,
+            scenarioId: $this->scenario->id,
+            scenarioBlockId: $blockId,
+            messageId: $message->id,
+            aiRequestId: $aiRequestId,
+            foundFirstName: $firstName !== '' ? $firstName : null,
+            resolvedFirstName: $firstName !== '' ? $firstName : null,
+            correlationId: $correlationId,
+            payload: ['output_id' => $outputId],
+        );
+    }
+
+    private function recordV3AiNameResolutionError(Message $message, string $blockId, ?int $aiRequestId): void
+    {
+        if (! $message->contact instanceof Contact) {
+            return;
+        }
+
+        $this->firstNameResolutionAnalyticsService->recordResolutionAttempt(
+            contact: $this->resolveRootContactAction->handle($message->contact),
+            source: ContactFirstNameResolutionEvent::SOURCE_AI,
+            result: ContactFirstNameResolutionEvent::RESULT_ERROR,
+            clientText: (string) ($message->text ?? ''),
+            dialogId: $message->dialog_id,
+            channelId: $message->channel_id,
+            scenarioId: $this->scenario->id,
+            scenarioBlockId: $blockId,
+            messageId: $message->id,
+            aiRequestId: $aiRequestId,
+            correlationId: (string) Str::uuid(),
+        );
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\AI\AiProviderStructuredResult;
 use App\Data\Bitrix24\Bitrix24ContactSyncQueueResultData;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotDialogTextSendResult;
@@ -530,17 +531,29 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $prompts = [];
         $gemini = Mockery::mock(GeminiApiService::class);
         $gemini
-            ->shouldReceive('generateStructured')
+            ->shouldReceive('generateStructuredWithMetadata')
             ->twice()
-            ->andReturnUsing(function (string $systemPrompt, string $userPrompt, array $schema) use (&$prompts): array {
+            ->andReturnUsing(function (string $systemPrompt, string $userPrompt, array $schema) use (&$prompts): AiProviderStructuredResult {
                 $prompts[] = $userPrompt;
                 $this->assertSame(['1', '2'], data_get($schema, 'properties.output_id.enum'));
                 $this->assertStringContainsString('ID 1: Имя найдено', $systemPrompt);
                 $this->assertStringContainsString('ID 2: Имя не найдено', $systemPrompt);
 
-                return count($prompts) === 1
+                $payload = count($prompts) === 1
                     ? ['output_id' => '2', 'data' => []]
                     : ['output_id' => '1', 'data' => ['first_name' => 'Вася']];
+
+                return new AiProviderStructuredResult(
+                    provider: 'gemini',
+                    model: 'test-gemini',
+                    parsedPayload: $payload,
+                    requestBodyRaw: '{}',
+                    responseBodyRaw: '{}',
+                    httpStatus: 200,
+                    inputTokens: 10,
+                    outputTokens: 5,
+                    totalTokens: 15,
+                );
             });
         $this->app->instance(GeminiApiService::class, $gemini);
 
@@ -889,16 +902,26 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $captured = [];
         $gemini = Mockery::mock(GeminiApiService::class);
         $gemini
-            ->shouldReceive('generateStructured')
+            ->shouldReceive('generateStructuredWithMetadata')
             ->once()
-            ->andReturnUsing(function (string $systemPrompt, string $userPrompt, array $schema) use (&$captured): array {
+            ->andReturnUsing(function (string $systemPrompt, string $userPrompt, array $schema) use (&$captured): AiProviderStructuredResult {
                 $captured = [
                     'system' => $systemPrompt,
                     'user' => $userPrompt,
                     'schema' => $schema,
                 ];
 
-                return ['output_id' => '1', 'data' => ['first_name' => 'Николай']];
+                return new AiProviderStructuredResult(
+                    provider: 'gemini',
+                    model: 'test-gemini',
+                    parsedPayload: ['output_id' => '1', 'data' => ['first_name' => 'Николай']],
+                    requestBodyRaw: '{}',
+                    responseBodyRaw: '{}',
+                    httpStatus: 200,
+                    inputTokens: 10,
+                    outputTokens: 5,
+                    totalTokens: 15,
+                );
             });
         $this->app->instance(GeminiApiService::class, $gemini);
 
@@ -985,9 +1008,19 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $gemini = Mockery::mock(GeminiApiService::class);
         $gemini
-            ->shouldReceive('generateStructured')
+            ->shouldReceive('generateStructuredWithMetadata')
             ->once()
-            ->andReturn(['output_id' => '1', 'data' => ['first_name' => 'Клава']]);
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => '1', 'data' => ['first_name' => 'Клава']],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
         $this->app->instance(GeminiApiService::class, $gemini);
 
         $channel = $this->createTelegramChannel();
@@ -1060,9 +1093,19 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $gemini = Mockery::mock(GeminiApiService::class);
         $gemini
-            ->shouldReceive('generateStructured')
+            ->shouldReceive('generateStructuredWithMetadata')
             ->once()
-            ->andReturn(['output_id' => '1', 'data' => ['first_name' => '']]);
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => '1', 'data' => ['first_name' => '']],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
         $this->app->instance(GeminiApiService::class, $gemini);
 
         $channel = $this->createTelegramChannel();

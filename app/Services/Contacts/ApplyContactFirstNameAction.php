@@ -3,8 +3,10 @@
 namespace App\Services\Contacts;
 
 use App\Data\Contacts\FirstNameApplyResult;
+use App\Data\Contacts\FirstNameResolutionWriteContext;
 use App\Models\Contact;
 use App\Models\ContactTimelineEvent;
+use App\Services\Analytics\FirstNameResolutionAnalyticsService;
 use Illuminate\Support\Facades\DB;
 
 class ApplyContactFirstNameAction
@@ -19,6 +21,7 @@ class ApplyContactFirstNameAction
 
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly FirstNameResolutionAnalyticsService $firstNameResolutionAnalyticsService,
     ) {}
 
     public function handle(
@@ -27,6 +30,7 @@ class ApplyContactFirstNameAction
         string $source,
         string $reason,
         ?string $resolutionMethod = self::RESOLUTION_METHOD_NOT_PROVIDED,
+        ?FirstNameResolutionWriteContext $writeContext = null,
     ): FirstNameApplyResult {
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $normalizedFirstName = $this->normalizeNullableString($newFirstName);
@@ -116,7 +120,7 @@ class ApplyContactFirstNameAction
             }
         });
 
-        return new FirstNameApplyResult(
+        $result = new FirstNameApplyResult(
             changed: true,
             bitrix24RelevantChanged: $nameOrSourceChanged,
             previousValue: $previousValue,
@@ -126,6 +130,10 @@ class ApplyContactFirstNameAction
             previousResolutionMethod: $previousResolutionMethod,
             newResolutionMethod: $newResolutionMethod,
         );
+
+        $this->firstNameResolutionAnalyticsService->recordNameWritten($rootContact, $result, $writeContext);
+
+        return $result;
     }
 
     /**

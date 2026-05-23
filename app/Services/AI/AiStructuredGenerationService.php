@@ -2,7 +2,10 @@
 
 namespace App\Services\AI;
 
+use App\Data\AI\AiGenerationContext;
+use App\Data\AI\AiStructuredGenerationResult;
 use App\Models\AiProcessor;
+use App\Models\AiRequest;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use RuntimeException;
@@ -12,6 +15,7 @@ class AiStructuredGenerationService
 {
     public function __construct(
         private readonly GeminiApiService $geminiApiService,
+        private readonly AiRequestAnalyticsService $aiRequestAnalyticsService,
     ) {}
 
     /**
@@ -50,6 +54,138 @@ class AiStructuredGenerationService
         }
 
         throw new RuntimeException('Все ИИ-обработчики недоступны.', previous: $lastThrowable);
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseJsonSchema
+     */
+    public function generateStructuredWithAnalytics(
+        string $systemPrompt,
+        string $userPrompt,
+        array $responseJsonSchema,
+        AiGenerationContext $context,
+    ): AiStructuredGenerationResult {
+        $aiRequest = $this->aiRequestAnalyticsService->start($context, $systemPrompt, $userPrompt);
+        $processors = $this->activeProcessors();
+
+        if ($processors === []) {
+            try {
+                return $this->generateWithAnalyticsAttempt(
+                    aiRequest: $aiRequest,
+                    attemptNumber: 1,
+                    processor: null,
+                    systemPrompt: $systemPrompt,
+                    userPrompt: $userPrompt,
+                    responseJsonSchema: $responseJsonSchema,
+                    settings: null,
+                );
+            } catch (Throwable $throwable) {
+                $this->aiRequestAnalyticsService->finalize(
+                    $aiRequest,
+                    $aiRequest?->attempts()->latest('id')->first(),
+                    false,
+                );
+
+                throw new AiStructuredGenerationException(
+                    $throwable->getMessage(),
+                    $aiRequest?->id,
+                    $throwable,
+                );
+            }
+        }
+
+        $lastThrowable = null;
+        $lastAttempt = null;
+
+        foreach ($processors as $index => $processor) {
+            try {
+                return $this->generateWithAnalyticsAttempt(
+                    aiRequest: $aiRequest,
+                    attemptNumber: $index + 1,
+                    processor: $processor,
+                    systemPrompt: $systemPrompt,
+                    userPrompt: $userPrompt,
+                    responseJsonSchema: $responseJsonSchema,
+                    settings: $processor->structuredSettings(),
+                );
+            } catch (Throwable $throwable) {
+                $lastThrowable = $throwable;
+                $this->markProcessorFailed($processor, $throwable);
+                $lastAttempt = $aiRequest?->attempts()->latest('id')->first();
+            }
+        }
+
+        $this->aiRequestAnalyticsService->finalize($aiRequest, $lastAttempt, false);
+
+        throw new AiStructuredGenerationException(
+            'Все ИИ-обработчики недоступны.',
+            $aiRequest?->id,
+            $lastThrowable,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseJsonSchema
+     * @param  array<string, mixed>|null  $settings
+     */
+    private function generateWithAnalyticsAttempt(
+        ?AiRequest $aiRequest,
+        int $attemptNumber,
+        ?AiProcessor $processor,
+        string $systemPrompt,
+        string $userPrompt,
+        array $responseJsonSchema,
+        ?array $settings,
+    ): AiStructuredGenerationResult {
+        $startedAt = now();
+
+        try {
+            $response = match ($processor?->provider ?? AiProcessor::PROVIDER_GEMINI) {
+                AiProcessor::PROVIDER_GEMINI => $this->geminiApiService->generateStructuredWithMetadata(
+                    $systemPrompt,
+                    $userPrompt,
+                    $responseJsonSchema,
+                    $settings,
+                ),
+                default => throw new RuntimeException("AI provider [{$processor?->provider}] is not supported."),
+            };
+        } catch (AiProviderRequestException $throwable) {
+            $finishedAt = now();
+            $attempt = $this->aiRequestAnalyticsService->recordErrorAttempt(
+                $aiRequest,
+                $attemptNumber,
+                $processor,
+                $throwable,
+                $startedAt,
+                $finishedAt,
+            );
+
+            throw $throwable;
+        }
+
+        $finishedAt = now();
+        $attempt = $this->aiRequestAnalyticsService->recordSuccessAttempt(
+            $aiRequest,
+            $attemptNumber,
+            $processor,
+            $response,
+            $startedAt,
+            $finishedAt,
+        );
+        $this->aiRequestAnalyticsService->finalize($aiRequest, $attempt, true);
+
+        if ($processor instanceof AiProcessor) {
+            $this->markProcessorRecovered($processor);
+        }
+
+        return new AiStructuredGenerationResult(
+            data: $response->parsedPayload,
+            aiRequestId: $aiRequest?->id,
+            finalAttemptId: $attempt?->id,
+            provider: $response->provider,
+            model: $response->model,
+            status: 'success',
+        );
     }
 
     /**

@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Data\Contacts\FirstNameResolutionWriteContext;
 use App\Models\Contact;
+use App\Models\ContactFirstNameResolutionEvent;
 use App\Models\ContactTimelineEvent;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -58,6 +60,36 @@ class ApplyContactFirstNameActionTest extends TestCase
         $this->assertTrue($result->bitrix24RelevantChanged);
         $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE, $contact->first_name_resolution_method);
         $this->assertDatabaseCount('contact_timeline_events', 0);
+    }
+
+    public function test_name_write_analytics_event_is_created_with_context(): void
+    {
+        $contact = Contact::factory()->create([
+            'first_name' => null,
+            'first_name_source' => null,
+            'first_name_resolution_method' => null,
+        ]);
+
+        app(ApplyContactFirstNameAction::class)->handle(
+            $contact,
+            'Николай',
+            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+            Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
+            new FirstNameResolutionWriteContext(
+                correlationId: '11111111-1111-1111-1111-111111111111',
+            ),
+        );
+
+        $this->assertDatabaseHas('contact_first_name_resolution_events', [
+            'event_type' => ContactFirstNameResolutionEvent::EVENT_TYPE_NAME_WRITTEN,
+            'correlation_id' => '11111111-1111-1111-1111-111111111111',
+            'contact_id' => $contact->id,
+            'source' => ContactFirstNameResolutionEvent::SOURCE_DICTIONARY,
+            'result' => ContactFirstNameResolutionEvent::RESULT_WRITTEN,
+            'written_first_name' => 'Николай',
+            'first_name_resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
+        ]);
     }
 
     public function test_handle_is_noop_when_value_and_source_are_unchanged(): void
