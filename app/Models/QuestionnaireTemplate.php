@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Str;
 
 class QuestionnaireTemplate extends Model
@@ -75,6 +76,13 @@ class QuestionnaireTemplate extends Model
     public function publishedVersion(): BelongsTo
     {
         return $this->belongsTo(QuestionnaireTemplateVersion::class, 'published_version_id');
+    }
+
+    public function draftVersion(): HasOne
+    {
+        return $this->hasOne(QuestionnaireTemplateVersion::class)
+            ->where('status', QuestionnaireTemplateVersion::STATUS_DRAFT)
+            ->latestOfMany('version');
     }
 
     public function runs(): HasMany

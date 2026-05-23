@@ -1,0 +1,134 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Filament\Resources\QuestionnaireTemplates\Pages\ManageQuestionnaireTemplates;
+use App\Models\QuestionnaireTemplate;
+use App\Models\User;
+use Database\Seeders\ProfileQuestionnaireSeeder;
+use Filament\Facades\Filament;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Gate;
+use Livewire\Livewire;
+use Tests\TestCase;
+
+class FilamentQuestionnaireTemplatesResourceTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Filament::setCurrentPanel(Filament::getPanel('admin'));
+        Filament::bootCurrentPanel();
+    }
+
+    public function test_admin_can_open_questionnaire_templates_resource(): void
+    {
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $template = QuestionnaireTemplate::query()->where('key', QuestionnaireTemplate::KEY_PROFILE)->sole();
+
+        $this->actingAs($admin)
+            ->get('/admin/questionnaire-templates')
+            ->assertOk()
+            ->assertSee('Анкеты');
+
+        $this->assertTrue(Gate::forUser($admin)->allows('viewAny', QuestionnaireTemplate::class));
+        $this->assertTrue(Gate::forUser($admin)->allows('update', $template));
+
+        Livewire::actingAs($admin)
+            ->test(ManageQuestionnaireTemplates::class)
+            ->assertCanSeeTableRecords([$template])
+            ->assertTableActionExists('editDraft', null, $template)
+            ->assertTableActionExists('publishDraft', null, $template);
+    }
+
+    public function test_employee_cannot_open_questionnaire_templates_resource(): void
+    {
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+
+        $this->actingAs($employee)
+            ->get('/admin/questionnaire-templates')
+            ->assertForbidden();
+
+        $this->assertFalse(Gate::forUser($employee)->allows('viewAny', QuestionnaireTemplate::class));
+    }
+
+    public function test_admin_can_save_json_draft_and_publish_it(): void
+    {
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->with('publishedVersion')
+            ->sole();
+        $payload = $template->publishedVersion->fields_payload;
+        $payload[0]['prompts'] = ['Выбери пол для локального теста'];
+
+        Livewire::actingAs($admin)
+            ->test(ManageQuestionnaireTemplates::class)
+            ->callTableAction('editDraft', $template, [
+                'fields_payload_json' => $this->encodePayload($payload),
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $template->refresh();
+
+        $this->assertNotNull($template->draftVersion);
+        $this->assertSame(2, $template->draftVersion->version);
+
+        Livewire::actingAs($admin)
+            ->test(ManageQuestionnaireTemplates::class)
+            ->callTableAction('publishDraft', $template->fresh())
+            ->assertHasNoTableActionErrors();
+
+        $template->refresh();
+
+        $this->assertSame(2, $template->publishedVersion->version);
+        $this->assertSame('Выбери пол для локального теста', $template->publishedVersion->fields_payload[0]['prompts'][0]);
+    }
+
+    public function test_invalid_json_draft_is_rejected(): void
+    {
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->sole();
+
+        Livewire::actingAs($admin)
+            ->test(ManageQuestionnaireTemplates::class)
+            ->callTableAction('editDraft', $template, [
+                'fields_payload_json' => '{"broken"',
+            ])
+            ->assertHasTableActionErrors();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $payload
+     */
+    private function encodePayload(array $payload): string
+    {
+        return json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+}
