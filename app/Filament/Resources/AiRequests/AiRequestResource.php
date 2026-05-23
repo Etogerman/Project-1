@@ -61,7 +61,10 @@ class AiRequestResource extends Resource
                     TextEntry::make('provider')->label('Провайдер')->placeholder('—'),
                     TextEntry::make('model')->label('Модель')->placeholder('—'),
                     TextEntry::make('total_tokens')->label('Токены')->placeholder('Токены неизвестны'),
-                    TextEntry::make('estimated_cost')->label('Расчётная стоимость')->placeholder('Не рассчитана'),
+                    TextEntry::make('estimated_cost')
+                        ->label('Расчётная стоимость')
+                        ->formatStateUsing(fn (mixed $state): ?string => self::formatEstimatedCost($state))
+                        ->placeholder('Не рассчитана'),
                     TextEntry::make('currency')->label('Валюта')->placeholder('—'),
                     TextEntry::make('cost_status')->label('Стоимость')->formatStateUsing(fn (?string $state): string => AiRequest::costStatusLabel($state))->badge(),
                 ])
@@ -118,7 +121,7 @@ class AiRequestResource extends Resource
                 TextColumn::make('estimated_cost')
                     ->label('Расчётная стоимость')
                     ->placeholder('Не рассчитана')
-                    ->money('USD', divideBy: 1)
+                    ->formatStateUsing(fn (mixed $state): ?string => self::formatEstimatedCost($state))
                     ->sortable(),
                 TextColumn::make('cost_status')
                     ->label('Стоимость')
@@ -189,5 +192,14 @@ class AiRequestResource extends Resource
         return [
             'index' => ListAiRequests::route('/'),
         ];
+    }
+
+    private static function formatEstimatedCost(mixed $state): ?string
+    {
+        if ($state === null || $state === '') {
+            return null;
+        }
+
+        return '$'.number_format((float) $state, 8, '.', ' ');
     }
 }

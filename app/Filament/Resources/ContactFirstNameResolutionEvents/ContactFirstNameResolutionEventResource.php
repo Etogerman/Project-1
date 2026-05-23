@@ -7,6 +7,8 @@ use App\Models\Channel;
 use App\Models\ContactFirstNameResolutionEvent;
 use App\Models\Scenario;
 use BackedEnum;
+use Filament\Actions\DeleteAction;
+use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Infolists\Components\TextEntry;
@@ -81,6 +83,10 @@ class ContactFirstNameResolutionEventResource extends Resource
     {
         return $table
             ->columns([
+                TextColumn::make('id')
+                    ->label('ID')
+                    ->sortable()
+                    ->copyable(),
                 TextColumn::make('created_at')
                     ->label('Дата')
                     ->dateTime('d.m.Y H:i:s')
@@ -180,9 +186,23 @@ class ContactFirstNameResolutionEventResource extends Resource
                     ->icon(Heroicon::OutlinedEye)
                     ->iconButton()
                     ->tooltip('Открыть')
-                    ->modalWidth(Width::FiveExtraLarge),
+                    ->modalWidth(Width::FiveExtraLarge)
+                    ->extraModalFooterActions([
+                        DeleteAction::make('deleteFromView')
+                            ->label('Удалить')
+                            ->icon(Heroicon::OutlinedTrash)
+                            ->color('danger'),
+                    ]),
+                DeleteAction::make()
+                    ->icon(Heroicon::OutlinedTrash)
+                    ->iconButton()
+                    ->tooltip('Удалить'),
             ])
-            ->toolbarActions([]);
+            ->toolbarActions([
+                DeleteBulkAction::make()
+                    ->label('Удалить выбранные'),
+            ])
+            ->recordActionsColumnLabel('Действия');
     }
 
     public static function getPages(): array

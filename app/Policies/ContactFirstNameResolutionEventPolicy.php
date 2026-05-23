@@ -29,6 +29,11 @@ class ContactFirstNameResolutionEventPolicy
 
     public function delete(User $user, ContactFirstNameResolutionEvent $event): bool
     {
-        return false;
+        return $user->canDebugAnalytics();
+    }
+
+    public function deleteAny(User $user): bool
+    {
+        return $user->canDebugAnalytics();
     }
 }

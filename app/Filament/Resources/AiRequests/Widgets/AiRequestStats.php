@@ -33,7 +33,7 @@ class AiRequestStats extends StatsOverviewWidget
             Stat::make('Всего запросов', number_format($total, 0, '.', ' ')),
             Stat::make('Успешно / ошибок', number_format($success, 0, '.', ' ').' / '.number_format($errors, 0, '.', ' ')),
             Stat::make('Токены', $tokens > 0 ? number_format((int) $tokens, 0, '.', ' ') : 'Токены неизвестны'),
-            Stat::make('Расчётная стоимость', $cost > 0 ? '$'.number_format((float) $cost, 6, '.', ' ') : 'Не рассчитана'),
+            Stat::make('Расчётная стоимость', $cost > 0 ? '$'.number_format((float) $cost, 8, '.', ' ') : 'Не рассчитана'),
         ];
     }
 
