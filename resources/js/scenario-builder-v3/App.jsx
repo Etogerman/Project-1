@@ -4492,6 +4492,19 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         ))}
                     </select>
                 </label>
+                <label>
+                    <span>Условие</span>
+                    <textarea
+                        className="ac-v3-builder__textarea-auto"
+                        rows={3}
+                        value={payload.expression ?? ''}
+                        placeholder={'{{contact.gender}} == "male" or {{contact.gender}} == "female"'}
+                        onChange={(event) => updatePayload({ expression: event.target.value })}
+                    />
+                </label>
+                <p className="ac-v3-builder__field-hint">
+                    Пример: {'{{contact.gender}} == "male" or {{contact.gender}} == "female"'}
+                </p>
                 <label className="ac-v3-builder__check">
                     <input
                         type="checkbox"
@@ -5759,6 +5772,7 @@ function edgePayload(outputId, label, kind = null) {
         transition_limit: 0,
         contact_phone_condition: '',
         dialog_phone_condition: '',
+        expression: '',
         field_condition: {
             enabled: false,
             field_scope: 'dialog',

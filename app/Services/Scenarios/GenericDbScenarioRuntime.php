@@ -1558,7 +1558,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 && (
                     ($edge['mode'] ?? null) !== 'wait_reply'
                     || $this->messageMatchesV3WaitReplyEdge($message, $edge, $block)
-                ))
+                )
+                && $this->v3EdgeAllowsExpression($message, $edge))
             ->values()
             ->all();
     }
@@ -1741,6 +1742,32 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return $this->normalizeV3ButtonText((string) $actualValue) === $expected;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3EdgeAllowsExpression(Message $message, array $edge): bool
+    {
+        $expression = trim((string) ($edge['expression'] ?? ''));
+
+        if ($expression === '') {
+            return true;
+        }
+
+        try {
+            return app(ScenarioEdgeExpressionCondition::class)->evaluate($expression, $message);
+        } catch (Throwable $exception) {
+            Log::warning('V3 edge expression condition failed.', [
+                'scenario_id' => $this->scenario->id,
+                'edge_id' => $edge['id'] ?? null,
+                'edge_key' => $edge['edge_key'] ?? null,
+                'message_id' => $message->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     /**
@@ -2343,6 +2370,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ! $this->v3EdgeAllowsContactPhone($message, $edge)
                 || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
                 || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsExpression($message, $edge)
             ) {
                 continue;
             }
@@ -2449,6 +2477,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ! $this->v3EdgeAllowsContactPhone($message, $edge)
             || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
             || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+            || ! $this->v3EdgeAllowsExpression($message, $edge)
         ) {
             return null;
         }
@@ -2823,6 +2852,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ! $this->v3EdgeAllowsContactPhone($message, $edge)
             || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
             || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+            || ! $this->v3EdgeAllowsExpression($message, $edge)
         ) {
             return null;
         }

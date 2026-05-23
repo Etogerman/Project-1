@@ -344,6 +344,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             'operator' => 'equals',
             'value' => 'hot',
         ];
+        $callbackPayload['expression'] = '{{contact.gender}} == "male" or {{contact.gender}} == "female"';
         $edges = [
             [
                 'id' => null,
@@ -376,6 +377,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.edges.0.condition_payload.dialog_phone_condition', 'missing_phone')
             ->assertJsonPath('builder.edges.1.condition_payload.match.type', 'exact_text_or_parameter')
             ->assertJsonPath('builder.edges.2.condition_payload.match.type', 'exact_callback')
+            ->assertJsonPath('builder.edges.2.condition_payload.expression', '{{contact.gender}} == "male" or {{contact.gender}} == "female"')
             ->assertJsonPath('builder.edges.2.condition_payload.field_condition.field_key', 'lead_status')
             ->assertJsonPath('builder.edges.2.condition_payload.field_condition.operator', 'equals')
             ->json();
@@ -399,8 +401,49 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame(['payload_1', 'payload_2'], data_get($edgesByMatchType->get('exact_parameter'), 'match.variants'));
         $this->assertSame('has_phone', data_get($edgesByMatchType->get('exact_parameter'), 'contact_phone_condition'));
         $this->assertSame('missing_phone', data_get($edgesByMatchType->get('exact_parameter'), 'dialog_phone_condition'));
+        $this->assertSame('{{contact.gender}} == "male" or {{contact.gender}} == "female"', data_get($edgesByMatchType->get('exact_callback'), 'expression'));
         $this->assertSame('lead_status', data_get($edgesByMatchType->get('exact_callback'), 'field_condition.field_key'));
         $this->assertSame('hot', data_get($edgesByMatchType->get('exact_callback'), 'field_condition.value'));
+    }
+
+    public function test_put_state_rejects_invalid_edge_expression(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_invalid_expression',
+            'name' => 'V3 Invalid Expression',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Источник'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Цель'),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['expression'] = '{{dialog.user.region}} == "Москва"';
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $edgePayload,
+            ]]))
+            ->assertJsonValidationErrors(['builder.edges.0.condition_payload.expression']);
     }
 
     public function test_put_state_allows_first_name_source_contact_field_condition(): void
@@ -2997,6 +3040,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             'transition_limit' => 0,
             'contact_phone_condition' => '',
             'dialog_phone_condition' => '',
+            'expression' => '',
             'field_condition' => [
                 'enabled' => false,
                 'field_scope' => 'dialog',

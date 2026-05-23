@@ -522,6 +522,7 @@ class CompileScenarioBuilderV3RuntimeAction
             'dialog_phone_condition' => $this->normalizeContactPhoneCondition(
                 $conditionPayload['dialog_phone_condition'] ?? '',
             ),
+            'expression' => trim((string) ($conditionPayload['expression'] ?? '')),
             'field_condition' => $this->compileEdgeFieldCondition($conditionPayload),
             'match' => $this->compileEdgeMatch($conditionPayload),
             'delay' => $delay,

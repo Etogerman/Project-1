@@ -392,6 +392,23 @@ class ValidateScenarioBuilderV3StateAction
         return $condition;
     }
 
+    private function normalizeEdgeExpression(mixed $expression, int $edgeIndex): string
+    {
+        $expression = app(ScenarioEdgeExpressionCondition::class)->normalize($expression);
+
+        if (mb_strlen($expression) > self::MAX_MESSAGE_LENGTH) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.expression", 'Условие слишком длинное.');
+        }
+
+        try {
+            app(ScenarioEdgeExpressionCondition::class)->assertValid($expression);
+        } catch (Throwable) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.expression", 'Некорректное условие стрелки.');
+        }
+
+        return $expression;
+    }
+
     /**
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
@@ -964,6 +981,7 @@ class ValidateScenarioBuilderV3StateAction
             'transition_limit' => $transitionLimit,
             'contact_phone_condition' => $this->normalizeEdgeContactPhoneCondition($payload['contact_phone_condition'] ?? '', $edgeIndex),
             'dialog_phone_condition' => $this->normalizeEdgeDialogPhoneCondition($payload['dialog_phone_condition'] ?? '', $edgeIndex),
+            'expression' => $this->normalizeEdgeExpression($payload['expression'] ?? '', $edgeIndex),
             'field_condition' => $this->normalizeEdgeFieldCondition($payload['field_condition'] ?? [], $edgeIndex),
             'match' => $this->normalizeEdgeMatch($payload['match'] ?? [], $edgeIndex),
             'input_capture' => $this->normalizeEdgeInputCapture($payload['input_capture'] ?? [], $edgeIndex),

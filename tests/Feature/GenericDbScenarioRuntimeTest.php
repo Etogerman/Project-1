@@ -2275,6 +2275,141 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Имя указал оператор');
     }
 
+    public function test_v3_wait_reply_uses_expression_condition_with_fallback(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9285]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9286]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill(['gender' => 'unknown'])->save();
+        $dialog->forceFill(['fields_payload' => ['region' => 'Москва']])->save();
+        $scenario = $this->createPublishedScenario('v3_wait_reply_expression_condition', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_known_gender',
+                targetBlockId: 'known_gender',
+                priority: 20,
+                expression: '{{contact.gender}} == "male" or {{contact.gender}} == "female" and {{dialog.region}} == "Москва"',
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'known_gender' => 'Пол известен',
+            'fallback' => 'Пол неизвестен',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('fallback', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Пол неизвестен');
+    }
+
+    public function test_v3_wait_reply_expression_condition_matches_contact_and_dialog_values(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9287]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9288]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill([
+            'gender' => 'male',
+            'age_years' => 18,
+        ])->save();
+        $dialog->forceFill(['fields_payload' => ['region' => 'Москва']])->save();
+        $scenario = $this->createPublishedScenario('v3_wait_reply_expression_match', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_match',
+                targetBlockId: 'match',
+                priority: 20,
+                expression: '{{contact.gender}} == "male" and {{contact.age_years}} == "18" and {{dialog.region}} == "Москва"',
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'match' => 'Условие прошло',
+            'fallback' => 'Fallback',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('match', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Условие прошло');
+    }
+
     public function test_v3_wait_reply_skips_exhausted_transition_limit_and_uses_next_edge(): void
     {
         Http::fake([
@@ -8449,6 +8584,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         string $contactPhoneCondition = '',
         string $dialogPhoneCondition = '',
         array $fieldCondition = [],
+        string $expression = '',
     ): array {
         return [
             'id' => $id,
@@ -8458,6 +8594,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'transition_limit' => $transitionLimit,
             'contact_phone_condition' => $contactPhoneCondition,
             'dialog_phone_condition' => $dialogPhoneCondition,
+            'expression' => $expression,
             'field_condition' => array_merge([
                 'enabled' => false,
                 'field_scope' => 'dialog',
