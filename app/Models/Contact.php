@@ -455,6 +455,19 @@ class Contact extends Model
         return $this->hasMany(ContactDuplicateReview::class);
     }
 
+    public function questionnaireRuns(): HasMany
+    {
+        return $this->hasMany(ContactQuestionnaireRun::class)
+            ->orderByDesc('started_at')
+            ->orderByDesc('id');
+    }
+
+    public function activeQuestionnaireRuns(): HasMany
+    {
+        return $this->questionnaireRuns()
+            ->whereIn('status', ContactQuestionnaireRun::activeStatuses());
+    }
+
     public function openDuplicateReviews(): HasMany
     {
         return $this->duplicateReviews()
