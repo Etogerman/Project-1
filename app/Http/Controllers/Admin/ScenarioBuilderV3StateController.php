@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\Scenarios\BuildScenarioBuilderV3StateAction;
 use App\Services\Scenarios\PublishScenarioBuilderV3Action;
 use App\Services\Scenarios\SaveScenarioBuilderV3StateAction;
+use App\Services\Scenarios\ScenarioBuilderV3SheetTransferService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -89,6 +90,42 @@ class ScenarioBuilderV3StateController extends Controller
         ];
 
         return response()->json($state);
+    }
+
+    public function exportSheet(
+        Request $request,
+        Scenario $scenario,
+        ScenarioBuilderV3SheetTransferService $sheetTransferService,
+    ): JsonResponse {
+        $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
+        $document = $sheetTransferService->export($scenario, $user);
+        $sheetId = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) data_get($document, 'sheet.source_sheet_id', 'main'));
+
+        return response()
+            ->json($document)
+            ->withHeaders([
+                'Content-Disposition' => sprintf('attachment; filename="scenario-%d-sheet-%s.json"', $scenario->id, $sheetId ?: 'main'),
+            ]);
+    }
+
+    public function previewSheetImport(
+        Request $request,
+        Scenario $scenario,
+        ScenarioBuilderV3SheetTransferService $sheetTransferService,
+    ): JsonResponse {
+        $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
+
+        return response()->json($sheetTransferService->preview($scenario, $user, $request->all()));
+    }
+
+    public function applySheetImport(
+        Request $request,
+        Scenario $scenario,
+        ScenarioBuilderV3SheetTransferService $sheetTransferService,
+    ): JsonResponse {
+        $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
+
+        return response()->json($sheetTransferService->apply($scenario, $user, $request->all()));
     }
 
     private function authorizeScenarioBuilderAccess(Request $request, Scenario $scenario): User

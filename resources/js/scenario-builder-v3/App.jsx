@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { loadScenarioBuilderState, publishScenarioBuilderState, saveScenarioBuilderState } from './api.js';
+import {
+    applyScenarioBuilderSheetImport,
+    exportScenarioBuilderSheet,
+    loadScenarioBuilderState,
+    previewScenarioBuilderSheetImport,
+    publishScenarioBuilderState,
+    saveScenarioBuilderState,
+} from './api.js';
 
 const MAIN_SHEET = {
     id: 'main',
@@ -315,9 +322,18 @@ const BLOCK_TYPE_META = {
     },
 };
 
-export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
+export default function App({
+    stateUrl,
+    saveUrl,
+    publishUrl,
+    sheetExportUrl,
+    sheetImportPreviewUrl,
+    sheetImportApplyUrl,
+    csrfToken,
+}) {
     const canvasRef = useRef(null);
     const dragRef = useRef(null);
+    const sheetImportFileRef = useRef(null);
     const [state, setState] = useState(null);
     const [status, setStatus] = useState('loading');
     const [error, setError] = useState(null);
@@ -328,6 +344,13 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const [tool, setTool] = useState('select');
     const [isSaving, setIsSaving] = useState(false);
     const [isPublishing, setIsPublishing] = useState(false);
+    const [isExportingSheet, setIsExportingSheet] = useState(false);
+    const [isImportingSheet, setIsImportingSheet] = useState(false);
+    const [isApplyingSheetImport, setIsApplyingSheetImport] = useState(false);
+    const [sheetImportJson, setSheetImportJson] = useState('');
+    const [sheetImportPreview, setSheetImportPreview] = useState(null);
+    const [sheetImportSelection, setSheetImportSelection] = useState({});
+    const [sheetImportError, setSheetImportError] = useState(null);
     const [selectedBlockKey, setSelectedBlockKey] = useState(null);
     const [selectedEdgeKey, setSelectedEdgeKey] = useState(null);
     const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
@@ -401,7 +424,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     }, [stateUrl]);
 
     useEffect(() => {
-        if (status !== 'ready' || isSaving || isPublishing) {
+        if (status !== 'ready' || isSaving || isPublishing || isImportingSheet || isApplyingSheetImport) {
             return undefined;
         }
 
@@ -432,7 +455,7 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
             disposed = true;
             window.clearInterval(interval);
         };
-    }, [status, isSaving, isPublishing, refreshBuilderDiagnostics]);
+    }, [status, isSaving, isPublishing, isImportingSheet, isApplyingSheetImport, refreshBuilderDiagnostics]);
 
     const builder = state?.builder ?? null;
     const blocks = builder?.blocks ?? [];
@@ -448,8 +471,29 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
     const dialogFieldKeys = useMemo(() => dialogFieldKeysFromEdges(edges), [edges]);
-    const canSave = state?.permissions?.can_update === true && status === 'ready' && ! isSaving && ! isPublishing;
-    const canPublish = state?.permissions?.can_publish === true && status === 'ready' && ! isSaving && ! isPublishing && Boolean(publishUrl);
+    const canSave = state?.permissions?.can_update === true
+        && status === 'ready'
+        && ! isSaving
+        && ! isPublishing
+        && ! isImportingSheet
+        && ! isApplyingSheetImport;
+    const canPublish = state?.permissions?.can_publish === true
+        && status === 'ready'
+        && ! isSaving
+        && ! isPublishing
+        && ! isImportingSheet
+        && ! isApplyingSheetImport
+        && Boolean(publishUrl);
+    const canTransferSheet = state?.permissions?.can_update === true
+        && status === 'ready'
+        && ! isSaving
+        && ! isPublishing
+        && ! isExportingSheet
+        && ! isImportingSheet
+        && ! isApplyingSheetImport
+        && Boolean(sheetExportUrl)
+        && Boolean(sheetImportPreviewUrl)
+        && Boolean(sheetImportApplyUrl);
     const canvasBounds = useMemo(() => graphBounds(blocks), [blocks]);
     const hasPanelSelection = Boolean(selectedBlock || selectedEdge);
     const isPanelOpen = mode === 'design' && hasPanelSelection && ! isPanelCollapsed;
@@ -1635,6 +1679,135 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
         }
     }
 
+    async function exportSheet() {
+        if (! sheetExportUrl || isExportingSheet) {
+            return;
+        }
+
+        setIsExportingSheet(true);
+        setError(null);
+        setNotice(null);
+
+        try {
+            const document = await exportScenarioBuilderSheet(sheetExportUrl);
+            downloadJsonDocument(sheetExportFilename(document), document);
+            setNotice('Активный лист экспортирован из сохранённого черновика.');
+        } catch (requestError) {
+            setError(errorText(requestError));
+        } finally {
+            setIsExportingSheet(false);
+        }
+    }
+
+    function openSheetImportPicker() {
+        if (! canTransferSheet) {
+            return;
+        }
+
+        sheetImportFileRef.current?.click();
+    }
+
+    async function previewSheetImportFromFile(event) {
+        const file = event.target.files?.[0] ?? null;
+
+        event.target.value = '';
+
+        if (! file || ! sheetImportPreviewUrl) {
+            return;
+        }
+
+        setIsImportingSheet(true);
+        setError(null);
+        setNotice(null);
+        setSheetImportError(null);
+
+        try {
+            const json = await file.text();
+            const preview = await previewScenarioBuilderSheetImport(sheetImportPreviewUrl, csrfToken, { json });
+
+            setSheetImportJson(json);
+            setSheetImportPreview(preview);
+            setSheetImportSelection(defaultSheetImportSelection(preview));
+        } catch (requestError) {
+            setError(errorText(requestError));
+        } finally {
+            setIsImportingSheet(false);
+        }
+    }
+
+    function closeSheetImportPreview() {
+        if (isApplyingSheetImport) {
+            return;
+        }
+
+        setSheetImportJson('');
+        setSheetImportPreview(null);
+        setSheetImportSelection({});
+        setSheetImportError(null);
+    }
+
+    function updateSheetImportChannels(blockExportKey, channelIds) {
+        setSheetImportSelection((current) => ({
+            ...current,
+            [blockExportKey]: channelIds.map((id) => Number(id)).filter((id) => id > 0),
+        }));
+    }
+
+    async function downloadSheetBackup() {
+        if (! sheetExportUrl) {
+            return;
+        }
+
+        try {
+            const document = await exportScenarioBuilderSheet(sheetExportUrl);
+            downloadJsonDocument(`backup-${sheetExportFilename(document)}`, document);
+            setSheetImportError(null);
+        } catch (requestError) {
+            setSheetImportError(errorText(requestError));
+        }
+    }
+
+    async function applySheetImport() {
+        if (! sheetImportPreview || ! sheetImportApplyUrl || isApplyingSheetImport) {
+            return;
+        }
+
+        setIsApplyingSheetImport(true);
+        setSheetImportError(null);
+        setError(null);
+        setNotice(null);
+
+        try {
+            const response = await applyScenarioBuilderSheetImport(sheetImportApplyUrl, csrfToken, {
+                json: sheetImportJson,
+                draft_version_id: sheetImportPreview.draft_version_id,
+                base_builder_revision: sheetImportPreview.base_builder_revision,
+                selected_channels: sheetImportSelection,
+            });
+            const focusKey = resolveReturnedKey(response.import?.focus_block_client_key, response.id_map?.blocks, 'block');
+            const focusedState = stateWithSheetImportFocus(response, focusKey);
+
+            setState(focusedState);
+            setSelectedBlockKey(focusKey);
+            setSelectedEdgeKey(null);
+            cancelConnection();
+            setStatus('ready');
+            setNotice('Активный лист импортирован и сохранён в черновик.');
+            setSheetImportJson('');
+            setSheetImportPreview(null);
+            setSheetImportSelection({});
+            setSheetImportError(null);
+        } catch (requestError) {
+            if (requestError.status === 409) {
+                setStatus('conflict');
+            }
+
+            setSheetImportError(errorText(requestError));
+        } finally {
+            setIsApplyingSheetImport(false);
+        }
+    }
+
     async function resolvePendingPublishWarning(policy) {
         if (! pendingPublishWarning || isPublishing) {
             return;
@@ -1767,6 +1940,12 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                     <button type="button" className="ac-v3-builder__icon-button" title="История версий" onClick={() => setNotice('История версий не входит в текущий шаг.')}>
                         <HistoryIcon />
                     </button>
+                    <button type="button" className="ac-v3-builder__secondary" disabled={! canTransferSheet} onClick={exportSheet}>
+                        {isExportingSheet ? 'Экспорт...' : 'Экспорт листа'}
+                    </button>
+                    <button type="button" className="ac-v3-builder__secondary" disabled={! canTransferSheet} onClick={openSheetImportPicker}>
+                        {isImportingSheet ? 'Проверяю...' : 'Импорт листа'}
+                    </button>
                     <button type="button" className="ac-v3-builder__primary" disabled={! canSave} onClick={save}>
                         {isSaving ? 'Сохраняю...' : 'Сохранить'}
                     </button>
@@ -1775,6 +1954,14 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                     </button>
                 </div>
             </header>
+
+            <input
+                ref={sheetImportFileRef}
+                type="file"
+                accept="application/json,.json"
+                className="ac-v3-builder__file-input"
+                onChange={previewSheetImportFromFile}
+            />
 
             <div className="ac-v3-builder__tabs">
                 <button type="button" className="is-active">
@@ -1819,6 +2006,19 @@ export default function App({ stateUrl, saveUrl, publishUrl, csrfToken }) {
                     onKeep={() => resolvePendingPublishWarning('keep')}
                     onCancelScheduled={() => resolvePendingPublishWarning('cancel')}
                     onClose={() => setPendingPublishWarning(null)}
+                />
+            ) : null}
+
+            {sheetImportPreview ? (
+                <SheetImportPreviewDialog
+                    preview={sheetImportPreview}
+                    selection={sheetImportSelection}
+                    error={sheetImportError}
+                    isApplying={isApplyingSheetImport}
+                    onChangeChannels={updateSheetImportChannels}
+                    onDownloadBackup={downloadSheetBackup}
+                    onApply={applySheetImport}
+                    onClose={closeSheetImportPreview}
                 />
             ) : null}
 
@@ -2036,6 +2236,101 @@ function ScheduledPublishDialog({ warning, isPublishing, onKeep, onCancelSchedul
                     </button>
                     <button type="button" className="is-danger" disabled={isPublishing} onClick={onCancelScheduled}>
                         Отменить переходы
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function SheetImportPreviewDialog({
+    preview,
+    selection,
+    error,
+    isApplying,
+    onChangeChannels,
+    onDownloadBackup,
+    onApply,
+    onClose,
+}) {
+    const counts = preview?.counts ?? {};
+    const startBlocks = Array.isArray(preview?.start_blocks) ? preview.start_blocks : [];
+    const channels = Array.isArray(preview?.available_channels) ? preview.available_channels : [];
+    const channelHints = new Map((preview?.channel_hints ?? []).map((hint) => [hint.export_key, hint]));
+
+    return (
+        <div className="ac-v3-builder__dialog-backdrop" role="presentation">
+            <div className="ac-v3-builder__sheet-import-dialog" role="dialog" aria-modal="true" aria-labelledby="sheet-import-title">
+                <div className="ac-v3-builder__publish-dialog-head">
+                    <h2 id="sheet-import-title">Импорт листа</h2>
+                    <button type="button" title="Закрыть" disabled={isApplying} onClick={onClose}>×</button>
+                </div>
+
+                <div className="ac-v3-builder__sheet-import-body">
+                    <div className="ac-v3-builder__sheet-import-summary">
+                        <span><strong>{counts.blocks ?? 0}</strong> блоков</span>
+                        <span><strong>{counts.edges ?? 0}</strong> связей</span>
+                        <span><strong>{counts.start_blocks ?? 0}</strong> стартовых</span>
+                        <span><strong>{counts.channel_hints ?? 0}</strong> подсказок каналов</span>
+                    </div>
+
+                    <div className="ac-v3-builder__sheet-import-warnings">
+                        {(preview?.warnings ?? []).map((warning) => (
+                            <p key={warning}>{warning}</p>
+                        ))}
+                    </div>
+
+                    {startBlocks.length > 0 ? (
+                        <div className="ac-v3-builder__sheet-import-starts">
+                            <h3>Каналы стартовых блоков</h3>
+                            {startBlocks.map((startBlock) => {
+                                const selected = selection[startBlock.block_export_key] ?? [];
+                                const hints = (startBlock.channel_hint_keys ?? [])
+                                    .map((key) => channelHints.get(key))
+                                    .filter(Boolean);
+
+                                return (
+                                    <label key={startBlock.block_export_key} className="ac-v3-builder__sheet-import-start">
+                                        <span>
+                                            <strong>{startBlock.title || startBlock.block_export_key}</strong>
+                                            {startBlock.start_condition_summary ? <small>{startBlock.start_condition_summary}</small> : null}
+                                            {hints.length > 0 ? (
+                                                <small>Подсказки: {hints.map((hint) => hint.name).join(', ')}</small>
+                                            ) : null}
+                                        </span>
+                                        <select
+                                            multiple
+                                            value={selected.map(String)}
+                                            disabled={isApplying}
+                                            onChange={(event) => onChangeChannels(
+                                                startBlock.block_export_key,
+                                                Array.from(event.target.selectedOptions).map((option) => option.value),
+                                            )}
+                                        >
+                                            {channels.map((channel) => (
+                                                <option key={channel.id} value={channel.id}>
+                                                    #{channel.id} {channel.name} ({channel.platform})
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    ) : null}
+
+                    {error ? <p className="ac-v3-builder__sheet-import-error">{error}</p> : null}
+                </div>
+
+                <div className="ac-v3-builder__publish-dialog-footer">
+                    <button type="button" disabled={isApplying} onClick={onDownloadBackup}>
+                        Скачать backup
+                    </button>
+                    <button type="button" disabled={isApplying} onClick={onClose}>
+                        Отмена
+                    </button>
+                    <button type="button" className="is-danger" disabled={isApplying} onClick={onApply}>
+                        {isApplying ? 'Импортирую...' : 'Импортировать'}
                     </button>
                 </div>
             </div>
@@ -4984,6 +5279,72 @@ function activeSheetFrom(builder) {
     const sheets = builder?.sheets?.length ? builder.sheets : [MAIN_SHEET];
 
     return sheets.find((sheet) => sheet.id === builder?.active_sheet_id) ?? sheets[0] ?? MAIN_SHEET;
+}
+
+function defaultSheetImportSelection(preview) {
+    const channelsById = new Set((preview?.available_channels ?? []).map((channel) => Number(channel.id)));
+    const hintsByKey = new Map((preview?.channel_hints ?? []).map((hint) => [hint.export_key, hint]));
+    const selection = {};
+
+    (preview?.start_blocks ?? []).forEach((startBlock) => {
+        const ids = (startBlock.channel_hint_keys ?? [])
+            .map((key) => Number(hintsByKey.get(key)?.source_channel_id ?? 0))
+            .filter((id) => id > 0 && channelsById.has(id));
+
+        selection[startBlock.block_export_key] = [...new Set(ids)];
+    });
+
+    return selection;
+}
+
+function downloadJsonDocument(filename, document) {
+    const blob = new Blob([JSON.stringify(document, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = documentForDownload();
+
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
+function documentForDownload() {
+    const link = document.createElement('a');
+
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    window.setTimeout(() => link.remove(), 0);
+
+    return link;
+}
+
+function sheetExportFilename(document) {
+    const sheetId = String(document?.sheet?.source_sheet_id || 'main').replace(/[^A-Za-z0-9_-]+/g, '-');
+    const timestamp = String(document?.exported_at || new Date().toISOString()).replace(/[^0-9T]+/g, '').slice(0, 15);
+
+    return `scenario-sheet-${sheetId || 'main'}-${timestamp}.json`;
+}
+
+function stateWithSheetImportFocus(state, focusBlockKey) {
+    const sheetId = state?.import?.sheet_id || state?.builder?.active_sheet_id || MAIN_SHEET.id;
+    const focusBlock = focusBlockKey
+        ? (state?.builder?.blocks ?? []).find((block) => block.client_key === focusBlockKey)
+        : null;
+    const nextView = focusBlock
+        ? { tx: 132 - blockPosition(focusBlock).x, ty: 100 - blockPosition(focusBlock).y, zoom: 1 }
+        : MAIN_SHEET.view;
+    const sheets = (state?.builder?.sheets?.length ? state.builder.sheets : [MAIN_SHEET]).map((sheet) => (
+        sheet.id === sheetId ? { ...sheet, view: nextView } : sheet
+    ));
+
+    return {
+        ...state,
+        builder: {
+            ...state.builder,
+            active_sheet_id: sheetId,
+            sheets,
+        },
+    };
 }
 
 function errorText(error) {

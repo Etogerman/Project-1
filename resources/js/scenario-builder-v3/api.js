@@ -39,6 +39,47 @@ export async function publishScenarioBuilderState(publishUrl, csrfToken, payload
     return parseJsonResponse(response);
 }
 
+export async function exportScenarioBuilderSheet(exportUrl) {
+    const response = await fetch(exportUrl, {
+        headers: {
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+    });
+
+    return parseJsonResponse(response);
+}
+
+export async function previewScenarioBuilderSheetImport(previewUrl, csrfToken, payload) {
+    const response = await fetch(previewUrl, {
+        method: 'POST',
+        headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken,
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+    });
+
+    return parseJsonResponse(response);
+}
+
+export async function applyScenarioBuilderSheetImport(applyUrl, csrfToken, payload) {
+    const response = await fetch(applyUrl, {
+        method: 'POST',
+        headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken,
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+    });
+
+    return parseJsonResponse(response);
+}
+
 async function parseJsonResponse(response) {
     const data = await response.json().catch(() => ({}));
 

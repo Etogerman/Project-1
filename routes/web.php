@@ -55,6 +55,15 @@ Route::middleware('auth')
 
         Route::post('/publish', [ScenarioBuilderV3StateController::class, 'publish'])
             ->name('publish');
+
+        Route::get('/sheet/export', [ScenarioBuilderV3StateController::class, 'exportSheet'])
+            ->name('sheet.export');
+
+        Route::post('/sheet/import/preview', [ScenarioBuilderV3StateController::class, 'previewSheetImport'])
+            ->name('sheet.import.preview');
+
+        Route::post('/sheet/import/apply', [ScenarioBuilderV3StateController::class, 'applySheetImport'])
+            ->name('sheet.import.apply');
     });
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])

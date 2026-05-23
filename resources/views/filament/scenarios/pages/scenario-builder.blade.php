@@ -8,6 +8,9 @@
         data-state-url="{{ $scenarioBuilderV3Config['stateUrl'] }}"
         data-save-url="{{ $scenarioBuilderV3Config['saveUrl'] }}"
         data-publish-url="{{ $scenarioBuilderV3Config['publishUrl'] }}"
+        data-sheet-export-url="{{ $scenarioBuilderV3Config['sheetExportUrl'] }}"
+        data-sheet-import-preview-url="{{ $scenarioBuilderV3Config['sheetImportPreviewUrl'] }}"
+        data-sheet-import-apply-url="{{ $scenarioBuilderV3Config['sheetImportApplyUrl'] }}"
         data-csrf-token="{{ $scenarioBuilderV3Config['csrfToken'] }}"
     >
         <section class="ac-v3-builder" data-status="loading">

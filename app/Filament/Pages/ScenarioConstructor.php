@@ -161,6 +161,15 @@ class ScenarioConstructor extends Page
             'publishUrl' => $this->scenarioId !== null
                 ? route('admin.scenario-constructor.v3.publish', ['scenario' => $this->scenarioId])
                 : null,
+            'sheetExportUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.sheet.export', ['scenario' => $this->scenarioId])
+                : null,
+            'sheetImportPreviewUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.sheet.import.preview', ['scenario' => $this->scenarioId])
+                : null,
+            'sheetImportApplyUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.sheet.import.apply', ['scenario' => $this->scenarioId])
+                : null,
             'csrfToken' => csrf_token(),
         ];
     }

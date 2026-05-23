@@ -125,6 +125,174 @@ class ScenarioBuilderV3StateTest extends TestCase
         ]);
     }
 
+    public function test_sheet_export_treats_blocks_without_sheet_id_as_main(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_export_main',
+            'name' => 'V3 Sheet Export Main',
+        ]);
+        $draft = $scenario->draftVersion()->firstOrFail();
+        $settings = $this->messageSettings('Старый блок');
+        unset($settings['ui']['sheet_id']);
+
+        ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $draft->id,
+            'type' => 'state',
+            'title' => 'Без sheet_id',
+            'position_x' => 120,
+            'position_y' => 160,
+            'settings_payload' => $settings,
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson($this->sheetExportUrl($scenario))
+            ->assertOk()
+            ->assertJsonPath('format', 'abrikosoff.constructor.v3.sheet_export')
+            ->assertJsonPath('sheet.source_sheet_id', 'main')
+            ->assertJsonPath('blocks.0.title', 'Без sheet_id')
+            ->assertJsonPath('blocks.0.export_key', 'block_000001');
+    }
+
+    public function test_sheet_import_preview_does_not_write_database(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_preview',
+            'name' => 'V3 Sheet Preview',
+        ]);
+        $document = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Импорт'),
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+            ])
+            ->assertOk()
+            ->assertJsonPath('sheet_id', 'main')
+            ->assertJsonPath('counts.blocks', 1)
+            ->assertJsonPath('counts.edges', 0)
+            ->assertJsonPath('warnings.0', 'Импорт полностью заменит активный лист. Остальные листы останутся без изменений.');
+
+        $this->assertDatabaseCount('scenario_builder_blocks', 0);
+        $this->assertDatabaseCount('scenario_builder_edges', 0);
+    }
+
+    public function test_sheet_import_apply_replaces_only_active_sheet(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_apply',
+            'name' => 'V3 Sheet Apply',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $secondarySettings = $this->messageSettings('Другой лист');
+        $secondarySettings['ui']['sheet_id'] = 'secondary';
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_main',
+                'type' => 'state',
+                'title' => 'Старый main',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Старый main'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_secondary',
+                'type' => 'state',
+                'title' => 'Другой лист',
+                'position' => ['x' => 520, 'y' => 160],
+                'settings_payload' => $secondarySettings,
+            ],
+        ]);
+        $payload['builder']['sheets'][] = [
+            'id' => 'secondary',
+            'name' => 'Другой',
+            'color' => 'none',
+            'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertOk()
+            ->json();
+        $document = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Новый main'),
+        ]);
+        $preview = $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+            ])
+            ->assertOk()
+            ->json();
+
+        $response = $this->actingAs($admin)
+            ->postJson($this->sheetImportApplyUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+                'draft_version_id' => $preview['draft_version_id'],
+                'base_builder_revision' => $preview['base_builder_revision'],
+                'selected_channels' => [],
+            ])
+            ->assertOk()
+            ->assertJsonPath('import.sheet_id', 'main')
+            ->assertJsonPath('import.focus_block_client_key', 'import_block_000001')
+            ->json();
+
+        $this->assertNull(ScenarioBuilderBlock::query()->find($saved['id_map']['blocks']['tmp_main']));
+        $this->assertNotNull(ScenarioBuilderBlock::query()->find($saved['id_map']['blocks']['tmp_secondary']));
+        $this->assertDatabaseHas('scenario_builder_blocks', [
+            'title' => 'Новый main',
+            'scenario_version_id' => $scenario->fresh()->draftVersion?->id,
+        ]);
+        $this->assertCount(2, $response['builder']['blocks']);
+    }
+
+    public function test_sheet_import_blocks_broken_edge_and_extra_selected_channel_key(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_invalid',
+            'name' => 'V3 Sheet Invalid',
+        ]);
+        $brokenEdgeDocument = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Источник'),
+        ], [[
+            'export_key' => 'edge_000001',
+            'source' => ['block_export_key' => 'block_000001', 'output_id' => null],
+            'target' => ['block_export_key' => 'block_999999'],
+            'condition_payload' => $this->edgePayload(null, 'Дальше'),
+        ]]);
+
+        $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($brokenEdgeDocument, JSON_UNESCAPED_UNICODE),
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['edges.0']);
+
+        $validDocument = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Импорт'),
+        ]);
+        $preview = $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($validDocument, JSON_UNESCAPED_UNICODE),
+            ])
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->sheetImportApplyUrl($scenario), [
+                'json' => json_encode($validDocument, JSON_UNESCAPED_UNICODE),
+                'draft_version_id' => $preview['draft_version_id'],
+                'base_builder_revision' => $preview['base_builder_revision'],
+                'selected_channels' => ['block_000001' => []],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['selected_channels']);
+    }
+
     public function test_put_state_preserves_v3_block_kind_in_settings_payload(): void
     {
         $admin = $this->adminUser();
@@ -2717,6 +2885,21 @@ class ScenarioBuilderV3StateTest extends TestCase
         return route('admin.scenario-constructor.v3.publish', ['scenario' => $scenario]);
     }
 
+    private function sheetExportUrl(Scenario $scenario): string
+    {
+        return route('admin.scenario-constructor.v3.sheet.export', ['scenario' => $scenario]);
+    }
+
+    private function sheetImportPreviewUrl(Scenario $scenario): string
+    {
+        return route('admin.scenario-constructor.v3.sheet.import.preview', ['scenario' => $scenario]);
+    }
+
+    private function sheetImportApplyUrl(Scenario $scenario): string
+    {
+        return route('admin.scenario-constructor.v3.sheet.import.apply', ['scenario' => $scenario]);
+    }
+
     /**
      * @param  array<string, mixed>  $state
      * @param  list<array<string, mixed>>  $blocks
@@ -2736,6 +2919,51 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'edges' => $edges,
                 'visible_scope' => $state['builder']['visible_scope'],
             ],
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $blocks
+     * @param  list<array<string, mixed>>  $edges
+     * @param  list<array<string, mixed>>  $startBlocks
+     * @param  list<array<string, mixed>>  $channelHints
+     * @return array<string, mixed>
+     */
+    private function sheetImportDocument(array $blocks, array $edges = [], array $startBlocks = [], array $channelHints = []): array
+    {
+        return [
+            'format' => 'abrikosoff.constructor.v3.sheet_export',
+            'export_format_version' => 1,
+            'schema_version' => 3,
+            'exported_at' => '2026-05-23T12:00:00Z',
+            'source' => [
+                'draft_version_id' => 123,
+                'builder_revision' => 'v3:test',
+            ],
+            'sheet' => [
+                'export_key' => 'sheet_000001',
+                'source_sheet_id' => 'main',
+                'name' => 'Главный',
+                'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+            ],
+            'blocks' => $blocks,
+            'edges' => $edges,
+            'start_blocks' => $startBlocks,
+            'channel_hints' => $channelHints,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sheetImportBlock(string $exportKey, string $title, ?array $settings = null): array
+    {
+        return [
+            'export_key' => $exportKey,
+            'title' => $title,
+            'type' => 'state',
+            'position' => ['x' => 120, 'y' => 160],
+            'settings_payload' => $settings ?? $this->messageSettings('Импортированный блок'),
         ];
     }
 
