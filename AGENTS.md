@@ -123,6 +123,27 @@
 
 - [Проект и текущий scope](/Users/abrikosov/Documents/Проект-1/docs/reference/project-scope.md)
 
+## Работа с ТЗ и Project-1-specs
+
+1. Стандартный внешний репозиторий документации для этого проекта:
+   - GitHub: `Etogerman/Project-1-specs`
+   - локальный путь: `/Users/abrikosov/Documents/Project-1-specs`
+2. Если пользователь просит сохранить, зафиксировать или обновить полное ТЗ и не указывает другой внешний репозиторий, агент использует `/Users/abrikosov/Documents/Project-1-specs` без дополнительных вопросов пользователю про путь.
+3. Перед записью ТЗ агент открывает и учитывает:
+   - `/Users/abrikosov/Documents/Project-1-specs/README.md`
+   - `/Users/abrikosov/Documents/Project-1-specs/active-streams.md`
+   - `/Users/abrikosov/Documents/Project-1-specs/streams/README.md`
+   - `/Users/abrikosov/Documents/Project-1-specs/templates/stream-template.md`
+4. Новое существенное ТЗ по умолчанию сохраняется в `/Users/abrikosov/Documents/Project-1-specs/streams/` с понятным `tz-*.md` именем, если пользователь не указал другой путь внутри Spec repo.
+5. После добавления или изменения stream-ТЗ агент обновляет `/Users/abrikosov/Documents/Project-1-specs/streams/README.md`.
+6. `active-streams.md` обновляется только когда implementation stream реально открыт или меняется статус уже открытого stream-а. Сохранение planned-ТЗ само по себе не обязано открывать active stream.
+7. После сохранения ТЗ агент сообщает пользователю:
+   - `Spec repo`
+   - `Spec doc`
+   - `Spec revision` после локального commit-а в Spec repo
+   - опубликованы ли изменения или остались локальными.
+8. Агент не спрашивает пользователя про путь к ТЗ, если стандартный Spec repo найден и доступен. Вопрос допустим только если Spec repo недоступен, пользователь явно требует другой репозиторий или есть конфликт структуры, который нельзя безопасно разрешить по файлам `README.md` / `streams/README.md`.
+
 ## Источники истины
 
 Приоритет источников истины:
