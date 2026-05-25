@@ -1205,6 +1205,66 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('female', data_get($dialog->fields_payload, 'selected_gender'));
     }
 
+    public function test_v3_distance_to_moscow_action_calculates_for_ru_country_and_follows_resolved_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9701],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill([
+            'country' => 'RU',
+            'city' => 'Москва',
+            'distance_to_moscow_km' => null,
+            'distance_to_moscow_status' => null,
+            'distance_to_moscow_calculated_at' => null,
+        ])->save();
+
+        $scenario = $this->createPublishedScenario(
+            'v3_distance_to_moscow',
+            $this->v3DistanceToMoscowRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $contact->refresh();
+
+        $this->assertSame(0, $contact->distance_to_moscow_km);
+        $this->assertSame(Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED, $contact->distance_to_moscow_status);
+        $this->assertNotNull($contact->distance_to_moscow_calculated_at);
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('done', $run->current_step);
+        $this->assertSame('distance_resolved', data_get($run->state_payload, 'v3.distance_to_moscow.distance.output_id'));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Расстояние рассчитано');
+    }
+
     public function test_v3_questionnaire_action_starts_profile_questionnaire_and_stops_current_execution(): void
     {
         $this->seed(ProfileQuestionnaireSeeder::class);
@@ -8549,6 +8609,72 @@ class GenericDbScenarioRuntimeTest extends TestCase
     /**
      * @return array<string, mixed>
      */
+    private function v3DistanceToMoscowRuntimeSchema(int $channelId): array
+    {
+        $resolvedEdge = [
+            'id' => 'edge_distance_resolved',
+            'edge_key' => 'edge_distance_resolved',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'distance',
+            'target_block_id' => 'done',
+            'from_output_id' => 'distance_resolved',
+            'label' => 'Рассчитано',
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'distance',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'distance' => [
+                        'id' => 'distance',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Расстояние до Москвы',
+                        'actions' => [[
+                            'type' => 'calculate_distance_to_moscow',
+                        ]],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'action_result_edges' => [$resolvedEdge],
+                        'default_target_block_id' => null,
+                    ],
+                    'done' => [
+                        'id' => 'done',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Готово',
+                        'message' => [
+                            'text' => 'Расстояние рассчитано',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$resolvedEdge],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     private function v3QuestionnaireRuntimeSchema(int $channelId): array
     {
         $waitingEdge = [
@@ -8646,8 +8772,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         bool $nextHasInlineButtons = false,
         string $operation = 'remove_buttons',
         string $target = 'last_current_run_outbound_with_inline_buttons',
-    ): array
-    {
+    ): array {
         $edgeToAction = [
             'id' => 'edge_remove_buttons',
             'source_block_id' => 'start',

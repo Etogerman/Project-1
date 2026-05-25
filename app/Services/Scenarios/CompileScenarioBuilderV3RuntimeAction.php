@@ -283,6 +283,12 @@ class CompileScenarioBuilderV3RuntimeAction
                     ];
                 }
 
+                if ($type === 'calculate_distance_to_moscow') {
+                    return [
+                        'type' => 'calculate_distance_to_moscow',
+                    ];
+                }
+
                 return [
                     'type' => $type,
                     'source_type' => (string) ($item['source_type'] ?? 'ai_data'),
@@ -304,6 +310,7 @@ class CompileScenarioBuilderV3RuntimeAction
                         && ($item['target'] ?? '') === 'last_current_run_outbound')
                 ),
                 'questionnaire' => filled($item['template_key'] ?? null),
+                'calculate_distance_to_moscow' => true,
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'
                         ? trim((string) ($item['static_value'] ?? '')) !== ''

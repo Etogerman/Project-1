@@ -40,7 +40,7 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_ACTIONS_PER_BLOCK = 20;
 
-    private const ACTION_TYPES = ['write_contact_field', 'check_data', 'edit_message', 'questionnaire'];
+    private const ACTION_TYPES = ['write_contact_field', 'check_data', 'edit_message', 'questionnaire', 'calculate_distance_to_moscow'];
 
     private const ACTION_SOURCE_TYPES = ['ai_data', 'inbound_message', 'static_value'];
 
@@ -749,6 +749,14 @@ class ValidateScenarioBuilderV3StateAction
                 $normalized[] = [
                     'type' => $type,
                     'template_key' => $templateKey,
+                ];
+
+                continue;
+            }
+
+            if ($type === 'calculate_distance_to_moscow') {
+                $normalized[] = [
+                    'type' => $type,
                 ];
 
                 continue;

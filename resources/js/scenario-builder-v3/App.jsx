@@ -80,6 +80,7 @@ const ACTION_TYPE_WRITE_CONTACT_FIELD = 'write_contact_field';
 const ACTION_TYPE_CHECK_DATA = 'check_data';
 const ACTION_TYPE_EDIT_MESSAGE = 'edit_message';
 const ACTION_TYPE_QUESTIONNAIRE = 'questionnaire';
+const ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW = 'calculate_distance_to_moscow';
 const ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS = 'remove_buttons';
 const ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE = 'delete_message';
 const ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS = 'last_current_run_outbound_with_inline_buttons';
@@ -137,9 +138,17 @@ const ACTION_QUESTIONNAIRE_OUTPUTS = [
     { id: 'operator_requested', label: 'Запрошен оператор', source: 'action', action_result_id: 'operator_requested' },
     { id: 'blocked_by_active_questionnaire', label: 'Уже ждём другую анкету', source: 'action', action_result_id: 'blocked_by_active_questionnaire' },
 ];
+const ACTION_DISTANCE_TO_MOSCOW_OUTPUTS = [
+    { id: 'distance_resolved', label: 'Рассчитано', source: 'action', action_result_id: 'distance_resolved' },
+    { id: 'distance_pending', label: 'Ждёт данных', source: 'action', action_result_id: 'distance_pending' },
+    { id: 'distance_out_of_scope', label: 'Не Россия', source: 'action', action_result_id: 'distance_out_of_scope' },
+    { id: 'distance_unknown', label: 'Не удалось определить', source: 'action', action_result_id: 'distance_unknown' },
+    { id: 'distance_failed', label: 'Ошибка расчёта', source: 'action', action_result_id: 'distance_failed' },
+];
 const ACTION_RESULT_OUTPUTS = [
     ...ACTION_CHECK_DATA_OUTPUTS,
     ...ACTION_QUESTIONNAIRE_OUTPUTS,
+    ...ACTION_DISTANCE_TO_MOSCOW_OUTPUTS,
 ];
 const FIRST_NAME_SOURCE_CONDITION_OPTIONS = [
     ['auto', 'Авто'],
@@ -1512,10 +1521,12 @@ export default function App({
         if (type === 'action' && Array.isArray(patch.actions)) {
             const hasCheckData = patch.actions.some((item) => item?.type === ACTION_TYPE_CHECK_DATA);
             const hasQuestionnaire = patch.actions.some((item) => item?.type === ACTION_TYPE_QUESTIONNAIRE);
+            const hasDistanceToMoscow = patch.actions.some((item) => item?.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW);
             const allActionOutputIds = new Set(ACTION_RESULT_OUTPUTS.map((output) => output.id));
             const nextActionOutputIds = new Set([
                 ...(hasCheckData ? ACTION_CHECK_DATA_OUTPUTS : []),
                 ...(hasQuestionnaire ? ACTION_QUESTIONNAIRE_OUTPUTS : []),
+                ...(hasDistanceToMoscow ? ACTION_DISTANCE_TO_MOSCOW_OUTPUTS : []),
             ].map((output) => output.id));
 
             updateEdges(edges.filter((edge) => (
@@ -4452,9 +4463,15 @@ function ActionFields({ action, blockKey, onUpdateModulePayload }) {
                             <option value="check_data">Проверить данные</option>
                             <option value="edit_message">Изменить сообщение</option>
                             <option value="questionnaire">Запустить анкету</option>
+                            <option value="calculate_distance_to_moscow">Рассчитать расстояние до Москвы</option>
                         </select>
                     </label>
-                    {item.type === ACTION_TYPE_QUESTIONNAIRE ? (
+                    {item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW ? (
+                        <label>
+                            <span>Что рассчитать</span>
+                            <input value="Расстояние от города контакта до Москвы" readOnly />
+                        </label>
+                    ) : item.type === ACTION_TYPE_QUESTIONNAIRE ? (
                         <>
                             <label>
                                 <span>Шаблон анкеты</span>
@@ -6223,6 +6240,10 @@ function actionItemSummary(item) {
         return `Анкета → ${template}`;
     }
 
+    if (item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW) {
+        return 'Контакт → расстояние до Москвы';
+    }
+
     if (item.type === ACTION_TYPE_CHECK_DATA) {
         const dictionary = ACTION_DICTIONARY_OPTIONS.find(([value]) => value === item.dictionary_key)?.[1] ?? 'справочник';
 
@@ -6371,6 +6392,7 @@ function actionItems(actionModule) {
             item.type === ACTION_TYPE_CHECK_DATA
             || item.type === ACTION_TYPE_EDIT_MESSAGE
             || item.type === ACTION_TYPE_QUESTIONNAIRE
+            || item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
             || item.target_field !== ''
         ));
 
@@ -6382,7 +6404,11 @@ function normalizeActionItemForType(item) {
         ? ACTION_TYPE_CHECK_DATA
         : (item.type === ACTION_TYPE_EDIT_MESSAGE
             ? ACTION_TYPE_EDIT_MESSAGE
-            : (item.type === ACTION_TYPE_QUESTIONNAIRE ? ACTION_TYPE_QUESTIONNAIRE : ACTION_TYPE_WRITE_CONTACT_FIELD));
+            : (item.type === ACTION_TYPE_QUESTIONNAIRE
+                ? ACTION_TYPE_QUESTIONNAIRE
+                : (item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
+                    ? ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
+                    : ACTION_TYPE_WRITE_CONTACT_FIELD)));
 
     if (type === ACTION_TYPE_EDIT_MESSAGE) {
         const operation = item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
@@ -6430,6 +6456,10 @@ function normalizeActionItemForType(item) {
             type,
             template_key: templateKey,
         };
+    }
+
+    if (type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW) {
+        return { type };
     }
 
     const targetScope = ACTION_TARGET_SCOPE_OPTIONS.some(([value]) => value === item.target_scope)
@@ -6557,6 +6587,7 @@ function syncOutputs(settingsPayload) {
     const actionOutputs = [
         ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_CHECK_DATA) ? ACTION_CHECK_DATA_OUTPUTS : []),
         ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_QUESTIONNAIRE) ? ACTION_QUESTIONNAIRE_OUTPUTS : []),
+        ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW) ? ACTION_DISTANCE_TO_MOSCOW_OUTPUTS : []),
     ].map((output) => ({
         ...output,
         module_id: action?.id ?? 'mod_action',

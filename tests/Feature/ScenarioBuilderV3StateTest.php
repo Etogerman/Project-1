@@ -1080,6 +1080,70 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_publish_keeps_distance_to_moscow_action_outputs_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Distance']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_distance_to_moscow_action',
+            'name' => 'V3 Distance To Moscow Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_distance',
+                'type' => 'state',
+                'title' => 'Расстояние до Москвы',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->distanceToMoscowActionSettings(),
+            ],
+        ];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_distance'],
+                'condition_payload' => $this->edgePayload(null, 'Дальше'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'calculate_distance_to_moscow')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.0.id', 'distance_resolved')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.1.id', 'distance_pending')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.2.id', 'distance_out_of_scope')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.3.id', 'distance_unknown')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.4.id', 'distance_failed')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $distanceBlockId = (string) $saved['id_map']['blocks']['tmp_distance'];
+
+        $this->assertSame(
+            'calculate_distance_to_moscow',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$distanceBlockId.actions.0.type"),
+        );
+    }
+
     public function test_put_state_rejects_first_name_source_contact_input_capture(): void
     {
         $admin = $this->adminUser();
@@ -3263,8 +3327,7 @@ class ScenarioBuilderV3StateTest extends TestCase
     private function editMessageActionSettings(
         string $operation = 'remove_buttons',
         string $target = 'last_current_run_outbound_with_inline_buttons',
-    ): array
-    {
+    ): array {
         return [
             'schema_version' => 3,
             'kind' => 'state',
@@ -3314,6 +3377,69 @@ class ScenarioBuilderV3StateTest extends TestCase
                 ],
             ],
             'outputs' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function distanceToMoscowActionSettings(): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'calculate_distance_to_moscow',
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [
+                [
+                    'id' => 'distance_resolved',
+                    'label' => 'Рассчитано',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'distance_resolved',
+                ],
+                [
+                    'id' => 'distance_pending',
+                    'label' => 'Ждёт данных',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'distance_pending',
+                ],
+                [
+                    'id' => 'distance_out_of_scope',
+                    'label' => 'Не Россия',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'distance_out_of_scope',
+                ],
+                [
+                    'id' => 'distance_unknown',
+                    'label' => 'Не удалось определить',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'distance_unknown',
+                ],
+                [
+                    'id' => 'distance_failed',
+                    'label' => 'Ошибка расчёта',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'distance_failed',
+                ],
+            ],
         ];
     }
 

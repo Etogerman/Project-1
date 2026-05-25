@@ -110,7 +110,6 @@ class ResolveRussianLocalityGeocodeQueryAction
     }
 
     /**
-     * @param  mixed  $regions
      * @return list<string>
      */
     private function normalizeRegions(mixed $regions): array
@@ -131,7 +130,6 @@ class ResolveRussianLocalityGeocodeQueryAction
     }
 
     /**
-     * @param  mixed  $queries
      * @return array<string, string>
      */
     private function normalizeGeocodeQueriesByRegion(mixed $queries): array
@@ -204,6 +202,6 @@ class ResolveRussianLocalityGeocodeQueryAction
     {
         $normalized = mb_strtolower(trim($country));
 
-        return in_array($normalized, ['россия', 'российская федерация', 'рф', 'russia'], true);
+        return in_array($normalized, ['ru', 'rus', 'россия', 'российская федерация', 'рф', 'russia'], true);
     }
 }

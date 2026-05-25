@@ -40,6 +40,7 @@ use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\NormalizePhoneNumberAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Contacts\SyncContactDistanceToMoscowAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
 use App\Services\Messages\PrepareMessageContentAction;
@@ -102,6 +103,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private const V3_OUTBOUND_RETRY_BACKOFF_SECONDS = [10, 30, 60, 180];
 
     private const TELEGRAM_REPLY_KEYBOARD_CLEANUP_TEXT = "\u{2060}";
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_RESOLVED = 'distance_resolved';
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_PENDING = 'distance_pending';
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_UNKNOWN = 'distance_unknown';
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_OUT_OF_SCOPE = 'distance_out_of_scope';
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_FAILED = 'distance_failed';
 
     private const V3_CONTACT_CAPTURE_FIELDS = [
         'phone',
@@ -172,6 +183,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly AddContactPhoneAction $addContactPhoneAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        private readonly SyncContactDistanceToMoscowAction $syncContactDistanceToMoscowAction,
     ) {}
 
     public function code(): string
@@ -2808,6 +2820,14 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 return $this->applyV3QuestionnaireAction($message, $action, $block, $statePayload, $run);
             }
 
+            if (($action['type'] ?? null) === 'calculate_distance_to_moscow') {
+                return $this->applyV3CalculateDistanceToMoscowAction(
+                    $message,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                );
+            }
+
             if (($action['type'] ?? null) !== 'write_contact_field') {
                 return null;
             }
@@ -3414,6 +3434,78 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ? app(NormalizePhoneNumberAction::class)->handle($stringValue)
                 : null,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: string}
+     */
+    private function applyV3CalculateDistanceToMoscowAction(Message $message, array $statePayload, ?string $blockId): array
+    {
+        $outputId = self::V3_DISTANCE_TO_MOSCOW_OUTPUT_FAILED;
+        $status = Contact::DISTANCE_TO_MOSCOW_STATUS_FAILED;
+        $distanceKm = null;
+        $calculatedAt = null;
+        $contactId = null;
+
+        try {
+            $rootContact = $message->contact instanceof Contact
+                ? $this->resolveRootContactAction->handle($message->contact)
+                : null;
+
+            if (! $rootContact instanceof Contact) {
+                Log::info('scenario.v3_distance_to_moscow_missing_contact', [
+                    'scenario_code' => $this->code(),
+                    'dialog_id' => $message->dialog_id,
+                    'message_id' => $message->id,
+                    'block_id' => $blockId,
+                ]);
+            } else {
+                $contactId = $rootContact->id;
+                $updated = $this->syncContactDistanceToMoscowAction->handle($rootContact)->fresh();
+
+                if ($updated instanceof Contact) {
+                    $status = (string) ($updated->distance_to_moscow_status ?: Contact::DISTANCE_TO_MOSCOW_STATUS_FAILED);
+                    $distanceKm = $updated->distance_to_moscow_km;
+                    $calculatedAt = $updated->distance_to_moscow_calculated_at?->toISOString();
+                }
+            }
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_distance_to_moscow_action_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'block_id' => $blockId,
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+        }
+
+        $outputId = $this->v3DistanceToMoscowOutputId($status);
+
+        data_set($statePayload, 'v3.distance_to_moscow.'.($blockId ?: 'unknown'), [
+            'contact_id' => $contactId,
+            'status' => $status,
+            'distance_km' => $distanceKm,
+            'calculated_at' => $calculatedAt,
+            'output_id' => $outputId,
+        ]);
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => $outputId,
+        ];
+    }
+
+    private function v3DistanceToMoscowOutputId(string $status): string
+    {
+        return match ($status) {
+            Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_RESOLVED,
+            Contact::DISTANCE_TO_MOSCOW_STATUS_PENDING => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_PENDING,
+            Contact::DISTANCE_TO_MOSCOW_STATUS_OUT_OF_SCOPE => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_OUT_OF_SCOPE,
+            Contact::DISTANCE_TO_MOSCOW_STATUS_UNKNOWN => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_UNKNOWN,
+            default => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_FAILED,
+        };
     }
 
     private function applyV3WriteDialogFieldAction(Message $message, string $fieldKey, string $value): bool
