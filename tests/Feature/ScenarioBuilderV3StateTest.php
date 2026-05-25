@@ -949,6 +949,137 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_publish_keeps_delete_message_action_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Delete Message']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_delete_message_action',
+            'name' => 'V3 Delete Message Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_delete',
+                'type' => 'state',
+                'title' => 'Удалить сообщение',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->editMessageActionSettings('delete_message', 'last_current_run_outbound'),
+            ],
+        ];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_delete'],
+                'condition_payload' => $this->edgePayload(null, 'Дальше'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.operation', 'delete_message')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $editBlockId = (string) $saved['id_map']['blocks']['tmp_delete'];
+
+        $this->assertSame(
+            'edit_message',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$editBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'delete_message',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$editBlockId.actions.0.operation"),
+        );
+        $this->assertSame(
+            'last_current_run_outbound',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$editBlockId.actions.0.target"),
+        );
+    }
+
+    public function test_publish_keeps_questionnaire_action_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Questionnaire']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_questionnaire_action',
+            'name' => 'V3 Questionnaire Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_questionnaire',
+                'type' => 'state',
+                'title' => 'Профильная анкета',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->questionnaireActionSettings('profile'),
+            ],
+        ];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_questionnaire'],
+                'condition_payload' => $this->edgePayload(null, 'Дальше'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'questionnaire')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.template_key', 'profile')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $questionnaireBlockId = (string) $saved['id_map']['blocks']['tmp_questionnaire'];
+
+        $this->assertSame(
+            'questionnaire',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$questionnaireBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'profile',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$questionnaireBlockId.actions.0.template_key"),
+        );
+    }
+
     public function test_put_state_rejects_first_name_source_contact_input_capture(): void
     {
         $admin = $this->adminUser();
@@ -3129,7 +3260,10 @@ class ScenarioBuilderV3StateTest extends TestCase
     /**
      * @return array<string, mixed>
      */
-    private function editMessageActionSettings(): array
+    private function editMessageActionSettings(
+        string $operation = 'remove_buttons',
+        string $target = 'last_current_run_outbound_with_inline_buttons',
+    ): array
     {
         return [
             'schema_version' => 3,
@@ -3144,8 +3278,36 @@ class ScenarioBuilderV3StateTest extends TestCase
                         'actions' => [
                             [
                                 'type' => 'edit_message',
-                                'operation' => 'remove_buttons',
-                                'target' => 'last_current_run_outbound_with_inline_buttons',
+                                'operation' => $operation,
+                                'target' => $target,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function questionnaireActionSettings(string $templateKey): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'questionnaire',
+                                'template_key' => $templateKey,
                             ],
                         ],
                     ],

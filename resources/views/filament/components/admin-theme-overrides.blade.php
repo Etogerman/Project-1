@@ -6009,7 +6009,7 @@
         justify-content: space-between;
         gap: 0.75rem;
         padding-bottom: 0.25rem;
-        border-bottom: 1px solid color-mix(in srgb, #f5d76e 42%, var(--ac-border));
+        border-bottom: 1px solid color-mix(in srgb, var(--ac-border-strong) 82%, transparent);
     }
 
     .ac-contact-form-section__title {
@@ -6017,9 +6017,9 @@
         display: inline-flex;
         align-items: center;
         min-height: 2rem;
-        padding: 0.2rem 0.4rem;
-        background: linear-gradient(180deg, color-mix(in srgb, #fff4c2 88%, white) 0%, color-mix(in srgb, #fff7da 92%, white) 100%);
-        color: var(--ac-text);
+        padding: 0;
+        background: transparent;
+        color: color-mix(in srgb, var(--ac-text) 94%, white 6%);
         font-size: 1.25rem;
         font-weight: 700;
         line-height: 1.15;
@@ -6123,6 +6123,51 @@
         flex-wrap: wrap;
         align-items: center;
         gap: 0.5rem;
+    }
+
+    .ac-contact-questionnaires-table-shell {
+        margin-top: 1rem;
+    }
+
+    .ac-contact-questionnaires-table th,
+    .ac-contact-questionnaires-table td {
+        vertical-align: top;
+    }
+
+    .ac-contact-questionnaire-answers {
+        display: grid;
+        gap: 0.45rem;
+        min-width: 16rem;
+    }
+
+    .ac-contact-questionnaire-answers__items {
+        display: grid;
+        gap: 0.35rem;
+    }
+
+    .ac-contact-questionnaire-answers__items p {
+        margin: 0;
+        display: grid;
+        gap: 0.12rem;
+        font-size: 0.84rem;
+        line-height: 1.35;
+        color: var(--ac-text);
+    }
+
+    .ac-contact-questionnaire-answers__items small {
+        color: var(--ac-text-muted);
+    }
+
+    .ac-contact-questionnaires-table__actions {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.6rem;
+        min-width: 7rem;
+    }
+
+    .ac-muted {
+        color: var(--ac-text-muted);
     }
 
     .ac-icon-button {

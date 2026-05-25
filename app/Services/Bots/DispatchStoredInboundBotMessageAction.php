@@ -13,6 +13,7 @@ use App\Models\Contact;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Services\DataCollection\DataCollectionPromptHelper;
+use App\Services\Questionnaires\HandleContactQuestionnaireAnswerAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 
 class DispatchStoredInboundBotMessageAction
@@ -25,6 +26,7 @@ class DispatchStoredInboundBotMessageAction
         protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
         protected DataCollectionPromptHelper $dataCollectionPromptHelper,
+        protected HandleContactQuestionnaireAnswerAction $handleContactQuestionnaireAnswerAction,
     ) {}
 
     public function handle(
@@ -117,13 +119,17 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
+        if ($this->handleContactQuestionnaireAnswerAction->handle($storedMessage)) {
+            return;
+        }
+
         if ($this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)) {
             return;
         }
 
         $storedMessage->loadMissing('contact');
 
-        if (! $storedMessage->wasRecentlyCreated && $storedMessage->contact?->isInDataCollection()) {
+        if (! $storedMessage->wasRecentlyCreated && $this->usesLegacyCollector() && $storedMessage->contact?->isInDataCollection()) {
             $this->channelActivityLogger->info(
                 $channel,
                 'webhook.duplicate_ignored',
@@ -137,7 +143,7 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if ($storedMessage->contact?->isInDataCollection()) {
+        if ($this->usesLegacyCollector() && $storedMessage->contact?->isInDataCollection()) {
             if ($this->currentDataCollectionFieldIsPendingPrompt($channel, $storedMessage)) {
                 ProcessDataCollectionQuestionJob::dispatch(
                     $storedMessage->id,
@@ -209,6 +215,11 @@ class DispatchStoredInboundBotMessageAction
         }
 
         return $contact->data_collection_last_prompted_field !== $currentField;
+    }
+
+    protected function usesLegacyCollector(): bool
+    {
+        return config('bots.data_collection.profile_collection_engine') !== 'questionnaires';
     }
 
     protected function contactAlreadyHasPromptForCurrentField(Channel $channel, Contact $contact, string $currentField): bool

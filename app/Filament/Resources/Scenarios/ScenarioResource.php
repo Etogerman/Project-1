@@ -55,7 +55,7 @@ class ScenarioResource extends Resource
 
     protected static ?string $navigationLabel = 'Сценарии';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Автоматизация';
 
     protected static ?int $navigationSort = 15;
 
@@ -804,5 +804,4 @@ class ScenarioResource extends Resource
                 || ($trigger['type'] ?? null) !== self::START_TRIGGER_TYPE_PARAMETER,
         ));
     }
-
 }

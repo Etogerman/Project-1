@@ -146,7 +146,7 @@ PROMPT;
     {
         $normalized = mb_strtolower(trim($country));
 
-        return in_array($normalized, ['россия', 'российская федерация', 'рф', 'russia'], true);
+        return in_array($normalized, ['ru', 'россия', 'российская федерация', 'рф', 'russia'], true);
     }
 
     private function normalizeStatus(mixed $value): string

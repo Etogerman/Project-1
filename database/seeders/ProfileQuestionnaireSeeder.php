@@ -6,8 +6,6 @@ use App\Models\Contact;
 use App\Models\QuestionnaireTemplate;
 use App\Models\QuestionnaireTemplateVersion;
 use Illuminate\Database\Seeder;
-use Locale;
-use ResourceBundle;
 
 class ProfileQuestionnaireSeeder extends Seeder
 {
@@ -88,23 +86,6 @@ class ProfileQuestionnaireSeeder extends Seeder
                 ],
             ],
             [
-                'field_key' => 'country',
-                'label' => 'Страна',
-                'type' => 'single_choice',
-                'required' => true,
-                'allow_skip' => false,
-                'max_attempts' => 3,
-                'target' => 'contact.country',
-                'overwrite_contact' => true,
-                'required_when' => '{{contact.country}} == ""',
-                'prompts' => [
-                    'В какой стране ты живёшь?',
-                    'Выбери, пожалуйста, страну проживания',
-                    'Подскажи страну, это нужно для правильной анкеты',
-                ],
-                'options' => $this->countryOptions(),
-            ],
-            [
                 'field_key' => 'city',
                 'label' => 'Город',
                 'type' => 'text',
@@ -117,25 +98,8 @@ class ProfileQuestionnaireSeeder extends Seeder
                 'prompts' => [
                     'В каком городе ты живёшь?',
                     'Напиши, пожалуйста, город проживания',
-                    'Подскажи город, чтобы мы точнее подобрали условия',
+                    'Подскажи город проживания, чтобы мы точнее подобрали условия',
                 ],
-            ],
-            [
-                'field_key' => 'region',
-                'label' => 'Регион РФ',
-                'type' => 'single_choice',
-                'required' => true,
-                'allow_skip' => false,
-                'max_attempts' => 3,
-                'target' => 'contact.region',
-                'overwrite_contact' => true,
-                'required_when' => '{{contact.country}} == "RU" and {{contact.region}} == ""',
-                'prompts' => [
-                    'Уточни регион проживания',
-                    'Выбери, пожалуйста, регион РФ',
-                    'Подскажи регион, чтобы мы корректно завершили анкету',
-                ],
-                'options' => $this->russianRegionOptions(),
             ],
             [
                 'field_key' => 'age_range',
@@ -155,81 +119,6 @@ class ProfileQuestionnaireSeeder extends Seeder
                 'options' => $this->ageRangeOptions(),
             ],
         ];
-    }
-
-    /**
-     * @return list<array{value:string,label:string}>
-     */
-    private function countryOptions(): array
-    {
-        $options = [];
-
-        $countries = null;
-
-        if (class_exists(ResourceBundle::class)) {
-            $bundle = ResourceBundle::create('ru', 'ICUDATA-region');
-            $countries = $bundle instanceof ResourceBundle ? $bundle->get('Countries') : null;
-        }
-
-        if ($countries instanceof ResourceBundle) {
-            foreach ($countries as $code => $name) {
-                if (! is_string($code) || ! preg_match('/^[A-Z]{2}$/', $code)) {
-                    continue;
-                }
-
-                $label = class_exists(Locale::class)
-                    ? Locale::getDisplayRegion('und_'.$code, 'ru')
-                    : null;
-
-                if (! is_string($label) || trim($label) === '') {
-                    $label = is_string($name) ? $name : $code;
-                }
-
-                $options[$code] = trim($label);
-            }
-        }
-
-        if ($options === []) {
-            $options = [
-                'RU' => 'Россия',
-                'KZ' => 'Казахстан',
-                'BY' => 'Беларусь',
-                'AM' => 'Армения',
-            ];
-        }
-
-        $options = array_replace($options, [
-            'RU' => 'Россия',
-            'KZ' => 'Казахстан',
-            'BY' => 'Беларусь',
-            'AM' => 'Армения',
-        ]);
-
-        asort($options, SORT_NATURAL | SORT_FLAG_CASE);
-
-        return array_map(
-            static fn (string $code, string $label): array => [
-                'value' => $code,
-                'label' => $label,
-            ],
-            array_keys($options),
-            array_values($options),
-        );
-    }
-
-    /**
-     * @return list<array{value:string,label:string}>
-     */
-    private function russianRegionOptions(): array
-    {
-        return array_map(
-            static fn (string $value, string $label): array => [
-                'value' => $value,
-                'label' => $label,
-            ],
-            array_keys(Contact::russianRegionOptions()),
-            array_values(Contact::russianRegionOptions()),
-        );
     }
 
     /**

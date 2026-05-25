@@ -77,6 +77,7 @@ return new class extends Migration
                     from messages
                     where messages.dialog_id = dialogs.id
                       and messages.direction = 'outbound'
+                      and messages.external_message_id is not null
                       and (
                         messages.message_kind is null
                         or messages.message_kind <> 'outbound_dialog_status_change'

@@ -79,8 +79,11 @@ const EDGE_CONTACT_CONDITION_FIELD_OPTIONS = [
 const ACTION_TYPE_WRITE_CONTACT_FIELD = 'write_contact_field';
 const ACTION_TYPE_CHECK_DATA = 'check_data';
 const ACTION_TYPE_EDIT_MESSAGE = 'edit_message';
+const ACTION_TYPE_QUESTIONNAIRE = 'questionnaire';
 const ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS = 'remove_buttons';
+const ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE = 'delete_message';
 const ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS = 'last_current_run_outbound_with_inline_buttons';
+const ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND = 'last_current_run_outbound';
 const ACTION_TARGET_SCOPE_OPTIONS = [
     ['contact', 'Контакт'],
     ['dialog', 'Диалог'],
@@ -120,6 +123,23 @@ const ACTION_CHECK_SOURCE_OPTIONS = [
 ];
 const ACTION_DICTIONARY_OPTIONS = [
     ['names', 'Имена'],
+];
+const ACTION_QUESTIONNAIRE_TEMPLATE_OPTIONS = [
+    ['profile', 'Профильная анкета'],
+];
+const ACTION_QUESTIONNAIRE_OUTPUTS = [
+    { id: 'started', label: 'Запущена', source: 'action', action_result_id: 'started' },
+    { id: 'waiting', label: 'Ждёт ответ', source: 'action', action_result_id: 'waiting' },
+    { id: 'completed', label: 'Завершена', source: 'action', action_result_id: 'completed' },
+    { id: 'failed', label: 'Не удалось', source: 'action', action_result_id: 'failed' },
+    { id: 'already_completed', label: 'Уже завершена', source: 'action', action_result_id: 'already_completed' },
+    { id: 'cancelled', label: 'Отменена', source: 'action', action_result_id: 'cancelled' },
+    { id: 'operator_requested', label: 'Запрошен оператор', source: 'action', action_result_id: 'operator_requested' },
+    { id: 'blocked_by_active_questionnaire', label: 'Уже ждём другую анкету', source: 'action', action_result_id: 'blocked_by_active_questionnaire' },
+];
+const ACTION_RESULT_OUTPUTS = [
+    ...ACTION_CHECK_DATA_OUTPUTS,
+    ...ACTION_QUESTIONNAIRE_OUTPUTS,
 ];
 const FIRST_NAME_SOURCE_CONDITION_OPTIONS = [
     ['auto', 'Авто'],
@@ -334,6 +354,7 @@ export default function App({
     const canvasRef = useRef(null);
     const dragRef = useRef(null);
     const sheetImportFileRef = useRef(null);
+    const moreMenuRef = useRef(null);
     const [state, setState] = useState(null);
     const [status, setStatus] = useState('loading');
     const [error, setError] = useState(null);
@@ -351,6 +372,9 @@ export default function App({
     const [sheetImportPreview, setSheetImportPreview] = useState(null);
     const [sheetImportSelection, setSheetImportSelection] = useState({});
     const [sheetImportError, setSheetImportError] = useState(null);
+    const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+    const [blockSearchQuery, setBlockSearchQuery] = useState('');
+    const [blockSearchIndex, setBlockSearchIndex] = useState(0);
     const [selectedBlockKey, setSelectedBlockKey] = useState(null);
     const [selectedEdgeKey, setSelectedEdgeKey] = useState(null);
     const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
@@ -458,19 +482,23 @@ export default function App({
     }, [status, isSaving, isPublishing, isImportingSheet, isApplyingSheetImport, refreshBuilderDiagnostics]);
 
     const builder = state?.builder ?? null;
-    const blocks = builder?.blocks ?? [];
-    const edges = builder?.edges ?? [];
+    const allBlocks = builder?.blocks ?? [];
+    const allEdges = builder?.edges ?? [];
     const channels = state?.catalogs?.channels ?? [];
     const scheduledTransitions = builder?.diagnostics?.scheduled_transitions ?? [];
+    const sheets = sheetsFrom(builder);
     const activeSheet = activeSheetFrom(builder);
     const view = activeSheet.view ?? MAIN_SHEET.view;
     const revision = builder?.revision ?? null;
     const serverClock = state?.server ?? null;
     const serverTimezone = serverClock?.timezone || '';
     const serverTimezoneLabel = serverClock?.timezone_abbr || serverClock?.utc_offset || '';
+    const blocks = useMemo(() => blocksForSheet(allBlocks, activeSheet.id), [allBlocks, activeSheet.id]);
+    const edges = useMemo(() => filterEdgesForBlocks(allEdges, blocks), [allEdges, blocks]);
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
     const dialogFieldKeys = useMemo(() => dialogFieldKeysFromEdges(edges), [edges]);
+    const blockSearchMatches = useMemo(() => searchBlocks(blocks, blockSearchQuery), [blocks, blockSearchQuery]);
     const canSave = state?.permissions?.can_update === true
         && status === 'ready'
         && ! isSaving
@@ -497,6 +525,66 @@ export default function App({
     const canvasBounds = useMemo(() => graphBounds(blocks), [blocks]);
     const hasPanelSelection = Boolean(selectedBlock || selectedEdge);
     const isPanelOpen = mode === 'design' && hasPanelSelection && ! isPanelCollapsed;
+
+    useEffect(() => {
+        setBlockSearchIndex(0);
+    }, [blockSearchQuery]);
+
+    useEffect(() => {
+        if (! isMoreMenuOpen) {
+            return undefined;
+        }
+
+        const handlePointerDown = (event) => {
+            if (moreMenuRef.current?.contains(event.target)) {
+                return;
+            }
+
+            setIsMoreMenuOpen(false);
+        };
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setIsMoreMenuOpen(false);
+            }
+        };
+
+        document.addEventListener('pointerdown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isMoreMenuOpen]);
+
+    useEffect(() => {
+        if (status !== 'ready') {
+            return;
+        }
+
+        if (selectedBlockKey && blocks.some((block) => block.client_key === selectedBlockKey)) {
+            return;
+        }
+
+        if (selectedEdgeKey && edges.some((edge) => edge.client_key === selectedEdgeKey)) {
+            return;
+        }
+
+        setSelectedEdgeKey(null);
+        setSelectedBlockKey(blocks[0]?.client_key ?? null);
+        setIsPanelCollapsed(false);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+    }, [status, activeSheet.id, blocks, edges, selectedBlockKey, selectedEdgeKey]);
+
+    useEffect(() => {
+        if (blockSearchMatches.length === 0 || blockSearchIndex < blockSearchMatches.length) {
+            return;
+        }
+
+        setBlockSearchIndex(0);
+    }, [blockSearchIndex, blockSearchMatches.length]);
 
     useLayoutEffect(() => {
         if (status !== 'ready' || ! canvasRef.current) {
@@ -543,23 +631,49 @@ export default function App({
     }
 
     function updateBlocks(nextBlocks) {
-        setState((current) => ({
-            ...current,
-            builder: {
-                ...current.builder,
-                blocks: typeof nextBlocks === 'function' ? nextBlocks(current.builder?.blocks ?? []) : nextBlocks,
-            },
-        }));
+        setState((current) => {
+            const sheetId = activeSheetIdFrom(current?.builder);
+            const currentAllBlocks = current?.builder?.blocks ?? [];
+            const currentSheetBlocks = blocksForSheet(currentAllBlocks, sheetId);
+            const resolvedSheetBlocks = typeof nextBlocks === 'function'
+                ? nextBlocks(currentSheetBlocks)
+                : nextBlocks;
+
+            return {
+                ...current,
+                builder: {
+                    ...current.builder,
+                    blocks: [
+                        ...currentAllBlocks.filter((block) => blockSheetId(block) !== sheetId),
+                        ...resolvedSheetBlocks.map((block) => blockWithSheet(block, sheetId)),
+                    ],
+                },
+            };
+        });
     }
 
     function updateEdges(nextEdges) {
-        setState((current) => ({
-            ...current,
-            builder: {
-                ...current.builder,
-                edges: typeof nextEdges === 'function' ? nextEdges(current.builder?.edges ?? []) : nextEdges,
-            },
-        }));
+        setState((current) => {
+            const sheetId = activeSheetIdFrom(current?.builder);
+            const currentAllBlocks = current?.builder?.blocks ?? [];
+            const currentAllEdges = current?.builder?.edges ?? [];
+            const currentSheetEdges = filterEdgesForBlocks(currentAllEdges, blocksForSheet(currentAllBlocks, sheetId));
+            const currentSheetEdgeKeys = new Set(currentSheetEdges.map(edgeIdentityKey));
+            const resolvedSheetEdges = typeof nextEdges === 'function'
+                ? nextEdges(currentSheetEdges)
+                : nextEdges;
+
+            return {
+                ...current,
+                builder: {
+                    ...current.builder,
+                    edges: [
+                        ...currentAllEdges.filter((edge) => ! currentSheetEdgeKeys.has(edgeIdentityKey(edge))),
+                        ...resolvedSheetEdges,
+                    ],
+                },
+            };
+        });
     }
 
     function updateView(nextView) {
@@ -570,6 +684,20 @@ export default function App({
         ));
 
         updateBuilder({ sheets });
+    }
+
+    function switchSheet(sheetId) {
+        if (! sheetId || sheetId === activeSheet.id) {
+            return;
+        }
+
+        updateBuilder({ active_sheet_id: sheetId });
+        setSelectedBlockKey(null);
+        setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setNotice(null);
     }
 
     function selectBlock(clientKey) {
@@ -634,7 +762,12 @@ export default function App({
             block.settings_payload = aiSettingsPayload();
         }
 
-        updateBlocks([...blocks, block]);
+        if (kind === 'questionnaire') {
+            block.title = `Анкета ${index}`;
+            block.settings_payload = questionnaireSettingsPayload();
+        }
+
+        updateBlocks([...blocks, blockWithSheet(block, activeSheet.id)]);
         selectBlock(clientKey);
     }
 
@@ -662,7 +795,7 @@ export default function App({
             settings_payload: settingsPayload,
         };
 
-        updateBlocks([...blocks, duplicate]);
+        updateBlocks([...blocks, blockWithSheet(duplicate, activeSheet.id)]);
         selectBlock(duplicateKey);
         setNotice('Блок скопирован');
     }
@@ -1128,6 +1261,59 @@ export default function App({
         });
     }
 
+    function focusBlock(block, message = null) {
+        if (! block) {
+            return;
+        }
+
+        const rect = blockRect(block, anchors);
+        const canvasRect = canvasRef.current?.getBoundingClientRect();
+        const zoom = clamp(Number(view.zoom) || 1, 0.35, 2.2);
+        const viewportWidth = canvasRect?.width ?? 1100;
+        const viewportHeight = canvasRect?.height ?? 720;
+
+        setMode('design');
+        setTool('select');
+        setSelectedBlockKey(block.client_key);
+        setSelectedEdgeKey(null);
+        setIsPanelCollapsed(false);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        updateView({
+            ...view,
+            zoom,
+            tx: Math.round((viewportWidth * 0.42) - (rect.x + (rect.width / 2)) * zoom),
+            ty: Math.round((viewportHeight * 0.38) - (rect.y + (rect.height / 2)) * zoom),
+        });
+
+        if (message) {
+            setNotice(message);
+        }
+    }
+
+    function focusBlockSearchMatch(offset = 0) {
+        if (String(blockSearchQuery ?? '').trim() === '') {
+            setNotice('Введите ID или название блока.');
+
+            return;
+        }
+
+        if (blockSearchMatches.length === 0) {
+            setNotice('Блок не найден.');
+
+            return;
+        }
+
+        const nextIndex = (blockSearchIndex + offset + blockSearchMatches.length) % blockSearchMatches.length;
+        const block = blockSearchMatches[nextIndex];
+
+        setBlockSearchIndex(nextIndex);
+        focusBlock(
+            block,
+            `Найден блок ${nextIndex + 1} из ${blockSearchMatches.length}: ${shortBlockId(block)} · ${block.title || 'Без названия'}`,
+        );
+    }
+
     function beginConnection(block, output) {
         const connection = {
             sourceKey: block.client_key,
@@ -1278,7 +1464,7 @@ export default function App({
         }
 
         if (type === 'action' && ! enabled) {
-            const actionOutputIds = new Set(ACTION_CHECK_DATA_OUTPUTS.map((output) => output.id));
+            const actionOutputIds = new Set(ACTION_RESULT_OUTPUTS.map((output) => output.id));
 
             updateEdges(edges.filter((edge) => (
                 edge.source?.client_key !== clientKey
@@ -1325,14 +1511,18 @@ export default function App({
 
         if (type === 'action' && Array.isArray(patch.actions)) {
             const hasCheckData = patch.actions.some((item) => item?.type === ACTION_TYPE_CHECK_DATA);
-            const actionOutputIds = new Set(ACTION_CHECK_DATA_OUTPUTS.map((output) => output.id));
+            const hasQuestionnaire = patch.actions.some((item) => item?.type === ACTION_TYPE_QUESTIONNAIRE);
+            const allActionOutputIds = new Set(ACTION_RESULT_OUTPUTS.map((output) => output.id));
+            const nextActionOutputIds = new Set([
+                ...(hasCheckData ? ACTION_CHECK_DATA_OUTPUTS : []),
+                ...(hasQuestionnaire ? ACTION_QUESTIONNAIRE_OUTPUTS : []),
+            ].map((output) => output.id));
 
-            if (! hasCheckData) {
-                updateEdges(edges.filter((edge) => (
-                    edge.source?.client_key !== clientKey
-                    || ! actionOutputIds.has(edge.source?.output_id)
-                )));
-            }
+            updateEdges(edges.filter((edge) => (
+                edge.source?.client_key !== clientKey
+                || ! allActionOutputIds.has(edge.source?.output_id)
+                || nextActionOutputIds.has(edge.source?.output_id)
+            )));
         }
 
     }
@@ -1520,11 +1710,11 @@ export default function App({
     }
 
     function savePayload() {
-        const blocksForSave = blocks.map((block) => ({
+        const blocksForSave = allBlocks.map((block) => ({
             ...block,
             settings_payload: syncOutputs(normalizeSettings(block.settings_payload)),
         }));
-        const edgesForSave = filterEdgesForBlocks(edges, blocksForSave);
+        const edgesForSave = filterEdgesForBlocks(allEdges, blocksForSave);
 
         return {
             draft_version_id: state.scenario.draft_version_id,
@@ -1532,7 +1722,7 @@ export default function App({
             builder: {
                 schema_version: 3,
                 active_sheet_id: state.builder.active_sheet_id || 'main',
-                sheets: state.builder.sheets?.length ? state.builder.sheets : [MAIN_SHEET],
+                sheets,
                 blocks: blocksForSave,
                 edges: edgesForSave,
                 visible_scope: state.builder.visible_scope || { block_ids: [], edge_ids: [] },
@@ -1920,31 +2110,22 @@ export default function App({
             <header className="ac-v3-builder__topbar">
                 <div className="ac-v3-builder__crumb">
                     <strong>{state?.scenario?.name ?? 'Сценарий'}</strong>
-                    {revision ? <em>{revision}</em> : null}
-                    {serverClock?.time ? (
-                        <span className="ac-v3-builder__server-time">
-                            Время сервера: {formatDateTime(serverClock.time, serverTimezoneLabel, serverTimezone)}
-                        </span>
-                    ) : null}
                 </div>
+
+                <BlockSearchControl
+                    query={blockSearchQuery}
+                    matchCount={blockSearchMatches.length}
+                    matchIndex={blockSearchIndex}
+                    onQueryChange={setBlockSearchQuery}
+                    onOpen={() => focusBlockSearchMatch(0)}
+                    onPrevious={() => focusBlockSearchMatch(-1)}
+                    onNext={() => focusBlockSearchMatch(1)}
+                />
 
                 <div className="ac-v3-builder__top-actions">
                     <button type="button" className="ac-v3-builder__run" onClick={() => setNotice('Симулятор будет подключен отдельным шагом.')}>
                         <PlayIcon />
                         Прогнать
-                    </button>
-                    <div className="ac-v3-builder__mode" role="tablist" aria-label="Режим конструктора">
-                        <button type="button" className={mode === 'design' ? 'is-active' : ''} onClick={() => setMode('design')}>Сценарий</button>
-                        <button type="button" className={mode === 'logs' ? 'is-active' : ''} onClick={() => setMode('logs')}>Логи</button>
-                    </div>
-                    <button type="button" className="ac-v3-builder__icon-button" title="История версий" onClick={() => setNotice('История версий не входит в текущий шаг.')}>
-                        <HistoryIcon />
-                    </button>
-                    <button type="button" className="ac-v3-builder__secondary" disabled={! canTransferSheet} onClick={exportSheet}>
-                        {isExportingSheet ? 'Экспорт...' : 'Экспорт листа'}
-                    </button>
-                    <button type="button" className="ac-v3-builder__secondary" disabled={! canTransferSheet} onClick={openSheetImportPicker}>
-                        {isImportingSheet ? 'Проверяю...' : 'Импорт листа'}
                     </button>
                     <button type="button" className="ac-v3-builder__primary" disabled={! canSave} onClick={save}>
                         {isSaving ? 'Сохраняю...' : 'Сохранить'}
@@ -1952,6 +2133,101 @@ export default function App({
                     <button type="button" className="ac-v3-builder__publish" disabled={! canPublish} onClick={publish}>
                         {isPublishing ? 'Публикую...' : 'Опубликовать'}
                     </button>
+                    <div className="ac-v3-builder__more" ref={moreMenuRef}>
+                        <button
+                            type="button"
+                            className={`ac-v3-builder__more-button ${isMoreMenuOpen ? 'is-active' : ''}`}
+                            aria-haspopup="menu"
+                            aria-expanded={isMoreMenuOpen}
+                            onClick={() => setIsMoreMenuOpen((isOpen) => ! isOpen)}
+                        >
+                            <MoreIcon />
+                            Ещё
+                        </button>
+
+                        {isMoreMenuOpen ? (
+                            <div className="ac-v3-builder__more-menu" role="menu">
+                                <div className="ac-v3-builder__more-section">
+                                    <span className="ac-v3-builder__more-label">Режим</span>
+                                    <div className="ac-v3-builder__mode ac-v3-builder__mode--menu" role="tablist" aria-label="Режим конструктора">
+                                        <button
+                                            type="button"
+                                            className={mode === 'design' ? 'is-active' : ''}
+                                            onClick={() => {
+                                                setMode('design');
+                                                setIsMoreMenuOpen(false);
+                                            }}
+                                        >
+                                            Сценарий
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={mode === 'logs' ? 'is-active' : ''}
+                                            onClick={() => {
+                                                setMode('logs');
+                                                setIsMoreMenuOpen(false);
+                                            }}
+                                        >
+                                            Логи
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="ac-v3-builder__more-section">
+                                    <span className="ac-v3-builder__more-label">Лист</span>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        disabled={! canTransferSheet}
+                                        onClick={() => {
+                                            setIsMoreMenuOpen(false);
+                                            exportSheet();
+                                        }}
+                                    >
+                                        {isExportingSheet ? 'Экспорт...' : 'Экспорт листа'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        disabled={! canTransferSheet}
+                                        onClick={() => {
+                                            setIsMoreMenuOpen(false);
+                                            openSheetImportPicker();
+                                        }}
+                                    >
+                                        {isImportingSheet ? 'Проверяю...' : 'Импорт листа'}
+                                    </button>
+                                </div>
+
+                                <div className="ac-v3-builder__more-section">
+                                    <span className="ac-v3-builder__more-label">Сервис</span>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() => {
+                                            setIsMoreMenuOpen(false);
+                                            setNotice('История версий не входит в текущий шаг.');
+                                        }}
+                                    >
+                                        <HistoryIcon />
+                                        История версий
+                                    </button>
+                                    {revision ? (
+                                        <div className="ac-v3-builder__more-meta">
+                                            <span>Версия</span>
+                                            <strong>{revision}</strong>
+                                        </div>
+                                    ) : null}
+                                    {serverClock?.time ? (
+                                        <div className="ac-v3-builder__more-meta">
+                                            <span>Время сервера</span>
+                                            <strong>{formatDateTime(serverClock.time, serverTimezoneLabel, serverTimezone)}</strong>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            </div>
+                        ) : null}
+                    </div>
                 </div>
             </header>
 
@@ -1964,11 +2240,18 @@ export default function App({
             />
 
             <div className="ac-v3-builder__tabs">
-                <button type="button" className="is-active">
-                    <span>{activeSheet.name}</span>
-                    <b>{blocks.length}</b>
-                    <GearIcon />
-                </button>
+                {sheets.map((sheet) => (
+                    <button
+                        key={sheet.id}
+                        type="button"
+                        className={sheet.id === activeSheet.id ? 'is-active' : ''}
+                        onClick={() => switchSheet(sheet.id)}
+                    >
+                        <span>{sheet.name}</span>
+                        <b>{sheetBlockCount(allBlocks, sheet.id)}</b>
+                        {sheet.id === activeSheet.id ? <GearIcon /> : null}
+                    </button>
+                ))}
                 <button type="button" className="ac-v3-builder__tab-add" onClick={() => setNotice('В первом релизе используется один лист.')}>+</button>
             </div>
 
@@ -2479,6 +2762,91 @@ function firstEmptyButtonIssue(blocks) {
     return null;
 }
 
+function searchBlocks(blocks, query) {
+    const needle = normalizeSearchValue(query);
+
+    if (needle === '') {
+        return [];
+    }
+
+    return (Array.isArray(blocks) ? blocks : []).filter((block) => blockSearchHaystack(block).includes(needle));
+}
+
+function blockSearchHaystack(block) {
+    const modules = modulesFrom(block?.settings_payload);
+    const moduleParts = modules.flatMap((module) => [
+        moduleLabel(module.type),
+        module?.payload?.text,
+        module?.payload?.command,
+        module?.payload?.template_key,
+        module.type === 'action' ? actionSummary(module) : null,
+        module.type === 'ai' ? aiSummary(module) : null,
+        module.type === 'buttons' ? flatButtons(module).map((button) => button.text).join(' ') : null,
+    ]);
+
+    return normalizeSearchValue([
+        copyableBlockId(block),
+        shortBlockId(block),
+        block?.id,
+        block?.display_id,
+        block?.client_key,
+        block?.title,
+        block?.type,
+        nodeTypeLabel(Boolean(findModule(block?.settings_payload, 'start_condition')), block?.settings_payload?.kind),
+        ...moduleParts,
+    ].filter(Boolean).join(' '));
+}
+
+function normalizeSearchValue(value) {
+    return String(value ?? '')
+        .toLocaleLowerCase('ru-RU')
+        .replace(/ё/g, 'е')
+        .replace(/^#/, '')
+        .trim();
+}
+
+function BlockSearchControl({
+    query,
+    matchCount,
+    matchIndex,
+    onQueryChange,
+    onOpen,
+    onPrevious,
+    onNext,
+}) {
+    const hasQuery = String(query ?? '').trim() !== '';
+    const hasMatches = matchCount > 0;
+
+    return (
+        <div className="ac-v3-builder__block-search">
+            <input
+                type="search"
+                value={query}
+                placeholder="ID или название"
+                aria-label="Найти блок по ID или названию"
+                onChange={(event) => onQueryChange(event.target.value)}
+                onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        onOpen();
+                    }
+
+                    if (event.key === 'Escape') {
+                        event.preventDefault();
+                        onQueryChange('');
+                    }
+                }}
+            />
+            <span className="ac-v3-builder__block-search-count">
+                {hasQuery ? (hasMatches ? `${matchIndex + 1}/${matchCount}` : '0') : 'ID'}
+            </span>
+            <button type="button" title="Предыдущий найденный блок" disabled={! hasMatches} onClick={onPrevious}>‹</button>
+            <button type="button" title="Следующий найденный блок" disabled={! hasMatches} onClick={onNext}>›</button>
+            <button type="button" title="Открыть найденный блок" disabled={! hasQuery} onClick={onOpen}>Найти</button>
+        </div>
+    );
+}
+
 function ToolRail({ tool, onTool, onAddBlock }) {
     return (
         <aside className="ac-v3-builder__toolrail" aria-label="Инструменты конструктора">
@@ -2500,6 +2868,9 @@ function ToolRail({ tool, onTool, onAddBlock }) {
             </button>
             <button type="button" title="Создать ИИ-анализ" onClick={() => onAddBlock('ai')}>
                 <SparkleIcon />
+            </button>
+            <button type="button" title="Создать анкету" onClick={() => onAddBlock('questionnaire')}>
+                <QuestionnaireIcon />
             </button>
         </aside>
     );
@@ -4080,9 +4451,31 @@ function ActionFields({ action, blockKey, onUpdateModulePayload }) {
                             <option value="write_contact_field">Изменить данные</option>
                             <option value="check_data">Проверить данные</option>
                             <option value="edit_message">Изменить сообщение</option>
+                            <option value="questionnaire">Запустить анкету</option>
                         </select>
                     </label>
-                    {item.type === ACTION_TYPE_EDIT_MESSAGE ? (
+                    {item.type === ACTION_TYPE_QUESTIONNAIRE ? (
+                        <>
+                            <label>
+                                <span>Шаблон анкеты</span>
+                                <select
+                                    value={item.template_key}
+                                    onChange={(event) => updateItem(index, normalizeActionItemForType({
+                                        ...item,
+                                        template_key: event.target.value,
+                                    }))}
+                                >
+                                    {ACTION_QUESTIONNAIRE_TEMPLATE_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label>
+                                <span>Режим</span>
+                                <input value="Запустить или продолжить" readOnly />
+                            </label>
+                        </>
+                    ) : item.type === ACTION_TYPE_EDIT_MESSAGE ? (
                         <>
                             <label>
                                 <span>Что изменить</span>
@@ -4093,9 +4486,15 @@ function ActionFields({ action, blockKey, onUpdateModulePayload }) {
                                         target: event.target.value,
                                     }))}
                                 >
-                                    <option value={ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS}>
-                                        Последнее сообщение сценария с кнопками
-                                    </option>
+                                    {item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE ? (
+                                        <option value={ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND}>
+                                            Последнее наше сообщение
+                                        </option>
+                                    ) : (
+                                        <option value={ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS}>
+                                            Последнее сообщение сценария с кнопками
+                                        </option>
+                                    )}
                                 </select>
                             </label>
                             <label>
@@ -4105,9 +4504,13 @@ function ActionFields({ action, blockKey, onUpdateModulePayload }) {
                                     onChange={(event) => updateItem(index, normalizeActionItemForType({
                                         ...item,
                                         operation: event.target.value,
+                                        target: event.target.value === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
+                                            ? ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND
+                                            : ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS,
                                     }))}
                                 >
                                     <option value={ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS}>Убрать кнопки</option>
+                                    <option value={ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE}>Удалить сообщение полностью</option>
                                 </select>
                             </label>
                         </>
@@ -5275,10 +5678,55 @@ function edgeDiagnosticsKey(edge) {
         || (edge?.id ? `id:${edge.id}` : null);
 }
 
+function sheetsFrom(builder) {
+    return builder?.sheets?.length ? builder.sheets : [MAIN_SHEET];
+}
+
+function activeSheetIdFrom(builder) {
+    return activeSheetFrom(builder).id ?? MAIN_SHEET.id;
+}
+
 function activeSheetFrom(builder) {
-    const sheets = builder?.sheets?.length ? builder.sheets : [MAIN_SHEET];
+    const sheets = sheetsFrom(builder);
 
     return sheets.find((sheet) => sheet.id === builder?.active_sheet_id) ?? sheets[0] ?? MAIN_SHEET;
+}
+
+function blockSheetId(block) {
+    return String(block?.settings_payload?.ui?.sheet_id || MAIN_SHEET.id);
+}
+
+function blocksForSheet(blocks, sheetId) {
+    const resolvedSheetId = String(sheetId || MAIN_SHEET.id);
+
+    return (Array.isArray(blocks) ? blocks : []).filter((block) => blockSheetId(block) === resolvedSheetId);
+}
+
+function sheetBlockCount(blocks, sheetId) {
+    return blocksForSheet(blocks, sheetId).length;
+}
+
+function edgeIdentityKey(edge) {
+    return edge?.client_key || (edge?.id ? `id:${edge.id}` : JSON.stringify(edge));
+}
+
+function blockWithSheet(block, sheetId) {
+    return {
+        ...block,
+        settings_payload: settingsPayloadWithSheet(block?.settings_payload, sheetId),
+    };
+}
+
+function settingsPayloadWithSheet(settingsPayload, sheetId) {
+    const settings = normalizeSettings(settingsPayload);
+
+    return {
+        ...settings,
+        ui: {
+            ...settings.ui,
+            sheet_id: String(sheetId || MAIN_SHEET.id),
+        },
+    };
 }
 
 function defaultSheetImportSelection(preview) {
@@ -5702,6 +6150,27 @@ function aiSettingsPayload() {
     });
 }
 
+function questionnaireSettingsPayload() {
+    return syncOutputs({
+        ...messageSettingsPayload(''),
+        modules: [
+            {
+                id: 'mod_action',
+                type: 'action',
+                enabled: true,
+                payload: {
+                    actions: [
+                        {
+                            type: ACTION_TYPE_QUESTIONNAIRE,
+                            template_key: 'profile',
+                        },
+                    ],
+                },
+            },
+        ],
+    });
+}
+
 function sortModules(modules) {
     return [...modules].sort((left, right) => MODULE_ORDER.indexOf(left.type) - MODULE_ORDER.indexOf(right.type));
 }
@@ -5721,34 +6190,70 @@ function buttonSummary(buttonsModule) {
 
 function actionSummary(actionModule) {
     const items = actionItems(actionModule, []);
-    const editMessage = items.find((item) => item.type === ACTION_TYPE_EDIT_MESSAGE);
+    const summaries = items
+        .map(actionItemSummary)
+        .filter((summary) => summary !== '');
 
-    if (editMessage) {
+    if (summaries.length === 0) {
+        return 'Нет действий';
+    }
+
+    if (summaries.length === 1) {
+        return summaries[0];
+    }
+
+    const visibleSummaries = summaries.slice(0, 2).join('; ');
+    const suffix = summaries.length > 2 ? '; ...' : '';
+
+    return `${summaries.length} ${pluralActions(summaries.length)}: ${visibleSummaries}${suffix}`;
+}
+
+function actionItemSummary(item) {
+    if (item.type === ACTION_TYPE_EDIT_MESSAGE) {
+        if (item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE) {
+            return 'Сообщение → удалить полностью';
+        }
+
         return 'Сообщение → убрать кнопки';
     }
 
-    const checkData = items.find((item) => item.type === ACTION_TYPE_CHECK_DATA);
+    if (item.type === ACTION_TYPE_QUESTIONNAIRE) {
+        const template = ACTION_QUESTIONNAIRE_TEMPLATE_OPTIONS.find(([value]) => value === item.template_key)?.[1] ?? item.template_key;
 
-    if (checkData) {
-        const dictionary = ACTION_DICTIONARY_OPTIONS.find(([value]) => value === checkData.dictionary_key)?.[1] ?? 'справочник';
-
-        return `${dictionary} → ${checkData.target_variable_key || 'переменная'}`;
+        return `Анкета → ${template}`;
     }
 
-    const changeData = items.find((item) => item.type === ACTION_TYPE_WRITE_CONTACT_FIELD);
+    if (item.type === ACTION_TYPE_CHECK_DATA) {
+        const dictionary = ACTION_DICTIONARY_OPTIONS.find(([value]) => value === item.dictionary_key)?.[1] ?? 'справочник';
 
-    if (changeData) {
-        const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === changeData.target_scope)?.[1] ?? 'Данные';
-        const field = changeData.target_scope === 'contact'
-            ? (EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === changeData.target_field)?.[1] ?? changeData.target_field)
-            : changeData.target_field;
+        return `${dictionary} → ${item.target_variable_key || 'переменная'}`;
+    }
+
+    if (item.type === ACTION_TYPE_WRITE_CONTACT_FIELD) {
+        const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === item.target_scope)?.[1] ?? 'Данные';
+        const field = item.target_scope === 'contact'
+            ? (EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === item.target_field)?.[1] ?? item.target_field)
+            : item.target_field;
 
         return `${scope} → ${field}`;
     }
 
-    const count = items.length;
+    return '';
+}
 
-    return `${count} ${count === 1 ? 'действие' : 'действия'}`;
+function pluralActions(count) {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+
+    if (mod10 === 1 && mod100 !== 11) {
+        return 'действие';
+    }
+
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+        return 'действия';
+    }
+
+    return 'действий';
 }
 
 function normalizeButtonRows(rows) {
@@ -5865,6 +6370,7 @@ function actionItems(actionModule) {
         .filter((item) => (
             item.type === ACTION_TYPE_CHECK_DATA
             || item.type === ACTION_TYPE_EDIT_MESSAGE
+            || item.type === ACTION_TYPE_QUESTIONNAIRE
             || item.target_field !== ''
         ));
 
@@ -5874,17 +6380,25 @@ function actionItems(actionModule) {
 function normalizeActionItemForType(item) {
     const type = item.type === ACTION_TYPE_CHECK_DATA
         ? ACTION_TYPE_CHECK_DATA
-        : (item.type === ACTION_TYPE_EDIT_MESSAGE ? ACTION_TYPE_EDIT_MESSAGE : ACTION_TYPE_WRITE_CONTACT_FIELD);
+        : (item.type === ACTION_TYPE_EDIT_MESSAGE
+            ? ACTION_TYPE_EDIT_MESSAGE
+            : (item.type === ACTION_TYPE_QUESTIONNAIRE ? ACTION_TYPE_QUESTIONNAIRE : ACTION_TYPE_WRITE_CONTACT_FIELD));
 
     if (type === ACTION_TYPE_EDIT_MESSAGE) {
+        const operation = item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
+            ? ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
+            : ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS;
+        const defaultTarget = operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
+            ? ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND
+            : ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS;
+        const target = item.target === defaultTarget
+            ? item.target
+            : defaultTarget;
+
         return {
             type,
-            operation: item.operation === ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS
-                ? item.operation
-                : ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS,
-            target: item.target === ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS
-                ? item.target
-                : ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS,
+            operation,
+            target,
         };
     }
 
@@ -5904,6 +6418,17 @@ function normalizeActionItemForType(item) {
             lookup_field: 'lookup_value',
             result_field: 'result_value',
             target_variable_key: normalizeAiExtractFieldKey(item.target_variable_key || item.source_field_key || 'first_name'),
+        };
+    }
+
+    if (type === ACTION_TYPE_QUESTIONNAIRE) {
+        const templateKey = ACTION_QUESTIONNAIRE_TEMPLATE_OPTIONS.some(([value]) => value === item.template_key)
+            ? item.template_key
+            : 'profile';
+
+        return {
+            type,
+            template_key: templateKey,
         };
     }
 
@@ -6028,12 +6553,14 @@ function syncOutputs(settingsPayload) {
             ai_choice_id: String(index + 1),
         }));
     const action = findModule(settingsPayload, 'action');
-    const actionOutputs = actionItems(action).some((item) => item.type === ACTION_TYPE_CHECK_DATA)
-        ? ACTION_CHECK_DATA_OUTPUTS.map((output) => ({
-            ...output,
-            module_id: action?.id ?? 'mod_action',
-        }))
-        : [];
+    const actionDefinitions = actionItems(action);
+    const actionOutputs = [
+        ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_CHECK_DATA) ? ACTION_CHECK_DATA_OUTPUTS : []),
+        ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_QUESTIONNAIRE) ? ACTION_QUESTIONNAIRE_OUTPUTS : []),
+    ].map((output) => ({
+        ...output,
+        module_id: action?.id ?? 'mod_action',
+    }));
 
     return {
         ...settingsPayload,
@@ -6430,6 +6957,15 @@ function SparkleIcon() {
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
             <path d="M7.5 2.2 8.6 5.4l3.2 1.1-3.2 1.1-1.1 3.2-1.1-3.2-3.2-1.1 3.2-1.1 1.1-3.2Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
             <path d="M12.3 9.7 12.8 11l1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5.5-1.3Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function QuestionnaireIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <rect x="3" y="2.2" width="10" height="11.6" rx="1.6" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M5.2 5h5.6M5.2 8h5.6M5.2 11h3.7" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
         </svg>
     );
 }

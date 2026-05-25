@@ -34,7 +34,7 @@ class AutoReplyCategoryResource extends Resource
 
     protected static ?string $navigationLabel = 'Категории автоответов';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Автоматизация';
 
     protected static ?int $navigationSort = 19;
 

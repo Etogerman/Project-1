@@ -6,6 +6,7 @@ use App\Data\Contacts\ResolvedContactDeletePreviewResult;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactQuestionnaireRun;
 use App\Models\Dialog;
 use App\Models\Message;
 
@@ -26,6 +27,9 @@ class ResolveContactDeletePreviewAction
                 ->whereIn('contact_id', $resolvedAggregate->aggregateContactIds)
                 ->count(),
             messagesCount: Message::query()
+                ->whereIn('contact_id', $resolvedAggregate->aggregateContactIds)
+                ->count(),
+            questionnaireRunsCount: ContactQuestionnaireRun::query()
                 ->whereIn('contact_id', $resolvedAggregate->aggregateContactIds)
                 ->count(),
             phonesCount: ContactPhoneNumber::query()

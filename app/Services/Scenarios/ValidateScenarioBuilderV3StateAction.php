@@ -40,7 +40,7 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_ACTIONS_PER_BLOCK = 20;
 
-    private const ACTION_TYPES = ['write_contact_field', 'check_data', 'edit_message'];
+    private const ACTION_TYPES = ['write_contact_field', 'check_data', 'edit_message', 'questionnaire'];
 
     private const ACTION_SOURCE_TYPES = ['ai_data', 'inbound_message', 'static_value'];
 
@@ -48,9 +48,9 @@ class ValidateScenarioBuilderV3StateAction
 
     private const ACTION_DICTIONARIES = ['names'];
 
-    private const ACTION_EDIT_MESSAGE_OPERATIONS = ['remove_buttons'];
+    private const ACTION_EDIT_MESSAGE_OPERATIONS = ['remove_buttons', 'delete_message'];
 
-    private const ACTION_EDIT_MESSAGE_TARGETS = ['last_current_run_outbound_with_inline_buttons'];
+    private const ACTION_EDIT_MESSAGE_TARGETS = ['last_current_run_outbound_with_inline_buttons', 'last_current_run_outbound'];
 
     private const BLOCK_KINDS = ['state', 'non_state'];
 
@@ -684,6 +684,7 @@ class ValidateScenarioBuilderV3StateAction
             $targetVariableKey = trim((string) ($action['target_variable_key'] ?? ''));
             $operation = trim((string) ($action['operation'] ?? 'remove_buttons'));
             $target = trim((string) ($action['target'] ?? 'last_current_run_outbound_with_inline_buttons'));
+            $templateKey = trim((string) ($action['template_key'] ?? 'profile'));
 
             if (! in_array($type, self::ACTION_TYPES, true)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.type", 'Unknown action type.');
@@ -696,6 +697,13 @@ class ValidateScenarioBuilderV3StateAction
 
                 if (! in_array($target, self::ACTION_EDIT_MESSAGE_TARGETS, true)) {
                     $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target", 'Unknown message edit target.');
+                }
+
+                if (
+                    ($operation === 'remove_buttons' && $target !== 'last_current_run_outbound_with_inline_buttons')
+                    || ($operation === 'delete_message' && $target !== 'last_current_run_outbound')
+                ) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target", 'Message edit target does not match operation.');
                 }
 
                 $normalized[] = [
@@ -728,6 +736,19 @@ class ValidateScenarioBuilderV3StateAction
                     'lookup_field' => 'lookup_value',
                     'result_field' => 'result_value',
                     'target_variable_key' => $targetVariableKey,
+                ];
+
+                continue;
+            }
+
+            if ($type === 'questionnaire') {
+                if ($templateKey === '' || ! preg_match('/^[a-z][a-z0-9_]{0,79}$/', $templateKey)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.template_key", 'Invalid questionnaire key.');
+                }
+
+                $normalized[] = [
+                    'type' => $type,
+                    'template_key' => $templateKey,
                 ];
 
                 continue;

@@ -276,6 +276,13 @@ class CompileScenarioBuilderV3RuntimeAction
                     ];
                 }
 
+                if ($type === 'questionnaire') {
+                    return [
+                        'type' => 'questionnaire',
+                        'template_key' => (string) ($item['template_key'] ?? 'profile'),
+                    ];
+                }
+
                 return [
                     'type' => $type,
                     'source_type' => (string) ($item['source_type'] ?? 'ai_data'),
@@ -290,8 +297,13 @@ class CompileScenarioBuilderV3RuntimeAction
             })
             ->filter(fn (array $item): bool => match ($item['type']) {
                 'check_data' => ($item['target_variable_key'] ?? '') !== '',
-                'edit_message' => ($item['operation'] ?? '') === 'remove_buttons'
-                    && ($item['target'] ?? '') === 'last_current_run_outbound_with_inline_buttons',
+                'edit_message' => (
+                    (($item['operation'] ?? '') === 'remove_buttons'
+                        && ($item['target'] ?? '') === 'last_current_run_outbound_with_inline_buttons')
+                    || (($item['operation'] ?? '') === 'delete_message'
+                        && ($item['target'] ?? '') === 'last_current_run_outbound')
+                ),
+                'questionnaire' => filled($item['template_key'] ?? null),
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'
                         ? trim((string) ($item['static_value'] ?? '')) !== ''

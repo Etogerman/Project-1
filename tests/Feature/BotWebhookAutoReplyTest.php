@@ -24,6 +24,7 @@ use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
+use App\Services\Questionnaires\HandleContactQuestionnaireAnswerAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -446,6 +447,54 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $this->maxPayload(
             messageId: 'max-priority-start-1',
             text: 'старт',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
+    public function test_text_message_checks_priority_scenario_before_questionnaire_answer_handler(): void
+    {
+        Queue::fake();
+        Http::fake();
+        config()->set('bots.data_collection.profile_collection_engine', 'questionnaires');
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $dispatcher = Mockery::mock(DispatchStoredInboundScenarioAction::class);
+        $dispatcher->shouldReceive('shouldBlockVipIbizaParameterStartBecauseBusyState')
+            ->once()
+            ->ordered()
+            ->andReturn(false);
+        $dispatcher->shouldReceive('startPriorityScenario')
+            ->once()
+            ->ordered()
+            ->andReturn(true);
+        $dispatcher->shouldNotReceive('continueActiveRun');
+        $dispatcher->shouldNotReceive('startMatchingScenario');
+        $this->app->instance(DispatchStoredInboundScenarioAction::class, $dispatcher);
+
+        $questionnaireHandler = Mockery::mock(HandleContactQuestionnaireAnswerAction::class);
+        $questionnaireHandler->shouldNotReceive('handle');
+        $this->app->instance(HandleContactQuestionnaireAnswerAction::class, $questionnaireHandler);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            messageId: 9001,
+            text: 'удалить',
         ));
 
         $response->assertOk()->assertExactJson([

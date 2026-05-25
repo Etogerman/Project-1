@@ -4,6 +4,7 @@ namespace App\Services\Scenarios;
 
 use App\Data\AI\AiGenerationContext;
 use App\Data\Contacts\FirstNameResolutionWriteContext;
+use App\Data\Questionnaires\QuestionnaireStartResult;
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessScenarioV3AiAnalysisJob;
@@ -19,6 +20,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\DataDictionaryEntry;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\QuestionnaireTemplate;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
@@ -39,7 +41,9 @@ use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\NormalizePhoneNumberAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
+use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
 use App\Services\Messages\PrepareMessageContentAction;
+use App\Services\Questionnaires\StartOrContinueContactQuestionnaireAction;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -157,6 +161,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
         private readonly SendBotDialogTextAction $sendBotDialogTextAction,
         private readonly TelegramBotApiService $telegramBotApiService,
+        private readonly DeleteLastOutboundDialogMessageAction $deleteLastOutboundDialogMessageAction,
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
         private readonly AiStructuredGenerationService $aiStructuredGenerationService,
         private readonly FirstNameResolutionAnalyticsService $firstNameResolutionAnalyticsService,
@@ -674,8 +679,36 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return false;
         }
 
+        if ($this->v3QuestionnaireCallbackIsAllowed($callbackData, $block, $statePayload)) {
+            return true;
+        }
+
         return $this->v3TargetForButtonCallback($callbackData, $block, $channel) !== null
             || $this->v3WaitReplyTargetForButtonCallback($callbackData, $block, $channel) !== null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3QuestionnaireCallbackIsAllowed(string $callbackData, array $block, array $statePayload): bool
+    {
+        $callback = $this->v3ButtonCallbackFromData($callbackData);
+
+        if ($callback === null || ! $this->v3ButtonCallbackMatchesBlock($callback, $block)) {
+            return false;
+        }
+
+        $hasQuestionnaireAction = collect(is_array($block['actions'] ?? null) ? $block['actions'] : [])
+            ->contains(fn (mixed $action): bool => is_array($action) && ($action['type'] ?? null) === 'questionnaire');
+
+        if (! $hasQuestionnaireAction) {
+            return false;
+        }
+
+        $optionMap = data_get($statePayload, "v3.questionnaires.{$callback['block_id']}.option_map");
+
+        return is_array($optionMap) && array_key_exists($callback['output_id'], $optionMap);
     }
 
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
@@ -1270,6 +1303,195 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
             exitOutcome: null,
         );
+    }
+
+    public function dispatchV3QuestionnairePrompt(
+        ScenarioRun $run,
+        Message $message,
+        QuestionnaireStartResult $result,
+    ): bool {
+        if ($result->outcome !== QuestionnaireStartResult::OUTCOME_WAITING || trim((string) $result->promptText) === '') {
+            return false;
+        }
+
+        $runtime = $this->v3RuntimeOrNull();
+
+        if ($runtime === null || $message->dialog_id === null) {
+            return false;
+        }
+
+        return $this->withDeferredV3ScenarioMessages(function () use ($run, $message, $runtime, $result): bool {
+            return DB::transaction(function () use ($run, $message, $runtime, $result): bool {
+                $lockedRun = ScenarioRun::query()
+                    ->whereKey($run->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (
+                    ! $lockedRun instanceof ScenarioRun
+                    || ! $lockedRun->isActive()
+                    || (int) $lockedRun->dialog_id !== (int) $message->dialog_id
+                ) {
+                    return false;
+                }
+
+                $statePayload = $this->v3StatePayload($lockedRun->state_payload);
+                $blockId = $this->v3RuntimeBlockId(
+                    $runtime,
+                    (string) (data_get($statePayload, 'v3.current_block_id') ?: $lockedRun->current_step),
+                    $statePayload,
+                );
+
+                if ($blockId === null) {
+                    return false;
+                }
+
+                $block = $this->v3RuntimeBlock($runtime, $blockId);
+
+                if (! is_array($block)) {
+                    return false;
+                }
+
+                $statePayload = $this->markV3Waiting(
+                    $this->storeV3QuestionnaireActionResult($statePayload, $blockId, $result),
+                    $blockId,
+                    $block,
+                    $message->channel,
+                );
+                $replyButtonRows = $this->v3QuestionnaireButtonRows($result, $blockId);
+                $statePayload = $this->storeV3QuestionnaireOptionMap($statePayload, $blockId, $result, $replyButtonRows);
+
+                if (! $this->dispatchScenarioMessage(
+                    $message,
+                    (string) $result->promptText,
+                    Message::TEXT_FORMAT_PLAIN_TEXT,
+                    replyButtonRows: $replyButtonRows,
+                    buttonPlacement: self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE,
+                    v3CallbackBlockId: $blockId,
+                    scenarioRun: $lockedRun,
+                )) {
+                    return false;
+                }
+
+                $lockedRun->forceFill([
+                    'status' => ScenarioRun::STATUS_ACTIVE,
+                    'current_step' => $blockId,
+                    'state_payload' => $statePayload,
+                    'exit_outcome' => null,
+                    'finished_at' => null,
+                ])->save();
+
+                return true;
+            });
+        });
+    }
+
+    public function resumeV3QuestionnaireOutcome(
+        ScenarioRun $run,
+        Message $message,
+        string $outcome,
+    ): ScenarioInboundResult {
+        $runtime = $this->v3RuntimeOrNull();
+
+        if ($runtime === null || $message->dialog_id === null) {
+            return new ScenarioInboundResult(
+                consumed: false,
+                status: $run->status,
+                currentStep: $run->current_step,
+                statePayload: $this->v3StatePayload($run->state_payload),
+                exitOutcome: $run->exit_outcome,
+            );
+        }
+
+        return $this->withDeferredV3ScenarioMessages(function () use ($run, $message, $runtime, $outcome): ScenarioInboundResult {
+            return DB::transaction(function () use ($run, $message, $runtime, $outcome): ScenarioInboundResult {
+                $lockedRun = ScenarioRun::query()
+                    ->whereKey($run->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (
+                    ! $lockedRun instanceof ScenarioRun
+                    || ! $lockedRun->isActive()
+                    || (int) $lockedRun->dialog_id !== (int) $message->dialog_id
+                ) {
+                    return new ScenarioInboundResult(
+                        consumed: false,
+                        status: $run->status,
+                        currentStep: $run->current_step,
+                        statePayload: $this->v3StatePayload($run->state_payload),
+                        exitOutcome: $run->exit_outcome,
+                    );
+                }
+
+                $statePayload = $this->v3StatePayload($lockedRun->state_payload);
+                $blockId = $this->v3RuntimeBlockId(
+                    $runtime,
+                    (string) (data_get($statePayload, 'v3.current_block_id') ?: $lockedRun->current_step),
+                    $statePayload,
+                );
+
+                if ($blockId === null) {
+                    return new ScenarioInboundResult(
+                        consumed: true,
+                        status: $lockedRun->status,
+                        currentStep: $lockedRun->current_step,
+                        statePayload: $statePayload,
+                        exitOutcome: $lockedRun->exit_outcome,
+                    );
+                }
+
+                $block = $this->v3RuntimeBlock($runtime, $blockId);
+
+                if (! is_array($block)) {
+                    return new ScenarioInboundResult(
+                        consumed: true,
+                        status: $lockedRun->status,
+                        currentStep: $lockedRun->current_step,
+                        statePayload: $statePayload,
+                        exitOutcome: $lockedRun->exit_outcome,
+                    );
+                }
+
+                $runId = data_get($statePayload, "v3.questionnaires.$blockId.run_id");
+                $statePayload = $this->storeV3QuestionnaireActionResult($statePayload, $blockId, new QuestionnaireStartResult(
+                    outcome: $outcome,
+                    runId: is_numeric($runId) ? (int) $runId : null,
+                ));
+
+                $progress = $this->advanceV3ActionResultEdge(
+                    $message,
+                    $runtime,
+                    $block,
+                    $statePayload,
+                    $outcome,
+                    count($runtime['blocks'] ?? []) + 1,
+                    $lockedRun,
+                ) ?? $this->activeProgress($blockId, $this->markV3Waiting($statePayload, $blockId, $block, $message->channel));
+
+                $lockedRun->forceFill([
+                    'status' => $progress['status'],
+                    'current_step' => $progress['current_step'],
+                    'state_payload' => $progress['state_payload'],
+                    'exit_outcome' => $progress['exit_outcome'],
+                    'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                ])->save();
+
+                return new ScenarioInboundResult(
+                    consumed: true,
+                    status: $progress['status'],
+                    currentStep: $progress['current_step'],
+                    statePayload: $progress['state_payload'],
+                    exitOutcome: $progress['exit_outcome'],
+                    persisted: true,
+                );
+            });
+        });
+    }
+
+    public function removeV3InlineButtonsForRun(Message $message, ScenarioRun $run): void
+    {
+        $this->removeV3TelegramInlineButtonsFromLastCurrentRunMessage($message, $run);
     }
 
     /**
@@ -2213,6 +2435,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         $statePayload = $actionResult['state_payload'];
 
+        if (($actionResult['stop_current_execution'] ?? false) === true) {
+            $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
+
+            return $this->activeProgress($activeBlockId, $statePayload);
+        }
+
         if ($actionResult['output_id'] !== null) {
             $actionProgress = $this->advanceV3ActionResultEdge(
                 $message,
@@ -2526,7 +2754,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     /**
      * @param  array<string, mixed>  $block
      * @param  array<string, mixed>  $statePayload
-     * @return array{state_payload: array<string, mixed>, output_id: ?string}|null
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool}|null
      */
     private function applyV3ActionModule(Message $message, array $block, array $statePayload, ?ScenarioRun $run): ?array
     {
@@ -2556,6 +2784,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 continue;
             }
 
+            if (($action['type'] ?? null) === 'questionnaire') {
+                return $this->applyV3QuestionnaireAction($message, $action, $block, $statePayload, $run);
+            }
+
             if (($action['type'] ?? null) !== 'write_contact_field') {
                 return null;
             }
@@ -2576,23 +2808,81 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private function applyV3EditMessageAction(Message $message, array $action, array $statePayload, ?ScenarioRun $run): array
     {
         if (
-            ($action['operation'] ?? null) !== 'remove_buttons'
-            || ($action['target'] ?? null) !== 'last_current_run_outbound_with_inline_buttons'
+            ($action['operation'] ?? null) === 'remove_buttons'
+            && ($action['target'] ?? null) === 'last_current_run_outbound_with_inline_buttons'
         ) {
+            if ($message->channel?->platform !== Channel::PLATFORM_TELEGRAM) {
+                return $statePayload;
+            }
+
+            $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
+
+            if ($run instanceof ScenarioRun) {
+                $this->removeV3TelegramInlineButtonsFromLastCurrentRunMessage($message, $run);
+            }
+
             return $statePayload;
         }
 
-        if ($message->channel?->platform !== Channel::PLATFORM_TELEGRAM) {
+        if (
+            ($action['operation'] ?? null) === 'delete_message'
+            && ($action['target'] ?? null) === 'last_current_run_outbound'
+        ) {
+            if ($message->channel?->platform === Channel::PLATFORM_TELEGRAM) {
+                $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
+            }
+
+            if ($run instanceof ScenarioRun) {
+                $this->deleteV3LastCurrentRunMessage($message, $run);
+            }
+
             return $statePayload;
-        }
-
-        $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
-
-        if ($run instanceof ScenarioRun) {
-            $this->removeV3TelegramInlineButtonsFromLastCurrentRunMessage($message, $run);
         }
 
         return $statePayload;
+    }
+
+    private function deleteV3LastCurrentRunMessage(Message $message, ScenarioRun $run): void
+    {
+        $dialog = $message->dialog;
+
+        if (! $dialog instanceof Dialog && filled($message->dialog_id)) {
+            $dialog = Dialog::query()->find($message->dialog_id);
+        }
+
+        if (! $dialog instanceof Dialog) {
+            Log::info('scenario.v3_edit_message_delete_message_skipped', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run->id,
+                'dialog_id' => $message->dialog_id,
+                'status' => DeleteLastOutboundDialogMessageAction::STATUS_MISSING_LAST_MESSAGE,
+            ]);
+
+            return;
+        }
+
+        $result = $this->deleteLastOutboundDialogMessageAction->handle($dialog);
+
+        $context = [
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'message_id' => $result->messageId,
+            'external_message_id' => $result->externalMessageId,
+            'status' => $result->status,
+        ];
+
+        if ($result->error !== null) {
+            $context['error_message'] = $result->error;
+        }
+
+        if ($result->status === DeleteLastOutboundDialogMessageAction::STATUS_PROVIDER_FAILED) {
+            Log::warning('scenario.v3_edit_message_delete_message_failed', $context);
+
+            return;
+        }
+
+        Log::info('scenario.v3_edit_message_delete_message_result', $context);
     }
 
     private function removeV3TelegramInlineButtonsFromLastCurrentRunMessage(Message $message, ScenarioRun $run): void
@@ -2730,6 +3020,156 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ->contains(fn (mixed $button): bool => is_array($button)
                 && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
                 && filled($button['url'] ?? null));
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool}|null
+     */
+    private function applyV3QuestionnaireAction(
+        Message $message,
+        array $action,
+        array $block,
+        array $statePayload,
+        ?ScenarioRun $run,
+    ): ?array {
+        $blockId = filled($block['id'] ?? null) ? (string) $block['id'] : null;
+        $templateKey = filled($action['template_key'] ?? null)
+            ? (string) $action['template_key']
+            : QuestionnaireTemplate::KEY_PROFILE;
+
+        $result = app(StartOrContinueContactQuestionnaireAction::class)->handle(
+            message: $message,
+            templateKey: $templateKey,
+            scenarioRun: $run,
+            blockId: $blockId,
+        );
+
+        $statePayload = $this->storeV3QuestionnaireActionResult($statePayload, $blockId, $result);
+
+        if ($result->outcome === QuestionnaireStartResult::OUTCOME_WAITING) {
+            $statePayload = $this->markV3Waiting($statePayload, (string) $blockId, $block, $message->channel);
+            $replyButtonRows = $this->v3QuestionnaireButtonRows($result, $blockId);
+            $statePayload = $this->storeV3QuestionnaireOptionMap($statePayload, $blockId, $result, $replyButtonRows);
+
+            if (trim((string) $result->promptText) === '') {
+                return [
+                    'state_payload' => $statePayload,
+                    'output_id' => QuestionnaireStartResult::OUTCOME_FAILED,
+                ];
+            }
+
+            if (! $this->dispatchScenarioMessage(
+                $message,
+                (string) $result->promptText,
+                Message::TEXT_FORMAT_PLAIN_TEXT,
+                replyButtonRows: $replyButtonRows,
+                buttonPlacement: self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE,
+                v3CallbackBlockId: $blockId,
+                scenarioRun: $run,
+            )) {
+                return [
+                    'state_payload' => $statePayload,
+                    'output_id' => QuestionnaireStartResult::OUTCOME_FAILED,
+                ];
+            }
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => $result->outcome,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function storeV3QuestionnaireActionResult(
+        array $statePayload,
+        ?string $blockId,
+        QuestionnaireStartResult $result,
+    ): array {
+        $key = filled($blockId) ? (string) $blockId : 'unknown';
+
+        data_set($statePayload, "v3.questionnaires.$key", [
+            'run_id' => $result->runId,
+            'current_field_key' => $result->currentFieldKey,
+            'outcome' => $result->outcome,
+            'error' => $result->error,
+        ]);
+
+        return $statePayload;
+    }
+
+    /**
+     * @return list<list<array<string, mixed>>>|null
+     */
+    private function v3QuestionnaireButtonRows(
+        QuestionnaireStartResult $result,
+        ?string $blockId,
+    ): ?array {
+        if ($result->options === [] || count($result->options) > 20 || ! filled($blockId)) {
+            return null;
+        }
+
+        $buttons = collect($result->options)
+            ->map(function (array $option): array {
+                $value = (string) $option['value'];
+
+                return [
+                    'id' => $this->v3QuestionnaireOptionOutputId($value),
+                    'type' => self::V3_BUTTON_TYPE_TEXT,
+                    'text' => (string) $option['label'],
+                    'output_id' => $this->v3QuestionnaireOptionOutputId($value),
+                ];
+            })
+            ->values()
+            ->all();
+
+        return array_chunk($buttons, 2);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     * @return array<string, mixed>
+     */
+    private function storeV3QuestionnaireOptionMap(
+        array $statePayload,
+        ?string $blockId,
+        QuestionnaireStartResult $result,
+        ?array $replyButtonRows,
+    ): array {
+        if ($replyButtonRows === null || ! filled($blockId)) {
+            return $statePayload;
+        }
+
+        $map = [];
+
+        foreach ($result->options as $option) {
+            $map[$this->v3QuestionnaireOptionOutputId((string) $option['value'])] = [
+                'value' => (string) $option['value'],
+                'label' => (string) $option['label'],
+            ];
+        }
+
+        data_set($statePayload, "v3.questionnaires.$blockId.option_map", $map);
+
+        return $statePayload;
+    }
+
+    private function v3QuestionnaireOptionOutputId(string $value): string
+    {
+        return 'q_'.substr(sha1($value), 0, 16);
     }
 
     /**

@@ -81,23 +81,10 @@ class QuestionnaireStorageTest extends TestCase
         $this->assertSame([
             'gender',
             'first_name',
-            'country',
             'city',
-            'region',
             'age_range',
         ], $fieldKeys);
         $this->assertNotContains('phone', $fieldKeys);
-
-        $countryField = collect($fields)->firstWhere('field_key', 'country');
-        $countryOptions = collect($countryField['options'] ?? []);
-
-        $this->assertTrue($countryOptions->contains(fn (array $option): bool => $option['value'] === 'RU' && $option['label'] === 'Россия'));
-        $this->assertTrue($countryOptions->contains(fn (array $option): bool => $option['value'] === 'KZ' && $option['label'] === 'Казахстан'));
-
-        $regionField = collect($fields)->firstWhere('field_key', 'region');
-        $regionOptions = collect($regionField['options'] ?? [])->pluck('value')->all();
-
-        $this->assertContains('Москва', $regionOptions);
     }
 
     public function test_only_one_awaiting_questionnaire_run_is_allowed_per_contact(): void

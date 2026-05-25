@@ -14,23 +14,28 @@ use App\Models\BotConstructorDialogState;
 use App\Models\BotConstructorExecution;
 use App\Models\BotConstructorExecutionBlockRun;
 use App\Models\Channel;
-use App\Models\ChannelActivityLog;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactQuestionnaireAnswer;
+use App\Models\ContactQuestionnaireAttempt;
+use App\Models\ContactQuestionnaireRun;
 use App\Models\ContactStartTag;
 use App\Models\ContactTimelineEvent;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\QuestionnaireTemplate;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Contacts\CreateContactDuplicateReviewAction;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
+use Database\Seeders\ProfileQuestionnaireSeeder;
 use Filament\Facades\Filament;
-use Filament\Support\Icons\Heroicon;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\TextColumn;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -197,6 +202,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Общее')
             ->assertSee('Диалоги')
             ->assertSee('Битрикс24')
+            ->assertSee('Анкеты')
             ->assertSee('История')
             ->assertSee('Диагностика')
             ->assertSee('Данные клиента')
@@ -205,7 +211,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertDontSee('Имя (мессенджер)')
             ->assertSee('Работа с контактом')
             ->assertSee('Локация')
-            ->assertSee('Анкета')
+            ->assertDontSee('contact-section-questionnaire')
             ->assertSee('Теги контакта')
             ->assertSee('Телефоны')
             ->assertSee('Ответственный')
@@ -1034,7 +1040,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Теги контакта')
             ->call('openAddTagDialog')
@@ -1333,7 +1338,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($employee)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openAssignContactDialog')
             ->assertSee('Новый оператор')
@@ -1363,7 +1367,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($employee)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openAssignContactDialog')
             ->set('selectedAssigneeId', '')
@@ -1385,7 +1388,6 @@ class FilamentContactsResourceTest extends TestCase
         $contact = Contact::factory()->create();
 
         Livewire::actingAs($employee)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('deleteMountedContact')
@@ -1450,7 +1452,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Дедупликация')
             ->assertSee('Нужна проверка')
@@ -1487,7 +1488,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Открытые проверки: 1')
             ->assertSee('Один platform user ID привязан к нескольким root-контактам')
@@ -1519,7 +1519,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $anchorContact->getRouteKey()])
             ->assertSee('Разобрать')
@@ -1561,7 +1560,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $anchorContact->getRouteKey()])
             ->call('dismissMountedCrossChannelIdentityReview', $review->id);
 
@@ -1597,7 +1595,6 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertSame(Contact::DUPLICATE_REVIEW_STATUS_PENDING, $candidateRoot->fresh()->duplicate_review_status);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $candidateRoot->getRouteKey()])
             ->assertSee('Открытые проверки: 1')
@@ -1664,6 +1661,10 @@ class FilamentContactsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $contact = Contact::factory()->create();
+        $this->seed(ProfileQuestionnaireSeeder::class);
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->sole();
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
         ]);
@@ -1686,9 +1687,34 @@ class FilamentContactsResourceTest extends TestCase
             'raw_payload' => ['message' => 'payload'],
             'received_at' => now(),
         ]);
+        $questionnaireRun = ContactQuestionnaireRun::query()->create([
+            'contact_id' => $contact->id,
+            'questionnaire_template_id' => $template->id,
+            'questionnaire_template_version_id' => $template->published_version_id,
+            'status' => ContactQuestionnaireRun::STATUS_COMPLETED,
+            'started_at' => now()->subMinutes(10),
+            'completed_at' => now()->subMinutes(2),
+        ]);
+        $questionnaireAnswer = ContactQuestionnaireAnswer::query()->create([
+            'questionnaire_run_id' => $questionnaireRun->id,
+            'field_key' => 'first_name',
+            'status' => ContactQuestionnaireAnswer::STATUS_FILLED,
+            'attempts_count' => 1,
+            'value' => 'Герман',
+            'display_value' => 'Герман',
+            'target' => 'contact.first_name',
+        ]);
+        $questionnaireAttempt = ContactQuestionnaireAttempt::query()->create([
+            'questionnaire_run_id' => $questionnaireRun->id,
+            'field_key' => 'first_name',
+            'attempt_index' => 1,
+            'prompt_text' => 'Как тебя зовут?',
+            'raw_answer' => 'Герман',
+            'parsed_value' => 'Герман',
+            'status' => ContactQuestionnaireAttempt::STATUS_ACCEPTED,
+        ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Анкета')
@@ -1720,7 +1746,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Теги')
@@ -1765,7 +1790,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Удаляемый тег')
@@ -1841,7 +1865,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Анкета')
             ->assertSee('Не запущена')
@@ -1871,13 +1894,150 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('В процессе')
             ->assertSee('Город')
             ->assertSee('1')
             ->assertSee('Герман')
             ->assertSee('Россия');
+    }
+
+    public function test_contact_view_shows_questionnaire_run_progress_and_answers(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->with('publishedVersion')
+            ->sole();
+
+        $contact = Contact::factory()->create([
+            'first_name' => null,
+            'gender' => 'male',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+        ]);
+
+        $run = ContactQuestionnaireRun::query()->create([
+            'contact_id' => $contact->id,
+            'questionnaire_template_id' => $template->id,
+            'questionnaire_template_version_id' => $template->published_version_id,
+            'status' => ContactQuestionnaireRun::STATUS_AWAITING_ANSWER,
+            'current_field_key' => 'first_name',
+            'started_at' => now()->subMinutes(5),
+        ]);
+
+        ContactQuestionnaireAnswer::query()->create([
+            'questionnaire_run_id' => $run->id,
+            'field_key' => 'gender',
+            'status' => ContactQuestionnaireAnswer::STATUS_FILLED,
+            'attempts_count' => 1,
+            'value' => 'male',
+            'display_value' => 'Мужской',
+            'target' => 'contact.gender',
+            'synced_to_contact_at' => now(),
+        ]);
+
+        ContactQuestionnaireAnswer::query()->create([
+            'questionnaire_run_id' => $run->id,
+            'field_key' => 'first_name',
+            'status' => ContactQuestionnaireAnswer::STATUS_ASKED,
+            'attempts_count' => 1,
+            'value' => null,
+            'display_value' => null,
+            'target' => 'contact.first_name',
+        ]);
+
+        ContactQuestionnaireAttempt::query()->create([
+            'questionnaire_run_id' => $run->id,
+            'field_key' => 'gender',
+            'attempt_index' => 1,
+            'prompt_text' => 'Укажи свой пол',
+            'raw_answer' => 'Мужской',
+            'parsed_value' => 'male',
+            'status' => ContactQuestionnaireAttempt::STATUS_ACCEPTED,
+        ]);
+
+        ContactQuestionnaireAttempt::query()->create([
+            'questionnaire_run_id' => $run->id,
+            'field_key' => 'first_name',
+            'attempt_index' => 1,
+            'prompt_text' => 'Как тебя зовут?',
+            'raw_answer' => 'Не имя',
+            'parsed_value' => null,
+            'status' => ContactQuestionnaireAttempt::STATUS_REJECTED,
+            'error' => 'not_found',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_QUESTIONNAIRES)
+            ->assertSee('Прохождения анкет')
+            ->assertSee('Профильная анкета v1')
+            ->assertSee('Ждёт ответ')
+            ->assertSee('1 / 4')
+            ->assertSee('Текущий вопрос')
+            ->assertSee('Пол: Мужской')
+            ->assertSee('Заполнено')
+            ->assertSee('ответ: Мужской')
+            ->assertSee('Имя: —')
+            ->assertSee('Спросили');
+    }
+
+    public function test_admin_can_cancel_and_reset_questionnaire_run_from_contact_view(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->sole();
+
+        $contact = Contact::factory()->create();
+
+        $run = ContactQuestionnaireRun::query()->create([
+            'contact_id' => $contact->id,
+            'questionnaire_template_id' => $template->id,
+            'questionnaire_template_version_id' => $template->published_version_id,
+            'status' => ContactQuestionnaireRun::STATUS_AWAITING_ANSWER,
+            'current_field_key' => 'gender',
+            'started_at' => now()->subMinutes(5),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_QUESTIONNAIRES)
+            ->assertSee('Отменить')
+            ->assertSee('Сбросить')
+            ->call('cancelMountedContactQuestionnaireRun', $run->id)
+            ->assertNotified();
+
+        $this->assertDatabaseHas('contact_questionnaire_runs', [
+            'id' => $run->id,
+            'status' => ContactQuestionnaireRun::STATUS_CANCELLED,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_QUESTIONNAIRES)
+            ->assertDontSee('Отменить')
+            ->assertSee('Сбросить')
+            ->call('resetMountedContactQuestionnaireRun', $run->id)
+            ->assertNotified();
+
+        $this->assertDatabaseHas('contact_questionnaire_runs', [
+            'id' => $run->id,
+            'status' => ContactQuestionnaireRun::STATUS_RESET,
+            'reset_by' => $admin->id,
+        ]);
     }
 
     public function test_contact_modal_shows_completed_collector_status_without_current_step(): void
@@ -1897,7 +2057,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Завершена')
@@ -1930,7 +2089,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Возобновить анкету');
     }
@@ -1958,7 +2116,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertDontSee('Возобновить анкету');
@@ -1988,7 +2145,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertDontSee('Возобновить анкету');
     }
@@ -2008,7 +2164,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertDontSee('Возобновить анкету');
@@ -2060,7 +2215,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('resumeMountedContactDataCollection')
@@ -2131,7 +2285,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $merged->getRouteKey()])
             ->call('resumeMountedContactDataCollection')
             ->assertRedirect(ContactResource::getUrl('view', ['record' => $root, 'tab' => ViewContact::TAB_GENERAL]));
@@ -2189,7 +2342,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Данные клиента')
@@ -2256,7 +2408,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $merged->getRouteKey()])
             ->call('openEditProfileDialog')
             ->set('editingFirstName', 'Герман')
@@ -2284,7 +2435,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Расстояние до Москвы')
             ->assertSee('0 км')
@@ -2302,7 +2452,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Автоответы')
@@ -2354,18 +2503,48 @@ class FilamentContactsResourceTest extends TestCase
             'raw_payload' => ['message' => 'payload'],
             'received_at' => now(),
         ]);
+        $this->seed(ProfileQuestionnaireSeeder::class);
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->sole();
+        $questionnaireRun = ContactQuestionnaireRun::query()->create([
+            'contact_id' => $contact->id,
+            'questionnaire_template_id' => $template->id,
+            'questionnaire_template_version_id' => $template->published_version_id,
+            'status' => ContactQuestionnaireRun::STATUS_COMPLETED,
+            'started_at' => now()->subMinutes(10),
+            'completed_at' => now()->subMinutes(2),
+        ]);
+        $questionnaireAnswer = ContactQuestionnaireAnswer::query()->create([
+            'questionnaire_run_id' => $questionnaireRun->id,
+            'field_key' => 'first_name',
+            'status' => ContactQuestionnaireAnswer::STATUS_FILLED,
+            'attempts_count' => 1,
+            'value' => 'Герман',
+            'display_value' => 'Герман',
+            'target' => 'contact.first_name',
+        ]);
+        $questionnaireAttempt = ContactQuestionnaireAttempt::query()->create([
+            'questionnaire_run_id' => $questionnaireRun->id,
+            'field_key' => 'first_name',
+            'attempt_index' => 1,
+            'prompt_text' => 'Как тебя зовут?',
+            'raw_answer' => 'Герман',
+            'parsed_value' => 'Герман',
+            'status' => ContactQuestionnaireAttempt::STATUS_ACCEPTED,
+        ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Удалить клиента')
             ->call('openDeleteContactDialog')
             ->assertSee('Контакт')
-            ->assertSee('будет удалён вместе с диалогами, сообщениями, телефонами и идентичностями.')
+            ->assertSee('будет удалён вместе с диалогами, сообщениями, анкетами с ответами, телефонами и идентичностями.')
             ->assertSee('Контактов')
             ->assertSee('Диалогов')
             ->assertSee('Сообщений')
+            ->assertSee('Анкет')
             ->assertSee('Телефонов')
             ->assertSee('Идентификаторов')
             ->call('deleteMountedContact')
@@ -2385,6 +2564,15 @@ class FilamentContactsResourceTest extends TestCase
         ]);
         $this->assertDatabaseMissing('messages', [
             'id' => $message->id,
+        ]);
+        $this->assertDatabaseMissing('contact_questionnaire_runs', [
+            'id' => $questionnaireRun->id,
+        ]);
+        $this->assertDatabaseMissing('contact_questionnaire_answers', [
+            'id' => $questionnaireAnswer->id,
+        ]);
+        $this->assertDatabaseMissing('contact_questionnaire_attempts', [
+            'id' => $questionnaireAttempt->id,
         ]);
     }
 
@@ -2585,7 +2773,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $root->getRouteKey()])
             ->assertSee('Дедупликация')
             ->assertSee('Склеено дублей')
@@ -2621,7 +2808,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $merged->getRouteKey()])
             ->call('openDeleteContactDialog')
             ->assertSee('Удалить клиента целиком?')
@@ -2645,7 +2831,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Телефоны')
@@ -2746,7 +2931,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openEditPhoneDialog', $phoneNumber->id)
             ->set('editingPhoneRaw', '+7 999 555 55 55')
@@ -2775,7 +2959,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($employee)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Телефоны')
@@ -2817,7 +3000,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openEditPhoneDialog', $editablePhone->id)
             ->set('editingPhoneRaw', '+7 999 555 55 55')
@@ -2852,7 +3034,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($employee)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openEditPhoneDialog', $editablePhone->id)
             ->set('editingPhoneRaw', '+7 999 555 55 55')
@@ -2886,7 +3067,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openDeletePhoneDialog', $primaryPhone->id)
@@ -2925,7 +3105,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($employee)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertDontSee('Убрать')
             ->call('openDeletePhoneDialog', $primaryPhone->id)
@@ -2957,7 +3136,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($employee)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertDontSee('Убрать')
@@ -3097,7 +3275,7 @@ class FilamentContactsResourceTest extends TestCase
         $component = Livewire::actingAs($admin)
             ->test(ManageContacts::class);
 
-        /** @var \Filament\Tables\Columns\TextColumn $column */
+        /** @var TextColumn $column */
         $column = $component->instance()->getTable()->getColumn('primary_phone_raw');
         $record = $component->instance()->getTableRecord((string) $contact->getKey());
 
@@ -3331,7 +3509,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->set('activeTab', ViewContact::TAB_DIAGNOSTICS)
@@ -3983,7 +4160,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Изменить')
             ->call('openAssignContactDialog')
@@ -4014,7 +4190,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($firstAdmin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openAssignContactDialog')
             ->set('selectedAssigneeId', (string) $secondAdmin->id)
@@ -4038,7 +4213,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openAssignContactDialog')
@@ -4065,7 +4239,6 @@ class FilamentContactsResourceTest extends TestCase
         $contact = Contact::factory()->create();
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openAssignContactDialog')
@@ -4168,7 +4341,6 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
 
-
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->set('activeTab', ViewContact::TAB_DIAGNOSTICS)
             ->assertSee('mid.0000000003f780cc019d33311ef013fa')
@@ -4227,7 +4399,6 @@ class FilamentContactsResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->set('activeTab', ViewContact::TAB_DIAGNOSTICS)
@@ -4337,17 +4508,17 @@ class FilamentContactsResourceTest extends TestCase
         ]);
         $contact = Contact::factory()->create();
 
-        \Illuminate\Support\Facades\DB::table('role_permissions')
+        DB::table('role_permissions')
             ->where('role', User::ROLE_EMPLOYEE)
             ->whereIn('permission_key', ['contacts.view', 'contacts.edit', 'contacts.delete'])
             ->update(['granted' => false]);
 
         $employee = User::query()->findOrFail($employee->id);
 
-        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($employee)->allows('viewAny', Contact::class));
-        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($employee)->allows('view', $contact));
-        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($employee)->allows('update', $contact));
-        $this->assertFalse(\Illuminate\Support\Facades\Gate::forUser($employee)->allows('delete', $contact));
+        $this->assertFalse(Gate::forUser($employee)->allows('viewAny', Contact::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('view', $contact));
+        $this->assertFalse(Gate::forUser($employee)->allows('update', $contact));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $contact));
         $this->assertFalse($employee->canManageContactWorkspaceMutations());
         $this->assertFalse($employee->canManageContactProfile());
         $this->assertFalse($employee->canManageContactOwnership());

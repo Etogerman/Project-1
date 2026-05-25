@@ -40,9 +40,9 @@ class QuestionnaireTemplateResource extends Resource
 
     protected static ?string $navigationLabel = 'Анкеты';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Настройки';
+    protected static string|UnitEnum|null $navigationGroup = 'Автоматизация';
 
-    protected static ?int $navigationSort = 22;
+    protected static ?int $navigationSort = 17;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedDocumentText;
 
@@ -63,7 +63,7 @@ class QuestionnaireTemplateResource extends Resource
     {
         return $schema->components([
             Section::make('Анкета')
-                ->description('Поля анкеты редактируются отдельным JSON-черновиком. Runtime использует только опубликованную версию.')
+                ->description('Здесь задаются ключ и название. Вопросы, варианты ответов и правила редактируются в настройках существующей анкеты.')
                 ->schema([
                     TextInput::make('key')
                         ->label('Ключ')
@@ -121,6 +121,13 @@ class QuestionnaireTemplateResource extends Resource
                     ->state(fn (QuestionnaireTemplate $record): string => static::formatVersionLabel($record->draftVersion))
                     ->badge()
                     ->color(fn (QuestionnaireTemplate $record): string => $record->draftVersion instanceof QuestionnaireTemplateVersion ? 'warning' : 'gray'),
+                TextColumn::make('fields_summary')
+                    ->label('Вопросы и настройки')
+                    ->state(fn (QuestionnaireTemplate $record): string => static::formatFieldsSummary(
+                        $record->draftVersion ?? $record->publishedVersion,
+                    ))
+                    ->wrap()
+                    ->limit(220),
                 TextColumn::make('fields_count')
                     ->label('Полей')
                     ->state(fn (QuestionnaireTemplate $record): int => count($record->publishedVersion?->fields_payload ?? []))
@@ -137,10 +144,9 @@ class QuestionnaireTemplateResource extends Resource
             ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
                 Action::make('editDraft')
-                    ->label('JSON')
+                    ->label('Редактировать вопросы')
                     ->icon(Heroicon::OutlinedDocumentText)
-                    ->iconButton()
-                    ->tooltip('Редактировать JSON черновика')
+                    ->tooltip('Редактировать вопросы, варианты ответов и правила шаблона')
                     ->modalHeading(fn (QuestionnaireTemplate $record): string => 'JSON анкеты: '.$record->name)
                     ->modalSubmitActionLabel('Сохранить черновик')
                     ->modalWidth(Width::SevenExtraLarge)
@@ -177,8 +183,8 @@ class QuestionnaireTemplateResource extends Resource
                             ->send();
                     }),
                 Action::make('publishDraft')
+                    ->label('Опубликовать')
                     ->icon(Heroicon::OutlinedBolt)
-                    ->iconButton()
                     ->tooltip('Опубликовать черновик')
                     ->color('success')
                     ->requiresConfirmation()
@@ -204,15 +210,64 @@ class QuestionnaireTemplateResource extends Resource
                             ->send();
                     }),
                 EditAction::make()
+                    ->label('Настройки')
                     ->icon(Heroicon::OutlinedPencilSquare)
-                    ->iconButton()
-                    ->tooltip('Изменить')
-                    ->modalWidth(Width::Large)
+                    ->tooltip('Изменить название, вопросы, варианты и правила')
+                    ->modalHeading(fn (QuestionnaireTemplate $record): string => 'Настройки анкеты: '.$record->name)
+                    ->modalSubmitActionLabel('Сохранить черновик')
+                    ->modalWidth(Width::SevenExtraLarge)
                     ->modalFooterActionsAlignment(Alignment::End)
-                    ->using(fn (array $data, QuestionnaireTemplate $record): QuestionnaireTemplate => static::saveTemplate($data, $record)),
+                    ->fillForm(fn (QuestionnaireTemplate $record): array => [
+                        'key' => $record->key,
+                        'name' => $record->name,
+                        'fields_payload_json' => static::encodeFieldsPayload(
+                            $record->draftVersion?->fields_payload
+                                ?? $record->publishedVersion?->fields_payload
+                                ?? [],
+                        ),
+                    ])
+                    ->form([
+                        Section::make('Общие настройки')
+                            ->schema([
+                                TextInput::make('key')
+                                    ->label('Ключ')
+                                    ->disabled()
+                                    ->dehydrated(false)
+                                    ->helperText('Технический ключ, например profile. После создания не меняется.'),
+                                TextInput::make('name')
+                                    ->label('Название')
+                                    ->required()
+                                    ->maxLength(255),
+                            ])
+                            ->columns(2)
+                            ->columnSpanFull(),
+                        Section::make('Вопросы, варианты ответов и правила')
+                            ->description('Здесь хранится JSON шаблона анкеты: вопросы, варианты, попытки, условия и поля контакта, куда записываются ответы.')
+                            ->schema([
+                                Textarea::make('fields_payload_json')
+                                    ->label('fields_payload')
+                                    ->helperText('Сохранение обновляет черновик. Чтобы бот начал использовать изменения, нажмите «Опубликовать».')
+                                    ->required()
+                                    ->rows(24)
+                                    ->columnSpanFull(),
+                            ])
+                            ->columnSpanFull(),
+                    ])
+                    ->using(function (array $data, QuestionnaireTemplate $record): QuestionnaireTemplate {
+                        $record = static::saveTemplate($data, $record);
+
+                        app(SaveQuestionnaireTemplateDraftAction::class)->handle(
+                            $record,
+                            static::decodeFieldsPayloadJson((string) ($data['fields_payload_json'] ?? '')),
+                            auth()->user(),
+                            'fields_payload_json',
+                        );
+
+                        return $record;
+                    }),
                 DeleteAction::make()
+                    ->label('Удалить')
                     ->icon(Heroicon::OutlinedTrash)
-                    ->iconButton()
                     ->tooltip('Удалить')
                     ->hidden(fn (QuestionnaireTemplate $record): bool => $record->runs_count > 0 || $record->versions_count > 0),
             ])
@@ -242,6 +297,50 @@ class QuestionnaireTemplateResource extends Resource
     protected static function formatVersionLabel(?QuestionnaireTemplateVersion $version): string
     {
         return $version instanceof QuestionnaireTemplateVersion ? 'v'.$version->version : 'Нет';
+    }
+
+    protected static function formatFieldsSummary(?QuestionnaireTemplateVersion $version): string
+    {
+        $fields = $version?->fields_payload ?? [];
+
+        if (! is_array($fields) || $fields === []) {
+            return 'Поля не настроены';
+        }
+
+        return collect($fields)
+            ->take(6)
+            ->map(function (mixed $field): string {
+                if (! is_array($field)) {
+                    return 'Некорректное поле';
+                }
+
+                $label = trim((string) ($field['label'] ?? $field['field_key'] ?? 'Поле'));
+                $type = trim((string) ($field['type'] ?? ''));
+                $target = trim((string) ($field['target'] ?? ''));
+                $optionsCount = is_array($field['options'] ?? null) ? count($field['options']) : 0;
+                $parts = [$label];
+
+                if ($type !== '') {
+                    $parts[] = $type;
+                }
+
+                if ($target !== '') {
+                    $parts[] = $target;
+                }
+
+                if ($optionsCount > 0) {
+                    $suffix = match (true) {
+                        $optionsCount === 1 => '',
+                        $optionsCount >= 2 && $optionsCount <= 4 => 'а',
+                        default => 'ов',
+                    };
+
+                    $parts[] = $optionsCount.' вариант'.$suffix;
+                }
+
+                return implode(' · ', $parts);
+            })
+            ->join('; ');
     }
 
     /**

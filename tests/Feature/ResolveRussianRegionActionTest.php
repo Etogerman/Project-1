@@ -40,6 +40,33 @@ class ResolveRussianRegionActionTest extends TestCase
         ], $result);
     }
 
+    public function test_action_accepts_ru_country_code_for_russian_city(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Мурманская область',
+        ]);
+        config()->set('russian_region_cities.cities', [
+            'мурманск' => [
+                'city' => 'Мурманск',
+                'aliases' => [],
+                'regions' => ['Мурманская область'],
+            ],
+        ]);
+
+        Http::fake();
+
+        $result = app(ResolveRussianRegionAction::class)->handle('RU', 'Мурманск');
+
+        Http::assertNothingSent();
+
+        $this->assertSame([
+            'status' => Contact::REGION_STATUS_RESOLVED,
+            'region' => 'Мурманская область',
+            'candidate_regions' => [],
+        ], $result);
+    }
+
     public function test_action_returns_clarification_pending_for_russian_city_with_multiple_matches(): void
     {
         config()->set('bots.gemini.api_key', 'gemini-key');

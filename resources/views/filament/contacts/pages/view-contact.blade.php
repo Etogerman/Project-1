@@ -35,6 +35,7 @@
             @foreach ($tabs as $tab)
                 <a
                     href="{{ $tab['url'] }}"
+                    wire:click.prevent="selectTab('{{ $tab['key'] }}')"
                     data-role="contact-tab-{{ $tab['key'] }}"
                     data-active="{{ $tab['isActive'] ? 'true' : 'false' }}"
                     @class([
@@ -97,14 +98,6 @@
                         'showFieldKeys' => $showFieldKeys,
                     ])
 
-                    @include('filament.contacts.partials.contact-flat-section', [
-                        'dataRole' => 'contact-section-questionnaire',
-                        'title' => 'Анкета',
-                        'rows' => $questionnaireRows,
-                        'showFieldKeys' => $showFieldKeys,
-                        'sectionAction' => $questionnaireAction,
-                    ])
-
                     @if (filled($ownershipControls['deleteBlockedReason'] ?? null))
                         <div data-role="contact-delete-blocked-reason" class="ac-note-box ac-note-box--danger">
                             <p class="ac-copy"><strong>Удаление недоступно.</strong> {{ $ownershipControls['deleteBlockedReason'] }}</p>
@@ -131,6 +124,14 @@
             @include('filament.contacts.partials.ownership-controls', array_merge($ownershipControls, ['renderSurface' => false]))
             @include('filament.contacts.partials.contact-tags', array_merge($tagsViewData, ['renderSurface' => false]))
             @include('filament.contacts.partials.phone-numbers', array_merge($phoneNumbersViewData, ['renderSurface' => false]))
+        @elseif ($activeTab === 'questionnaires')
+            <div data-role="contact-questionnaires-tab" class="ac-contact-page__full-width">
+                @include('filament.contacts.partials.contact-questionnaires-table', [
+                    'questionnaireRunsViewData' => $questionnaireRunsViewData,
+                    'questionnaireAction' => $questionnaireAction,
+                    'showFieldKeys' => $showFieldKeys,
+                ])
+            </div>
         @elseif ($activeTab === 'dialogs')
             <div data-role="contact-dialogs-tab" class="ac-contact-page__full-width">
                 @include('filament.contacts.partials.contact-dialogs', $dialogsViewData)

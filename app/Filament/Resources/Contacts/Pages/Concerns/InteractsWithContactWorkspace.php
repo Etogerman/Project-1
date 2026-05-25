@@ -555,6 +555,7 @@ trait InteractsWithContactWorkspace
             ['label' => 'Контактов', 'value' => $preview->contactsCount],
             ['label' => 'Диалогов', 'value' => $preview->dialogsCount],
             ['label' => 'Сообщений', 'value' => $preview->messagesCount],
+            ['label' => 'Анкет', 'value' => $preview->questionnaireRunsCount],
             ['label' => 'Телефонов', 'value' => $preview->phonesCount],
             ['label' => 'Идентификаторов', 'value' => $preview->identitiesCount],
         ];

@@ -29,7 +29,7 @@ class QuestionnaireTemplateValidationTest extends TestCase
         $validated = app(ValidateQuestionnaireFieldsPayloadAction::class)
             ->handle($template->publishedVersion->fields_payload);
 
-        $this->assertCount(6, $validated);
+        $this->assertCount(4, $validated);
         $this->assertSame('first_name', $validated[1]['field_key']);
     }
 

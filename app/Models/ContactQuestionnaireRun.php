@@ -21,6 +21,8 @@ class ContactQuestionnaireRun extends Model
 
     public const STATUS_OPERATOR_REQUESTED = 'operator_requested';
 
+    public const STATUS_PAUSED = 'paused';
+
     public const STATUS_RESET = 'reset';
 
     /**
@@ -68,6 +70,7 @@ class ContactQuestionnaireRun extends Model
             self::STATUS_FAILED => 'Не удалось',
             self::STATUS_CANCELLED => 'Отменена',
             self::STATUS_OPERATOR_REQUESTED => 'Запрошен оператор',
+            self::STATUS_PAUSED => 'На паузе',
             self::STATUS_RESET => 'Сброшена',
         ];
     }
