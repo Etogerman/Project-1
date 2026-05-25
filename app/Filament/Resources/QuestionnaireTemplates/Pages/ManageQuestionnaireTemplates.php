@@ -12,6 +12,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Section;
 use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
+use Illuminate\Support\Facades\DB;
 
 class ManageQuestionnaireTemplates extends ManageRecords
 {
@@ -69,22 +70,24 @@ class ManageQuestionnaireTemplates extends ManageRecords
                         ->columnSpanFull(),
                 ])
                 ->using(function (array $data): QuestionnaireTemplate {
-                    $template = QuestionnaireTemplate::query()->create([
-                        'key' => QuestionnaireTemplate::normalizeKey($data['key'] ?? ''),
-                        'name' => (string) ($data['name'] ?? ''),
-                        'status' => QuestionnaireTemplate::STATUS_DRAFT,
-                        'created_by' => auth()->id(),
-                        'updated_by' => auth()->id(),
-                    ]);
+                    return DB::transaction(function () use ($data): QuestionnaireTemplate {
+                        $template = QuestionnaireTemplate::query()->create([
+                            'key' => QuestionnaireTemplate::normalizeKey($data['key'] ?? ''),
+                            'name' => (string) ($data['name'] ?? ''),
+                            'status' => QuestionnaireTemplate::STATUS_DRAFT,
+                            'created_by' => auth()->id(),
+                            'updated_by' => auth()->id(),
+                        ]);
 
-                    app(SaveQuestionnaireTemplateDraftAction::class)->handle(
-                        $template,
-                        QuestionnaireTemplateResource::decodeFieldsPayloadJson((string) ($data['fields_payload_json'] ?? '')),
-                        auth()->user(),
-                        'fields_payload_json',
-                    );
+                        app(SaveQuestionnaireTemplateDraftAction::class)->handle(
+                            $template,
+                            QuestionnaireTemplateResource::decodeFieldsPayloadJson((string) ($data['fields_payload_json'] ?? '')),
+                            auth()->user(),
+                            'fields_payload_json',
+                        );
 
-                    return $template;
+                        return $template;
+                    });
                 })
                 ->createAnother(false),
         ];

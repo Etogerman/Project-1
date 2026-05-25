@@ -148,6 +148,27 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         $this->assertSame('nickname', $template->draftVersion->fields_payload[0]['field_key']);
     }
 
+    public function test_invalid_json_create_does_not_leave_empty_questionnaire(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageQuestionnaireTemplates::class)
+            ->callAction('create', [
+                'key' => 'broken_local',
+                'name' => 'Сломанная анкета',
+                'fields_payload_json' => '{"broken"',
+            ])
+            ->assertHasActionErrors();
+
+        $this->assertDatabaseMissing('questionnaire_templates', [
+            'key' => 'broken_local',
+        ]);
+    }
+
     public function test_invalid_json_draft_is_rejected(): void
     {
         $this->seed(ProfileQuestionnaireSeeder::class);
