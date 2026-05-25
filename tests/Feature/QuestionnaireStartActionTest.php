@@ -207,6 +207,82 @@ class QuestionnaireStartActionTest extends TestCase
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
     }
 
+    public function test_profile_questionnaire_asks_region_candidates_after_ambiguous_russian_city(): void
+    {
+        config()->set('bots.data_collection.profile_collection_engine', 'questionnaires');
+        config()->set('russian_region_cities.cities', [
+            'михайловск' => [
+                'city' => 'Михайловск',
+                'aliases' => [],
+                'regions' => ['Свердловская область', 'Ставропольский край'],
+            ],
+        ]);
+
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        [$contact, $message] = $this->createIncomingMessage([
+            'gender' => 'male',
+            'first_name' => 'Николай',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            'first_name_resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+            'age_range' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+        ]);
+
+        $startResult = app(StartOrContinueContactQuestionnaireAction::class)->handle($message);
+
+        $this->assertSame(QuestionnaireStartResult::OUTCOME_WAITING, $startResult->outcome);
+        $this->assertSame('city', $startResult->currentFieldKey);
+
+        $handler = app(HandleContactQuestionnaireAnswerAction::class);
+
+        $this->answerQuestionnaire($handler, $message, 'Михайловск', 'russian_region_confirm');
+
+        $contact->refresh();
+        $this->assertSame('RU', $contact->country);
+        $this->assertSame('Михайловск', $contact->city);
+        $this->assertNull($contact->region);
+        $this->assertSame(Contact::REGION_STATUS_CLARIFICATION_PENDING, $contact->region_status);
+        $this->assertSame(Contact::REGION_SOURCE_DICTIONARY, $contact->region_source);
+        $this->assertSame(['Свердловская область', 'Ставропольский край'], $contact->pending_region_candidates);
+
+        $regionResult = app(StartOrContinueContactQuestionnaireAction::class)->handle($message);
+
+        $this->assertSame(QuestionnaireStartResult::OUTCOME_WAITING, $regionResult->outcome);
+        $this->assertSame('russian_region_confirm', $regionResult->currentFieldKey);
+        $this->assertSame('Уточните, пожалуйста, ваш регион проживания.', $regionResult->promptText);
+        $this->assertSame([
+            ['value' => 'Свердловская область', 'label' => 'Свердловская область'],
+            ['value' => 'Ставропольский край', 'label' => 'Ставропольский край'],
+        ], $regionResult->options);
+
+        $this->answerQuestionnaire($handler, $message, '2', 'age_range');
+
+        $contact->refresh();
+        $this->assertSame('Ставропольский край', $contact->region);
+        $this->assertSame(Contact::REGION_STATUS_RESOLVED, $contact->region_status);
+        $this->assertSame(Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT, $contact->region_source);
+        $this->assertNull($contact->pending_region_candidates);
+
+        $this->answerQuestionnaire($handler, $message, '30 - 39 лет', null);
+
+        $run = ContactQuestionnaireRun::query()->where('contact_id', $contact->id)->sole();
+
+        $this->assertSame(ContactQuestionnaireRun::STATUS_COMPLETED, $run->status);
+        $this->assertSame(3, ContactQuestionnaireAnswer::query()
+            ->where('questionnaire_run_id', $run->id)
+            ->where('status', ContactQuestionnaireAnswer::STATUS_FILLED)
+            ->count());
+        $this->assertSame('Ставропольский край', ContactQuestionnaireAnswer::query()
+            ->where('questionnaire_run_id', $run->id)
+            ->where('field_key', 'russian_region_confirm')
+            ->value('value'));
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->fresh()->data_collection_status);
+    }
+
     public function test_profile_questionnaire_start_resumes_paused_run(): void
     {
         $this->seed(ProfileQuestionnaireSeeder::class);

@@ -15,6 +15,7 @@ use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\DataCollection\DataCollectionPromptHelper;
 use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
@@ -26,6 +27,8 @@ use Throwable;
 
 class HandleContactQuestionnaireAnswerAction
 {
+    private const FIELD_KEY_RUSSIAN_REGION_CONFIRM = 'russian_region_confirm';
+
     /**
      * @var list<string>
      */
@@ -50,6 +53,7 @@ class HandleContactQuestionnaireAnswerAction
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
         private readonly ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
         private readonly ExtractResidenceCityAction $extractResidenceCityAction,
+        private readonly DataCollectionPromptHelper $dataCollectionPromptHelper,
         private readonly ScenarioRegistry $scenarioRegistry,
     ) {}
 
@@ -119,7 +123,7 @@ class HandleContactQuestionnaireAnswerAction
 
         $version = $run->templateVersion;
         $field = $version instanceof QuestionnaireTemplateVersion
-            ? $this->fieldByKey($version, (string) $run->current_field_key)
+            ? $this->fieldByKey($version, (string) $run->current_field_key, $lockedContact)
             : null;
 
         if ($field === null) {
@@ -356,6 +360,10 @@ class HandleContactQuestionnaireAnswerAction
      */
     private function parseAnswer(Message $message, ContactQuestionnaireRun $run, array $field): array
     {
+        if (($field['field_key'] ?? null) === self::FIELD_KEY_RUSSIAN_REGION_CONFIRM) {
+            return $this->parseRussianRegionConfirmAnswer($message, $run, $field);
+        }
+
         if (($field['target'] ?? null) === 'contact.city') {
             return $this->parseCityAnswer($message);
         }
@@ -406,6 +414,38 @@ class HandleContactQuestionnaireAnswerAction
         }
 
         return ['accepted' => false, 'error' => 'unknown option'];
+    }
+
+    /**
+     * @param  array<string, mixed>  $field
+     * @return array{accepted: bool, value?: string, display_value?: string, error?: string}
+     */
+    private function parseRussianRegionConfirmAnswer(Message $message, ContactQuestionnaireRun $run, array $field): array
+    {
+        $choice = $this->parseSingleChoiceAnswer($message, $run, $field);
+
+        if (($choice['accepted'] ?? false) === true) {
+            return $choice;
+        }
+
+        if (! $message->contact instanceof Contact) {
+            return ['accepted' => false, 'error' => 'unknown region'];
+        }
+
+        $resolved = $this->dataCollectionPromptHelper->resolveRussianRegionConfirmInput(
+            $message->contact,
+            $this->rawAnswerText($message),
+        );
+
+        if ($resolved === null || $resolved === 'skip' || ! array_key_exists($resolved, Contact::russianRegionOptions())) {
+            return ['accepted' => false, 'error' => 'unknown region'];
+        }
+
+        return [
+            'accepted' => true,
+            'value' => $resolved,
+            'display_value' => $resolved,
+        ];
     }
 
     /**
@@ -824,15 +864,19 @@ class HandleContactQuestionnaireAnswerAction
         }
 
         $payload = [
+            'country' => 'RU',
             'region' => $value,
             'region_status' => Contact::REGION_STATUS_RESOLVED,
             'region_source' => Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT,
+            'pending_region_candidates' => null,
         ];
 
         if (
-            $contact->region === $payload['region']
+            $contact->country === $payload['country']
+            && $contact->region === $payload['region']
             && $contact->region_status === $payload['region_status']
             && $contact->region_source === $payload['region_source']
+            && $contact->pending_region_candidates === $payload['pending_region_candidates']
         ) {
             return true;
         }
@@ -1005,8 +1049,12 @@ class HandleContactQuestionnaireAnswerAction
     /**
      * @return array<string, mixed>|null
      */
-    private function fieldByKey(QuestionnaireTemplateVersion $version, string $fieldKey): ?array
+    private function fieldByKey(QuestionnaireTemplateVersion $version, string $fieldKey, ?Contact $contact = null): ?array
     {
+        if ($fieldKey === self::FIELD_KEY_RUSSIAN_REGION_CONFIRM && $contact instanceof Contact) {
+            return $this->russianRegionConfirmField($contact);
+        }
+
         foreach ($this->fields($version) as $field) {
             if ((string) ($field['field_key'] ?? '') === $fieldKey) {
                 return $field;
@@ -1014,6 +1062,44 @@ class HandleContactQuestionnaireAnswerAction
         }
 
         return null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function russianRegionConfirmField(Contact $contact): ?array
+    {
+        if (! $this->dataCollectionPromptHelper->shouldAskRussianRegionConfirmation($contact)) {
+            return null;
+        }
+
+        $candidates = $this->dataCollectionPromptHelper->russianRegionCandidates($contact);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        return [
+            'field_key' => self::FIELD_KEY_RUSSIAN_REGION_CONFIRM,
+            'label' => 'Регион',
+            'type' => count($candidates) <= 4 ? 'single_choice' : 'russian_region_confirm',
+            'required' => true,
+            'allow_skip' => true,
+            'max_attempts' => 3,
+            'target' => 'contact.region',
+            'overwrite_contact' => true,
+            'prompts' => [
+                $this->dataCollectionPromptHelper->russianRegionConfirmQuestionText($contact),
+                $this->dataCollectionPromptHelper->russianRegionConfirmRetryText($contact),
+                $this->dataCollectionPromptHelper->russianRegionConfirmRetryText($contact),
+            ],
+            'options' => count($candidates) <= 4
+                ? array_map(
+                    static fn (string $candidate): array => ['value' => $candidate, 'label' => $candidate],
+                    $candidates,
+                )
+                : [],
+        ];
     }
 
     /**

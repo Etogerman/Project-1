@@ -11,6 +11,7 @@ use App\Models\QuestionnaireTemplate;
 use App\Models\QuestionnaireTemplateVersion;
 use App\Models\ScenarioRun;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\DataCollection\DataCollectionPromptHelper;
 use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -18,9 +19,12 @@ use Throwable;
 
 class StartOrContinueContactQuestionnaireAction
 {
+    private const FIELD_KEY_RUSSIAN_REGION_CONFIRM = 'russian_region_confirm';
+
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ScenarioEdgeExpressionCondition $expressionCondition,
+        private readonly DataCollectionPromptHelper $dataCollectionPromptHelper,
     ) {}
 
     public function handle(
@@ -124,7 +128,7 @@ class StartOrContinueContactQuestionnaireAction
             ]);
         }
 
-        $nextField = $this->nextRequiredField($run, $version, $message);
+        $nextField = $this->nextRequiredField($run, $version, $message, $lockedContact);
 
         if ($run->fresh()->status === ContactQuestionnaireRun::STATUS_FAILED) {
             return new QuestionnaireStartResult(
@@ -211,7 +215,12 @@ class StartOrContinueContactQuestionnaireAction
         ContactQuestionnaireRun $run,
         QuestionnaireTemplateVersion $version,
     ): QuestionnaireStartResult {
+        $contact = $run->contact()->first();
         $field = $this->fieldByKey($version, (string) $run->current_field_key);
+
+        if ($field === null && $contact instanceof Contact) {
+            $field = $this->russianRegionConfirmField($contact, $run, includeTerminalAnswer: true);
+        }
 
         if ($field === null) {
             return new QuestionnaireStartResult(
@@ -239,14 +248,20 @@ class StartOrContinueContactQuestionnaireAction
         ContactQuestionnaireRun $run,
         QuestionnaireTemplateVersion $version,
         Message $message,
+        Contact $contact,
     ): ?array {
         foreach ($this->fields($version) as $field) {
+            $fieldKey = (string) ($field['field_key'] ?? '');
             $answer = $this->answerForField($run, $field);
 
             if (in_array($answer->status, [
                 ContactQuestionnaireAnswer::STATUS_FILLED,
                 ContactQuestionnaireAnswer::STATUS_SKIPPED,
             ], true)) {
+                if ($fieldKey === 'city' && ($regionField = $this->russianRegionConfirmField($contact, $run)) !== null) {
+                    return $regionField;
+                }
+
                 continue;
             }
 
@@ -260,6 +275,10 @@ class StartOrContinueContactQuestionnaireAction
 
             if (! $required) {
                 $this->markFieldSkipped($answer, $field);
+
+                if ($fieldKey === 'city' && ($regionField = $this->russianRegionConfirmField($contact, $run)) !== null) {
+                    return $regionField;
+                }
 
                 continue;
             }
@@ -407,5 +426,58 @@ class StartOrContinueContactQuestionnaireAction
             ])
             ->values()
             ->all();
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function russianRegionConfirmField(
+        Contact $contact,
+        ContactQuestionnaireRun $run,
+        bool $includeTerminalAnswer = false,
+    ): ?array {
+        if (! $this->dataCollectionPromptHelper->shouldAskRussianRegionConfirmation($contact)) {
+            return null;
+        }
+
+        $candidates = $this->dataCollectionPromptHelper->russianRegionCandidates($contact);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $field = [
+            'field_key' => self::FIELD_KEY_RUSSIAN_REGION_CONFIRM,
+            'label' => 'Регион',
+            'type' => count($candidates) <= 4 ? 'single_choice' : 'russian_region_confirm',
+            'required' => true,
+            'allow_skip' => true,
+            'max_attempts' => 3,
+            'target' => 'contact.region',
+            'overwrite_contact' => true,
+            'prompts' => [
+                $this->dataCollectionPromptHelper->russianRegionConfirmQuestionText($contact),
+                $this->dataCollectionPromptHelper->russianRegionConfirmRetryText($contact),
+                $this->dataCollectionPromptHelper->russianRegionConfirmRetryText($contact),
+            ],
+            'options' => count($candidates) <= 4
+                ? array_map(
+                    static fn (string $candidate): array => ['value' => $candidate, 'label' => $candidate],
+                    $candidates,
+                )
+                : [],
+        ];
+
+        $answer = $this->answerForField($run, $field);
+
+        if (! $includeTerminalAnswer && in_array($answer->status, [
+            ContactQuestionnaireAnswer::STATUS_FILLED,
+            ContactQuestionnaireAnswer::STATUS_SKIPPED,
+            ContactQuestionnaireAnswer::STATUS_FAILED,
+        ], true)) {
+            return null;
+        }
+
+        return $field;
     }
 }
