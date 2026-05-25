@@ -16,6 +16,7 @@ use App\Services\Questionnaires\HandleContactQuestionnaireAnswerAction;
 use App\Services\Questionnaires\StartOrContinueContactQuestionnaireAction;
 use Database\Seeders\ProfileQuestionnaireSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class QuestionnaireStartActionTest extends TestCase
@@ -153,6 +154,59 @@ class QuestionnaireStartActionTest extends TestCase
             ->count());
     }
 
+    public function test_profile_questionnaire_detects_foreign_country_from_city_without_region(): void
+    {
+        config()->set('bots.data_collection.profile_collection_engine', 'questionnaires');
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'city' => 'Будапешт',
+                'country' => 'Венгрия',
+                'country_confidence' => 'high',
+            ])),
+        ]);
+
+        [$contact, $message] = $this->createIncomingMessage([
+            'gender' => 'male',
+            'first_name' => 'Николай',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            'first_name_resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+            'age_range' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+        ]);
+
+        $startResult = app(StartOrContinueContactQuestionnaireAction::class)->handle($message);
+
+        $this->assertSame(QuestionnaireStartResult::OUTCOME_WAITING, $startResult->outcome);
+        $this->assertSame('city', $startResult->currentFieldKey);
+
+        $handler = app(HandleContactQuestionnaireAnswerAction::class);
+
+        $this->answerQuestionnaire($handler, $message, 'Будапешт', 'age_range');
+        $this->answerQuestionnaire($handler, $message, '30 - 39 лет', null);
+
+        $run = ContactQuestionnaireRun::query()->where('contact_id', $contact->id)->sole();
+
+        $this->assertSame(ContactQuestionnaireRun::STATUS_COMPLETED, $run->status);
+
+        $contact->refresh();
+        $this->assertSame('Будапешт', $contact->city);
+        $this->assertSame('Венгрия', $contact->country);
+        $this->assertNull($contact->region);
+        $this->assertSame(Contact::REGION_STATUS_OUT_OF_SCOPE, $contact->region_status);
+        $this->assertNull($contact->region_source);
+        $this->assertNull($contact->pending_region_candidates);
+        $this->assertSame('30_39', $contact->age_range);
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+    }
+
     public function test_profile_questionnaire_start_resumes_paused_run(): void
     {
         $this->seed(ProfileQuestionnaireSeeder::class);
@@ -265,5 +319,26 @@ class QuestionnaireStartActionTest extends TestCase
             'auto_apply' => true,
             'is_active' => true,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function geminiResponse(array $payload): array
+    {
+        return [
+            'candidates' => [
+                [
+                    'content' => [
+                        'parts' => [
+                            [
+                                'text' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
     }
 }

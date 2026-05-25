@@ -15,6 +15,7 @@ use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
 use App\Services\Scenarios\LookupScenarioDataDictionaryAction;
@@ -48,6 +49,7 @@ class HandleContactQuestionnaireAnswerAction
         private readonly AddContactPhoneAction $addContactPhoneAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
         private readonly ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
+        private readonly ExtractResidenceCityAction $extractResidenceCityAction,
         private readonly ScenarioRegistry $scenarioRegistry,
     ) {}
 
@@ -179,7 +181,7 @@ class HandleContactQuestionnaireAnswerAction
 
             $this->storeAttempt($run, $field, $attemptIndex, $message, $promptText, $rawAnswer, $value, ContactQuestionnaireAttempt::STATUS_ACCEPTED);
 
-            $synced = $this->syncAnswerToContact($lockedContact, $field, $value, $displayValue, $message);
+            $synced = $this->syncAnswerToContact($lockedContact, $field, $value, $displayValue, $message, $parsed);
 
             $answer->forceFill([
                 'status' => ContactQuestionnaireAnswer::STATUS_FILLED,
@@ -440,7 +442,7 @@ class HandleContactQuestionnaireAnswerAction
     }
 
     /**
-     * @return array{accepted: bool, value?: string, display_value?: string, error?: string}
+     * @return array{accepted: bool, value?: string, display_value?: string, country?: string, country_confidence?: string, error?: string}
      */
     private function parseCityAnswer(Message $message): array
     {
@@ -454,15 +456,57 @@ class HandleContactQuestionnaireAnswerAction
         $matchedCity = is_string($lookup['matched_city'] ?? null) ? trim((string) $lookup['matched_city']) : '';
         $candidateRegions = $this->normalizeRegionCandidates($lookup['candidate_regions'] ?? null);
 
-        if ($matchedCity === '' || $candidateRegions === []) {
+        if ($matchedCity !== '' && $candidateRegions !== []) {
+            return [
+                'accepted' => true,
+                'value' => $matchedCity,
+                'display_value' => $matchedCity,
+                'country' => 'RU',
+                'country_confidence' => ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH,
+            ];
+        }
+
+        try {
+            $extraction = $this->extractResidenceCityAction->handle($value);
+        } catch (Throwable $throwable) {
+            Log::warning('questionnaire.city_extraction_failed', [
+                'contact_id' => $message->contact_id,
+                'message_id' => $message->id,
+                'reply_preview' => mb_substr($value, 0, 120),
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
             return ['accepted' => false, 'error' => 'unknown city'];
         }
 
-        return [
+        if (($extraction['decision'] ?? null) !== ExtractResidenceCityAction::DECISION_ACCEPT) {
+            return ['accepted' => false, 'error' => 'unknown city'];
+        }
+
+        $city = $this->normalizeFreeTextAnswer((string) ($extraction['city'] ?? ''));
+
+        if ($city === '' || mb_strlen($city) > 255) {
+            return ['accepted' => false, 'error' => 'invalid city'];
+        }
+
+        $result = [
             'accepted' => true,
-            'value' => $matchedCity,
-            'display_value' => $matchedCity,
+            'value' => $city,
+            'display_value' => $city,
         ];
+
+        $country = $this->normalizeFreeTextAnswer((string) ($extraction['country'] ?? ''));
+        $countryConfidence = is_string($extraction['country_confidence'] ?? null)
+            ? (string) $extraction['country_confidence']
+            : null;
+
+        if ($country !== '' && $countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH) {
+            $result['country'] = $country;
+            $result['country_confidence'] = ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH;
+        }
+
+        return $result;
     }
 
     /**
@@ -516,6 +560,7 @@ class HandleContactQuestionnaireAnswerAction
         string $value,
         string $displayValue,
         Message $message,
+        array $parsed = [],
     ): bool {
         if (($field['overwrite_contact'] ?? false) !== true || ! is_string($field['target'] ?? null)) {
             return false;
@@ -526,7 +571,7 @@ class HandleContactQuestionnaireAnswerAction
             'contact.phone' => $this->syncPhone($contact, $value),
             'contact.gender' => $this->syncEnumContactField($contact, 'gender', $value, Contact::genderOptions()),
             'contact.country' => $this->syncStringContactField($contact, 'country', $value),
-            'contact.city' => $this->syncCity($contact, $value),
+            'contact.city' => $this->syncCity($contact, $value, $parsed),
             'contact.region' => $this->syncRegion($contact, $value),
             'contact.age_range' => $this->syncEnumContactField($contact, 'age_range', $value, Contact::ageRangeOptions()),
             'contact.age_years' => $this->syncAgeYears($contact, $value),
@@ -558,7 +603,10 @@ class HandleContactQuestionnaireAnswerAction
         return true;
     }
 
-    private function syncCity(Contact $contact, string $value): bool
+    /**
+     * @param  array<string, mixed>  $parsed
+     */
+    private function syncCity(Contact $contact, string $value, array $parsed = []): bool
     {
         if (mb_strlen($value) > 255) {
             return false;
@@ -602,6 +650,22 @@ class HandleContactQuestionnaireAnswerAction
             ]);
         }
 
+        $parsedCountry = $this->parsedHighConfidenceCountry($parsed);
+
+        if ($parsedCountry !== null) {
+            if ($this->isRussianCountry($parsedCountry)) {
+                $payload['country'] = 'RU';
+            } else {
+                $payload = array_merge($payload, [
+                    'country' => $parsedCountry,
+                    'region' => null,
+                    'region_status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
+                    'region_source' => null,
+                    'pending_region_candidates' => null,
+                ]);
+            }
+        }
+
         if (
             $contact->city === $payload['city']
             && $contact->country === $payload['country']
@@ -617,6 +681,31 @@ class HandleContactQuestionnaireAnswerAction
         $this->queueBitrix24ContactSyncAction->handle($contact);
 
         return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $parsed
+     */
+    private function parsedHighConfidenceCountry(array $parsed): ?string
+    {
+        if (($parsed['country_confidence'] ?? null) !== ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH) {
+            return null;
+        }
+
+        if (! is_string($parsed['country'] ?? null)) {
+            return null;
+        }
+
+        $country = $this->normalizeFreeTextAnswer((string) $parsed['country']);
+
+        return $country !== '' && mb_strlen($country) <= 255 ? $country : null;
+    }
+
+    private function isRussianCountry(string $country): bool
+    {
+        $normalized = str_replace('ё', 'е', mb_strtolower($this->normalizeFreeTextAnswer($country)));
+
+        return in_array($normalized, ['ru', 'rus', 'russia', 'россия', 'рф', 'российская федерация'], true);
     }
 
     /**
