@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\QuestionnaireTemplates\Pages\ManageQuestionnaireTemplates;
 use App\Models\QuestionnaireTemplate;
+use App\Models\QuestionnaireTemplateVersion;
 use App\Models\User;
 use Database\Seeders\ProfileQuestionnaireSeeder;
 use Filament\Facades\Filament;
@@ -102,6 +103,49 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
 
         $this->assertSame(2, $template->publishedVersion->version);
         $this->assertSame('Выбери пол для локального теста', $template->publishedVersion->fields_payload[0]['prompts'][0]);
+    }
+
+    public function test_admin_can_create_questionnaire_with_json_draft(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $payload = [
+            [
+                'field_key' => 'nickname',
+                'label' => 'Ник',
+                'type' => 'text',
+                'required' => true,
+                'allow_skip' => false,
+                'max_attempts' => 3,
+                'prompts' => [
+                    'Как тебя называть?',
+                    'Напиши, пожалуйста, имя или ник',
+                    'Подскажи, как к тебе обращаться',
+                ],
+            ],
+        ];
+
+        Livewire::actingAs($admin)
+            ->test(ManageQuestionnaireTemplates::class)
+            ->callAction('create', [
+                'key' => 'local_profile',
+                'name' => 'Локальная анкета',
+                'fields_payload_json' => $this->encodePayload($payload),
+            ])
+            ->assertHasNoActionErrors();
+
+        $template = QuestionnaireTemplate::query()
+            ->where('key', 'local_profile')
+            ->with('draftVersion')
+            ->sole();
+
+        $this->assertSame('Локальная анкета', $template->name);
+        $this->assertSame(QuestionnaireTemplate::STATUS_DRAFT, $template->status);
+        $this->assertNotNull($template->draftVersion);
+        $this->assertSame(QuestionnaireTemplateVersion::STATUS_DRAFT, $template->draftVersion->status);
+        $this->assertSame('nickname', $template->draftVersion->fields_payload[0]['field_key']);
     }
 
     public function test_invalid_json_draft_is_rejected(): void

@@ -346,7 +346,7 @@ class QuestionnaireTemplateResource extends Resource
     /**
      * @param  array<mixed, mixed>  $fieldsPayload
      */
-    protected static function encodeFieldsPayload(array $fieldsPayload): string
+    public static function encodeFieldsPayload(array $fieldsPayload): string
     {
         if ($fieldsPayload === []) {
             return '[]';
@@ -363,7 +363,7 @@ class QuestionnaireTemplateResource extends Resource
     /**
      * @return list<array<string, mixed>>
      */
-    protected static function decodeFieldsPayloadJson(string $fieldsPayloadJson): array
+    public static function decodeFieldsPayloadJson(string $fieldsPayloadJson): array
     {
         $trimmedPayload = trim($fieldsPayloadJson);
 
