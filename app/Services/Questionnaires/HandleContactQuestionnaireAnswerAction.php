@@ -633,7 +633,7 @@ class HandleContactQuestionnaireAnswerAction
                     'country' => 'RU',
                     'region' => $region,
                     'region_status' => Contact::REGION_STATUS_RESOLVED,
-                    'region_source' => Contact::REGION_SOURCE_AI,
+                    'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                     'pending_region_candidates' => null,
                 ]);
             }
@@ -645,7 +645,7 @@ class HandleContactQuestionnaireAnswerAction
                 'country' => 'RU',
                 'region' => null,
                 'region_status' => $status,
-                'region_source' => null,
+                'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                 'pending_region_candidates' => $candidateRegions,
             ]);
         }
@@ -655,12 +655,13 @@ class HandleContactQuestionnaireAnswerAction
         if ($parsedCountry !== null) {
             if ($this->isRussianCountry($parsedCountry)) {
                 $payload['country'] = 'RU';
+                $payload['region_source'] ??= Contact::REGION_SOURCE_AI;
             } else {
                 $payload = array_merge($payload, [
                     'country' => $parsedCountry,
                     'region' => null,
                     'region_status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
-                    'region_source' => null,
+                    'region_source' => Contact::REGION_SOURCE_AI,
                     'pending_region_candidates' => null,
                 ]);
             }

@@ -51,7 +51,7 @@ class UpdateContactProfileActionTest extends TestCase
         $this->assertSame('Москва', $updated->city);
         $this->assertSame('Московская область', $updated->region);
         $this->assertSame(Contact::REGION_STATUS_RESOLVED, $updated->region_status);
-        $this->assertSame(Contact::REGION_SOURCE_AI, $updated->region_source);
+        $this->assertSame(Contact::REGION_SOURCE_DICTIONARY, $updated->region_source);
         Queue::assertPushed(CalculateDistanceToMoscowJob::class, function (CalculateDistanceToMoscowJob $job) use ($contact): bool {
             return $job->contactId === $contact->id;
         });

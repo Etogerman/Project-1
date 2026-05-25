@@ -1083,7 +1083,8 @@ class ViewContact extends ViewRecord
     protected function formatRegionSource(?string $value): string
     {
         return match ($value) {
-            Contact::REGION_SOURCE_AI => 'AI',
+            Contact::REGION_SOURCE_AI => 'ИИ',
+            Contact::REGION_SOURCE_DICTIONARY => 'Справочник',
             Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT => 'Подтверждён клиентом',
             Contact::REGION_SOURCE_MANUAL => 'Указан вручную',
             default => '—',

@@ -1267,7 +1267,13 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertNotNull($runtime);
         $this->assertTrue($runtime->supportsTelegramCallbackContinuation($run, 'v3b:questionnaire:q_030ef4a52619b493'));
 
-        Http::assertSentCount(1);
+        Http::assertSentCount(3);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true
+            && ($request['disable_notification'] ?? false) === true);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9701');
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Укажи свой пол'
             && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Мужской'
@@ -1763,13 +1769,15 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_DELETED, data_get($previousOutbound->raw_payload, 'delete_action_result'));
     }
 
-    public function test_v3_delete_message_action_keeps_reply_keyboard_cleanup_pending_before_next_inline_buttons(): void
+    public function test_v3_delete_message_action_cleans_reply_keyboard_before_next_inline_buttons(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
                 ->push(['ok' => true, 'result' => ['message_id' => 9611]])
                 ->push(['ok' => true, 'result' => true])
-                ->push(['ok' => true, 'result' => ['message_id' => 9612]]),
+                ->push(['ok' => true, 'result' => ['message_id' => 9612]])
+                ->push(['ok' => true, 'result' => true])
+                ->push(['ok' => true, 'result' => ['message_id' => 9613]]),
         ]);
 
         $channel = $this->createTelegramChannel();
@@ -1810,15 +1818,18 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $run->refresh();
 
-        $this->assertTrue((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
+        $this->assertFalse((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
 
-        Http::assertSentCount(3);
+        Http::assertSentCount(5);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && (string) $request['message_id'] === '9611');
-        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true
             && ($request['disable_notification'] ?? false) === true);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9612');
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Выберите следующий шаг'
@@ -5015,12 +5026,14 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
     }
 
-    public function test_v3_request_phone_share_keeps_reply_keyboard_cleanup_pending_before_next_inline_buttons(): void
+    public function test_v3_request_phone_share_cleans_reply_keyboard_before_next_inline_buttons(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
                 ->push(['ok' => true, 'result' => ['message_id' => 9411]])
-                ->push(['ok' => true, 'result' => ['message_id' => 9412]]),
+                ->push(['ok' => true, 'result' => ['message_id' => 9412]])
+                ->push(['ok' => true, 'result' => true])
+                ->push(['ok' => true, 'result' => ['message_id' => 9413]]),
         ]);
 
         $channel = $this->createTelegramChannel();
@@ -5080,15 +5093,17 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->handle(app(ScenarioRegistry::class));
 
         $run->refresh();
-        $this->assertTrue((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
+        $this->assertFalse((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
 
-        Http::assertSentCount(2);
+        Http::assertSentCount(4);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.keyboard.0.0.request_contact') === true);
-        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true
             && ($request['disable_notification'] ?? false) === true);
-        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9412');
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Спасибо, телефон получен'
             && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Мужской'

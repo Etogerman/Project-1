@@ -530,21 +530,21 @@ class MergeContactsAction
                 $contact->forceFill([
                     'region' => $candidateRegions[0],
                     'region_status' => Contact::REGION_STATUS_RESOLVED,
-                    'region_source' => Contact::REGION_SOURCE_AI,
+                    'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                     'pending_region_candidates' => null,
                 ])->save();
             } elseif (count($candidateRegions) >= 2 && count($candidateRegions) <= 4) {
                 $contact->forceFill([
                     'region' => null,
                     'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
-                    'region_source' => null,
+                    'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                     'pending_region_candidates' => array_values($candidateRegions),
                 ])->save();
             } elseif (count($candidateRegions) >= 5) {
                 $contact->forceFill([
                     'region' => null,
                     'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
-                    'region_source' => null,
+                    'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                     'pending_region_candidates' => null,
                 ])->save();
             } else {

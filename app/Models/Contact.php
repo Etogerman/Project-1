@@ -67,6 +67,8 @@ class Contact extends Model
 
     public const REGION_SOURCE_AI = 'ai';
 
+    public const REGION_SOURCE_DICTIONARY = 'dictionary';
+
     public const REGION_SOURCE_CONFIRMED_BY_CONTACT = 'confirmed_by_contact';
 
     public const REGION_SOURCE_MANUAL = 'manual';

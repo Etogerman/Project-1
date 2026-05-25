@@ -544,6 +544,8 @@ class ProcessDataCollectionResponseJobTest extends TestCase
 
         $this->assertSame('Будапешт', $contact->city);
         $this->assertSame('Венгрия', $contact->country);
+        $this->assertSame(Contact::REGION_STATUS_OUT_OF_SCOPE, $contact->region_status);
+        $this->assertSame(Contact::REGION_SOURCE_AI, $contact->region_source);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
     }
 
@@ -592,7 +594,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame('Россия', $contact->country);
         $this->assertSame('Московская область', $contact->region);
         $this->assertSame(Contact::REGION_STATUS_RESOLVED, $contact->region_status);
-        $this->assertSame(Contact::REGION_SOURCE_AI, $contact->region_source);
+        $this->assertSame(Contact::REGION_SOURCE_DICTIONARY, $contact->region_source);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_AGE_RANGE, $contact->data_collection_current_field);
     }
 
@@ -1331,7 +1333,7 @@ class ProcessDataCollectionResponseJobTest extends TestCase
         $this->assertSame('Александровка', $contact->city);
         $this->assertNull($contact->region);
         $this->assertSame(Contact::REGION_STATUS_AMBIGUOUS, $contact->region_status);
-        $this->assertNull($contact->region_source);
+        $this->assertSame(Contact::REGION_SOURCE_DICTIONARY, $contact->region_source);
         $this->assertSame(Contact::DATA_COLLECTION_FIELD_RUSSIAN_REGION_CONFIRM, $contact->data_collection_current_field);
         $this->assertSame([
             'Волгоградская область',

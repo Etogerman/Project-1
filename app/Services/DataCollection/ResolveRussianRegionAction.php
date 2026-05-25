@@ -13,7 +13,7 @@ class ResolveRussianRegionAction
     ) {}
 
     /**
-     * @return array{status: string, region: ?string, candidate_regions: list<string>}
+     * @return array{status: string, region: ?string, candidate_regions: list<string>, source: ?string}
      */
     public function handle(?string $country, ?string $city): array
     {
@@ -25,6 +25,7 @@ class ResolveRussianRegionAction
                 'status' => Contact::REGION_STATUS_UNKNOWN,
                 'region' => null,
                 'candidate_regions' => [],
+                'source' => null,
             ];
         }
 
@@ -33,6 +34,7 @@ class ResolveRussianRegionAction
                 'status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
                 'region' => null,
                 'candidate_regions' => [],
+                'source' => null,
             ];
         }
 
@@ -43,6 +45,7 @@ class ResolveRussianRegionAction
                 'status' => Contact::REGION_STATUS_UNKNOWN,
                 'region' => null,
                 'candidate_regions' => [],
+                'source' => null,
             ];
         }
 
@@ -53,6 +56,7 @@ class ResolveRussianRegionAction
                 'status' => Contact::REGION_STATUS_RESOLVED,
                 'region' => $lookupCandidateRegions[0],
                 'candidate_regions' => [],
+                'source' => Contact::REGION_SOURCE_DICTIONARY,
             ];
         }
 
@@ -61,6 +65,7 @@ class ResolveRussianRegionAction
                 'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
                 'region' => null,
                 'candidate_regions' => $lookupCandidateRegions,
+                'source' => Contact::REGION_SOURCE_DICTIONARY,
             ];
         }
 
@@ -69,6 +74,7 @@ class ResolveRussianRegionAction
                 'status' => Contact::REGION_STATUS_AMBIGUOUS,
                 'region' => null,
                 'candidate_regions' => $lookupCandidateRegions,
+                'source' => Contact::REGION_SOURCE_DICTIONARY,
             ];
         }
 
@@ -130,6 +136,7 @@ PROMPT;
                 'status' => Contact::REGION_STATUS_RESOLVED,
                 'region' => $region,
                 'candidate_regions' => [],
+                'source' => Contact::REGION_SOURCE_AI,
             ];
         }
 
@@ -139,6 +146,7 @@ PROMPT;
                 : $status,
             'region' => null,
             'candidate_regions' => [],
+            'source' => null,
         ];
     }
 

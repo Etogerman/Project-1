@@ -134,7 +134,7 @@ class QuestionnaireStartActionTest extends TestCase
         $this->assertSame('Мурманск', $contact->city);
         $this->assertSame('Мурманская область', $contact->region);
         $this->assertSame(Contact::REGION_STATUS_RESOLVED, $contact->region_status);
-        $this->assertSame(Contact::REGION_SOURCE_AI, $contact->region_source);
+        $this->assertSame(Contact::REGION_SOURCE_DICTIONARY, $contact->region_source);
         $this->assertSame('30_39', $contact->age_range);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
 
@@ -201,7 +201,7 @@ class QuestionnaireStartActionTest extends TestCase
         $this->assertSame('Венгрия', $contact->country);
         $this->assertNull($contact->region);
         $this->assertSame(Contact::REGION_STATUS_OUT_OF_SCOPE, $contact->region_status);
-        $this->assertNull($contact->region_source);
+        $this->assertSame(Contact::REGION_SOURCE_AI, $contact->region_source);
         $this->assertNull($contact->pending_region_candidates);
         $this->assertSame('30_39', $contact->age_range);
         $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);

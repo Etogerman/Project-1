@@ -53,7 +53,7 @@ class UpdateContactProfileAction
             $contact->forceFill(array_merge($payload, [
                 'region' => null,
                 'region_status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
-                'region_source' => null,
+                'region_source' => Contact::REGION_SOURCE_MANUAL,
                 'pending_region_candidates' => null,
             ]))->save();
 

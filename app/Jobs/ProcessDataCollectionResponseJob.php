@@ -562,6 +562,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         if ($countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH && filled($country)) {
             $attributes['country'] = $country;
+            $attributes['region_source'] = Contact::REGION_SOURCE_AI;
         }
 
         if ($countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH && filled($country)) {
@@ -719,6 +720,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $contact->forceFill([
             'country' => $country,
+            'region_source' => Contact::REGION_SOURCE_AI,
         ])->save();
         $syncContactRussianRegionAction->handle($contact, true);
         $this->dispatchDistanceToMoscowCalculation($contact);
@@ -1738,7 +1740,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             $contact->forceFill(array_merge($payload, [
                 'region' => $candidateRegions[0],
                 'region_status' => Contact::REGION_STATUS_RESOLVED,
-                'region_source' => Contact::REGION_SOURCE_AI,
+                'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                 'pending_region_candidates' => null,
             ]))->save();
 
@@ -1749,7 +1751,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             $contact->forceFill(array_merge($payload, [
                 'region' => null,
                 'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
-                'region_source' => null,
+                'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                 'pending_region_candidates' => $candidateRegions,
             ]))->save();
 
@@ -1759,7 +1761,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $contact->forceFill(array_merge($payload, [
             'region' => null,
             'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
-            'region_source' => null,
+            'region_source' => Contact::REGION_SOURCE_DICTIONARY,
             'pending_region_candidates' => $candidateRegions,
         ]))->save();
 

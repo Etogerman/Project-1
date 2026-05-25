@@ -101,6 +101,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_OUTBOUND_RETRY_BACKOFF_SECONDS = [10, 30, 60, 180];
 
+    private const TELEGRAM_REPLY_KEYBOARD_CLEANUP_TEXT = "\u{2060}";
+
     private const V3_CONTACT_CAPTURE_FIELDS = [
         'phone',
         'first_name',
@@ -1360,15 +1362,32 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 );
                 $replyButtonRows = $this->v3QuestionnaireButtonRows($result, $blockId);
                 $statePayload = $this->storeV3QuestionnaireOptionMap($statePayload, $blockId, $result, $replyButtonRows);
+                $replyMarkupKind = $this->v3TelegramReplyMarkupKind(false, $replyButtonRows, self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE);
+                $removeTelegramKeyboard = false;
+                $removeTelegramKeyboardBeforeMessage = false;
+
+                if ($message->channel?->platform === Channel::PLATFORM_TELEGRAM) {
+                    if ($replyMarkupKind === 'none') {
+                        $removeTelegramKeyboard = true;
+                    } elseif ($replyMarkupKind === 'inline_message') {
+                        $removeTelegramKeyboardBeforeMessage = true;
+                    }
+
+                    if ($removeTelegramKeyboard || $removeTelegramKeyboardBeforeMessage) {
+                        $statePayload = $this->clearV3PendingTelegramKeyboardRemoval($statePayload);
+                    }
+                }
 
                 if (! $this->dispatchScenarioMessage(
                     $message,
                     (string) $result->promptText,
                     Message::TEXT_FORMAT_PLAIN_TEXT,
+                    removeTelegramKeyboard: $removeTelegramKeyboard,
                     replyButtonRows: $replyButtonRows,
                     buttonPlacement: self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE,
                     v3CallbackBlockId: $blockId,
                     scenarioRun: $lockedRun,
+                    removeTelegramKeyboardBeforeMessage: $removeTelegramKeyboardBeforeMessage,
                 )) {
                     return false;
                 }
@@ -2474,8 +2493,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     $clearPendingTelegramKeyboardRemoval = true;
                 } elseif ($replyMarkupKind === 'inline_message') {
                     // Telegram cannot remove a reply keyboard and show inline buttons in the same message.
-                    // Keep the cleanup pending instead of sending a temporary cleanup message.
-                    $clearPendingTelegramKeyboardRemoval = false;
+                    // Send a technical cleanup message first, then delete it and send the real inline message.
+                    $removeTelegramKeyboardBeforeMessage = true;
+                    $clearPendingTelegramKeyboardRemoval = true;
                 } elseif ($replyMarkupKind === 'reply_keyboard') {
                     $clearPendingTelegramKeyboardRemoval = true;
                 }
@@ -3051,6 +3071,21 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $statePayload = $this->markV3Waiting($statePayload, (string) $blockId, $block, $message->channel);
             $replyButtonRows = $this->v3QuestionnaireButtonRows($result, $blockId);
             $statePayload = $this->storeV3QuestionnaireOptionMap($statePayload, $blockId, $result, $replyButtonRows);
+            $replyMarkupKind = $this->v3TelegramReplyMarkupKind(false, $replyButtonRows, self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE);
+            $removeTelegramKeyboard = false;
+            $removeTelegramKeyboardBeforeMessage = false;
+
+            if ($message->channel?->platform === Channel::PLATFORM_TELEGRAM) {
+                if ($replyMarkupKind === 'none') {
+                    $removeTelegramKeyboard = true;
+                } elseif ($replyMarkupKind === 'inline_message') {
+                    $removeTelegramKeyboardBeforeMessage = true;
+                }
+
+                if ($removeTelegramKeyboard || $removeTelegramKeyboardBeforeMessage) {
+                    $statePayload = $this->clearV3PendingTelegramKeyboardRemoval($statePayload);
+                }
+            }
 
             if (trim((string) $result->promptText) === '') {
                 return [
@@ -3063,10 +3098,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $message,
                 (string) $result->promptText,
                 Message::TEXT_FORMAT_PLAIN_TEXT,
+                removeTelegramKeyboard: $removeTelegramKeyboard,
                 replyButtonRows: $replyButtonRows,
                 buttonPlacement: self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE,
                 v3CallbackBlockId: $blockId,
                 scenarioRun: $run,
+                removeTelegramKeyboardBeforeMessage: $removeTelegramKeyboardBeforeMessage,
             )) {
                 return [
                     'state_payload' => $statePayload,
@@ -6226,6 +6263,10 @@ TEXT;
 
         $content = $this->prepareMessageContentAction->handle($text, $textFormat);
 
+        if ($removeTelegramKeyboardBeforeMessage) {
+            $this->removeTelegramReplyKeyboardBeforeScenarioMessage($message, $channel);
+        }
+
         $sendResult = $this->sendBotDialogTextAction->handleMessage(
             $message,
             $content->transportText,
@@ -6274,6 +6315,59 @@ TEXT;
             'delivery_accepted' => true,
             'error' => null,
         ];
+    }
+
+    private function removeTelegramReplyKeyboardBeforeScenarioMessage(Message $message, Channel $channel): void
+    {
+        if ($channel->platform !== Channel::PLATFORM_TELEGRAM) {
+            return;
+        }
+
+        $message->loadMissing(['dialog', 'contactIdentity']);
+
+        $chatId = $message->dialog instanceof Dialog && filled($message->dialog->external_chat_id)
+            ? (string) $message->dialog->external_chat_id
+            : (string) $message->external_chat_id;
+
+        if (! filled($chatId)) {
+            return;
+        }
+
+        try {
+            $cleanupDelivery = $this->telegramBotApiService->sendTextMessage(
+                $channel,
+                $chatId,
+                $message->contactIdentity?->external_user_id,
+                self::TELEGRAM_REPLY_KEYBOARD_CLEANUP_TEXT,
+                ['remove_keyboard' => true],
+                Message::TEXT_FORMAT_PLAIN_TEXT,
+                disableNotification: true,
+            );
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3.telegram_reply_keyboard_cleanup_failed', [
+                'scenario_code' => $this->code(),
+                'channel_id' => $channel->id,
+                'dialog_id' => $message->dialog_id,
+                'exception' => get_class($throwable),
+            ]);
+
+            return;
+        }
+
+        if (! filled($cleanupDelivery->externalMessageId)) {
+            return;
+        }
+
+        try {
+            $this->telegramBotApiService->deleteMessage($channel, $chatId, (string) $cleanupDelivery->externalMessageId);
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3.telegram_reply_keyboard_cleanup_delete_failed', [
+                'scenario_code' => $this->code(),
+                'channel_id' => $channel->id,
+                'dialog_id' => $message->dialog_id,
+                'exception' => get_class($throwable),
+            ]);
+        }
     }
 
     /**
