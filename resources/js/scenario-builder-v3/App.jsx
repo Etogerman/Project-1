@@ -572,7 +572,7 @@ export default function App({
         }
 
         setSelectedEdgeKey(null);
-        setSelectedBlockKey(blocks[0]?.client_key ?? null);
+        setSelectedBlockKey(null);
         setIsPanelCollapsed(false);
         setPendingConnection(null);
         setRewireTargetKey(null);

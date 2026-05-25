@@ -1763,7 +1763,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_DELETED, data_get($previousOutbound->raw_payload, 'delete_action_result'));
     }
 
-    public function test_v3_edit_message_action_keeps_reply_keyboard_cleanup_pending_before_next_inline_buttons(): void
+    public function test_v3_delete_message_action_keeps_reply_keyboard_cleanup_pending_before_next_inline_buttons(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -1776,7 +1776,12 @@ class GenericDbScenarioRuntimeTest extends TestCase
         [$contact, $identity, $dialog] = $this->createDialogContext($channel);
         $scenario = $this->createPublishedScenario(
             'v3_edit_message_defer_keyboard_cleanup',
-            $this->v3EditMessageRemoveButtonsRuntimeSchema($channel->id, nextHasInlineButtons: true),
+            $this->v3EditMessageRemoveButtonsRuntimeSchema(
+                $channel->id,
+                operation: 'delete_message',
+                target: 'last_current_run_outbound',
+                nextHasInlineButtons: true,
+            ),
         );
 
         ScenarioChannelBinding::query()->create([
@@ -1808,7 +1813,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertTrue((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
 
         Http::assertSentCount(3);
-        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9611');
         Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && data_get($request->data(), 'reply_markup.remove_keyboard') === true
             && ($request['disable_notification'] ?? false) === true);
@@ -3959,6 +3966,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['Стартовый блок'], $sentTexts);
 
         $this->travelTo(now()->addMinutes(5));
+        $channel->forceFill(['connection_checked_at' => now()])->save();
         (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
             ->handle(app(ScenarioRegistry::class));
 
@@ -4393,6 +4401,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('start', $run->current_step);
 
         $this->travelTo($scheduledAt);
+        $channel->forceFill(['connection_checked_at' => now()])->save();
         (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
             ->handle(app(ScenarioRegistry::class));
 
@@ -4480,6 +4489,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         app(ScenarioRegistry::class)->forgetCachedDefinitions();
 
         $this->travelTo($scheduledAt);
+        $channel->forceFill(['connection_checked_at' => now()])->save();
         (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
             ->handle(app(ScenarioRegistry::class));
 

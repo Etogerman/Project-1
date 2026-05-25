@@ -2815,8 +2815,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 return $statePayload;
             }
 
-            $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
-
             if ($run instanceof ScenarioRun) {
                 $this->removeV3TelegramInlineButtonsFromLastCurrentRunMessage($message, $run);
             }
