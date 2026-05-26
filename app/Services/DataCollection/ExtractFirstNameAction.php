@@ -57,6 +57,14 @@ class ExtractFirstNameAction
             ];
         }
 
+        return $this->handleWithAi($userReply, $messengerName, $aiContext);
+    }
+
+    /**
+     * @return array{decision: string, first_name: ?string, resolution_method: ?string, ai_used?: bool, ai_request_id?: int|null}
+     */
+    public function handleWithAi(string $userReply, ?string $messengerName = null, ?AiGenerationContext $aiContext = null): array
+    {
         $aiRequestId = null;
         $systemPrompt = $this->systemPrompt($messengerName);
         $userPrompt = $this->userPrompt($userReply, $messengerName);

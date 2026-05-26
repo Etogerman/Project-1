@@ -901,6 +901,719 @@
         gap: 0.8rem;
     }
 
+    .qe-questionnaire-editor {
+        --qe-bg: #fafaf8;
+        --qe-surface: #ffffff;
+        --qe-surface-2: #f5f5f3;
+        --qe-border: #e7e5e0;
+        --qe-border-strong: #d6d3cc;
+        --qe-text: #18181a;
+        --qe-text-2: #6b6a66;
+        --qe-text-3: #9a9893;
+        --qe-accent: oklch(0.55 0.16 264);
+        --qe-accent-soft: oklch(0.96 0.025 264);
+        --qe-cell-font: 12.5px;
+        --qe-head-font: 11px;
+        --qe-cell-px: 10px;
+        --qe-cell-py: 6px;
+        color: var(--qe-text);
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .qe-questionnaire-editor.density-compact {
+        --qe-cell-font: 12px;
+        --qe-head-font: 10.5px;
+        --qe-cell-px: 8px;
+        --qe-cell-py: 3px;
+    }
+
+    .qe-questionnaire-editor .fi-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        border: 1px solid var(--qe-border);
+        border-radius: 8px;
+        background: var(--qe-surface);
+        box-shadow: 0 1px 2px rgba(20, 20, 20, 0.04);
+        padding: 14px 16px;
+    }
+
+    .qe-questionnaire-editor .fi-header > :first-child {
+        flex: 1 1 360px;
+        min-width: 0;
+    }
+
+    .qe-questionnaire-editor .fi-header-actions-ctn {
+        flex: 0 1 auto;
+        min-width: 0;
+        margin-top: 0 !important;
+    }
+
+    .qe-questionnaire-editor .fi-header-actions-ctn .fi-ac {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+
+    .qe-questionnaire-editor .fi-header-heading {
+        color: var(--qe-text);
+        font-size: 17px;
+        line-height: 1.2;
+        letter-spacing: 0;
+    }
+
+    .qe-questionnaire-editor .fi-header-subheading {
+        width: 100%;
+    }
+
+    .qe-questionnaire-editor .fi-breadcrumbs {
+        color: var(--qe-text-3);
+        font-size: 12px;
+    }
+
+    .qe-questionnaire-editor .fi-page-content,
+    .qe-questionnaire-editor .fi-section-content,
+    .qe-questionnaire-editor .fi-section-content-ctn,
+    .qe-questionnaire-editor .fi-sc,
+    .qe-questionnaire-editor .fi-grid {
+        min-width: 0;
+        background: transparent;
+    }
+
+    .qe-questionnaire-editor .fi-page-content {
+        display: grid;
+        gap: 10px;
+        background: var(--qe-bg);
+    }
+
+    .qe-editor-overview {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        border: 1px solid var(--qe-border);
+        border-radius: 8px;
+        background: var(--qe-surface);
+        box-shadow: 0 1px 2px rgba(20, 20, 20, 0.04), 0 0 0 1px rgba(20, 20, 20, 0.03);
+        padding: 10px 12px;
+    }
+
+    .qe-questionnaire-editor .fi-header .qe-editor-overview {
+        margin-top: 10px;
+    }
+
+    .qe-editor-overview__main {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+        overflow-x: auto;
+        scrollbar-width: thin;
+    }
+
+    .qe-editor-overview__eyebrow {
+        color: var(--qe-text-2);
+        font-size: 12px;
+        font-weight: 650;
+    }
+
+    .qe-editor-overview__title-row,
+    .qe-editor-overview__meta,
+    .qe-editor-overview__actions {
+        display: flex;
+        flex: 0 0 auto;
+        flex-wrap: nowrap;
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+    }
+
+    .qe-editor-overview__title-row strong {
+        margin-right: 5px;
+        color: var(--qe-text);
+        font-size: 22px;
+        line-height: 1.2;
+    }
+
+    .qe-editor-overview__title-row span:not(.qe-tech):not(.qe-ver):not(.qe-status),
+    .qe-editor-overview__meta span,
+    .qe-editor-overview__actions span {
+        min-height: 24px;
+        border: 1px solid var(--qe-border);
+        border-radius: 999px;
+        background: var(--qe-surface-2);
+        color: var(--qe-text-2);
+        font-size: 12px;
+        font-weight: 650;
+        line-height: 1.2;
+        padding: 4px 8px;
+        white-space: nowrap;
+    }
+
+    .qe-editor-overview__meta b {
+        color: var(--qe-text);
+    }
+
+    .qe-editor-overview__actions span {
+        background: var(--qe-surface);
+        color: var(--qe-text);
+    }
+
+    .qe-tech,
+    .qe-ver,
+    .qe-status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 650;
+        line-height: 1.2;
+        letter-spacing: 0;
+        padding: 4px 8px;
+        white-space: nowrap;
+    }
+
+    .qe-tech,
+    .qe-ver {
+        border: 1px solid var(--qe-border);
+        background: var(--qe-surface-2);
+        color: var(--qe-text-2);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+
+    .qe-ver {
+        gap: 5px;
+    }
+
+    .qe-status {
+        gap: 5px;
+        border: 1px solid transparent;
+        text-transform: uppercase;
+    }
+
+    .qe-status::before {
+        width: 5px;
+        height: 5px;
+        flex-shrink: 0;
+        border-radius: 999px;
+        background: currentColor;
+        content: "";
+    }
+
+    .qe-status.s-published {
+        border-color: oklch(0.86 0.07 145);
+        background: oklch(0.96 0.05 145);
+        color: oklch(0.5 0.12 145);
+    }
+
+    .qe-status.s-draft {
+        border-color: oklch(0.86 0.07 75);
+        background: oklch(0.96 0.05 75);
+        color: oklch(0.5 0.14 60);
+    }
+
+    .qe-status.s-disabled {
+        border-color: var(--qe-border);
+        background: var(--qe-surface-2);
+        color: var(--qe-text-3);
+    }
+
+    .qe-typechip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        width: max-content;
+        max-width: 100%;
+        min-height: 22px;
+        border: 1px solid var(--qe-border);
+        border-radius: 999px;
+        background: var(--qe-surface-2);
+        color: var(--qe-text);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.1;
+        padding: 3px 8px;
+        white-space: nowrap;
+        cursor: help;
+    }
+
+    .qe-typechip__dot {
+        width: 6px;
+        height: 6px;
+        flex-shrink: 0;
+        border-radius: 999px;
+        background: currentColor;
+    }
+
+    .qe-typechip__help {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 13px;
+        height: 13px;
+        margin-inline-start: 1px;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        font-size: 9px;
+        font-weight: 800;
+        line-height: 1;
+        opacity: 0.7;
+    }
+
+    .qe-typechip:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--ac-primary) 70%, transparent);
+        outline-offset: 2px;
+    }
+
+    .qe-typechip.t-text {
+        border-color: oklch(0.84 0.05 245);
+        background: oklch(0.96 0.025 245);
+        color: oklch(0.42 0.13 245);
+    }
+
+    .qe-typechip.t-choice {
+        border-color: oklch(0.84 0.08 305);
+        background: oklch(0.96 0.035 305);
+        color: oklch(0.44 0.15 305);
+    }
+
+    .qe-typechip.t-dictionary {
+        border-color: oklch(0.84 0.07 155);
+        background: oklch(0.96 0.04 155);
+        color: oklch(0.42 0.12 155);
+    }
+
+    .qe-typechip.t-phone {
+        border-color: oklch(0.86 0.08 75);
+        background: oklch(0.96 0.05 75);
+        color: oklch(0.45 0.13 65);
+    }
+
+    .qe-notice {
+        grid-column: 1 / -1;
+        border: 1px solid color-mix(in srgb, var(--ac-warning) 34%, var(--qe-border));
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--ac-warning-soft) 46%, var(--qe-surface));
+        color: var(--qe-text);
+        font-size: 13px;
+        line-height: 1.4;
+        padding: 9px 11px;
+    }
+
+    .qe-sect {
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--qe-border);
+        border-radius: 8px;
+        background: var(--qe-surface);
+        box-shadow: 0 1px 2px rgba(20, 20, 20, 0.04), 0 0 0 1px rgba(20, 20, 20, 0.03);
+    }
+
+    .qe-sect .fi-section-header {
+        min-height: 46px;
+        border-bottom: 1px solid var(--qe-border);
+        background: var(--qe-surface);
+        padding: 10px 12px;
+    }
+
+    .qe-sect .fi-section-header-heading {
+        color: var(--qe-text);
+        font-size: 16px;
+        line-height: 1.2;
+    }
+
+    .qe-sect .fi-section-header-description {
+        color: var(--qe-text-2);
+        font-size: 12px;
+        line-height: 1.35;
+    }
+
+    .qe-sect .fi-section-content {
+        gap: 8px;
+        padding: 0;
+    }
+
+    .qe-sect--identity .fi-section-content {
+        padding: 12px;
+    }
+
+    .qe-sect--identity .fi-fo-field-label {
+        color: var(--qe-text-2);
+        font-size: 12px;
+        font-weight: 650;
+    }
+
+    .qe-tbl.fi-fo-table-repeater {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        border: 0;
+        border-radius: 0;
+        background: var(--qe-surface);
+    }
+
+    .qe-tbl.fi-fo-table-repeater table {
+        width: max-content;
+        min-width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater table {
+        width: 100%;
+        min-width: 1280px;
+        table-layout: auto;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(1),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(1) {
+        width: 40px;
+        min-width: 40px;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(2),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(2) {
+        width: 32px;
+        min-width: 32px;
+        max-width: 32px;
+        padding-inline: 4px;
+        text-align: center;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(2) .fi-input-wrp {
+        width: 24px;
+        min-width: 24px;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(2) .fi-input {
+        padding-inline: 0;
+        text-align: center;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(3),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(3) {
+        width: 140px;
+        min-width: 140px;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(4),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(4) {
+        width: 14%;
+        min-width: 140px;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(5),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(5) {
+        width: 150px;
+        min-width: 150px;
+        padding-inline: 4px;
+        text-align: center;
+        vertical-align: middle;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(5) :is(.fi-grid-col, .fi-sc-component, .fi-fo-field, .fi-fo-field-content-col) {
+        width: max-content;
+        min-width: 0;
+        margin-inline: auto;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(5) .fi-input-wrp,
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(5) .fi-select-input {
+        width: max-content;
+        min-width: 0;
+        border-color: transparent;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(5) .fi-select-input-btn {
+        min-height: 26px;
+        gap: 5px;
+        padding-inline: 0;
+        justify-content: center;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(5) .fi-select-input-value-ctn {
+        min-width: 0;
+        flex: 0 0 auto;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(5) .fi-select-input-value-label {
+        overflow: visible;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(6),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(6) {
+        width: 18%;
+        min-width: 170px;
+        padding: 2px 4px;
+        vertical-align: middle;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(6) .fi-input-wrp,
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(6) .fi-select-input {
+        min-height: 30px;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(6) .fi-select-input-btn {
+        min-height: 30px;
+        padding: 2px 4px;
+        align-items: center;
+        line-height: 1.2;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(6) .fi-select-input-value-ctn {
+        min-width: 0;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(6) .fi-select-input-value-label {
+        line-height: 1.28;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(7),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(7),
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(8),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(8) {
+        width: 56px;
+        min-width: 56px;
+        max-width: 56px;
+        padding-inline: 4px;
+        text-align: center;
+        vertical-align: middle;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(7) :is(.fi-grid-col, .fi-sc-component, .fi-fo-field, .fi-fo-field-label-col, .fi-fo-field-label-ctn, .fi-fo-field-label),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(8) :is(.fi-grid-col, .fi-sc-component, .fi-fo-field, .fi-fo-field-label-col, .fi-fo-field-label-ctn, .fi-fo-field-label) {
+        width: max-content;
+        margin-inline: auto;
+        justify-content: center;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(9),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(9) {
+        width: 48px;
+        min-width: 48px;
+        max-width: 48px;
+        padding-inline: 3px;
+        text-align: center;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(9) .fi-input-wrp {
+        width: 34px;
+        min-width: 34px;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(9) .fi-input {
+        padding-inline: 0;
+        text-align: center;
+        appearance: textfield;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(9) .fi-input::-webkit-inner-spin-button,
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(9) .fi-input::-webkit-outer-spin-button {
+        margin: 0;
+        appearance: none;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(10),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(10) {
+        width: 240px;
+        min-width: 240px;
+        white-space: normal;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(10) textarea {
+        width: 100%;
+        min-height: 68px;
+        resize: none !important;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater th:nth-of-type(11),
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(11) {
+        width: 116px;
+        min-width: 116px;
+        max-width: 116px;
+        padding-inline: 6px;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(11) .fi-input-wrp,
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(11) .fi-select-input,
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(11) .fi-select-input-btn {
+        min-width: 0;
+        width: 100%;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(11) .fi-select-input-btn {
+        min-height: 28px;
+    }
+
+    .qe-tbl--fields.fi-fo-table-repeater td:nth-of-type(11) .fi-select-input-value-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .qe-tbl.fi-fo-table-repeater th,
+    .qe-tbl.fi-fo-table-repeater td {
+        padding: var(--qe-cell-py) var(--qe-cell-px);
+        vertical-align: top;
+        white-space: nowrap;
+    }
+
+    .qe-tbl.fi-fo-table-repeater th {
+        position: relative;
+        border-bottom: 1px solid var(--qe-border);
+        background: var(--qe-surface-2);
+        color: var(--qe-text-2);
+        font-size: var(--qe-head-font);
+        font-weight: 750;
+        line-height: 1.2;
+        text-transform: none;
+    }
+
+    .qe-col-resizer {
+        position: absolute;
+        inset-block: 0;
+        inset-inline-end: -4px;
+        z-index: 3;
+        width: 8px;
+        cursor: col-resize;
+        touch-action: none;
+    }
+
+    .qe-col-resizer::after {
+        content: '';
+        position: absolute;
+        inset-block: 4px;
+        inset-inline-start: 3px;
+        width: 2px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-primary) 64%, transparent);
+        opacity: 0;
+        transition: opacity 120ms ease;
+    }
+
+    .qe-tbl.fi-fo-table-repeater th:hover > .qe-col-resizer::after,
+    .qe-col-resizer:hover::after,
+    .qe-col-resizer:active::after {
+        opacity: 1;
+    }
+
+    body.qe-is-resizing-cols {
+        cursor: col-resize;
+        user-select: none;
+    }
+
+    .qe-tbl.fi-fo-table-repeater tbody tr + tr td {
+        border-top: 1px solid var(--qe-border);
+    }
+
+    .qe-tbl .fi-fo-field,
+    .qe-tbl .fi-fo-field-content-col {
+        min-width: 0;
+        gap: 2px;
+    }
+
+    .qe-tbl .fi-input-wrp,
+    .qe-tbl .fi-select-input {
+        min-height: 28px;
+        border-color: var(--qe-border-strong);
+        border-radius: 6px;
+        background: var(--qe-surface);
+        color: var(--qe-text);
+    }
+
+    .qe-tbl .fi-input {
+        min-height: 28px;
+        color: var(--qe-text);
+        font-size: var(--qe-cell-font);
+        line-height: 1.25;
+    }
+
+    .qe-tbl textarea.fi-input {
+        min-height: 34px;
+        line-height: 1.28;
+    }
+
+    .qe-tbl .fi-fo-toggle {
+        justify-content: center;
+        width: 100%;
+        min-height: 28px;
+    }
+
+    .qe-tbl .fi-fo-table-repeater-empty-header-cell {
+        width: 36px;
+        min-width: 36px;
+    }
+
+    .qe-tbl td:has(> .fi-fo-table-repeater-actions) {
+        width: 40px;
+        min-width: 40px;
+        padding-inline: 5px;
+    }
+
+    .qe-tbl .fi-fo-table-repeater-actions {
+        justify-content: center;
+        gap: 3px;
+        min-width: 30px;
+    }
+
+    .qe-tbl .fi-fo-table-repeater-add {
+        position: sticky;
+        left: 0;
+        padding: 10px 12px;
+        border-top: 1px solid var(--qe-border);
+        background: var(--qe-surface);
+    }
+
+    .qe-json .fi-section-content {
+        padding: 12px;
+    }
+
+    .qe-json-preview {
+        display: grid;
+        gap: 8px;
+    }
+
+    .qe-json-preview > span {
+        justify-self: start;
+        border: 1px solid var(--qe-border);
+        border-radius: 999px;
+        background: var(--qe-surface-2);
+        color: var(--qe-text-2);
+        font-size: 12px;
+        font-weight: 650;
+        padding: 3px 8px;
+    }
+
+    .qe-json-preview pre {
+        max-height: 320px;
+        overflow: auto;
+        margin: 0;
+        border: 1px solid var(--qe-border);
+        border-radius: 8px;
+        background: var(--qe-surface-2);
+        color: var(--qe-text);
+        font-size: 12px;
+        line-height: 1.45;
+        padding: 12px;
+        white-space: pre;
+    }
+
+    .qe-json-preview p {
+        margin: 0;
+        color: var(--qe-text-2);
+        font-size: 12px;
+    }
+
     :is(.ac-user-form-section, .ac-channel-form-section, .ac-tag-form-section, .ac-auto-reply-form-section, .ac-scenario-form-section) {
         border: 1px solid color-mix(in srgb, var(--ac-border-strong) 86%, white 14%);
         border-radius: 22px;
@@ -6478,3 +7191,221 @@
         box-shadow: 16px 0 36px -30px rgba(2, 6, 23, 0.8);
     }
 </style>
+
+<script>
+    (() => {
+        const storageKey = 'ab.qe.fields.columnWidths.v2';
+        const cookieKey = 'ab_qe_fields_column_widths_v2';
+        const resizableColumns = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        const minWidths = {
+            2: 28,
+            3: 80,
+            4: 100,
+            5: 84,
+            6: 140,
+            7: 44,
+            8: 44,
+            9: 38,
+            10: 140,
+            11: 80,
+        };
+
+        let scheduled = false;
+
+        const readWidths = () => {
+            let rawValue = null;
+
+            try {
+                if (typeof localStorage !== 'undefined') {
+                    rawValue = localStorage.getItem(storageKey);
+                }
+            } catch {
+                rawValue = null;
+            }
+
+            if (! rawValue) {
+                const cookie = (document.cookie || '')
+                    .split('; ')
+                    .find((item) => item.startsWith(`${cookieKey}=`));
+
+                rawValue = cookie ? decodeURIComponent(cookie.slice(cookieKey.length + 1)) : null;
+            }
+
+            try {
+                return JSON.parse(rawValue || '{}') || {};
+            } catch {
+                return {};
+            }
+        };
+
+        const writeWidths = (widths) => {
+            const rawValue = JSON.stringify(widths);
+            let stored = false;
+
+            try {
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem(storageKey, rawValue);
+                    stored = true;
+                }
+            } catch {
+                stored = false;
+            }
+
+            if (! stored) {
+                document.cookie = `${cookieKey}=${encodeURIComponent(rawValue)}; max-age=31536000; path=/; SameSite=Lax`;
+            }
+        };
+
+        const columnCells = (table, column) => table.querySelectorAll(`tr > :is(th, td):nth-of-type(${column})`);
+
+        const updateTableWidth = (table) => {
+            const headerRow = table.tHead?.rows?.[0];
+
+            if (! headerRow) {
+                return;
+            }
+
+            const totalWidth = Array.from(headerRow.cells).reduce((sum, cell) => {
+                return sum + cell.getBoundingClientRect().width;
+            }, 0);
+            const wrapperWidth = table.closest('.qe-tbl')?.clientWidth || 0;
+            const width = Math.max(Math.ceil(totalWidth), Math.ceil(wrapperWidth), 1280);
+
+            table.style.width = `${width}px`;
+            table.style.minWidth = `${width}px`;
+        };
+
+        const setColumnWidth = (table, column, width) => {
+            const nextWidth = Math.max(minWidths[column] || 48, Math.round(width));
+
+            columnCells(table, column).forEach((cell) => {
+                cell.style.width = `${nextWidth}px`;
+                cell.style.minWidth = `${nextWidth}px`;
+                cell.style.maxWidth = `${nextWidth}px`;
+            });
+
+            updateTableWidth(table);
+
+            return nextWidth;
+        };
+
+        const resetColumnWidth = (table, column) => {
+            columnCells(table, column).forEach((cell) => {
+                cell.style.removeProperty('width');
+                cell.style.removeProperty('min-width');
+                cell.style.removeProperty('max-width');
+            });
+
+            const widths = readWidths();
+            delete widths[column];
+            writeWidths(widths);
+            updateTableWidth(table);
+        };
+
+        const applyStoredWidths = (table) => {
+            const widths = readWidths();
+
+            Object.entries(widths).forEach(([column, width]) => {
+                const columnIndex = Number(column);
+
+                if (resizableColumns.includes(columnIndex)) {
+                    setColumnWidth(table, columnIndex, Number(width));
+                }
+            });
+
+            updateTableWidth(table);
+        };
+
+        const initTable = (table) => {
+            if (table.dataset.qeResizableFieldsReady === '1') {
+                applyStoredWidths(table);
+
+                return;
+            }
+
+            table.dataset.qeResizableFieldsReady = '1';
+            table.classList.add('qe-resizable-table');
+
+            Array.from(table.querySelectorAll('thead th')).forEach((header, index) => {
+                const column = index + 1;
+
+                if (! resizableColumns.includes(column)) {
+                    return;
+                }
+
+                const handle = document.createElement('span');
+                handle.className = 'qe-col-resizer';
+                handle.setAttribute('aria-hidden', 'true');
+                header.append(handle);
+
+                handle.addEventListener('pointerdown', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    const startX = event.clientX;
+                    const startWidth = header.getBoundingClientRect().width;
+                    let currentWidth = startWidth;
+
+                    document.body.classList.add('qe-is-resizing-cols');
+
+                    const onMove = (moveEvent) => {
+                        currentWidth = setColumnWidth(table, column, startWidth + moveEvent.clientX - startX);
+                    };
+
+                    const onUp = () => {
+                        window.removeEventListener('pointermove', onMove);
+                        window.removeEventListener('pointerup', onUp);
+                        document.body.classList.remove('qe-is-resizing-cols');
+
+                        const widths = readWidths();
+                        widths[column] = currentWidth;
+                        writeWidths(widths);
+                    };
+
+                    window.addEventListener('pointermove', onMove);
+                    window.addEventListener('pointerup', onUp, { once: true });
+                });
+
+                handle.addEventListener('dblclick', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    resetColumnWidth(table, column);
+                });
+            });
+
+            applyStoredWidths(table);
+        };
+
+        const initTables = () => {
+            document
+                .querySelectorAll('.qe-tbl--fields.fi-fo-table-repeater table')
+                .forEach(initTable);
+        };
+
+        const scheduleInit = () => {
+            if (scheduled) {
+                return;
+            }
+
+            scheduled = true;
+
+            requestAnimationFrame(() => {
+                scheduled = false;
+                initTables();
+            });
+        };
+
+        document.addEventListener('DOMContentLoaded', scheduleInit);
+        document.addEventListener('livewire:navigated', scheduleInit);
+        document.addEventListener('livewire:updated', scheduleInit);
+
+        if (document.documentElement) {
+            new MutationObserver(scheduleInit).observe(document.documentElement, {
+                childList: true,
+                subtree: true,
+            });
+        }
+
+        scheduleInit();
+    })();
+</script>

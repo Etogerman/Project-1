@@ -61,7 +61,7 @@ class QuestionnaireTemplateValidationTest extends TestCase
         $payload = [[
             'field_key' => 'region',
             'label' => 'Регион РФ',
-            'type' => 'single_choice',
+            'type' => 'choice',
             'required' => true,
             'allow_skip' => false,
             'max_attempts' => 3,
@@ -73,6 +73,16 @@ class QuestionnaireTemplateValidationTest extends TestCase
                 ['value' => 'Несуществующий регион', 'label' => 'Несуществующий регион'],
             ],
         ]];
+
+        $this->expectException(ValidationException::class);
+
+        app(ValidateQuestionnaireFieldsPayloadAction::class)->handle($payload);
+    }
+
+    public function test_validation_rejects_legacy_field_type_names(): void
+    {
+        $payload = $this->validSingleChoicePayload();
+        $payload[0]['type'] = 'single_choice';
 
         $this->expectException(ValidationException::class);
 
@@ -135,7 +145,7 @@ class QuestionnaireTemplateValidationTest extends TestCase
         return [[
             'field_key' => 'gender',
             'label' => 'Пол',
-            'type' => 'single_choice',
+            'type' => 'choice',
             'required' => true,
             'allow_skip' => false,
             'max_attempts' => 3,

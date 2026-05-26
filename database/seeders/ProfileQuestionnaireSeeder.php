@@ -51,7 +51,7 @@ class ProfileQuestionnaireSeeder extends Seeder
             [
                 'field_key' => 'gender',
                 'label' => 'Пол',
-                'type' => 'single_choice',
+                'type' => 'choice',
                 'required' => true,
                 'allow_skip' => false,
                 'max_attempts' => 3,
@@ -71,7 +71,7 @@ class ProfileQuestionnaireSeeder extends Seeder
             [
                 'field_key' => 'first_name',
                 'label' => 'Имя',
-                'type' => 'dictionary_lookup',
+                'type' => 'dictionary',
                 'required' => true,
                 'allow_skip' => false,
                 'max_attempts' => 3,
@@ -104,7 +104,7 @@ class ProfileQuestionnaireSeeder extends Seeder
             [
                 'field_key' => 'age_range',
                 'label' => 'Возраст',
-                'type' => 'single_choice',
+                'type' => 'choice',
                 'required' => true,
                 'allow_skip' => false,
                 'max_attempts' => 3,

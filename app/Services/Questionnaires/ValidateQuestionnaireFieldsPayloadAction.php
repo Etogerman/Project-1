@@ -11,11 +11,11 @@ class ValidateQuestionnaireFieldsPayloadAction
 {
     private const TYPE_TEXT = 'text';
 
-    private const TYPE_SINGLE_CHOICE = 'single_choice';
+    private const TYPE_CHOICE = 'choice';
 
     private const TYPE_PHONE = 'phone';
 
-    private const TYPE_DICTIONARY_LOOKUP = 'dictionary_lookup';
+    private const TYPE_DICTIONARY = 'dictionary';
 
     private const DICTIONARY_NAMES = 'names';
 
@@ -24,9 +24,9 @@ class ValidateQuestionnaireFieldsPayloadAction
      */
     private const ALLOWED_TYPES = [
         self::TYPE_TEXT,
-        self::TYPE_SINGLE_CHOICE,
+        self::TYPE_CHOICE,
         self::TYPE_PHONE,
-        self::TYPE_DICTIONARY_LOOKUP,
+        self::TYPE_DICTIONARY,
     ];
 
     /**
@@ -67,6 +67,7 @@ class ValidateQuestionnaireFieldsPayloadAction
         }
 
         $fieldKeys = [];
+        $targets = [];
         $normalizedFields = [];
 
         foreach ($fieldsPayload as $index => $field) {
@@ -88,6 +89,16 @@ class ValidateQuestionnaireFieldsPayloadAction
 
             if (in_array($fieldKey, $fieldKeys, true)) {
                 $errors[] = "Поле #{$fieldNumber}: field_key «{$fieldKey}» повторяется.";
+            }
+
+            $target = $normalized['target'] ?? null;
+
+            if (is_string($target) && $target !== '') {
+                if (array_key_exists($target, $targets)) {
+                    $errors[] = "Поле #{$fieldNumber}: target «{$target}» уже используется полем #{$targets[$target]}.";
+                }
+
+                $targets[$target] = $fieldNumber;
             }
 
             $fieldKeys[] = $fieldKey;
@@ -149,11 +160,11 @@ class ValidateQuestionnaireFieldsPayloadAction
 
         $options = [];
 
-        if ($type === self::TYPE_SINGLE_CHOICE) {
+        if ($type === self::TYPE_CHOICE) {
             $options = $this->requiredOptions($field, $fieldNumber, $fieldErrors);
         }
 
-        if ($type === self::TYPE_DICTIONARY_LOOKUP) {
+        if ($type === self::TYPE_DICTIONARY) {
             $dictionaryKey = $this->requiredString($field, 'dictionary_key', $fieldNumber, $fieldErrors);
 
             if ($dictionaryKey !== null && $dictionaryKey !== self::DICTIONARY_NAMES) {
@@ -161,7 +172,7 @@ class ValidateQuestionnaireFieldsPayloadAction
             }
 
             if ($target !== null && $target !== 'contact.first_name') {
-                $fieldErrors[] = "Поле #{$fieldNumber}: dictionary_lookup в MVP можно писать только в contact.first_name.";
+                $fieldErrors[] = "Поле #{$fieldNumber}: dictionary в MVP можно писать только в contact.first_name.";
             }
         }
 
@@ -209,9 +220,9 @@ class ValidateQuestionnaireFieldsPayloadAction
     private function validateTargetContract(string $target, string $type, array $options, int $fieldNumber, array &$errors): void
     {
         if (in_array($target, ['contact.gender', 'contact.country', 'contact.region', 'contact.age_range'], true)
-            && $type !== self::TYPE_SINGLE_CHOICE
+            && $type !== self::TYPE_CHOICE
         ) {
-            $errors[] = "Поле #{$fieldNumber}: {$target} должен быть single_choice.";
+            $errors[] = "Поле #{$fieldNumber}: {$target} должен быть choice.";
 
             return;
         }

@@ -4,6 +4,7 @@ namespace App\Services\Questionnaires;
 
 use App\Data\Questionnaires\QuestionnaireStartResult;
 use App\Models\Contact;
+use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\ContactQuestionnaireAnswer;
 use App\Models\ContactQuestionnaireAttempt;
@@ -16,6 +17,7 @@ use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\DataCollectionPromptHelper;
+use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
@@ -53,6 +55,7 @@ class HandleContactQuestionnaireAnswerAction
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
         private readonly ResolveRussianRegionCandidatesLookupAction $resolveRussianRegionCandidatesLookupAction,
         private readonly ExtractResidenceCityAction $extractResidenceCityAction,
+        private readonly ExtractFirstNameAction $extractFirstNameAction,
         private readonly DataCollectionPromptHelper $dataCollectionPromptHelper,
         private readonly ScenarioRegistry $scenarioRegistry,
     ) {}
@@ -356,7 +359,7 @@ class HandleContactQuestionnaireAnswerAction
 
     /**
      * @param  array<string, mixed>  $field
-     * @return array{accepted: bool, value?: string, display_value?: string, error?: string}
+     * @return array{accepted: bool, value?: string, display_value?: string, resolution_method?: string, error?: string}
      */
     private function parseAnswer(Message $message, ContactQuestionnaireRun $run, array $field): array
     {
@@ -369,8 +372,8 @@ class HandleContactQuestionnaireAnswerAction
         }
 
         return match ((string) ($field['type'] ?? '')) {
-            'single_choice' => $this->parseSingleChoiceAnswer($message, $run, $field),
-            'dictionary_lookup' => $this->parseDictionaryLookupAnswer($message, $field),
+            'choice' => $this->parseSingleChoiceAnswer($message, $run, $field),
+            'dictionary' => $this->parseDictionaryLookupAnswer($message, $field),
             'phone' => $this->parsePhoneAnswer($message),
             default => $this->parseTextAnswer($message),
         };
@@ -450,7 +453,7 @@ class HandleContactQuestionnaireAnswerAction
 
     /**
      * @param  array<string, mixed>  $field
-     * @return array{accepted: bool, value?: string, display_value?: string, error?: string}
+     * @return array{accepted: bool, value?: string, display_value?: string, resolution_method?: string, error?: string}
      */
     private function parseDictionaryLookupAnswer(Message $message, array $field): array
     {
@@ -472,13 +475,130 @@ class HandleContactQuestionnaireAnswerAction
                 'accepted' => true,
                 'value' => (string) $lookup['value'],
                 'display_value' => (string) $lookup['value'],
+                'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
             ];
+        }
+
+        if ($this->isFirstNameDictionaryField($field)) {
+            return $this->parseFirstNameWithAiAnswer(
+                message: $message,
+                field: $field,
+                previousError: (string) ($lookup['status'] ?? LookupScenarioDataDictionaryAction::STATUS_NOT_FOUND),
+            );
         }
 
         return [
             'accepted' => false,
             'error' => (string) ($lookup['status'] ?? LookupScenarioDataDictionaryAction::STATUS_NOT_FOUND),
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $field
+     * @return array{accepted: bool, value?: string, display_value?: string, resolution_method?: string, error?: string}
+     */
+    private function parseFirstNameWithAiAnswer(Message $message, array $field, string $previousError): array
+    {
+        try {
+            $extraction = $this->extractFirstNameAction->handleWithAi(
+                $this->rawAnswerText($message),
+                $this->resolveFirstNameMessengerContext($message),
+            );
+        } catch (Throwable $throwable) {
+            Log::warning('questionnaire.first_name_ai_extraction_failed', [
+                'contact_id' => $message->contact_id,
+                'message_id' => $message->id,
+                'dictionary_error' => $previousError,
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return ['accepted' => false, 'error' => $previousError];
+        }
+
+        if (($extraction['decision'] ?? null) !== ExtractFirstNameAction::DECISION_ACCEPT) {
+            return ['accepted' => false, 'error' => 'first_name_ai_rejected'];
+        }
+
+        $firstName = is_string($extraction['first_name'] ?? null)
+            ? trim((string) $extraction['first_name'])
+            : '';
+
+        if ($firstName === '') {
+            return ['accepted' => false, 'error' => 'first_name_ai_empty'];
+        }
+
+        $normalizedFirstName = $this->normalizeFirstNameThroughDictionary($firstName, $field, $message);
+
+        return [
+            'accepted' => true,
+            'value' => $normalizedFirstName,
+            'display_value' => $normalizedFirstName,
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $field
+     */
+    private function isFirstNameDictionaryField(array $field): bool
+    {
+        return ($field['target'] ?? null) === 'contact.first_name'
+            && ($field['type'] ?? null) === 'dictionary';
+    }
+
+    /**
+     * @param  array<string, mixed>  $field
+     */
+    private function normalizeFirstNameThroughDictionary(string $firstName, array $field, Message $message): string
+    {
+        $dictionaryKey = (string) ($field['dictionary_key'] ?? 'names');
+        $lookup = $this->lookupScenarioDataDictionaryAction->handle(
+            $dictionaryKey,
+            $firstName,
+            $message->contact?->gender,
+        );
+
+        return ($lookup['matched'] ?? false) === true && filled($lookup['value'] ?? null)
+            ? trim((string) $lookup['value'])
+            : $firstName;
+    }
+
+    private function resolveFirstNameMessengerContext(Message $message): ?string
+    {
+        if (! $message->contact instanceof Contact) {
+            return null;
+        }
+
+        $message->loadMissing(['dialog.currentContactIdentity', 'contactIdentity']);
+
+        $dialogIdentity = $message->dialog?->currentContactIdentity;
+
+        if ($dialogIdentity instanceof ContactIdentity && filled($dialogIdentity->display_name)) {
+            return trim((string) $dialogIdentity->display_name);
+        }
+
+        $messageIdentity = $message->contactIdentity;
+
+        if ($messageIdentity instanceof ContactIdentity && filled($messageIdentity->display_name)) {
+            return trim((string) $messageIdentity->display_name);
+        }
+
+        $latestDialogIdentityId = $message->contact->dialogs()
+            ->whereNotNull('current_contact_identity_id')
+            ->orderByDesc('last_message_at')
+            ->orderByDesc('id')
+            ->value('current_contact_identity_id');
+
+        if ($latestDialogIdentityId === null) {
+            return null;
+        }
+
+        $displayName = ContactIdentity::query()
+            ->whereKey($latestDialogIdentityId)
+            ->value('display_name');
+
+        return filled($displayName) ? trim((string) $displayName) : null;
     }
 
     /**
@@ -607,7 +727,7 @@ class HandleContactQuestionnaireAnswerAction
         }
 
         return match ((string) $field['target']) {
-            'contact.first_name' => $this->syncFirstName($contact, $field, $value, $message),
+            'contact.first_name' => $this->syncFirstName($contact, $field, $value, $message, $parsed),
             'contact.phone' => $this->syncPhone($contact, $value),
             'contact.gender' => $this->syncEnumContactField($contact, 'gender', $value, Contact::genderOptions()),
             'contact.country' => $this->syncStringContactField($contact, 'country', $value),
@@ -622,11 +742,13 @@ class HandleContactQuestionnaireAnswerAction
     /**
      * @param  array<string, mixed>  $field
      */
-    private function syncFirstName(Contact $contact, array $field, string $value, Message $message): bool
+    private function syncFirstName(Contact $contact, array $field, string $value, Message $message, array $parsed = []): bool
     {
-        $method = ($field['type'] ?? null) === 'dictionary_lookup'
+        $method = is_string($parsed['resolution_method'] ?? null)
+            ? (string) $parsed['resolution_method']
+            : (($field['type'] ?? null) === 'dictionary'
             ? Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP
-            : Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT;
+            : Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT);
 
         $result = $this->applyContactFirstNameAction->handle(
             $contact,
@@ -1082,7 +1204,7 @@ class HandleContactQuestionnaireAnswerAction
         return [
             'field_key' => self::FIELD_KEY_RUSSIAN_REGION_CONFIRM,
             'label' => 'Регион',
-            'type' => count($candidates) <= 4 ? 'single_choice' : 'russian_region_confirm',
+            'type' => count($candidates) <= 4 ? 'choice' : 'russian_region_confirm',
             'required' => true,
             'allow_skip' => true,
             'max_attempts' => 3,

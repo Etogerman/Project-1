@@ -50,6 +50,11 @@ class QuestionnaireTemplate extends Model
             ->toString();
     }
 
+    public function getRouteKeyName(): string
+    {
+        return 'key';
+    }
+
     /**
      * @return array<string, string>
      */

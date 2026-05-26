@@ -154,6 +154,69 @@ class QuestionnaireStartActionTest extends TestCase
             ->count());
     }
 
+    public function test_profile_questionnaire_falls_back_to_ai_for_first_name_after_dictionary_miss(): void
+    {
+        config()->set('bots.data_collection.profile_collection_engine', 'questionnaires');
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'first_name' => 'Клава',
+            ])),
+        ]);
+
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        DataDictionaryEntry::query()->create([
+            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
+            'lookup_value' => 'Клава',
+            'result_value' => 'Клавдия',
+            'gender' => DataDictionaryEntry::GENDER_FEMALE,
+            'language' => DataDictionaryEntry::LANGUAGE_RU,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
+            'auto_apply' => true,
+            'is_active' => true,
+        ]);
+
+        [$contact, $message] = $this->createIncomingMessage([
+            'gender' => 'unknown',
+            'first_name' => null,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+            'age_range' => null,
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+        ]);
+
+        $startResult = app(StartOrContinueContactQuestionnaireAction::class)->handle($message);
+
+        $this->assertSame(QuestionnaireStartResult::OUTCOME_WAITING, $startResult->outcome);
+        $this->assertSame('gender', $startResult->currentFieldKey);
+
+        $handler = app(HandleContactQuestionnaireAnswerAction::class);
+
+        $this->answerQuestionnaire($handler, $message, 'Женский', 'first_name');
+        $this->answerQuestionnaire($handler, $message, 'думаю пусть будет Клава', 'city');
+
+        Http::assertSentCount(1);
+
+        $contact->refresh();
+        $this->assertSame('Клавдия', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, $contact->first_name_resolution_method);
+
+        $run = ContactQuestionnaireRun::query()->where('contact_id', $contact->id)->sole();
+        $answer = ContactQuestionnaireAnswer::query()
+            ->where('questionnaire_run_id', $run->id)
+            ->where('field_key', 'first_name')
+            ->sole();
+
+        $this->assertSame(ContactQuestionnaireAnswer::STATUS_FILLED, $answer->status);
+        $this->assertSame('Клавдия', $answer->value);
+        $this->assertSame('Клавдия', $answer->display_value);
+    }
+
     public function test_profile_questionnaire_detects_foreign_country_from_city_without_region(): void
     {
         config()->set('bots.data_collection.profile_collection_engine', 'questionnaires');

@@ -410,7 +410,7 @@ class StartOrContinueContactQuestionnaireAction
      */
     private function fieldOptions(array $field): array
     {
-        if (($field['type'] ?? null) !== 'single_choice') {
+        if (($field['type'] ?? null) !== 'choice') {
             return [];
         }
 
@@ -449,7 +449,7 @@ class StartOrContinueContactQuestionnaireAction
         $field = [
             'field_key' => self::FIELD_KEY_RUSSIAN_REGION_CONFIRM,
             'label' => 'Регион',
-            'type' => count($candidates) <= 4 ? 'single_choice' : 'russian_region_confirm',
+            'type' => count($candidates) <= 4 ? 'choice' : 'russian_region_confirm',
             'required' => true,
             'allow_skip' => true,
             'max_attempts' => 3,

@@ -2,10 +2,14 @@
 
 namespace Tests\Feature;
 
-use App\Filament\Resources\QuestionnaireTemplates\Pages\ManageQuestionnaireTemplates;
+use App\Filament\Resources\QuestionnaireTemplates\Pages\CreateQuestionnaireTemplate;
+use App\Filament\Resources\QuestionnaireTemplates\Pages\EditQuestionnaireTemplate;
+use App\Filament\Resources\QuestionnaireTemplates\Pages\ListQuestionnaireTemplates;
+use App\Filament\Resources\QuestionnaireTemplates\QuestionnaireTemplateResource;
 use App\Models\QuestionnaireTemplate;
 use App\Models\QuestionnaireTemplateVersion;
 use App\Models\User;
+use App\Services\Questionnaires\SaveQuestionnaireTemplateDraftAction;
 use Database\Seeders\ProfileQuestionnaireSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -44,9 +48,9 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         $this->assertTrue(Gate::forUser($admin)->allows('update', $template));
 
         Livewire::actingAs($admin)
-            ->test(ManageQuestionnaireTemplates::class)
+            ->test(ListQuestionnaireTemplates::class)
             ->assertCanSeeTableRecords([$template])
-            ->assertTableActionExists('editDraft', null, $template)
+            ->assertTableActionExists('edit', null, $template)
             ->assertTableActionExists('publishDraft', null, $template);
     }
 
@@ -67,7 +71,7 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         $this->assertFalse(Gate::forUser($employee)->allows('viewAny', QuestionnaireTemplate::class));
     }
 
-    public function test_admin_can_save_json_draft_and_publish_it(): void
+    public function test_admin_can_save_structured_draft_and_publish_it_from_full_page(): void
     {
         $this->seed(ProfileQuestionnaireSeeder::class);
 
@@ -83,11 +87,13 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         $payload[0]['prompts'] = ['Выбери пол для локального теста'];
 
         Livewire::actingAs($admin)
-            ->test(ManageQuestionnaireTemplates::class)
-            ->callTableAction('editDraft', $template, [
-                'fields_payload_json' => $this->encodePayload($payload),
+            ->test(EditQuestionnaireTemplate::class, ['record' => $template->key])
+            ->fillForm([
+                'name' => $template->name,
+                ...$this->toTableEditorPayload($payload),
             ])
-            ->assertHasNoTableActionErrors();
+            ->call('save')
+            ->assertHasNoFormErrors();
 
         $template->refresh();
 
@@ -95,9 +101,9 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         $this->assertSame(2, $template->draftVersion->version);
 
         Livewire::actingAs($admin)
-            ->test(ManageQuestionnaireTemplates::class)
-            ->callTableAction('publishDraft', $template->fresh())
-            ->assertHasNoTableActionErrors();
+            ->test(EditQuestionnaireTemplate::class, ['record' => $template->key])
+            ->call('publishDraft')
+            ->assertHasNoFormErrors();
 
         $template->refresh();
 
@@ -105,7 +111,83 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         $this->assertSame('Выбери пол для локального теста', $template->publishedVersion->fields_payload[0]['prompts'][0]);
     }
 
-    public function test_admin_can_create_questionnaire_with_json_draft(): void
+    public function test_admin_can_save_structured_fields_draft_without_editing_json(): void
+    {
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->with('publishedVersion')
+            ->sole();
+        $payload = $template->publishedVersion->fields_payload;
+        $payload[0]['prompts'][0] = 'Выбери пол в новой форме';
+        $payload[3]['options'][0]['label'] = '18-23';
+
+        app(SaveQuestionnaireTemplateDraftAction::class)->handle(
+            $template,
+            QuestionnaireTemplateResource::normalizeTableEditorPayload($this->toTableEditorPayload($payload)),
+            $admin,
+            'fields_payload',
+        );
+
+        $template->refresh();
+
+        $this->assertNotNull($template->draftVersion);
+        $this->assertSame(2, $template->draftVersion->version);
+        $this->assertSame('Выбери пол в новой форме', $template->draftVersion->fields_payload[0]['prompts'][0]);
+        $this->assertSame('18-23', $template->draftVersion->fields_payload[3]['options'][0]['label']);
+    }
+
+    public function test_editor_overview_shows_draft_badge_when_published_template_has_unpublished_draft(): void
+    {
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->with('publishedVersion')
+            ->sole();
+        $payload = $template->publishedVersion->fields_payload;
+        $payload[0]['prompts'][0] = 'Черновой вопрос про пол';
+
+        app(SaveQuestionnaireTemplateDraftAction::class)->handle(
+            $template,
+            QuestionnaireTemplateResource::normalizeTableEditorPayload($this->toTableEditorPayload($payload)),
+            $admin,
+            'fields_payload',
+        );
+
+        $overview = (string) QuestionnaireTemplateResource::buildEditorOverview(
+            $template->fresh(['publishedVersion', 'draftVersion', 'updater']),
+        );
+
+        $this->assertStringContainsString('Опубликована', $overview);
+        $this->assertStringContainsString('Черновик', $overview);
+    }
+
+    public function test_editor_overview_renders_version_as_inline_badge(): void
+    {
+        $this->seed(ProfileQuestionnaireSeeder::class);
+
+        $template = QuestionnaireTemplate::query()
+            ->where('key', QuestionnaireTemplate::KEY_PROFILE)
+            ->with(['publishedVersion', 'draftVersion', 'updater'])
+            ->sole();
+
+        $overview = (string) QuestionnaireTemplateResource::buildEditorOverview($template);
+
+        $this->assertStringContainsString('<span class="qe-ver">ver v1</span>', $overview);
+        $this->assertStringNotContainsString('qe-ver-label', $overview);
+    }
+
+    public function test_admin_can_create_questionnaire_with_structured_fields_draft(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -128,13 +210,14 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         ];
 
         Livewire::actingAs($admin)
-            ->test(ManageQuestionnaireTemplates::class)
-            ->callAction('create', [
+            ->test(CreateQuestionnaireTemplate::class)
+            ->fillForm([
                 'key' => 'local_profile',
                 'name' => 'Локальная анкета',
-                'fields_payload_json' => $this->encodePayload($payload),
+                ...$this->toTableEditorPayload($payload),
             ])
-            ->assertHasNoActionErrors();
+            ->call('create')
+            ->assertHasNoFormErrors();
 
         $template = QuestionnaireTemplate::query()
             ->where('key', 'local_profile')
@@ -148,7 +231,7 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         $this->assertSame('nickname', $template->draftVersion->fields_payload[0]['field_key']);
     }
 
-    public function test_invalid_json_create_does_not_leave_empty_questionnaire(): void
+    public function test_invalid_structured_create_does_not_leave_empty_questionnaire(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -156,20 +239,53 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
         ]);
 
         Livewire::actingAs($admin)
-            ->test(ManageQuestionnaireTemplates::class)
-            ->callAction('create', [
+            ->test(CreateQuestionnaireTemplate::class)
+            ->fillForm([
                 'key' => 'broken_local',
                 'name' => 'Сломанная анкета',
-                'fields_payload_json' => '{"broken"',
+                'fields_table' => [
+                    [
+                        'field_key' => 'first_name',
+                        'label' => 'Имя',
+                        'type' => 'text',
+                        'target' => 'contact.first_name',
+                        'required' => true,
+                        'allow_skip' => false,
+                        'max_attempts' => 3,
+                    ],
+                    [
+                        'field_key' => 'nickname',
+                        'label' => 'Ник',
+                        'type' => 'text',
+                        'target' => 'contact.first_name',
+                        'required' => true,
+                        'allow_skip' => false,
+                        'max_attempts' => 3,
+                    ],
+                ],
+                'prompts_table' => [
+                    [
+                        'field_key' => 'first_name',
+                        'attempt' => 1,
+                        'text' => 'Как тебя зовут?',
+                    ],
+                    [
+                        'field_key' => 'nickname',
+                        'attempt' => 1,
+                        'text' => 'Как тебя называть?',
+                    ],
+                ],
+                'options_table' => [],
             ])
-            ->assertHasActionErrors();
+            ->call('create')
+            ->assertHasErrors(['fields_payload']);
 
         $this->assertDatabaseMissing('questionnaire_templates', [
             'key' => 'broken_local',
         ]);
     }
 
-    public function test_invalid_json_draft_is_rejected(): void
+    public function test_editor_pages_are_full_page_routes(): void
     {
         $this->seed(ProfileQuestionnaireSeeder::class);
 
@@ -181,19 +297,25 @@ class FilamentQuestionnaireTemplatesResourceTest extends TestCase
             ->where('key', QuestionnaireTemplate::KEY_PROFILE)
             ->sole();
 
-        Livewire::actingAs($admin)
-            ->test(ManageQuestionnaireTemplates::class)
-            ->callTableAction('editDraft', $template, [
-                'fields_payload_json' => '{"broken"',
-            ])
-            ->assertHasTableActionErrors();
+        $this->actingAs($admin)
+            ->get('/admin/questionnaire-templates/create')
+            ->assertOk()
+            ->assertSee('Новая анкета');
+
+        $this->actingAs($admin)
+            ->get('/admin/questionnaire-templates/'.$template->key.'/edit')
+            ->assertOk()
+            ->assertSee('Профильная анкета')
+            ->assertSee('Поля анкеты')
+            ->assertDontSee('fields_payload_json');
     }
 
     /**
      * @param  list<array<string, mixed>>  $payload
+     * @return array{fields_table:list<array<string,mixed>>,prompts_table:list<array<string,mixed>>,options_table:list<array<string,mixed>>}
      */
-    private function encodePayload(array $payload): string
+    private function toTableEditorPayload(array $payload): array
     {
-        return json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return QuestionnaireTemplateResource::fieldsPayloadEditorFormData($payload);
     }
 }
