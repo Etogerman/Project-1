@@ -337,6 +337,28 @@
         border-inline-start: 1px solid var(--ac-border);
     }
 
+    .ac-admin-topbar-end .ac-env-indicator {
+        display: inline-flex;
+        align-items: center;
+        max-width: 11rem;
+        margin-inline-end: 0.1rem;
+        font-family: var(--ac-font-mono);
+        white-space: nowrap;
+    }
+
+    .ac-admin-topbar-end .ac-env-indicator span {
+        min-height: 1.55rem;
+        border-color: var(--ac-border);
+        border-radius: 8px;
+        background: var(--ac-surface);
+        color: var(--ac-text-muted);
+        box-shadow: none;
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: none;
+    }
+
     .ac-admin-search {
         display: inline-flex;
         align-items: center;
@@ -7922,6 +7944,226 @@
 
     .ac-contact-danger-zone__text {
         display: none;
+    }
+
+    .fi-resource-dialogs {
+        --ac-dialogs-row-h: 3.25rem;
+    }
+
+    .fi-resource-dialogs .fi-header {
+        align-items: center;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        padding: 0 0 0.65rem;
+    }
+
+    .fi-resource-dialogs .fi-header-heading {
+        font-size: 1.55rem;
+        font-weight: 760;
+        letter-spacing: -0.035em;
+    }
+
+    .fi-resource-dialogs .fi-breadcrumbs-list {
+        margin-bottom: 0.25rem;
+    }
+
+    .fi-resource-dialogs .fi-header-actions-ctn .fi-btn {
+        min-height: 2.15rem;
+        border: 1px solid var(--ac-border);
+        border-radius: 8px;
+        background: var(--ac-surface) !important;
+        color: var(--ac-text) !important;
+        box-shadow: none;
+    }
+
+    .fi-resource-dialogs .fi-header-actions-ctn .fi-btn :is(.fi-btn-label, .fi-icon) {
+        color: inherit !important;
+    }
+
+    .fi-resource-dialogs .fi-header-actions-ctn .fi-btn:hover {
+        border-color: color-mix(in srgb, var(--ac-primary) 26%, var(--ac-border));
+        background: var(--ac-primary-soft) !important;
+        color: var(--ac-primary) !important;
+    }
+
+    .fi-resource-dialogs .fi-ta-ctn {
+        overflow: hidden;
+        border-radius: 12px;
+        background: var(--ac-surface);
+        box-shadow: none;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-ctn {
+        padding: 0.75rem 0.85rem 0;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-toolbar {
+        margin-top: 0;
+        padding: 0 0 0.65rem;
+        border-top: 0;
+    }
+
+    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-header-toolbar > :last-child > .fi-ta-search-field {
+        flex: 0 1 17.5rem;
+        min-width: 17.5rem;
+    }
+
+    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input-wrp {
+        display: flex;
+        align-items: center;
+        min-height: 2.15rem;
+        overflow: hidden;
+        border-color: var(--ac-border);
+        border-radius: 8px;
+        background: var(--ac-surface-muted);
+        box-shadow: none;
+    }
+
+    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input-wrp-content-ctn {
+        order: 2;
+        min-width: 0;
+    }
+
+    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input-wrp-prefix,
+    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input-wrp-suffix {
+        order: 1;
+        min-height: 2.15rem;
+        border: 0;
+        background: transparent;
+        color: var(--ac-text-soft);
+    }
+
+    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input {
+        min-height: 2.15rem;
+        color: var(--ac-text);
+        font-size: 0.82rem;
+        font-weight: 500;
+    }
+
+    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input::placeholder {
+        color: var(--ac-text-soft);
+    }
+
+    .fi-resource-dialogs .fi-pagination-records-per-page-select .fi-input-wrp {
+        min-height: 2.25rem;
+        border-color: var(--ac-border);
+        background: var(--ac-surface-muted);
+        box-shadow: none;
+    }
+
+    .fi-resource-dialogs .fi-pagination-records-per-page-select .fi-select-input,
+    .fi-resource-dialogs .fi-pagination-records-per-page-select .fi-select-input-btn {
+        min-height: 2.25rem;
+        font-size: 0.82rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-toolbar .fi-btn,
+    .fi-resource-dialogs .fi-ta-header-toolbar .fi-icon-btn {
+        min-height: 2.25rem;
+        border-radius: 8px;
+        box-shadow: none;
+    }
+
+    .fi-resource-dialogs .fi-ta-filter-indicators {
+        margin: 0;
+        padding: 0.55rem 0.85rem;
+        border-top: 1px solid var(--ac-border);
+        background: var(--ac-surface);
+    }
+
+    .fi-resource-dialogs .fi-ta-filter-indicators-label {
+        font-size: 0.7rem;
+        letter-spacing: 0.06em;
+    }
+
+    .fi-resource-dialogs .fi-ta-content-ctn {
+        overflow-x: auto;
+        border-top: 1px solid var(--ac-border);
+    }
+
+    .fi-resource-dialogs .fi-ta-content-ctn::-webkit-scrollbar {
+        height: 0.7rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-content-ctn::-webkit-scrollbar-track {
+        background: var(--ac-surface-muted);
+    }
+
+    .fi-resource-dialogs .fi-ta-content-ctn::-webkit-scrollbar-thumb {
+        border: 2px solid var(--ac-surface-muted);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-text-soft) 56%, transparent);
+    }
+
+    .fi-resource-dialogs .fi-ta-table {
+        min-width: 78rem;
+        table-layout: fixed;
+        border-collapse: separate;
+        border-spacing: 0;
+    }
+
+    .fi-resource-dialogs .fi-ta-table thead {
+        background: var(--ac-surface-muted);
+    }
+
+    .fi-resource-dialogs .fi-ta-table th,
+    .fi-resource-dialogs .fi-ta-table td {
+        height: var(--ac-dialogs-row-h);
+        border-color: var(--ac-border);
+        padding: 0.45rem 0.7rem;
+        vertical-align: middle;
+    }
+
+    .fi-resource-dialogs .fi-ta-table th {
+        color: var(--ac-text-muted);
+        font-size: 0.72rem;
+        font-weight: 760;
+        line-height: 1.15;
+    }
+
+    .fi-resource-dialogs .fi-ta-table td {
+        color: var(--ac-text);
+        font-size: 0.82rem;
+        line-height: 1.3;
+    }
+
+    .fi-resource-dialogs .fi-ta-table td a {
+        color: inherit;
+        text-decoration: none;
+    }
+
+    .fi-resource-dialogs .fi-ta-table td a:hover {
+        color: var(--ac-primary);
+    }
+
+    .fi-resource-dialogs .fi-ta-table tbody tr {
+        transition: background 140ms ease;
+    }
+
+    .fi-resource-dialogs .fi-ta-table tbody tr:hover {
+        background: var(--ac-surface-muted);
+    }
+
+    .fi-resource-dialogs .fi-ta-table .fi-badge {
+        min-height: 1.25rem;
+        padding: 0.14rem 0.42rem;
+        font-size: 0.68rem;
+        font-weight: 760;
+        line-height: 1;
+    }
+
+    .fi-resource-dialogs .fi-pagination {
+        gap: 0.75rem;
+        border-top: 1px solid var(--ac-border);
+        padding: 0.65rem 0.85rem;
+        background: var(--ac-surface);
+    }
+
+    .fi-resource-dialogs .fi-pagination-overview {
+        color: var(--ac-text-muted);
+        font-size: 0.8rem;
     }
 
     @media (max-width: 1140px) {

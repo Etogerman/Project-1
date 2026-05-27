@@ -339,6 +339,7 @@ class ContactResource extends Resource
         return $table
             ->recordUrl(fn (Contact $record): string => static::getUrl('view', ['record' => $record]))
             ->splitSearchTerms(false)
+            ->searchPlaceholder('Поиск контакта')
             ->columns([
                 TextColumn::make('display_name')
                     ->label('Контакт')

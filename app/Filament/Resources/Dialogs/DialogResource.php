@@ -125,6 +125,7 @@ class DialogResource extends Resource
         return $table
             ->poll('10s')
             ->splitSearchTerms(false)
+            ->searchPlaceholder('Поиск диалога')
             ->columns([
                 TextColumn::make('contact_label')
                     ->label('Контакт')

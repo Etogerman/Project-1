@@ -54,7 +54,7 @@ class AdminPanelProvider extends PanelProvider
             )
             ->renderHook(
                 PanelsRenderHook::SIDEBAR_FOOTER,
-                fn (): string => view('filament.components.environment-indicator')->render(),
+                fn (): string => '',
             )
             ->renderHook(
                 PanelsRenderHook::TOPBAR_LOGO_AFTER,

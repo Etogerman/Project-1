@@ -170,7 +170,7 @@ class ListDialogs extends ListRecords
             Action::make('kanban')
                 ->label('Канбан')
                 ->icon('heroicon-m-view-columns')
-                ->color('warning')
+                ->color('gray')
                 ->url(DialogResource::getUrl('kanban')),
         ];
     }

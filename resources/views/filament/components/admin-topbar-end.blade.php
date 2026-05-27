@@ -1,13 +1,5 @@
 <div class="ac-admin-topbar-end">
-    <label class="ac-admin-search" aria-label="Глобальный поиск">
-        <x-filament::icon icon="heroicon-m-magnifying-glass" class="ac-admin-search__icon" />
-        <input
-            type="search"
-            class="ac-admin-search__input"
-            placeholder="Поиск контакта или диалога"
-            autocomplete="off"
-        />
-    </label>
+    @include('filament.components.environment-indicator')
 
     <button
         type="button"
